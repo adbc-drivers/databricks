@@ -19,6 +19,14 @@
 This repository contains [ADBC drivers](https://arrow.apache.org/adbc/) for
 Databricks, implemented in different languages.
 
+## Installation
+
+At this time pre-packaged drivers are not yet available.
+
+## Usage
+
+At this time user documentation is not yet available.
+
 ## Building
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
