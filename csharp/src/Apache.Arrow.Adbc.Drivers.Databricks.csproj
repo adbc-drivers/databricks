@@ -2,6 +2,10 @@
   <PropertyGroup>
     <TargetFrameworks>netstandard2.0;net472;net8.0</TargetFrameworks>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
+    <LangVersion>latest</LangVersion>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\arrow-adbc\csharp\ApacheArrow.snk</AssemblyOriginatorKeyFile>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="K4os.Compression.LZ4" />
@@ -15,6 +19,6 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Apache\Apache.Arrow.Adbc.Drivers.Apache.csproj" />
+    <ProjectReference Include="..\arrow-adbc\csharp\src\Drivers\Apache\Apache.Arrow.Adbc.Drivers.Apache.csproj" />
   </ItemGroup>
 </Project>
