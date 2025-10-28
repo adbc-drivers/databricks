@@ -38,9 +38,7 @@ repos:
     exclude: '\.(bat|sln)$'
   - id: trailing-whitespace
 
-# Temporarily disabled - requires authentication to private repo
-# TODO: Re-enable once GitHub token is configured for adbc-drivers/dev access
-# - repo: https://github.com/adbc-drivers/dev
-#   rev: f5779f2109f177f7da6394d3427589a3a84eb521
-#   hooks:
-#   - id: rat
+- repo: https://github.com/adbc-drivers/dev
+  rev: 4e395aab20b3b7458a117a2999bf3d67f2915945
+  hooks:
+  - id: rat
