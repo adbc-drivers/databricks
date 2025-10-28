@@ -38,7 +38,7 @@ repos:
     exclude: '\.(bat|sln)$'
   - id: trailing-whitespace
 
-- repo: git@github.com:adbc-drivers/dev
+- repo: https://github.com/adbc-drivers/dev
   rev: f5779f2109f177f7da6394d3427589a3a84eb521
   hooks:
   - id: rat
