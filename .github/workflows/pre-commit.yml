@@ -50,5 +50,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Configure git for GitHub token authentication
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.1
