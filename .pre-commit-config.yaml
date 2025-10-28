@@ -1,60 +1,44 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
+# Copyright (c) 2025 ADBC Drivers Contributors
 #
-#   http://www.apache.org/licenses/LICENSE-2.0
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 repos:
-  # General file checks
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
-    hooks:
-      - id: check-added-large-files
-      - id: check-case-conflict
-      - id: check-executables-have-shebangs
-      - id: check-merge-conflict
-      - id: check-symlinks
-      - id: check-xml
-      - id: check-yaml
-        exclude: ^csharp/arrow-adbc/
-      - id: detect-private-key
-      - id: end-of-file-fixer
-        exclude: ^csharp/arrow-adbc/
-      - id: mixed-line-ending
-        args: ['--fix=lf']
-        exclude: ^csharp/arrow-adbc/
-      - id: trailing-whitespace
-        exclude: ^csharp/arrow-adbc/
+- repo: https://github.com/codespell-project/codespell
+  rev: 63c8f8312b7559622c0d82815639671ae42132ac  # v2.4.1
+  hooks:
+  - id: codespell
+    exclude: >
+        (?x)^(
+            .*go\.sum
+        )$
 
-  # Spell checking
-  - repo: https://github.com/codespell-project/codespell
-    rev: v2.2.6
-    hooks:
-      - id: codespell
-        args: [
-          '--ignore-words-list=crate,keypair,nd,te,ue',
-          '--skip=*.cs,*.csproj,*.xml,csharp/arrow-adbc/**',
-        ]
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # v5.0.0
+  hooks:
+  - id: check-added-large-files
+    args: ["--enforce-all"]
+  - id: check-case-conflict
+  - id: check-executables-have-shebangs
+  - id: check-yaml
+  - id: detect-private-key
+  - id: end-of-file-fixer
+    exclude: '\.sln$'
+  - id: mixed-line-ending
+    args: [--fix=lf]
+    exclude: '\.(bat|sln)$'
+  - id: trailing-whitespace
 
-  # Markdown formatting
-  - repo: https://github.com/executablebooks/mdformat
-    rev: 0.7.17
-    hooks:
-      - id: mdformat
-        exclude: ^csharp/arrow-adbc/
-        additional_dependencies:
-          - mdformat-gfm
-          - mdformat-black
-
-exclude: ^csharp/arrow-adbc/
+- repo: git@github.com:adbc-drivers/dev
+  rev: f5779f2109f177f7da6394d3427589a3a84eb521
+  hooks:
+  - id: rat
