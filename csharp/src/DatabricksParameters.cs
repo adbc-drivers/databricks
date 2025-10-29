@@ -329,7 +329,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// Default: true
         /// Only applicable when Protocol is "rest".
         /// </summary>
-        public const string EnableSessionManagement = "adbc.databricks.enable_session_management";
+        public const string EnableSessionManagement = "adbc.databricks.rest.enable_session_management";
 
     }
 

@@ -67,7 +67,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
         [Fact]
         public void TestEnableSessionManagementParameterExists()
         {
-            Assert.Equal("adbc.databricks.enable_session_management", DatabricksParameters.EnableSessionManagement);
+            Assert.Equal("adbc.databricks.rest.enable_session_management", DatabricksParameters.EnableSessionManagement);
         }
 
         [Fact]
