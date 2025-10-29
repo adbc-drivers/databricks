@@ -262,6 +262,55 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// </summary>
         public const string OperationStatusRequestTimeout = "adbc.databricks.operation_status_request_timeout";
 
+        /// <summary>
+        /// Protocol to use for Databricks communication.
+        /// Values:
+        /// - "hive_thrift": Use Hive Thrift protocol (default)
+        /// - "rest": Use REST API (Statement Execution API)
+        /// </summary>
+        public const string Protocol = "adbc.databricks.protocol";
+
+        /// <summary>
+        /// Result disposition for Statement Execution API.
+        /// Values:
+        /// - "inline": Results inline in response (≤16 MiB recommended, ≤25 MiB max)
+        /// - "external_links": Results via presigned URLs (≤100 GiB)
+        /// - "inline_or_external_links": Hybrid mode - server decides based on size (default, recommended)
+        /// </summary>
+        public const string ResultDisposition = "adbc.databricks.rest.result_disposition";
+
+        /// <summary>
+        /// Result format for Statement Execution API.
+        /// Values:
+        /// - "arrow_stream": Apache Arrow IPC stream format (default)
+        /// - "json_array": JSON array format
+        /// - "csv": CSV format
+        /// </summary>
+        public const string ResultFormat = "adbc.databricks.rest.result_format";
+
+        /// <summary>
+        /// Result compression codec for Statement Execution API.
+        /// Values:
+        /// - "lz4": LZ4 compression (default for external_links)
+        /// - "gzip": GZIP compression
+        /// - "none": No compression (default for inline)
+        /// </summary>
+        public const string ResultCompression = "adbc.databricks.rest.result_compression";
+
+        /// <summary>
+        /// Wait timeout for statement execution in seconds.
+        /// Range: 1-600 seconds (10 minutes)
+        /// Default: 10 seconds
+        /// Note: When enable_direct_results=true, this parameter is not set (server waits until complete)
+        /// </summary>
+        public const string WaitTimeout = "adbc.databricks.rest.wait_timeout";
+
+        /// <summary>
+        /// Statement polling interval in milliseconds for async execution.
+        /// Default: 1000ms (1 second)
+        /// </summary>
+        public const string PollingInterval = "adbc.databricks.rest.polling_interval_ms";
+
     }
 
     /// <summary>
