@@ -21,28 +21,43 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 using Apache.Arrow.Adbc.Drivers.Databricks;
 using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
+using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
 using Moq;
 using Moq.Protected;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
 {
     /// <summary>
     /// E2E tests for Statement Execution API with support for both mock and real environments.
-    /// Set environment variable USE_REAL_DATABRICKS_ENDPOINT=true to run against real Databricks.
-    /// When using real endpoint, also set: DATABRICKS_HOST, DATABRICKS_WAREHOUSE_ID, and DATABRICKS_ACCESS_TOKEN
+    /// By default, tests use mock responses for fast, isolated testing.
+    /// To run against a real Databricks endpoint:
+    /// 1. Set DATABRICKS_TEST_CONFIG_FILE environment variable to point to a JSON configuration file
+    /// 2. Set USE_REAL_STATEMENT_EXECUTION_ENDPOINT=true to enable real endpoint testing
+    /// The configuration file should include: hostName, path (with warehouse ID), and token/access_token.
     /// </summary>
-    public class StatementExecutionClientE2ETests : IDisposable
+    public class StatementExecutionClientE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         private readonly bool _useRealEndpoint;
         private HttpClient? _httpClient;
         private Mock<HttpMessageHandler>? _mockHttpMessageHandler;
 
-        public StatementExecutionClientE2ETests()
+        public StatementExecutionClientE2ETests(ITestOutputHelper? outputHelper)
+            : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
-            _useRealEndpoint = Environment.GetEnvironmentVariable("USE_REAL_DATABRICKS_ENDPOINT") == "true";
+            // Only use real endpoint if explicitly enabled AND config file is available
+            _useRealEndpoint = Environment.GetEnvironmentVariable("USE_REAL_STATEMENT_EXECUTION_ENDPOINT") == "true"
+                            && Utils.CanExecuteTestConfig(TestConfigVariable);
+
+            // Initialize mock infrastructure in constructor for mock mode
+            if (!_useRealEndpoint)
+            {
+                _mockHttpMessageHandler = new Mock<HttpMessageHandler>();
+            }
         }
 
         private StatementExecutionClient CreateClient()
@@ -59,18 +74,20 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
 
         private StatementExecutionClient CreateRealClient()
         {
-            var host = Environment.GetEnvironmentVariable("DATABRICKS_HOST");
+            var host = TestConfiguration.HostName;
             if (string.IsNullOrEmpty(host))
             {
                 throw new InvalidOperationException(
-                    "DATABRICKS_HOST environment variable must be set when USE_REAL_DATABRICKS_ENDPOINT=true");
+                    "HostName must be set in the test configuration file");
             }
 
-            var accessToken = Environment.GetEnvironmentVariable("DATABRICKS_ACCESS_TOKEN");
+            // Get access token from configuration (supports both direct token and OAuth)
+            var accessToken = TestConfiguration.Token ?? TestConfiguration.AccessToken;
             if (string.IsNullOrEmpty(accessToken))
             {
                 throw new InvalidOperationException(
-                    "DATABRICKS_ACCESS_TOKEN environment variable must be set when USE_REAL_DATABRICKS_ENDPOINT=true");
+                    "Token or AccessToken must be set in the test configuration file. " +
+                    "For OAuth, ensure the connection has been established to obtain an access token.");
             }
 
             _httpClient = new HttpClient();
@@ -82,16 +99,25 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
 
         private StatementExecutionClient CreateMockClient()
         {
-            _mockHttpMessageHandler = new Mock<HttpMessageHandler>();
+            if (_mockHttpMessageHandler == null)
+            {
+                throw new InvalidOperationException("Mock HTTP handler not initialized");
+            }
+
             _httpClient = new HttpClient(_mockHttpMessageHandler.Object);
             return new StatementExecutionClient(_httpClient, "mock.databricks.com");
         }
 
         private void SetupMockResponse(HttpStatusCode statusCode, string responseContent)
         {
-            if (_useRealEndpoint || _mockHttpMessageHandler == null)
+            if (_useRealEndpoint)
             {
                 throw new InvalidOperationException("Cannot setup mock responses when using real endpoint");
+            }
+
+            if (_mockHttpMessageHandler == null)
+            {
+                throw new InvalidOperationException("Mock HTTP handler not initialized");
             }
 
             var httpResponseMessage = new HttpResponseMessage(statusCode)
@@ -111,13 +137,24 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
         {
             if (_useRealEndpoint)
             {
-                var warehouseId = Environment.GetEnvironmentVariable("DATABRICKS_WAREHOUSE_ID");
-                if (string.IsNullOrEmpty(warehouseId))
+                // Try to extract warehouse ID from the path (format: /sql/1.0/warehouses/{warehouse_id})
+                var path = TestConfiguration.Path;
+                if (!string.IsNullOrEmpty(path))
                 {
-                    throw new InvalidOperationException(
-                        "DATABRICKS_WAREHOUSE_ID environment variable must be set when USE_REAL_DATABRICKS_ENDPOINT=true");
+                    var parts = path.Split('/');
+                    if (parts.Length > 0)
+                    {
+                        var warehouseId = parts[parts.Length - 1];
+                        if (!string.IsNullOrEmpty(warehouseId))
+                        {
+                            return warehouseId;
+                        }
+                    }
                 }
-                return warehouseId;
+
+                throw new InvalidOperationException(
+                    "Unable to determine warehouse ID from test configuration. " +
+                    "Please set the 'path' field in the configuration file (e.g., '/sql/1.0/warehouses/your-warehouse-id')");
             }
             else
             {
@@ -125,10 +162,13 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
             }
         }
 
-        public void Dispose()
+        protected override void Dispose(bool disposing)
         {
-            _httpClient?.Dispose();
-            GC.SuppressFinalize(this);
+            if (disposing)
+            {
+                _httpClient?.Dispose();
+            }
+            base.Dispose(disposing);
         }
 
         [Fact]
