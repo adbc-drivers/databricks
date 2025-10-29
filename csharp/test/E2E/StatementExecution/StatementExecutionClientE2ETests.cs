@@ -201,7 +201,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
             }
 
             // Delete session
-            await client.DeleteSessionAsync(createResponse.SessionId, CancellationToken.None);
+            await client.DeleteSessionAsync(createResponse.SessionId, GetWarehouseId(), CancellationToken.None);
         }
 
         [Fact]
@@ -435,7 +435,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
                     ? "SELECT COUNT(*) FROM range(10000000)"  // Long-running query
                     : "SELECT 1",
                 WarehouseId = GetWarehouseId(),
-                WaitTimeout = "1s",  // Short timeout to ensure it stays RUNNING
+                WaitTimeout = "5s",  // Databricks requires 0s or 5s-50s
                 OnWaitTimeout = "CONTINUE"
             };
 
@@ -604,6 +604,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
                 {
                     Statement = "SELECT 'Hello from session' AS greeting",
                     SessionId = sessionId,
+                    WarehouseId = GetWarehouseId(),  // Required even when using session
                     Disposition = "inline",
                     Format = "arrow_stream"
                 };
@@ -634,7 +635,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
 
                     try
                     {
-                        await client.DeleteSessionAsync(sessionId, CancellationToken.None);
+                        await client.DeleteSessionAsync(sessionId, GetWarehouseId(), CancellationToken.None);
                     }
                     catch
                     {

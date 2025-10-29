@@ -183,10 +183,11 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
         public async Task DeleteSessionAsync_WithValidSessionId_Succeeds()
         {
             var sessionId = "test-session-id";
+            var warehouseId = "test-warehouse-id";
             SetupMockResponse(HttpStatusCode.OK, "");
 
             var client = new StatementExecutionClient(_httpClient, _testHost);
-            await client.DeleteSessionAsync(sessionId, CancellationToken.None);
+            await client.DeleteSessionAsync(sessionId, warehouseId, CancellationToken.None);
 
             // No exception means success
         }
@@ -195,6 +196,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
         public async Task DeleteSessionAsync_SendsCorrectRequest()
         {
             var sessionId = "test-session-id";
+            var warehouseId = "test-warehouse-id";
             HttpRequestMessage? capturedRequest = null;
 
             SetupMockResponseWithCapture(HttpStatusCode.OK, "",
@@ -202,12 +204,12 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 _ => { });
 
             var client = new StatementExecutionClient(_httpClient, _testHost);
-            await client.DeleteSessionAsync(sessionId, CancellationToken.None);
+            await client.DeleteSessionAsync(sessionId, warehouseId, CancellationToken.None);
 
             Assert.NotNull(capturedRequest);
             Assert.Equal(HttpMethod.Delete, capturedRequest.Method);
-            Assert.Equal($"https://test.databricks.com/api/2.0/sql/sessions/{sessionId}",
-                capturedRequest.RequestUri?.ToString());
+            Assert.Contains($"/api/2.0/sql/sessions/{sessionId}", capturedRequest.RequestUri?.ToString());
+            Assert.Contains($"warehouse_id={warehouseId}", capturedRequest.RequestUri?.Query);
         }
 
         [Fact]
@@ -215,18 +217,19 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
         {
             var client = new StatementExecutionClient(_httpClient, _testHost);
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                client.DeleteSessionAsync(string.Empty, CancellationToken.None));
+                client.DeleteSessionAsync(string.Empty, "warehouse-id", CancellationToken.None));
         }
 
         [Fact]
         public async Task DeleteSessionAsync_WithHttpError_ThrowsDatabricksException()
         {
             var sessionId = "test-session-id";
+            var warehouseId = "test-warehouse-id";
             SetupMockResponse(HttpStatusCode.NotFound, "{\"error_code\":\"SESSION_NOT_FOUND\",\"message\":\"Session not found\"}");
 
             var client = new StatementExecutionClient(_httpClient, _testHost);
             var exception = await Assert.ThrowsAsync<DatabricksException>(() =>
-                client.DeleteSessionAsync(sessionId, CancellationToken.None));
+                client.DeleteSessionAsync(sessionId, warehouseId, CancellationToken.None));
 
             Assert.Contains("404", exception.Message);
         }

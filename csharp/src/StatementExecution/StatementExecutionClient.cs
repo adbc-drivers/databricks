@@ -40,9 +40,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// Deletes an existing SQL session.
         /// </summary>
         /// <param name="sessionId">The session ID to delete.</param>
+        /// <param name="warehouseId">The warehouse ID (required by Databricks API).</param>
         /// <param name="cancellationToken">A cancellation token.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        Task DeleteSessionAsync(string sessionId, CancellationToken cancellationToken);
+        Task DeleteSessionAsync(string sessionId, string warehouseId, CancellationToken cancellationToken);
 
         /// <summary>
         /// Executes a SQL statement.
@@ -164,16 +165,23 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// Deletes an existing SQL session.
         /// </summary>
         /// <param name="sessionId">The session ID to delete.</param>
+        /// <param name="warehouseId">The warehouse ID (required by Databricks API).</param>
         /// <param name="cancellationToken">A cancellation token.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        public async Task DeleteSessionAsync(string sessionId, CancellationToken cancellationToken)
+        public async Task DeleteSessionAsync(string sessionId, string warehouseId, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(sessionId))
             {
                 throw new ArgumentException("Session ID cannot be null or whitespace.", nameof(sessionId));
             }
 
-            var url = $"{_baseUrl}{SessionsEndpoint}/{sessionId}";
+            if (string.IsNullOrWhiteSpace(warehouseId))
+            {
+                throw new ArgumentException("Warehouse ID cannot be null or whitespace.", nameof(warehouseId));
+            }
+
+            // Databricks requires warehouse_id as query parameter even for DELETE
+            var url = $"{_baseUrl}{SessionsEndpoint}/{sessionId}?warehouse_id={Uri.EscapeDataString(warehouseId)}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Delete, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -316,6 +324,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
         /// <summary>
         /// Closes a SQL statement and releases its resources.
+        /// Note: Uses DELETE method on /statements/{statement_id}, not POST to /close endpoint.
         /// </summary>
         /// <param name="statementId">The statement ID to close.</param>
         /// <param name="cancellationToken">A cancellation token.</param>
@@ -327,8 +336,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 throw new ArgumentException("Statement ID cannot be null or whitespace.", nameof(statementId));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}/close";
-            var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
+            // Databricks uses DELETE on /statements/{statement_id}, not POST to /close
+            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}";
+            var httpRequest = new HttpRequestMessage(HttpMethod.Delete, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 
