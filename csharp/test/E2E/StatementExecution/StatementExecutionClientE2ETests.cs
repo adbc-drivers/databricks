@@ -331,9 +331,9 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
             Assert.NotNull(getResponse.Status);
 
             // For real endpoint, wait for completion if still running
-            if (_useRealEndpoint && getResponse.Status.State == "RUNNING")
+            if (_useRealEndpoint && getResponse.Status?.State == "RUNNING")
             {
-                for (int i = 0; i < 30 && getResponse.Status.State == "RUNNING"; i++)
+                for (int i = 0; i < 30 && getResponse.Status?.State == "RUNNING"; i++)
                 {
                     await Task.Delay(1000);
                     getResponse = await client.GetStatementAsync(statementId, CancellationToken.None);
@@ -343,6 +343,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
             // Verify final state (should be SUCCEEDED for simple SELECT 1)
             if (_useRealEndpoint)
             {
+                Assert.NotNull(getResponse.Status);
                 Assert.Equal("SUCCEEDED", getResponse.Status.State);
             }
         }
@@ -471,6 +472,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
             if (_useRealEndpoint)
             {
                 // State should be CANCELED or CLOSED after cancellation
+                Assert.NotNull(getResponse.Status);
                 Assert.True(
                     getResponse.Status.State == "CANCELED" || getResponse.Status.State == "CLOSED",
                     $"Expected CANCELED or CLOSED, got {getResponse.Status.State}");
@@ -526,6 +528,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
 
                     var getResponse = await client.GetStatementAsync(statementId, CancellationToken.None);
                     // DELETE operation doesn't change state to CLOSED - it stays SUCCEEDED or becomes CLOSED
+                    Assert.NotNull(getResponse.Status);
                     Assert.True(
                         getResponse.Status.State == "CLOSED" || getResponse.Status.State == "SUCCEEDED",
                         $"Expected CLOSED or SUCCEEDED after close, got {getResponse.Status.State}");
