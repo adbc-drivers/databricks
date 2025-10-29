@@ -1,18 +1,11 @@
 /*
 * Copyright (c) 2025 ADBC Drivers Contributors
 *
-* This file has been modified from its original version, which is
-* under the Apache License:
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
 *
-* Licensed to the Apache Software Foundation (ASF) under one
-* or more contributor license agreements.  See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership.  The ASF licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
+*     http://www.apache.org/licenses/LICENSE-2.0
 *
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,31 +17,31 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 {
-    // ========================================
+    // ============================================================================
     // Session Management Models
-    // ========================================
+    // ============================================================================
 
     /// <summary>
-    /// Request to create a new session in the Statement Execution API.
+    /// Request to create a new SQL session.
     /// </summary>
     public class CreateSessionRequest
     {
         /// <summary>
-        /// The ID of the SQL warehouse to use for the session.
+        /// The warehouse ID to use for this session.
         /// </summary>
         [JsonPropertyName("warehouse_id")]
         public string WarehouseId { get; set; } = string.Empty;
 
         /// <summary>
-        /// The catalog to use for the session.
+        /// The catalog to use for this session.
         /// </summary>
         [JsonPropertyName("catalog")]
         public string? Catalog { get; set; }
 
         /// <summary>
-        /// The schema to use for the session.
+        /// The schema to use for this session.
         /// </summary>
         [JsonPropertyName("schema")]
         public string? Schema { get; set; }
@@ -61,20 +54,44 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     }
 
     /// <summary>
-    /// Response from creating a session.
+    /// Response from creating a SQL session.
     /// </summary>
     public class CreateSessionResponse
     {
         /// <summary>
-        /// The ID of the created session.
+        /// The unique identifier for the created session.
         /// </summary>
         [JsonPropertyName("session_id")]
         public string SessionId { get; set; } = string.Empty;
     }
 
-    // ========================================
+    // ============================================================================
     // Statement Execution Models
-    // ========================================
+    // ============================================================================
+
+    /// <summary>
+    /// Parameter for parameterized SQL queries.
+    /// </summary>
+    public class StatementParameter
+    {
+        /// <summary>
+        /// The parameter name (without leading colon).
+        /// </summary>
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = string.Empty;
+
+        /// <summary>
+        /// The parameter value as a string.
+        /// </summary>
+        [JsonPropertyName("value")]
+        public string Value { get; set; } = string.Empty;
+
+        /// <summary>
+        /// The parameter type (e.g., "STRING", "INT", "DOUBLE").
+        /// </summary>
+        [JsonPropertyName("type")]
+        public string? Type { get; set; }
+    }
 
     /// <summary>
     /// Request to execute a SQL statement.
@@ -82,13 +99,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     public class ExecuteStatementRequest
     {
         /// <summary>
-        /// The ID of the SQL warehouse to use (required if session_id is not provided).
+        /// The warehouse ID to use (required if session_id is not provided).
         /// </summary>
         [JsonPropertyName("warehouse_id")]
         public string? WarehouseId { get; set; }
 
         /// <summary>
-        /// The ID of the session to use (required if warehouse_id is not provided).
+        /// The session ID to use (if session management is enabled).
         /// </summary>
         [JsonPropertyName("session_id")]
         public string? SessionId { get; set; }
@@ -112,7 +129,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public string? Schema { get; set; }
 
         /// <summary>
-        /// Statement parameters for parameterized queries.
+        /// Parameters for parameterized queries.
         /// </summary>
         [JsonPropertyName("parameters")]
         public List<StatementParameter>? Parameters { get; set; }
@@ -121,7 +138,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// Result disposition: "inline", "external_links", or "inline_or_external_links".
         /// </summary>
         [JsonPropertyName("disposition")]
-        public string Disposition { get; set; } = "inline_or_external_links";
+        public string Disposition { get; set; } = "external_links";
 
         /// <summary>
         /// Result format: "arrow_stream", "json_array", or "csv".
@@ -130,19 +147,19 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public string Format { get; set; } = "arrow_stream";
 
         /// <summary>
-        /// Result compression codec: "lz4", "gzip", or "none".
+        /// Result compression: "lz4", "gzip", or "none".
         /// </summary>
         [JsonPropertyName("result_compression")]
         public string? ResultCompression { get; set; }
 
         /// <summary>
-        /// Wait timeout in seconds (e.g., "10s"). Omit for direct results mode.
+        /// Wait timeout (e.g., "10s"). Omit for direct results mode.
         /// </summary>
         [JsonPropertyName("wait_timeout")]
         public string? WaitTimeout { get; set; }
 
         /// <summary>
-        /// Action to take on wait timeout: "CONTINUE" or "CANCEL".
+        /// Action on wait timeout: "CONTINUE" or "CANCEL".
         /// </summary>
         [JsonPropertyName("on_wait_timeout")]
         public string? OnWaitTimeout { get; set; }
@@ -161,30 +178,30 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     }
 
     /// <summary>
-    /// Response from executing a statement.
+    /// Response from executing a SQL statement.
     /// </summary>
     public class ExecuteStatementResponse
     {
         /// <summary>
-        /// The ID of the executed statement.
+        /// The unique identifier for the executed statement.
         /// </summary>
         [JsonPropertyName("statement_id")]
         public string StatementId { get; set; } = string.Empty;
 
         /// <summary>
-        /// The status of the statement execution.
+        /// The current status of the statement.
         /// </summary>
         [JsonPropertyName("status")]
-        public StatementStatus Status { get; set; } = new StatementStatus();
+        public StatementStatus? Status { get; set; }
 
         /// <summary>
-        /// The result manifest (metadata about results).
+        /// The result manifest (for EXTERNAL_LINKS disposition).
         /// </summary>
         [JsonPropertyName("manifest")]
         public ResultManifest? Manifest { get; set; }
 
         /// <summary>
-        /// The result data (if inline disposition).
+        /// The result data (for INLINE disposition).
         /// </summary>
         [JsonPropertyName("result")]
         public ResultData? Result { get; set; }
@@ -196,36 +213,36 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     public class GetStatementResponse
     {
         /// <summary>
-        /// The ID of the statement.
+        /// The statement identifier.
         /// </summary>
         [JsonPropertyName("statement_id")]
         public string StatementId { get; set; } = string.Empty;
 
         /// <summary>
-        /// The status of the statement execution.
+        /// The current status of the statement.
         /// </summary>
         [JsonPropertyName("status")]
-        public StatementStatus Status { get; set; } = new StatementStatus();
+        public StatementStatus? Status { get; set; }
 
         /// <summary>
-        /// The result manifest (metadata about results).
+        /// The result manifest (for EXTERNAL_LINKS disposition).
         /// </summary>
         [JsonPropertyName("manifest")]
         public ResultManifest? Manifest { get; set; }
 
         /// <summary>
-        /// The result data (if inline disposition).
+        /// The result data (for INLINE disposition).
         /// </summary>
         [JsonPropertyName("result")]
         public ResultData? Result { get; set; }
     }
 
-    // ========================================
+    // ============================================================================
     // Status and Error Models
-    // ========================================
+    // ============================================================================
 
     /// <summary>
-    /// Status of a statement execution.
+    /// Status of a SQL statement execution.
     /// </summary>
     public class StatementStatus
     {
@@ -239,17 +256,35 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// Error information if the statement failed.
         /// </summary>
         [JsonPropertyName("error")]
-        public ServiceError? Error { get; set; }
+        public StatementError? Error { get; set; }
+    }
+
+    /// <summary>
+    /// Error information for a failed statement.
+    /// </summary>
+    public class StatementError
+    {
+        /// <summary>
+        /// The error code.
+        /// </summary>
+        [JsonPropertyName("error_code")]
+        public string? ErrorCode { get; set; }
 
         /// <summary>
-        /// SQL state code if available.
+        /// The error message.
+        /// </summary>
+        [JsonPropertyName("message")]
+        public string? Message { get; set; }
+
+        /// <summary>
+        /// SQL state code.
         /// </summary>
         [JsonPropertyName("sql_state")]
         public string? SqlState { get; set; }
     }
 
     /// <summary>
-    /// Error information for failed statements.
+    /// Service error from the API.
     /// </summary>
     public class ServiceError
     {
@@ -266,12 +301,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public string? Message { get; set; }
     }
 
-    // ========================================
+    // ============================================================================
     // Result Models
-    // ========================================
+    // ============================================================================
 
     /// <summary>
-    /// Manifest containing metadata about query results.
+    /// Manifest describing the structure and location of query results.
     /// </summary>
     public class ResultManifest
     {
@@ -285,16 +320,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// The schema of the result set.
         /// </summary>
         [JsonPropertyName("schema")]
-        public ResultSchema Schema { get; set; } = new ResultSchema();
+        public ResultSchema? Schema { get; set; }
 
         /// <summary>
-        /// Total number of chunks in the result set.
+        /// Total number of result chunks.
         /// </summary>
         [JsonPropertyName("total_chunk_count")]
         public int TotalChunkCount { get; set; }
 
         /// <summary>
-        /// List of result chunks (for external_links disposition).
+        /// The result chunks (may be incomplete for large result sets).
         /// </summary>
         [JsonPropertyName("chunks")]
         public List<ResultChunk>? Chunks { get; set; }
@@ -306,19 +341,19 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public long TotalRowCount { get; set; }
 
         /// <summary>
-        /// Total number of bytes in the result set.
+        /// Total size in bytes of the result set.
         /// </summary>
         [JsonPropertyName("total_byte_count")]
         public long TotalByteCount { get; set; }
 
         /// <summary>
-        /// Result compression codec: "lz4", "gzip", or "none".
+        /// Result compression: "lz4", "gzip", or "none".
         /// </summary>
         [JsonPropertyName("result_compression")]
         public string? ResultCompression { get; set; }
 
         /// <summary>
-        /// True if results were truncated by row_limit or byte_limit.
+        /// True if results were truncated due to row_limit or byte_limit.
         /// </summary>
         [JsonPropertyName("truncated")]
         public bool? Truncated { get; set; }
@@ -336,7 +371,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     public class ResultChunk
     {
         /// <summary>
-        /// The index of this chunk.
+        /// The zero-based index of this chunk.
         /// </summary>
         [JsonPropertyName("chunk_index")]
         public int ChunkIndex { get; set; }
@@ -348,25 +383,25 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public long RowCount { get; set; }
 
         /// <summary>
-        /// Starting row offset of this chunk.
+        /// Starting row offset of this chunk in the overall result set.
         /// </summary>
         [JsonPropertyName("row_offset")]
         public long RowOffset { get; set; }
 
         /// <summary>
-        /// Number of bytes in this chunk.
+        /// Size in bytes of this chunk.
         /// </summary>
         [JsonPropertyName("byte_count")]
         public long ByteCount { get; set; }
 
         /// <summary>
-        /// External links for downloading this chunk (external_links disposition).
+        /// External links for downloading this chunk (EXTERNAL_LINKS disposition).
         /// </summary>
         [JsonPropertyName("external_links")]
         public List<ExternalLink>? ExternalLinks { get; set; }
 
         /// <summary>
-        /// Inline data array (inline disposition).
+        /// Inline data for this chunk (INLINE disposition).
         /// </summary>
         [JsonPropertyName("data_array")]
         public List<List<object>>? DataArray { get; set; }
@@ -378,7 +413,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public byte[]? Attachment { get; set; }
 
         /// <summary>
-        /// Index of the next chunk (for pagination).
+        /// Index of the next chunk (for incremental fetching).
         /// </summary>
         [JsonPropertyName("next_chunk_index")]
         public long? NextChunkIndex { get; set; }
@@ -396,49 +431,49 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     public class ExternalLink
     {
         /// <summary>
-        /// The presigned URL for downloading the data.
+        /// The pre-signed URL for downloading the result file.
         /// </summary>
         [JsonPropertyName("external_link")]
         public string ExternalLinkUrl { get; set; } = string.Empty;
 
         /// <summary>
-        /// Expiration time of the presigned URL (ISO 8601 timestamp).
+        /// Expiration timestamp (ISO 8601 format).
         /// </summary>
         [JsonPropertyName("expiration")]
-        public string Expiration { get; set; } = string.Empty;
+        public string? Expiration { get; set; }
 
         /// <summary>
-        /// The chunk index this link corresponds to.
+        /// The chunk index this link belongs to.
         /// </summary>
         [JsonPropertyName("chunk_index")]
         public long ChunkIndex { get; set; }
 
         /// <summary>
-        /// Number of rows in this chunk.
+        /// Number of rows in this external link.
         /// </summary>
         [JsonPropertyName("row_count")]
         public long RowCount { get; set; }
 
         /// <summary>
-        /// Starting row offset of this chunk.
+        /// Starting row offset in the overall result set.
         /// </summary>
         [JsonPropertyName("row_offset")]
         public long RowOffset { get; set; }
 
         /// <summary>
-        /// Number of bytes in this chunk.
+        /// Size in bytes of this external link.
         /// </summary>
         [JsonPropertyName("byte_count")]
         public long ByteCount { get; set; }
 
         /// <summary>
-        /// HTTP headers required for downloading (for cloud storage auth).
+        /// HTTP headers required for downloading (e.g., for cloud storage auth).
         /// </summary>
         [JsonPropertyName("http_headers")]
         public Dictionary<string, string>? HttpHeaders { get; set; }
 
         /// <summary>
-        /// Index of the next chunk (for pagination).
+        /// Index of the next chunk (for incremental fetching).
         /// </summary>
         [JsonPropertyName("next_chunk_index")]
         public long? NextChunkIndex { get; set; }
@@ -451,12 +486,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     }
 
     /// <summary>
-    /// Result data returned for inline disposition.
+    /// Result data returned directly in the response (INLINE disposition).
     /// </summary>
     public class ResultData
     {
         /// <summary>
-        /// Number of bytes in this result.
+        /// Size in bytes of this result data.
         /// </summary>
         [JsonPropertyName("byte_count")]
         public long? ByteCount { get; set; }
@@ -468,13 +503,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public long? ChunkIndex { get; set; }
 
         /// <summary>
-        /// Inline data as array of rows.
+        /// Inline data as a 2D array.
         /// </summary>
         [JsonPropertyName("data_array")]
         public List<List<string>>? DataArray { get; set; }
 
         /// <summary>
-        /// External links for downloading data.
+        /// External links (for hybrid disposition).
         /// </summary>
         [JsonPropertyName("external_links")]
         public List<ExternalLink>? ExternalLinks { get; set; }
@@ -492,7 +527,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public string? NextChunkInternalLink { get; set; }
 
         /// <summary>
-        /// Number of rows in this result.
+        /// Number of rows in this result data.
         /// </summary>
         [JsonPropertyName("row_count")]
         public long? RowCount { get; set; }
@@ -504,18 +539,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public long? RowOffset { get; set; }
 
         /// <summary>
-        /// Binary attachment for special result types.
+        /// Binary attachment.
         /// </summary>
         [JsonPropertyName("attachment")]
         public byte[]? Attachment { get; set; }
     }
 
-    // ========================================
-    // Schema Models
-    // ========================================
-
     /// <summary>
-    /// Schema of the result set.
+    /// Schema description of the result set.
     /// </summary>
     public class ResultSchema
     {
@@ -526,14 +557,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public long? ColumnCount { get; set; }
 
         /// <summary>
-        /// List of column metadata.
+        /// List of column information.
         /// </summary>
         [JsonPropertyName("columns")]
         public List<ColumnInfo>? Columns { get; set; }
     }
 
     /// <summary>
-    /// Metadata about a column in the result set.
+    /// Information about a result set column.
     /// </summary>
     public class ColumnInfo
     {
@@ -544,67 +575,39 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public string? Name { get; set; }
 
         /// <summary>
-        /// The column position (0-indexed).
+        /// The column position (zero-based).
         /// </summary>
         [JsonPropertyName("position")]
         public long? Position { get; set; }
 
         /// <summary>
-        /// The interval type for INTERVAL columns.
-        /// </summary>
-        [JsonPropertyName("type_interval_type")]
-        public string? TypeIntervalType { get; set; }
-
-        /// <summary>
-        /// The type name (e.g., "BIGINT", "STRING", "DECIMAL").
+        /// The type name (e.g., "INT", "STRING", "TIMESTAMP").
         /// </summary>
         [JsonPropertyName("type_name")]
         public string? TypeName { get; set; }
 
         /// <summary>
-        /// The precision for numeric types.
+        /// The full type text.
+        /// </summary>
+        [JsonPropertyName("type_text")]
+        public string? TypeText { get; set; }
+
+        /// <summary>
+        /// Type precision (for numeric types).
         /// </summary>
         [JsonPropertyName("type_precision")]
         public long? TypePrecision { get; set; }
 
         /// <summary>
-        /// The scale for decimal types.
+        /// Type scale (for numeric types).
         /// </summary>
         [JsonPropertyName("type_scale")]
         public long? TypeScale { get; set; }
 
         /// <summary>
-        /// The full SQL type text (e.g., "DECIMAL(18,2)", "VARCHAR(255)").
+        /// Interval type (for interval types).
         /// </summary>
-        [JsonPropertyName("type_text")]
-        public string? TypeText { get; set; }
-    }
-
-    // ========================================
-    // Parameter Models
-    // ========================================
-
-    /// <summary>
-    /// A parameter for parameterized SQL queries.
-    /// </summary>
-    public class StatementParameter
-    {
-        /// <summary>
-        /// The parameter name.
-        /// </summary>
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = string.Empty;
-
-        /// <summary>
-        /// The parameter type (e.g., "STRING", "INT", "DATE").
-        /// </summary>
-        [JsonPropertyName("type")]
-        public string? Type { get; set; }
-
-        /// <summary>
-        /// The parameter value.
-        /// </summary>
-        [JsonPropertyName("value")]
-        public object? Value { get; set; }
+        [JsonPropertyName("type_interval_type")]
+        public string? TypeIntervalType { get; set; }
     }
 }

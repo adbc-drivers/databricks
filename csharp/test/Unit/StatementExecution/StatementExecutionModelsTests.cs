@@ -20,10 +20,10 @@
 
 using System.Collections.Generic;
 using System.Text.Json;
-using Apache.Arrow.Adbc.Drivers.Databricks;
+using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
+namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
 {
     /// <summary>
     /// Tests for Statement Execution API model serialization and deserialization.
@@ -82,7 +82,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 Schema = "default",
                 Parameters = new List<StatementParameter>
                 {
-                    new StatementParameter { Name = "id", Type = "INT", Value = 123 }
+                    new StatementParameter { Name = "id", Type = "INT", Value = "123" }
                 },
                 Disposition = "external_links",
                 Format = "arrow_stream",
@@ -168,8 +168,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 ""error"": {
                     ""error_code"": ""SYNTAX_ERROR"",
                     ""message"": ""Invalid SQL syntax""
-                },
-                ""sql_state"": ""42000""
+                }
             }";
 
             var status = JsonSerializer.Deserialize<StatementStatus>(json, _jsonOptions);
@@ -179,7 +178,6 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
             Assert.NotNull(status.Error);
             Assert.Equal("SYNTAX_ERROR", status.Error.ErrorCode);
             Assert.Equal("Invalid SQL syntax", status.Error.Message);
-            Assert.Equal("42000", status.SqlState);
         }
 
         [Fact]

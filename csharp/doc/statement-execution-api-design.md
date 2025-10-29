@@ -2590,25 +2590,27 @@ internal class StatementExecutionResultFetcher : BaseResultFetcher
 
 ### Files to Create (New Implementation)
 
-7. **`StatementExecutionClient.cs`** (NEW)
-   - [ ] Implement REST API client
-   - [ ] Session management methods: `CreateSessionAsync()`, `DeleteSessionAsync()`
-   - [ ] Statement execution methods: `ExecuteStatementAsync()`, `GetStatementAsync()`
-   - [ ] Result fetching: `GetResultChunkAsync()` (for incremental chunk fetching)
-   - [ ] Statement control: `CancelStatementAsync()`, `CloseStatementAsync()`
+7. **`csharp/src/StatementExecution/StatementExecutionClient.cs`** (NEW) ✅ **COMPLETED (PECO-2789)**
+   - [x] Implement REST API client
+   - [x] Session management methods: `CreateSessionAsync()`, `DeleteSessionAsync()`
+   - [x] Statement execution methods: `ExecuteStatementAsync()`, `GetStatementAsync()`
+   - [x] Result fetching: `GetResultChunkAsync()` (for incremental chunk fetching)
+   - [x] Statement control: `CancelStatementAsync()`, `CloseStatementAsync()`
+   - [x] Proper error handling with JSON error parsing
+   - [x] Interface `IStatementExecutionClient` for testability
 
-8. **`StatementExecutionModels.cs`** (NEW)
-   - [ ] Session models: `CreateSessionRequest`, `CreateSessionResponse`
-   - [ ] Request models: `ExecuteStatementRequest`, `GetStatementRequest`
-   - [ ] Response models: `ExecuteStatementResponse`, `GetStatementResponse`
-   - [ ] Result models: `StatementStatus`, `StatementError`
-   - [ ] Manifest models: `ResultManifest`, `ResultChunk`, `ExternalLink`, `ResultData`
-   - [ ] Parameter models: `StatementParameter`
-   - [ ] **New fields in models**:
+8. **`csharp/src/StatementExecution/StatementExecutionModels.cs`** (NEW) ✅ **COMPLETED (PECO-2789)**
+   - [x] Session models: `CreateSessionRequest`, `CreateSessionResponse`
+   - [x] Request models: `ExecuteStatementRequest`
+   - [x] Response models: `ExecuteStatementResponse`, `GetStatementResponse`
+   - [x] Result models: `StatementStatus`, `StatementError`, `ServiceError`
+   - [x] Manifest models: `ResultManifest`, `ResultChunk`, `ExternalLink`, `ResultData`, `ResultSchema`, `ColumnInfo`
+   - [x] Parameter models: `StatementParameter`
+   - [x] **All fields implemented**:
      - `ResultManifest`: `result_compression`, `truncated`, `is_volume_operation`
      - `ExternalLink`: `row_count`, `row_offset`, `byte_count`, `http_headers`
      - `ResultChunk`: `attachment`, `next_chunk_index`, `next_chunk_internal_link`
-     - `ExecuteStatementRequest`: `session_id`, `result_compression`, `row_limit`
+     - `ExecuteStatementRequest`: `session_id`, `result_compression`, `row_limit`, `byte_limit`, `wait_timeout`, `on_wait_timeout`
 
 9. **`StatementExecutionConnection.cs`** (NEW)
    - [ ] Implement `AdbcConnection` for REST protocol
@@ -2656,21 +2658,31 @@ internal class StatementExecutionResultFetcher : BaseResultFetcher
 
 ### Test Files to Create
 
-14. **`StatementExecutionClientTests.cs`** (NEW)
-    - [ ] Unit tests with mocked HTTP responses
-    - [ ] Test session management
-    - [ ] Test incremental chunk fetching
+14. **`csharp/test/Unit/StatementExecution/StatementExecutionClientTests.cs`** (NEW) ✅ **COMPLETED (PECO-2789)**
+    - [x] Unit tests with mocked HTTP responses (37 tests)
+    - [x] Test session management (create/delete)
+    - [x] Test statement execution with all methods
+    - [x] Test incremental chunk fetching
+    - [x] Test error handling (HTTP errors, invalid parameters)
+    - [x] Test cancellation token propagation
+    - [x] Test constructor validation
 
-15. **`StatementExecutionStatementTests.cs`** (NEW)
+15. **`csharp/test/E2E/StatementExecution/StatementExecutionClientE2ETests.cs`** (NEW) ✅ **COMPLETED (PECO-2789)**
+    - [x] E2E tests with mock/real environment switch
+    - [x] Environment variable `USE_REAL_DATABRICKS_ENDPOINT` for toggling
+    - [x] Test session lifecycle (create/delete)
+    - [x] Test statement execution (simple queries, parameterized queries)
+    - [x] Test result fetching and status polling
+    - [x] Test statement cancellation
+    - [x] Test statement closure
+    - [x] Test error handling with invalid SQL
+    - [x] Test full workflow (session → execute → close)
+
+16. **`StatementExecutionStatementTests.cs`** (FUTURE)
     - [ ] Unit tests with fake client
     - [ ] Test compression handling
     - [ ] Test hybrid disposition handling
     - [ ] Test truncation detection
-
-16. **`StatementExecutionE2ETests.cs`** (NEW)
-    - [ ] E2E tests with live warehouse
-    - [ ] Test session reuse
-    - [ ] Test large result sets with compression
 
 ### Documentation to Update
 
