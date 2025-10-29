@@ -225,6 +225,17 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 throw new DatabricksException("Failed to deserialize ExecuteStatementResponse");
             }
 
+            // Check for FAILED state and throw exception (like JDBC driver does)
+            if (executeResponse.Status?.State == "FAILED")
+            {
+                var errorMessage = $"Statement execution failed. State: {executeResponse.Status.State}";
+                if (executeResponse.Status.Error != null)
+                {
+                    errorMessage += $". Error Code: {executeResponse.Status.Error.ErrorCode}, Message: {executeResponse.Status.Error.Message}";
+                }
+                throw new DatabricksException(errorMessage);
+            }
+
             return executeResponse;
         }
 
