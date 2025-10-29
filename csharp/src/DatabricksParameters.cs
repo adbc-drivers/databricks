@@ -262,6 +262,75 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// </summary>
         public const string OperationStatusRequestTimeout = "adbc.databricks.operation_status_request_timeout";
 
+        // Statement Execution API configuration parameters
+
+        /// <summary>
+        /// The protocol to use for statement execution.
+        /// Supported values:
+        /// - "thrift": Use Thrift/HiveServer2 protocol (default)
+        /// - "rest": Use Statement Execution REST API
+        /// Default value is "thrift" if not specified.
+        /// </summary>
+        public const string Protocol = "adbc.databricks.protocol";
+
+        /// <summary>
+        /// Result disposition for Statement Execution API.
+        /// Supported values:
+        /// - "inline": Results returned directly in response (≤25 MiB)
+        /// - "external_links": Results via presigned URLs (≤100 GiB)
+        /// - "inline_or_external_links": Hybrid mode - server decides based on size (default, recommended)
+        /// Default value is "inline_or_external_links" if not specified.
+        /// Only applicable when Protocol is "rest".
+        /// </summary>
+        public const string ResultDisposition = "adbc.databricks.rest.result_disposition";
+
+        /// <summary>
+        /// Result format for Statement Execution API.
+        /// Supported values:
+        /// - "arrow_stream": Apache Arrow IPC format (default, recommended)
+        /// - "json_array": JSON array format
+        /// - "csv": CSV format
+        /// Default value is "arrow_stream" if not specified.
+        /// Only applicable when Protocol is "rest".
+        /// </summary>
+        public const string ResultFormat = "adbc.databricks.rest.result_format";
+
+        /// <summary>
+        /// Result compression codec for Statement Execution API.
+        /// Supported values:
+        /// - "lz4": LZ4 compression (default for external_links)
+        /// - "gzip": GZIP compression
+        /// - "none": No compression (default for inline)
+        /// Only applicable when Protocol is "rest".
+        /// </summary>
+        public const string ResultCompression = "adbc.databricks.rest.result_compression";
+
+        /// <summary>
+        /// Wait timeout for statement execution in seconds.
+        /// - 0: Async mode, return immediately
+        /// - 5-50: Sync mode up to timeout
+        /// Default: 10 seconds
+        /// Note: When enable_direct_results=true, this parameter is not set (server waits until complete)
+        /// Only applicable when Protocol is "rest".
+        /// </summary>
+        public const string WaitTimeout = "adbc.databricks.rest.wait_timeout";
+
+        /// <summary>
+        /// Statement polling interval in milliseconds for async execution.
+        /// Default: 1000ms (1 second)
+        /// Only applicable when Protocol is "rest".
+        /// </summary>
+        public const string PollingInterval = "adbc.databricks.rest.polling_interval_ms";
+
+        /// <summary>
+        /// Enable session management for Statement Execution API.
+        /// When true, creates and reuses session across statements in a connection.
+        /// When false, each statement executes without session context.
+        /// Default: true
+        /// Only applicable when Protocol is "rest".
+        /// </summary>
+        public const string EnableSessionManagement = "adbc.databricks.enable_session_management";
+
     }
 
     /// <summary>
