@@ -585,8 +585,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
             await client.CloseStatementAsync(statementId, CancellationToken.None);
 
             Assert.NotNull(capturedRequest);
-            Assert.Equal(HttpMethod.Post, capturedRequest.Method);
-            Assert.Equal($"https://test.databricks.com/api/2.0/sql/statements/{statementId}/close",
+            Assert.Equal(HttpMethod.Delete, capturedRequest.Method);
+            Assert.Equal($"https://test.databricks.com/api/2.0/sql/statements/{statementId}",
                 capturedRequest.RequestUri?.ToString());
         }
 
