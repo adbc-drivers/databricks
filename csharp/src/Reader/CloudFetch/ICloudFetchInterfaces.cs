@@ -22,22 +22,49 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Hive.Service.Rpc.Thrift;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Represents a downloaded result file with its associated metadata.
+    /// Protocol-agnostic interface that works with both Thrift and REST APIs.
     /// </summary>
     internal interface IDownloadResult : IDisposable
     {
         /// <summary>
-        /// Gets the link information for this result.
+        /// Gets the URL for downloading the file.
         /// </summary>
-        TSparkArrowResultLink Link { get; }
+        string FileUrl { get; }
+
+        /// <summary>
+        /// Gets the starting row offset for this result chunk.
+        /// </summary>
+        long StartRowOffset { get; }
+
+        /// <summary>
+        /// Gets the number of rows in this result chunk.
+        /// </summary>
+        long RowCount { get; }
+
+        /// <summary>
+        /// Gets the size in bytes of this result chunk.
+        /// </summary>
+        long ByteCount { get; }
+
+        /// <summary>
+        /// Gets the expiration time of the URL in UTC.
+        /// </summary>
+        DateTime ExpirationTime { get; }
+
+        /// <summary>
+        /// Gets optional HTTP headers to include when downloading the file.
+        /// Used for authentication or other custom headers required by the download endpoint.
+        /// </summary>
+        IReadOnlyDictionary<string, string>? HttpHeaders { get; }
 
         /// <summary>
         /// Gets the stream containing the downloaded data.
@@ -78,10 +105,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         void SetFailed(Exception exception);
 
         /// <summary>
-        /// Updates this download result with a refreshed link.
+        /// Updates this download result with a refreshed URL and expiration time.
         /// </summary>
-        /// <param name="refreshedLink">The refreshed link information.</param>
-        void UpdateWithRefreshedLink(TSparkArrowResultLink refreshedLink);
+        /// <param name="fileUrl">The refreshed file URL.</param>
+        /// <param name="expirationTime">The new expiration time.</param>
+        /// <param name="httpHeaders">Optional HTTP headers for the refreshed URL.</param>
+        void UpdateWithRefreshedUrl(string fileUrl, DateTime expirationTime, IReadOnlyDictionary<string, string>? httpHeaders = null);
 
         /// <summary>
         /// Checks if the URL is expired or about to expire.
@@ -129,7 +158,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
     }
 
     /// <summary>
-    /// Fetches result chunks from the Thrift server.
+    /// Fetches result chunks from the server (Thrift or REST).
     /// </summary>
     internal interface ICloudFetchResultFetcher
     {
@@ -167,12 +196,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         Exception? Error { get; }
 
         /// <summary>
-        /// Gets a URL for the specified offset, fetching or refreshing as needed.
+        /// Gets a download result for the specified offset, fetching or refreshing as needed.
         /// </summary>
-        /// <param name="offset">The row offset for which to get a URL.</param>
+        /// <param name="offset">The row offset for which to get a download result.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The URL link for the specified offset, or null if not available.</returns>
-        Task<TSparkArrowResultLink?> GetUrlAsync(long offset, CancellationToken cancellationToken);
+        /// <returns>The download result for the specified offset, or null if not available.</returns>
+        Task<IDownloadResult?> GetDownloadResultAsync(long offset, CancellationToken cancellationToken);
     }
 
     /// <summary>
