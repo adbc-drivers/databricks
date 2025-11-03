@@ -31,6 +31,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch;
+using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
 using Moq;
 using Moq.Protected;
@@ -38,13 +39,14 @@ using Xunit;
 
 namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 {
-    public class CloudFetchDownloaderTest
+    public class CloudFetchDownloaderTest : IDisposable
     {
         private readonly BlockingCollection<IDownloadResult> _downloadQueue;
         private readonly BlockingCollection<IDownloadResult> _resultQueue;
         private readonly Mock<ICloudFetchMemoryBufferManager> _mockMemoryManager;
         private readonly Mock<IHiveServer2Statement> _mockStatement;
         private readonly Mock<ICloudFetchResultFetcher> _mockResultFetcher;
+        private readonly ActivityTrace _activityTrace;
 
         public CloudFetchDownloaderTest()
         {
@@ -53,6 +55,13 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             _mockMemoryManager = new Mock<ICloudFetchMemoryBufferManager>();
             _mockStatement = new Mock<IHiveServer2Statement>();
             _mockResultFetcher = new Mock<ICloudFetchResultFetcher>();
+
+            // Set up activity trace for tracing support
+            _activityTrace = new ActivityTrace("TestActivitySource");
+            _mockStatement.Setup(s => s.Trace).Returns(_activityTrace);
+            _mockStatement.Setup(s => s.TraceParent).Returns((string?)null);
+            _mockStatement.Setup(s => s.AssemblyVersion).Returns("1.0.0");
+            _mockStatement.Setup(s => s.AssemblyName).Returns("TestAssembly");
 
             // Set up memory manager defaults
             _mockMemoryManager.Setup(m => m.TryAcquireMemory(It.IsAny<long>())).Returns(true);
@@ -296,7 +305,10 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             // Create test download results
             var mockDownloadResult = new Mock<IDownloadResult>();
             var resultLink = new TSparkArrowResultLink {
+                StartRowOffset = 0,
                 FileLink = "http://test.com/file1",
+                RowCount = 100,
+                BytesNum = 100,
                 ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set expiry 30 minutes in the future
             };
             mockDownloadResult.Setup(r => r.Link).Returns(resultLink);
@@ -306,8 +318,13 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Capture when SetFailed is called
             Exception? capturedException = null;
+            bool setFailedCalled = false;
             mockDownloadResult.Setup(r => r.SetFailed(It.IsAny<Exception>()))
-                .Callback<Exception>(ex => capturedException = ex);
+                .Callback<Exception>(ex => {
+                    capturedException = ex;
+                    setFailedCalled = true;
+                    Console.WriteLine($"SetFailed called with exception: {ex.Message}");
+                });
 
             // Create the downloader
             var downloader = new CloudFetchDownloader(
@@ -324,30 +341,42 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Act
             await downloader.StartAsync(CancellationToken.None);
+            Console.WriteLine("Downloader started");
             _downloadQueue.Add(mockDownloadResult.Object);
+            Console.WriteLine("Added download result to queue");
 
-            // Wait for the download to be processed and fail
-            await Task.Delay(200);
-
-            // Add the end of results guard
+            // Add the end of results guard immediately
             _downloadQueue.Add(EndOfResultsGuard.Instance);
+            Console.WriteLine("Added end guard");
 
-            // Wait for all processing to complete
-            await Task.Delay(200);
+            // Wait for the download to fail - use a timeout to avoid hanging
+            int maxWaitMs = 2000;
+            int waitedMs = 0;
+            while (!downloader.HasError && !setFailedCalled && waitedMs < maxWaitMs)
+            {
+                await Task.Delay(50);
+                waitedMs += 50;
+            }
+
+            Console.WriteLine($"Finished waiting: HasError={downloader.HasError}, SetFailedCalled={setFailedCalled}, WaitedMs={waitedMs}");
 
             // Assert
             // Verify the download failed
+            Assert.True(setFailedCalled, $"SetFailed was not called. Downloader HasError={downloader.HasError}");
             mockDownloadResult.Verify(r => r.SetFailed(It.IsAny<Exception>()), Times.Once);
+
+            // Verify GetNextDownloadedFileAsync throws an exception
+            await Assert.ThrowsAsync<AdbcException>(() => downloader.GetNextDownloadedFileAsync(CancellationToken.None));
 
             // Verify the downloader has an error
             Assert.True(downloader.HasError);
             Assert.NotNull(downloader.Error);
 
-            // Verify GetNextDownloadedFileAsync throws an exception
-            await Assert.ThrowsAsync<AdbcException>(() => downloader.GetNextDownloadedFileAsync(CancellationToken.None));
+            // Cleanup with timeout and verify task completed
+            var stopTask = downloader.StopAsync();
+            var completedTask = await Task.WhenAny(stopTask, Task.Delay(2000));
+            Assert.Same(stopTask, completedTask); // Ensure that StopAsync completed before the timeout
 
-            // Cleanup
-            await downloader.StopAsync();
         }
 
         [Fact]
@@ -679,6 +708,13 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                 });
 
             return mockHandler;
+        }
+
+        public void Dispose()
+        {
+            _activityTrace?.Dispose();
+            _downloadQueue?.Dispose();
+            _resultQueue?.Dispose();
         }
     }
 }
