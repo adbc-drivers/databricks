@@ -522,16 +522,16 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
         }
 
         [Fact]
-        public void CreateStatement_ThrowsNotImplementedException()
+        public void CreateStatement_ReturnsStatement()
         {
             _client = CreateClient();
             var properties = GetConnectionProperties(enableSessionManagement: true);
             var connection = new StatementExecutionConnection(_client, properties);
 
-            var exception = Assert.Throws<NotImplementedException>(() =>
-                connection.CreateStatement());
+            var statement = connection.CreateStatement();
 
-            Assert.Contains("PECO-2791-B", exception.Message);
+            Assert.NotNull(statement);
+            Assert.IsAssignableFrom<AdbcStatement>(statement);
         }
     }
 }

@@ -21,6 +21,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using Apache.Arrow.Ipc;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 {
@@ -28,7 +29,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
     /// Connection implementation for Databricks Statement Execution REST API.
     /// Manages SQL sessions and statement creation using the REST protocol.
     /// </summary>
-    internal class StatementExecutionConnection : IDisposable
+    internal class StatementExecutionConnection : AdbcConnection
     {
         private readonly IStatementExecutionClient _client;
         private readonly IReadOnlyDictionary<string, string> _properties;
@@ -105,12 +106,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// </summary>
         /// <returns>A new statement instance.</returns>
         /// <remarks>
-        /// This will be implemented in PECO-2791-B to return StatementExecutionStatement.
-        /// For now, it throws NotImplementedException.
+        /// Returns a StatementExecutionStatement instance. Full query execution
+        /// implementation will be completed in PECO-2791-B.
         /// </remarks>
-        public AdbcStatement CreateStatement()
+        public override AdbcStatement CreateStatement()
         {
-            throw new NotImplementedException("Statement creation will be implemented in PECO-2791-B");
+            return new StatementExecutionStatement(_client, _warehouseId, _sessionId);
         }
 
         /// <summary>
@@ -136,6 +137,51 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                     _sessionId = null;
                 }
             }
+        }
+
+        /// <summary>
+        /// Get a hierarchical view of all catalogs, database schemas, tables, and columns.
+        /// </summary>
+        /// <remarks>
+        /// Metadata operations via Statement Execution API will be implemented in a future release.
+        /// </remarks>
+        public override IArrowArrayStream GetObjects(
+            GetObjectsDepth depth,
+            string? catalogPattern,
+            string? dbSchemaPattern,
+            string? tableNamePattern,
+            IReadOnlyList<string>? tableTypes,
+            string? columnNamePattern)
+        {
+            throw AdbcException.NotImplemented(
+                "GetObjects not yet implemented for Statement Execution API. " +
+                "Metadata operations will be added in a future release.");
+        }
+
+        /// <summary>
+        /// Get the Arrow schema of a database table.
+        /// </summary>
+        /// <remarks>
+        /// Metadata operations via Statement Execution API will be implemented in a future release.
+        /// </remarks>
+        public override Schema GetTableSchema(string? catalog, string? dbSchema, string tableName)
+        {
+            throw AdbcException.NotImplemented(
+                "GetTableSchema not yet implemented for Statement Execution API. " +
+                "Metadata operations will be added in a future release.");
+        }
+
+        /// <summary>
+        /// Get a list of table types supported by the database.
+        /// </summary>
+        /// <remarks>
+        /// Metadata operations via Statement Execution API will be implemented in a future release.
+        /// </remarks>
+        public override IArrowArrayStream GetTableTypes()
+        {
+            throw AdbcException.NotImplemented(
+                "GetTableTypes not yet implemented for Statement Execution API. " +
+                "Metadata operations will be added in a future release.");
         }
 
         /// <summary>
@@ -183,7 +229,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// <summary>
         /// Disposes the connection and releases resources.
         /// </summary>
-        public void Dispose()
+        public override void Dispose()
         {
             if (!_disposed)
             {
@@ -201,6 +247,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                     }
                 }
 
+                base.Dispose();
                 _disposed = true;
             }
         }

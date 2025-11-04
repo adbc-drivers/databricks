@@ -382,10 +382,10 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
 
         #endregion
 
-        #region CreateStatement Tests
+        #region AdbcConnection Implementation Tests
 
         [Fact]
-        public void CreateStatement_ThrowsNotImplementedException()
+        public void Connection_InheritsFromAdbcConnection()
         {
             var properties = new Dictionary<string, string>
             {
@@ -394,7 +394,107 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
 
             var connection = new StatementExecutionConnection(_mockClient.Object, properties);
 
-            var exception = Assert.Throws<NotImplementedException>(() => connection.CreateStatement());
+            Assert.IsAssignableFrom<AdbcConnection>(connection);
+        }
+
+        [Fact]
+        public void CreateStatement_ReturnsStatementExecutionStatement()
+        {
+            var properties = new Dictionary<string, string>
+            {
+                { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
+            };
+
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var statement = connection.CreateStatement();
+
+            Assert.NotNull(statement);
+            Assert.IsType<StatementExecutionStatement>(statement);
+        }
+
+        [Fact]
+        public void GetObjects_ThrowsNotImplemented()
+        {
+            var properties = new Dictionary<string, string>
+            {
+                { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
+            };
+
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+
+            var exception = Assert.Throws<AdbcException>(() =>
+                connection.GetObjects(
+                    AdbcConnection.GetObjectsDepth.All,
+                    null, null, null, null, null));
+
+            Assert.Contains("not yet implemented", exception.Message);
+        }
+
+        [Fact]
+        public void GetTableSchema_ThrowsNotImplemented()
+        {
+            var properties = new Dictionary<string, string>
+            {
+                { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
+            };
+
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+
+            var exception = Assert.Throws<AdbcException>(() =>
+                connection.GetTableSchema(null, null, "test_table"));
+
+            Assert.Contains("not yet implemented", exception.Message);
+        }
+
+        [Fact]
+        public void GetTableTypes_ThrowsNotImplemented()
+        {
+            var properties = new Dictionary<string, string>
+            {
+                { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
+            };
+
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+
+            var exception = Assert.Throws<AdbcException>(() =>
+                connection.GetTableTypes());
+
+            Assert.Contains("not yet implemented", exception.Message);
+        }
+
+        [Fact]
+        public void Statement_ExecuteQuery_ThrowsNotImplementedException()
+        {
+            var properties = new Dictionary<string, string>
+            {
+                { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
+            };
+
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var statement = connection.CreateStatement();
+            statement.SqlQuery = "SELECT 1";
+
+            var exception = Assert.Throws<NotImplementedException>(() =>
+                statement.ExecuteQuery());
+
+            Assert.Contains("PECO-2791-B", exception.Message);
+        }
+
+        [Fact]
+        public void Statement_ExecuteUpdate_ThrowsNotImplementedException()
+        {
+            var properties = new Dictionary<string, string>
+            {
+                { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
+            };
+
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var statement = connection.CreateStatement();
+            statement.SqlQuery = "INSERT INTO test VALUES (1)";
+
+            var exception = Assert.Throws<NotImplementedException>(() =>
+                statement.ExecuteUpdate());
+
             Assert.Contains("PECO-2791-B", exception.Message);
         }
 
