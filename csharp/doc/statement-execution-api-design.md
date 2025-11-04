@@ -2359,33 +2359,43 @@ internal class StatementExecutionResultFetcher : BaseResultFetcher
 
 ### Current Sprint Tasks (PECO-2791 Breakdown)
 
-#### **PECO-2791-A: StatementExecutionConnection (Session Management)**
+#### **PECO-2791-A: StatementExecutionConnection (Session Management)** ✅
 **Estimated Effort:** 1-2 days
 **Dependencies:** PECO-2790
+**Status:** Completed (PECO-2837)
 
 **Scope:**
-- [ ] Implement `StatementExecutionConnection` class
+- [x] Implement `StatementExecutionConnection` class
   - Session lifecycle (create on open, delete on close)
   - Warehouse ID extraction from `http_path`
   - Parse catalog/schema from properties
   - Enable/disable session management configuration
-- [ ] Add missing constants to `DatabricksParameters`:
-  - `HttpPath`, `Catalog`, `Schema` (if not already present)
-- [ ] Unit tests for session management
+- [x] Unit tests for session management
   - Test session creation with valid warehouse ID
   - Test session deletion on dispose
   - Test warehouse ID extraction from various http_path formats
   - Test session management enable/disable
 
 **Files:**
-- `StatementExecution/StatementExecutionConnection.cs` (new)
-- `DatabricksParameters.cs` (update)
-- Test files
+- `StatementExecution/StatementExecutionConnection.cs` (new) ✅
+- `test/Unit/StatementExecution/StatementExecutionConnectionTests.cs` (new) ✅
+- `test/E2E/StatementExecution/StatementExecutionConnectionE2ETests.cs` (new) ✅
 
 **Success Criteria:**
-- Can create and delete sessions via REST API
-- Session management can be toggled via configuration
-- All unit tests pass
+- ✅ Can create and delete sessions via REST API
+- ✅ Session management can be toggled via configuration
+- ✅ All unit tests pass (20 tests)
+- ✅ All E2E tests pass (16 tests)
+- ✅ Total: 36 tests covering all scenarios
+
+**Implementation Notes:**
+- Uses **existing standard ADBC/Spark parameters** (no new parameters added):
+  - `adbc.spark.path` (SparkParameters.Path) for http_path/warehouse ID extraction
+  - `adbc.connection.catalog` (AdbcOptions.Connection.CurrentCatalog) for catalog
+  - `adbc.connection.db_schema` (AdbcOptions.Connection.CurrentDbSchema) for schema
+- Warehouse ID extraction supports both standard format (`/sql/1.0/warehouses/{id}`) and case-insensitive matching
+- Session deletion errors are swallowed to prevent masking other errors during cleanup
+- `CreateStatement()` method throws `NotImplementedException` with note about PECO-2791-B implementation
 
 ---
 
