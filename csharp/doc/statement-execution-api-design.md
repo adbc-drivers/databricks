@@ -2446,7 +2446,7 @@ internal class StatementExecutionResultFetcher : BaseResultFetcher
 **Dependencies:** PECO-2791-B
 
 **Scope:**
-- [ ] Implement `InlineReader` class
+- [x] Implement `InlineReader` class ✅ **COMPLETED (PECO-2839)**
   - Parse inline Arrow stream data from `ResultChunk.Attachment`
   - Handle multiple chunks in sequence
 - [ ] Update `StatementExecutionStatement` to support hybrid disposition
