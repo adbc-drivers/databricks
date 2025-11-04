@@ -251,6 +251,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // Set wait_timeout (skip if direct results mode is enabled OR using a session)
             // Sessions don't support wait_timeout parameter
             if (!_enableDirectResults && _sessionId == null)
+<<<<<<< HEAD
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
 =======
             // Set wait_timeout (skip if direct results mode is enabled)
@@ -261,6 +262,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // Sessions don't support wait_timeout parameter
             if (!_enableDirectResults && _sessionId == null)
 >>>>>>> c7082c9 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
+=======
+            if (!_enableDirectResults && _waitTimeout != null)
+>>>>>>> 7c1e247 (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
             {
                 request.WaitTimeout = _waitTimeout;
                 request.OnWaitTimeout = "CONTINUE";
@@ -394,6 +398,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // Determine actual disposition from response
             // Check Result field first (contains actual data for this response)
             var hasExternalLinks = (response.Result?.ExternalLinks != null && response.Result.ExternalLinks.Any()) ||
+<<<<<<< HEAD
                 (response.Manifest?.Chunks?.Any(c => c.ExternalLinks != null && c.ExternalLinks.Any()) == true);
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -401,11 +406,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 =======
 =======
 >>>>>>> c7082c9 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
+=======
+>>>>>>> 7c1e247 (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
 
             // Check for inline data in Result field (INLINE disposition with Arrow bytes)
             var hasInlineResult = response.Result?.Attachment != null && response.Result.Attachment.Length > 0;
 
             // Check for inline data in Manifest chunks (INLINE_OR_EXTERNAL_LINKS with Arrow bytes)
+<<<<<<< HEAD
 <<<<<<< HEAD
             var hasInlineManifest = response.Manifest?.Chunks?
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
@@ -417,6 +425,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 >>>>>>> cd94a4b (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
 =======
 >>>>>>> c7082c9 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
+=======
+            // Determine actual disposition from response
+                .Any(c => c.ExternalLinks != null && c.ExternalLinks.Any()) == true;
+>>>>>>> 7c1e247 (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
                 .Any(c => c.Attachment != null && c.Attachment.Length > 0) == true;
 
             if (hasExternalLinks)
@@ -433,6 +445,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 =======
             else if (hasInlineResult || hasInlineManifest)
             {
+<<<<<<< HEAD
                 // Inline Arrow data - parse directly
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
 =======
@@ -445,6 +458,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             {
                 // Inline Arrow data - parse directly
 >>>>>>> c7082c9 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
+=======
+                // Inline data - parse directly
+>>>>>>> 7c1e247 (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
                 return CreateInlineReader(response);
             }
             else
@@ -456,7 +472,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
         /// <summary>
         /// Creates a reader for external links results using the CloudFetch pipeline.
-        /// Follows the protocol-agnostic pattern: Create fetcher → Parse config → Create manager → Start → Create reader.
         /// </summary>
         /// <param name="response">The statement execution response.</param>
         /// <returns>A CloudFetch reader.</returns>
@@ -474,6 +489,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             bool isLz4Compressed = response.Manifest.ResultCompression?.Equals("lz4", StringComparison.OrdinalIgnoreCase) == true;
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 7c1e247 (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
             // Create memory manager
             int memoryBufferSizeMB = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMemoryBufferSize, "200"));
             var memoryManager = new CloudFetchMemoryBufferManager(memoryBufferSizeMB);
@@ -482,6 +500,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             var downloadQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
             var resultQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
             // If Result field has external links, add them to the download queue first
@@ -520,6 +539,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // 1. Create REST-specific result fetcher
             // Resources (memory manager, download queue) will be initialized by CloudFetchDownloadManager
 >>>>>>> d40cb8b (fix(csharp): update StatementExecutionStatement to use protocol-agnostic CloudFetch pattern)
+=======
+            // Create result fetcher
+>>>>>>> 7c1e247 (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
             var resultFetcher = new StatementExecutionResultFetcher(
                 _client,
                 response.StatementId,
@@ -634,16 +656,39 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             var config = CloudFetchConfiguration.FromProperties(
                 schema,
                 isLz4Compressed);
+                memoryManager,
+                downloadQueue);
 
-            // 3. Create protocol-agnostic download manager
-            // Manager creates shared resources and calls Initialize() on the fetcher
-            var downloadManager = new CloudFetchDownloadManager(
-                resultFetcher,        // Protocol-specific fetcher
+            // Create downloader with correct parameters
+            int parallelDownloads = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchParallelDownloads, "3"));
+            int maxRetries = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMaxRetries, "3"));
+            int retryDelayMs = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchRetryDelayMs, "500"));
+            int urlExpirationBufferSeconds = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, "60"));
+            int maxUrlRefreshAttempts = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, "3"));
+
+            var downloader = new CloudFetchDownloader(
+                this, // Pass this as ITracingStatement
+                downloadQueue,
+                resultQueue,
+                memoryManager,
                 _httpClient,
-                config,
-                this);                // ITracingStatement for tracing
+                resultFetcher,
+                parallelDownloads,
+                isLz4Compressed,
+                maxRetries,
+                retryDelayMs,
+                maxUrlRefreshAttempts,
+                urlExpirationBufferSeconds);
 
-            // 4. Start the manager
+            // Create download manager
+            var downloadManager = new CloudFetchDownloadManager(
+                null, // statement parameter is nullable for REST API
+                schema,
+                isLz4Compressed,
+                resultFetcher,
+                downloader);
+
+            // Start the download manager
             downloadManager.StartAsync().GetAwaiter().GetResult();
 
             // Create and return a simple reader that uses the download manager
@@ -763,6 +808,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 return new InlineReader(response.Manifest);
             }
 
+<<<<<<< HEAD
             throw new InvalidOperationException("No inline data found in response.Result or response.Manifest");
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
 =======
@@ -772,6 +818,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             }
 
 >>>>>>> c7082c9 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
+=======
+            {
+                throw new InvalidOperationException("Manifest is required for inline disposition");
+            }
+
+>>>>>>> 7c1e247 (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
         }
 
         /// <summary>
