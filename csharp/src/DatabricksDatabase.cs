@@ -112,7 +112,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             var client = new StatementExecutionClient(httpClient, host);
 
             // Create and open connection
-            var connection = new StatementExecutionConnection(client, mergedProperties);
+            var connection = new StatementExecutionConnection(client, mergedProperties, httpClient);
             connection.OpenAsync().Wait();
 
             return connection;

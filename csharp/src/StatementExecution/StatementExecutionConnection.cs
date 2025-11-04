@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache;
@@ -37,6 +38,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         private readonly string? _catalog;
         private readonly string? _schema;
         private readonly bool _enableSessionManagement;
+        private readonly HttpClient _httpClient;
         private string? _sessionId;
         private bool _disposed;
 
@@ -55,12 +57,17 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// </summary>
         /// <param name="client">The Statement Execution API client.</param>
         /// <param name="properties">Connection properties.</param>
+        /// <param name="httpClient">HTTP client for CloudFetch downloads.</param>
         /// <exception cref="ArgumentNullException">Thrown if client or properties is null.</exception>
         /// <exception cref="ArgumentException">Thrown if required properties are missing or invalid.</exception>
-        public StatementExecutionConnection(IStatementExecutionClient client, IReadOnlyDictionary<string, string> properties)
+        public StatementExecutionConnection(
+            IStatementExecutionClient client,
+            IReadOnlyDictionary<string, string> properties,
+            HttpClient httpClient)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
 
             // Extract warehouse ID from http_path
             _warehouseId = ExtractWarehouseId(properties);
@@ -105,13 +112,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// Creates a new statement for executing queries.
         /// </summary>
         /// <returns>A new statement instance.</returns>
-        /// <remarks>
-        /// Returns a StatementExecutionStatement instance. Full query execution
-        /// implementation will be completed in PECO-2791-B.
-        /// </remarks>
         public override AdbcStatement CreateStatement()
         {
-            return new StatementExecutionStatement(_client, _warehouseId, _sessionId);
+            return new StatementExecutionStatement(_client, _warehouseId, _sessionId, _properties, _httpClient);
         }
 
         /// <summary>

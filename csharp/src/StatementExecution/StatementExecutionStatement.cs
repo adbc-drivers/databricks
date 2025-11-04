@@ -91,8 +91,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
 
             // Parse configuration from properties
-            _resultDisposition = GetPropertyOrDefault(DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
-            _resultFormat = GetPropertyOrDefault(DatabricksParameters.ResultFormat, "ARROW_STREAM");
+            _resultDisposition = GetPropertyOrDefault(DatabricksParameters.ResultDisposition, "inline_or_external_links");
+            _resultFormat = GetPropertyOrDefault(DatabricksParameters.ResultFormat, "arrow_stream");
             _resultCompression = GetPropertyOrDefault(DatabricksParameters.ResultCompression, null);
             _pollingIntervalMs = int.Parse(GetPropertyOrDefault(DatabricksParameters.PollingInterval, "1000"));
             _waitTimeout = GetPropertyOrDefault(DatabricksParameters.WaitTimeout, null);
@@ -194,32 +194,28 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 // Parameters = ConvertParameters() // TODO: Implement parameter conversion
             };
 
-            // Set warehouse_id (always required) and session_id if available
-            request.WarehouseId = _warehouseId;
-
+            // Set warehouse_id or session_id (mutually exclusive)
             if (_sessionId != null)
             {
                 request.SessionId = _sessionId;
             }
             else
             {
-                // Only set catalog/schema when not using a session
-                // (sessions have their own catalog/schema)
+                request.WarehouseId = _warehouseId;
                 request.Catalog = _catalogName;
                 request.Schema = _schemaName;
             }
 
             // Set compression (skip for inline results)
-            if (request.Disposition != "INLINE")
+            if (request.Disposition != "inline")
             {
                 request.ResultCompression = _resultCompression ?? "lz4";
             }
 
-            // Set wait_timeout (skip if direct results mode is enabled OR using a session)
-            // Sessions don't support wait_timeout parameter
-            if (!_enableDirectResults && _sessionId == null)
+            // Set wait_timeout (skip if direct results mode is enabled)
+            if (!_enableDirectResults && _waitTimeout != null)
             {
-                request.WaitTimeout = _waitTimeout ?? "10s";  // Default to 10s if not specified
+                request.WaitTimeout = _waitTimeout;
                 request.OnWaitTimeout = "CONTINUE";
             }
 
@@ -328,25 +324,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// <returns>An Arrow array stream reader.</returns>
         private IArrowArrayStream CreateReader(GetStatementResponse response)
         {
-            // Check if response is in JSON_ARRAY format (fallback when Arrow not supported)
-            bool isJsonFormat = response.Manifest?.Format?.Equals("JSON_ARRAY", StringComparison.OrdinalIgnoreCase) == true;
-
-            if (isJsonFormat)
-            {
-                // JSON format - convert to Arrow
-                return CreateJsonArrayReader(response);
-            }
-
             // Determine actual disposition from response
-            // Check Result field first (contains actual data for this response)
-            var hasExternalLinks = (response.Result?.ExternalLinks != null && response.Result.ExternalLinks.Any()) ||
-                (response.Manifest?.Chunks?.Any(c => c.ExternalLinks != null && c.ExternalLinks.Any()) == true);
-
-            // Check for inline data in Result field (INLINE disposition with Arrow bytes)
-            var hasInlineResult = response.Result?.Attachment != null && response.Result.Attachment.Length > 0;
-
-            // Check for inline data in Manifest chunks (INLINE_OR_EXTERNAL_LINKS with Arrow bytes)
-            var hasInlineManifest = response.Manifest?.Chunks?
+            var hasExternalLinks = response.Manifest?.Chunks?
+                .Any(c => c.ExternalLinks != null && c.ExternalLinks.Any()) == true;
+            var hasInlineData = response.Manifest?.Chunks?
                 .Any(c => c.Attachment != null && c.Attachment.Length > 0) == true;
 
             if (hasExternalLinks)
@@ -354,9 +335,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 // External links - use CloudFetch pipeline
                 return CreateExternalLinksReader(response);
             }
-            else if (hasInlineResult || hasInlineManifest)
+            else if (hasInlineData)
             {
-                // Inline Arrow data - parse directly
+                // Inline data - parse directly
                 return CreateInlineReader(response);
             }
             else
@@ -368,7 +349,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
         /// <summary>
         /// Creates a reader for external links results using the CloudFetch pipeline.
-        /// Follows the protocol-agnostic pattern: Create fetcher → Parse config → Create manager → Start → Create reader.
         /// </summary>
         /// <param name="response">The statement execution response.</param>
         /// <returns>A CloudFetch reader.</returns>
@@ -385,8 +365,15 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // Determine compression
             bool isLz4Compressed = response.Manifest.ResultCompression?.Equals("lz4", StringComparison.OrdinalIgnoreCase) == true;
 
-            // 1. Create REST-specific result fetcher
-            // Resources (memory manager, download queue) will be initialized by CloudFetchDownloadManager
+            // Create memory manager
+            int memoryBufferSizeMB = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMemoryBufferSize, "200"));
+            var memoryManager = new CloudFetchMemoryBufferManager(memoryBufferSizeMB);
+
+            // Create download and result queues
+            var downloadQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
+            var resultQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
+
+            // Create result fetcher
             var resultFetcher = new StatementExecutionResultFetcher(
                 _client,
                 response.StatementId,
@@ -446,6 +433,42 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 schema,
                 null,                 // IResponse (REST doesn't use IResponse)
                 downloadManager);
+                memoryManager,
+                downloadQueue);
+
+            // Create downloader with correct parameters
+            int parallelDownloads = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchParallelDownloads, "3"));
+            int maxRetries = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMaxRetries, "3"));
+            int retryDelayMs = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchRetryDelayMs, "500"));
+            int urlExpirationBufferSeconds = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, "60"));
+            int maxUrlRefreshAttempts = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, "3"));
+
+            var downloader = new CloudFetchDownloader(
+                this, // Pass this as ITracingStatement
+                downloadQueue,
+                resultQueue,
+                memoryManager,
+                _httpClient,
+                resultFetcher,
+                parallelDownloads,
+                isLz4Compressed,
+                maxRetries,
+                retryDelayMs,
+                maxUrlRefreshAttempts,
+                urlExpirationBufferSeconds);
+
+            // Create download manager
+            var downloadManager = new CloudFetchDownloadManager(
+                null, // statement parameter is nullable for REST API
+                schema,
+                isLz4Compressed,
+                resultFetcher,
+                downloader);
+
+            // Start the download manager
+            downloadManager.StartAsync().GetAwaiter().GetResult();
+
+            // Create and return a simple reader that uses the download manager
         }
 
         /// <summary>
@@ -455,76 +478,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// <returns>An inline reader.</returns>
         private IArrowArrayStream CreateInlineReader(GetStatementResponse response)
         {
-            // For INLINE disposition, data is in response.Result
-            if (response.Result != null && response.Result.Attachment != null && response.Result.Attachment.Length > 0)
+            if (response.Manifest == null)
             {
-                // Check if data is compressed (manifest contains compression metadata)
-                byte[] attachmentData = response.Result.Attachment;
-                string? compression = response.Manifest?.ResultCompression;
-
-                // Decompress if necessary
-                if (!string.IsNullOrEmpty(compression) && !compression.Equals("none", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (compression.Equals("lz4", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var decompressed = Lz4Utilities.DecompressLz4(attachmentData);
-                        attachmentData = decompressed.ToArray();
-                    }
-                    else
-                    {
-                        throw new NotSupportedException($"Compression type '{compression}' is not supported for inline results");
-                    }
-                }
-
-                // Convert ResultData to ResultManifest format for InlineReader
-                var manifest = new ResultManifest
-                {
-                    Format = "arrow_stream",
-                    Chunks = new List<ResultChunk>
-                    {
-                        new ResultChunk
-                        {
-                            ChunkIndex = (int)(response.Result.ChunkIndex ?? 0),
-                            RowCount = response.Result.RowCount ?? 0,
-                            RowOffset = response.Result.RowOffset ?? 0,
-                            ByteCount = response.Result.ByteCount ?? 0,
-                            Attachment = attachmentData  // Use decompressed data
-                        }
-                    }
-                };
-
-                return new InlineReader(manifest);
+                throw new InvalidOperationException("Manifest is required for inline disposition");
             }
 
-            // For INLINE_OR_EXTERNAL_LINKS disposition with inline data, data is in response.Manifest
-            // These chunks should already be decompressed by the server or need similar handling
-            if (response.Manifest != null)
-            {
-                // Check if manifest chunks need decompression
-                if (response.Manifest.Chunks != null && response.Manifest.Chunks.Count > 0)
-                {
-                    string? compression = response.Manifest.ResultCompression;
-                    if (!string.IsNullOrEmpty(compression) && !compression.Equals("none", StringComparison.OrdinalIgnoreCase))
-                    {
-                        // Decompress each chunk's attachment
-                        foreach (var chunk in response.Manifest.Chunks)
-                        {
-                            if (chunk.Attachment != null && chunk.Attachment.Length > 0)
-                            {
-                                if (compression.Equals("lz4", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    var decompressed = Lz4Utilities.DecompressLz4(chunk.Attachment);
-                                    chunk.Attachment = decompressed.ToArray();
-                                }
-                            }
-                        }
-                    }
-                }
-
-                return new InlineReader(response.Manifest);
-            }
-
-            throw new InvalidOperationException("No inline data found in response.Result or response.Manifest");
+            return new InlineReader(response.Manifest);
         }
 
         /// <summary>
@@ -540,53 +499,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 : new Schema(new List<Field>(), null);
 
             return new EmptyArrowArrayStream(schema);
-        }
-
-        /// <summary>
-        /// Creates a reader for JSON_ARRAY format results.
-        /// </summary>
-        /// <param name="response">The statement execution response.</param>
-        /// <returns>A JSON array reader that converts JSON to Arrow format.</returns>
-        private IArrowArrayStream CreateJsonArrayReader(GetStatementResponse response)
-        {
-            if (response.Manifest == null)
-            {
-                throw new InvalidOperationException("Manifest is required for JSON_ARRAY format");
-            }
-
-            // Extract data_array from the response
-            List<List<string>> data;
-
-            if (response.Result?.DataArray != null && response.Result.DataArray.Count > 0)
-            {
-                // Data is in result.data_array - convert List<List<object>> to List<List<string>>
-                data = response.Result.DataArray
-                    .Select(row => row.Select(cell => cell?.ToString() ?? string.Empty).ToList())
-                    .ToList();
-            }
-            else if (response.Manifest.Chunks != null && response.Manifest.Chunks.Count > 0)
-            {
-                // Try to get data from manifest chunks
-                data = new List<List<string>>();
-                foreach (var chunk in response.Manifest.Chunks)
-                {
-                    if (chunk.DataArray != null)
-                    {
-                        // Convert List<List<object>> to List<List<string>>
-                        var chunkData = chunk.DataArray
-                            .Select(row => row.Select(cell => cell?.ToString() ?? string.Empty).ToList())
-                            .ToList();
-                        data.AddRange(chunkData);
-                    }
-                }
-            }
-            else
-            {
-                // Empty result
-                data = new List<List<string>>();
-            }
-
-            return new JsonArrayReader(response.Manifest, data);
         }
 
         /// <summary>
