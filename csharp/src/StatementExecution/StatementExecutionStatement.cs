@@ -213,9 +213,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             }
 
             // Set wait_timeout (skip if direct results mode is enabled)
-            if (!_enableDirectResults && _waitTimeout != null)
+            if (!_enableDirectResults)
             {
-                request.WaitTimeout = _waitTimeout;
+                request.WaitTimeout = _waitTimeout ?? "10s";  // Default to 10s if not specified
                 request.OnWaitTimeout = "CONTINUE";
             }
 
