@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Databricks;
@@ -45,7 +46,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse-id" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             Assert.NotNull(connection);
             Assert.Equal("test-warehouse-id", connection.WarehouseId);
@@ -60,14 +61,14 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
             };
 
             Assert.Throws<ArgumentNullException>(() =>
-                new StatementExecutionConnection(null!, properties));
+                new StatementExecutionConnection(null!, properties, new HttpClient()));
         }
 
         [Fact]
         public void Constructor_WithNullProperties_ThrowsArgumentNullException()
         {
             Assert.Throws<ArgumentNullException>(() =>
-                new StatementExecutionConnection(_mockClient.Object, null!));
+                new StatementExecutionConnection(_mockClient.Object, null!, new HttpClient()));
         }
 
         [Fact]
@@ -76,7 +77,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
             var properties = new Dictionary<string, string>();
 
             var exception = Assert.Throws<ArgumentException>(() =>
-                new StatementExecutionConnection(_mockClient.Object, properties));
+                new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient()));
 
             Assert.Contains("Missing required property", exception.Message);
         }
@@ -90,7 +91,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
             };
 
             var exception = Assert.Throws<ArgumentException>(() =>
-                new StatementExecutionConnection(_mockClient.Object, properties));
+                new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient()));
 
             Assert.Contains("cannot be null or empty", exception.Message);
         }
@@ -105,7 +106,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { AdbcOptions.Connection.CurrentDbSchema, "my_schema" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             Assert.NotNull(connection);
             // Catalog and Schema are not exposed as public properties, but they should be used in OpenAsync
@@ -123,7 +124,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/abc123def456" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             Assert.Equal("abc123def456", connection.WarehouseId);
         }
@@ -136,7 +137,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/abc123def456/" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             Assert.Equal("abc123def456", connection.WarehouseId);
         }
@@ -149,7 +150,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/fallback-warehouse" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             Assert.Equal("fallback-warehouse", connection.WarehouseId);
         }
@@ -162,7 +163,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/WAREHOUSES/uppercase-id" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             Assert.Equal("uppercase-id", connection.WarehouseId);
         }
@@ -176,7 +177,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
             };
 
             var exception = Assert.Throws<ArgumentException>(() =>
-                new StatementExecutionConnection(_mockClient.Object, properties));
+                new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient()));
 
             Assert.Contains("Invalid http_path format", exception.Message);
         }
@@ -190,7 +191,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
             };
 
             var exception = Assert.Throws<ArgumentException>(() =>
-                new StatementExecutionConnection(_mockClient.Object, properties));
+                new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient()));
 
             Assert.Contains("Invalid http_path format", exception.Message);
         }
@@ -216,7 +217,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new CreateSessionResponse { SessionId = expectedSessionId });
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             await connection.OpenAsync();
 
             Assert.Equal(expectedSessionId, connection.SessionId);
@@ -238,7 +239,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { DatabricksParameters.EnableSessionManagement, "false" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             await connection.OpenAsync();
 
             Assert.Null(connection.SessionId);
@@ -263,7 +264,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new CreateSessionResponse { SessionId = expectedSessionId });
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             await connection.OpenAsync();
 
             Assert.Equal(expectedSessionId, connection.SessionId);
@@ -292,7 +293,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new CreateSessionResponse { SessionId = sessionId });
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             await connection.OpenAsync();
             await connection.CloseAsync();
 
@@ -313,7 +314,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { DatabricksParameters.EnableSessionManagement, "false" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             await connection.OpenAsync();
             await connection.CloseAsync();
 
@@ -345,7 +346,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                     It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new Exception("Session deletion failed"));
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             await connection.OpenAsync();
 
             // Should not throw
@@ -369,7 +370,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new CreateSessionResponse { SessionId = sessionId });
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             await connection.OpenAsync();
 
             connection.Dispose();
@@ -392,7 +393,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             Assert.IsAssignableFrom<AdbcConnection>(connection);
         }
@@ -405,7 +406,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             var statement = connection.CreateStatement();
 
             Assert.NotNull(statement);
@@ -420,7 +421,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             var exception = Assert.Throws<AdbcException>(() =>
                 connection.GetObjects(
@@ -438,7 +439,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             var exception = Assert.Throws<AdbcException>(() =>
                 connection.GetTableSchema(null, null, "test_table"));
@@ -454,7 +455,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
 
             var exception = Assert.Throws<AdbcException>(() =>
                 connection.GetTableTypes());
@@ -470,7 +471,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1";
 
@@ -488,7 +489,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
                 { SparkParameters.Path, "/sql/1.0/warehouses/test-warehouse" }
             };
 
-            var connection = new StatementExecutionConnection(_mockClient.Object, properties);
+            var connection = new StatementExecutionConnection(_mockClient.Object, properties, new HttpClient());
             var statement = connection.CreateStatement();
             statement.SqlQuery = "INSERT INTO test VALUES (1)";
 

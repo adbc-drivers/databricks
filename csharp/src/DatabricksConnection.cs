@@ -722,10 +722,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
             // Create base HTTP handler with TLS configuration
             TlsProperties tlsOptions = HiveServer2TlsImpl.GetHttpTlsOptions(properties);
-            // Note: Proxy support not yet implemented for REST API connections
-            // TODO: Add proxy configurator support if needed
-            HttpMessageHandler baseHandler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, null);
-            HttpMessageHandler baseAuthHandler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, null);
+            // Create no-op proxy configurator (proxy support not yet fully implemented for REST API)
+            var proxyConfigurator = new HiveServer2ProxyConfigurator(useProxy: false);
+            HttpMessageHandler baseHandler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
+            HttpMessageHandler baseAuthHandler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
 
             // Build handler chain (same order as CreateHttpHandler)
             // Order: Tracing (innermost) → Retry → ThriftErrorMessage → OAuth (outermost)
@@ -807,8 +807,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                 }
             }
 
-            // Create and return the HTTP client
+            // Create the HTTP client
             HttpClient httpClient = new HttpClient(baseHandler);
+
+            // Set Authorization header for simple token authentication
+            // Note: This is separate from OAuth which uses delegating handlers
+            if (properties.TryGetValue(SparkParameters.Token, out string? token) && !string.IsNullOrEmpty(token))
+            {
+                httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            }
+
             return (httpClient, host);
         }
 

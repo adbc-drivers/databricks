@@ -15,6 +15,9 @@
 */
 
 using System;
+using System.Collections.Generic;
+using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using Apache.Arrow.Adbc.Drivers.Databricks;
 
 namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E
 {
@@ -83,6 +86,39 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E
                 throw new ArgumentException(
                     "Either Path or Uri must be set in the test configuration file");
             }
+        }
+
+        /// <summary>
+        /// Gets properties with Statement Execution API enabled.
+        /// </summary>
+        /// <param name="env">The test environment.</param>
+        /// <param name="config">The test configuration.</param>
+        /// <returns>Properties dictionary with Statement Execution API enabled.</returns>
+        public static Dictionary<string, string> GetPropertiesWithStatementExecutionEnabled(
+            DatabricksTestEnvironment env,
+            DatabricksTestConfiguration config)
+        {
+            var properties = env.GetDriverParameters(config);
+
+            // Enable Statement Execution API
+            properties[DatabricksParameters.Protocol] = "rest";
+
+            // Ensure host and path are set for REST API
+            if (!properties.ContainsKey(SparkParameters.HostName) && properties.ContainsKey(AdbcOptions.Uri))
+            {
+                // Extract host from URI if not explicitly set
+                var host = GetHostFromConfiguration(config);
+                properties[SparkParameters.HostName] = host;
+            }
+
+            if (!properties.ContainsKey(SparkParameters.Path) && properties.ContainsKey(AdbcOptions.Uri))
+            {
+                // Extract path from URI if not explicitly set
+                var path = GetPathFromConfiguration(config);
+                properties[SparkParameters.Path] = path;
+            }
+
+            return properties;
         }
     }
 }
