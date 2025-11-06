@@ -49,7 +49,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                     ? properties
                     : options
                         .Concat(properties.Where(x => !options.Keys.Contains(x.Key, StringComparer.OrdinalIgnoreCase)))
-                        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
 
                 // Check protocol parameter to determine which connection type to create
                 string protocol = "thrift"; // Default to Thrift for backward compatibility
