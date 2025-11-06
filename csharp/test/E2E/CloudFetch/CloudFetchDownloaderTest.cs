@@ -318,7 +318,6 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                 BytesNum = 100,
                 ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set expiry 30 minutes in the future
             };
-            mockDownloadResult.Setup(r => r.Link).Returns(resultLink);
             var fileUrl = "http://test.com/file1";
             var expirationTime = DateTimeOffset.UtcNow.AddMinutes(30).UtcDateTime;
             mockDownloadResult.Setup(r => r.FileUrl).Returns(fileUrl);
