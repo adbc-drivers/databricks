@@ -594,6 +594,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
             else if (hasInlineData)
 =======
             else if (hasInlineResult || hasInlineManifest)
@@ -640,6 +641,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
 =======
             else if (hasInlineData)
+=======
+            else if (hasInlineResult || hasInlineManifest)
+>>>>>>> 0a22dcb (feat(csharp): add JSON_ARRAY format support and complete GetObjects implementation for   Statement Execution API)
             {
                 // Inline data - parse directly
 >>>>>>> cd94a4b (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
@@ -1023,6 +1027,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
             if (response.Manifest == null)
 =======
 >>>>>>> c7082c9 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
@@ -1046,8 +1051,47 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 =======
             if (response.Manifest == null)
 >>>>>>> 2fa80cb (feat(csharp): implement StatementExecutionStatement with hybrid disposition support)
+=======
+            // For INLINE disposition, data is in response.Result
+            if (response.Result != null && response.Result.Attachment != null && response.Result.Attachment.Length > 0)
+>>>>>>> 0a22dcb (feat(csharp): add JSON_ARRAY format support and complete GetObjects implementation for   Statement Execution API)
             {
-                throw new InvalidOperationException("Manifest is required for inline disposition");
+                // Check if data is compressed (manifest contains compression metadata)
+                byte[] attachmentData = response.Result.Attachment;
+                string? compression = response.Manifest?.ResultCompression;
+
+                // Decompress if necessary
+                if (!string.IsNullOrEmpty(compression) && !compression.Equals("none", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (compression.Equals("lz4", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var decompressed = Lz4Utilities.DecompressLz4(attachmentData);
+                        attachmentData = decompressed.ToArray();
+                    }
+                    else
+                    {
+                        throw new NotSupportedException($"Compression type '{compression}' is not supported for inline results");
+                    }
+                }
+
+                // Convert ResultData to ResultManifest format for InlineReader
+                var manifest = new ResultManifest
+                {
+                    Format = "arrow_stream",
+                    Chunks = new List<ResultChunk>
+                    {
+                        new ResultChunk
+                        {
+                            ChunkIndex = (int)(response.Result.ChunkIndex ?? 0),
+                            RowCount = response.Result.RowCount ?? 0,
+                            RowOffset = response.Result.RowOffset ?? 0,
+                            ByteCount = response.Result.ByteCount ?? 0,
+                            Attachment = attachmentData  // Use decompressed data
+                        }
+                    }
+                };
+
+                return new InlineReader(manifest);
             }
 
 <<<<<<< HEAD
@@ -1162,7 +1206,17 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                     if (!string.IsNullOrEmpty(compression) && !compression.Equals("none", StringComparison.OrdinalIgnoreCase))
                     {
                         // Decompress each chunk's attachment
+<<<<<<< HEAD
 >>>>>>> cf3a928 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
+=======
+            // These chunks should already be decompressed by the server or need similar handling
+            {
+                // Check if manifest chunks need decompression
+                {
+                    if (!string.IsNullOrEmpty(compression) && !compression.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Decompress each chunk's attachment
+>>>>>>> 0a22dcb (feat(csharp): add JSON_ARRAY format support and complete GetObjects implementation for   Statement Execution API)
                         {
                             if (chunk.Attachment != null && chunk.Attachment.Length > 0)
                             {
@@ -1213,6 +1267,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 return new InlineReader(response.Manifest);
             }
 
+<<<<<<< HEAD
             throw new InvalidOperationException("No inline data found in response.Result or response.Manifest");
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
 =======
@@ -1232,6 +1287,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             }
 
 >>>>>>> cf3a928 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
+=======
+            }
+
+>>>>>>> 0a22dcb (feat(csharp): add JSON_ARRAY format support and complete GetObjects implementation for   Statement Execution API)
         }
 
         /// <summary>
@@ -1317,6 +1376,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             {
                 // Try to get data from manifest chunks
                 data = new List<List<string>>();
+<<<<<<< HEAD
 >>>>>>> e791f48 (feat(csharp): add JSON_ARRAY format support and complete GetObjects implementation for   Statement Execution API)
 =======
                 foreach (var chunk in response.Manifest.Chunks)
@@ -1336,6 +1396,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 // Try to get data from manifest chunks
                 data = new List<List<string>>();
 >>>>>>> cf3a928 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
+=======
+            {
+                // Try to get data from manifest chunks
+                data = new List<List<string>>();
+>>>>>>> 0a22dcb (feat(csharp): add JSON_ARRAY format support and complete GetObjects implementation for   Statement Execution API)
                 {
                     if (chunk.DataArray != null)
                     {
