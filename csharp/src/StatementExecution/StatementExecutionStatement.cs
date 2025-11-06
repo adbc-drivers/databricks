@@ -91,8 +91,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
 
             // Parse configuration from properties
-            _resultDisposition = GetPropertyOrDefault(DatabricksParameters.ResultDisposition, "inline_or_external_links");
-            _resultFormat = GetPropertyOrDefault(DatabricksParameters.ResultFormat, "arrow_stream");
+            _resultDisposition = GetPropertyOrDefault(DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
+            _resultFormat = GetPropertyOrDefault(DatabricksParameters.ResultFormat, "ARROW_STREAM");
             _resultCompression = GetPropertyOrDefault(DatabricksParameters.ResultCompression, null);
             _pollingIntervalMs = int.Parse(GetPropertyOrDefault(DatabricksParameters.PollingInterval, "1000"));
             _waitTimeout = GetPropertyOrDefault(DatabricksParameters.WaitTimeout, null);
@@ -207,7 +207,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             }
 
             // Set compression (skip for inline results)
-            if (request.Disposition != "inline")
+            if (request.Disposition != "INLINE")
             {
                 request.ResultCompression = _resultCompression ?? "lz4";
             }
