@@ -389,7 +389,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             var resultFetcher = new StatementExecutionResultFetcher(
                 _client,
                 response.StatementId,
-                response.Manifest);
+                response);  // Pass full response to use Result field
 
             // 2. Parse configuration from REST properties (unified properties work for both Thrift and REST)
             var config = CloudFetchConfiguration.FromProperties(

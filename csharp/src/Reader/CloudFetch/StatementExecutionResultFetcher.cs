@@ -40,7 +40,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
     {
         private readonly IStatementExecutionClient _client;
         private readonly string _statementId;
-        private readonly ResultManifest _manifest;
+        private readonly GetStatementResponse _initialResponse;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="StatementExecutionResultFetcher"/> class.
@@ -49,16 +49,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// </summary>
         /// <param name="client">The Statement Execution API client.</param>
         /// <param name="statementId">The statement ID for fetching results.</param>
-        /// <param name="manifest">The result manifest containing chunk information.</param>
+        /// <param name="initialResponse">The initial GetStatement response containing the first result.</param>
         public StatementExecutionResultFetcher(
             IStatementExecutionClient client,
             string statementId,
-            ResultManifest manifest)
+            GetStatementResponse initialResponse)
             : base(null, null)  // Resources will be injected via Initialize()
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _statementId = statementId ?? throw new ArgumentNullException(nameof(statementId));
-            _manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
+            _initialResponse = initialResponse ?? throw new ArgumentNullException(nameof(initialResponse));
         }
 
         /// <inheritdoc />
@@ -71,15 +71,68 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         }
 
         /// <inheritdoc />
-        public override Task<System.Collections.Generic.IEnumerable<IDownloadResult>> RefreshUrlsAsync(
+        public override async Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(
             long startChunkIndex,
             long endChunkIndex,
             CancellationToken cancellationToken)
         {
-            // For REST API, presigned URLs from ResultManifest are long-lived (~1 hour).
-            // URL refresh via GetResultChunkAsync() is not currently implemented.
-            // If URLs expire, queries will fail and need to be rerun.
-            return Task.FromResult(System.Linq.Enumerable.Empty<IDownloadResult>());
+            // REST API presigned URLs expire (typically 1 hour), so we need to refresh them
+            // using GetResultChunkAsync() which provides fresh URLs for specific chunk indices
+            var refreshedResults = new List<IDownloadResult>();
+
+            for (long chunkIndex = startChunkIndex; chunkIndex <= endChunkIndex; chunkIndex++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    // Fetch fresh URLs for this chunk
+                    var resultData = await _client.GetResultChunkAsync(
+                        _statementId,
+                        chunkIndex,
+                        cancellationToken).ConfigureAwait(false);
+
+                    if (resultData.ExternalLinks != null && resultData.ExternalLinks.Any())
+                    {
+                        foreach (var link in resultData.ExternalLinks)
+                        {
+                            // Parse the expiration time from ISO 8601 format
+                            DateTime expirationTime = DateTime.UtcNow.AddHours(1);
+                            if (!string.IsNullOrEmpty(link.Expiration))
+                            {
+                                try
+                                {
+                                    expirationTime = DateTime.Parse(link.Expiration, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+                                }
+                                catch (FormatException)
+                                {
+                                    // Use default expiration time if parsing fails
+                                }
+                            }
+
+                            // Create refreshed download result
+                            var downloadResult = new DownloadResult(
+                                chunkIndex: link.ChunkIndex,
+                                fileUrl: link.ExternalLinkUrl,
+                                startRowOffset: link.RowOffset,
+                                rowCount: link.RowCount,
+                                byteCount: link.ByteCount,
+                                expirationTime: expirationTime,
+                                memoryManager: _memoryManager,
+                                httpHeaders: link.HttpHeaders);
+
+                            refreshedResults.Add(downloadResult);
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    // Continue with other chunks even if one fails
+                    continue;
+                }
+            }
+
+            return refreshedResults;
         }
 
         /// <inheritdoc />
@@ -88,43 +141,51 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             // Yield execution so the download queue doesn't get blocked before downloader is started
             await Task.Yield();
 
-            if (_manifest.Chunks == null || _manifest.Chunks.Count == 0)
+            // Start with the initial result from GetStatement response
+            var currentResult = _initialResponse.Result;
+
+            if (currentResult == null)
             {
-                // No chunks to process
+                // No result data available
                 _hasMoreResults = false;
                 return;
             }
 
-            // Process all chunks from the manifest
-            foreach (var chunk in _manifest.Chunks)
+            // Follow the chain of results using next_chunk_index/next_chunk_internal_link
+            while (currentResult != null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Check if chunk has external links in the manifest
-                if (chunk.ExternalLinks != null && chunk.ExternalLinks.Any())
+                // Process external links in the current result
+                if (currentResult.ExternalLinks != null && currentResult.ExternalLinks.Any())
                 {
-                    // Manifest-based fetching: all links available upfront
-                    foreach (var link in chunk.ExternalLinks)
+                    foreach (var link in currentResult.ExternalLinks)
                     {
                         CreateAndAddDownloadResult(link, cancellationToken);
                     }
                 }
+
+                // Check if there are more chunks to fetch
+                if (currentResult.NextChunkIndex.HasValue)
+                {
+                    // Fetch the next chunk by index
+                    currentResult = await _client.GetResultChunkAsync(
+                        _statementId,
+                        currentResult.NextChunkIndex.Value,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else if (!string.IsNullOrEmpty(currentResult.NextChunkInternalLink))
+                {
+                    // TODO: Support NextChunkInternalLink fetching if needed
+                    // For now, we rely on NextChunkIndex
+                    throw new NotSupportedException(
+                        "NextChunkInternalLink is not yet supported. " +
+                        "Please use NextChunkIndex-based fetching.");
+                }
                 else
                 {
-                    // Incremental chunk fetching: fetch external links for this chunk
-                    // This handles cases where the manifest doesn't contain all links upfront
-                    var resultData = await _client.GetResultChunkAsync(
-                        _statementId,
-                        chunk.ChunkIndex,
-                        cancellationToken).ConfigureAwait(false);
-
-                    if (resultData.ExternalLinks != null && resultData.ExternalLinks.Any())
-                    {
-                        foreach (var link in resultData.ExternalLinks)
-                        {
-                            CreateAndAddDownloadResult(link, cancellationToken);
-                        }
-                    }
+                    // No more chunks to fetch
+                    currentResult = null;
                 }
             }
 
