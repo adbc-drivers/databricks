@@ -436,6 +436,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // Determine compression
             bool isLz4Compressed = response.Manifest.ResultCompression?.Equals("lz4", StringComparison.OrdinalIgnoreCase) == true;
 
+<<<<<<< HEAD
             // Create memory manager
             int memoryBufferSizeMB = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMemoryBufferSize, "200"));
             var memoryManager = new CloudFetchMemoryBufferManager(memoryBufferSizeMB);
@@ -478,6 +479,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
 >>>>>>> 77c7a19 (fix(csharp): implement RefreshUrlsAsync for REST API with 1-hour URL expiration)
             // Create result fetcher
+=======
+            // 1. Create REST-specific result fetcher
+            // Resources (memory manager, download queue) will be initialized by CloudFetchDownloadManager
+>>>>>>> d40cb8b (fix(csharp): update StatementExecutionStatement to use protocol-agnostic CloudFetch pattern)
             var resultFetcher = new StatementExecutionResultFetcher(
                 _client,
                 response.StatementId,
@@ -584,37 +589,30 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 memoryManager,
                 downloadQueue);
 
-            // Create downloader with correct parameters
-            int parallelDownloads = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchParallelDownloads, "3"));
-            int maxRetries = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMaxRetries, "3"));
-            int retryDelayMs = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchRetryDelayMs, "500"));
-            int urlExpirationBufferSeconds = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, "60"));
-            int maxUrlRefreshAttempts = int.Parse(GetPropertyOrDefault(DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, "3"));
-
-            var downloader = new CloudFetchDownloader(
-                this, // Pass this as ITracingStatement
-                downloadQueue,
-                resultQueue,
-                memoryManager,
-                _httpClient,
-                resultFetcher,
-                parallelDownloads,
-                isLz4Compressed,
-                maxRetries,
-                retryDelayMs,
-                maxUrlRefreshAttempts,
-                urlExpirationBufferSeconds);
-
-            // Create download manager using test constructor (for REST API)
-            var downloadManager = new CloudFetchDownloadManager(
+            // 2. Parse configuration from REST properties (unified properties work for both Thrift and REST)
+            var config = CloudFetchConfiguration.FromProperties(
+                _properties,
                 schema,
-                resultFetcher,
-                downloader);
+                isLz4Compressed);
 
-            // Start the download manager
+            // 3. Create protocol-agnostic download manager
+            // Manager creates shared resources and calls Initialize() on the fetcher
+            var downloadManager = new CloudFetchDownloadManager(
+                resultFetcher,        // Protocol-specific fetcher
+                _httpClient,
+                config,
+                this);                // ITracingStatement for tracing
+
+            // 4. Start the manager
             downloadManager.StartAsync().GetAwaiter().GetResult();
 
             // Create and return a simple reader that uses the download manager
+            // 5. Create protocol-agnostic reader
+            return new CloudFetchReader(
+                this,                 // ITracingStatement (both Thrift and REST implement this)
+                schema,
+                null,                 // IResponse (REST doesn't use IResponse)
+                downloadManager);
         }
 
         /// <summary>
