@@ -44,19 +44,17 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
         /// <summary>
         /// Initializes a new instance of the <see cref="StatementExecutionResultFetcher"/> class.
+        /// Resources (memoryManager, downloadQueue) will be initialized by CloudFetchDownloadManager
+        /// via the Initialize() method.
         /// </summary>
         /// <param name="client">The Statement Execution API client.</param>
         /// <param name="statementId">The statement ID for fetching results.</param>
         /// <param name="manifest">The result manifest containing chunk information.</param>
-        /// <param name="memoryManager">The memory buffer manager.</param>
-        /// <param name="downloadQueue">The queue to add download tasks to.</param>
         public StatementExecutionResultFetcher(
             IStatementExecutionClient client,
             string statementId,
-            ResultManifest manifest,
-            ICloudFetchMemoryBufferManager memoryManager,
-            BlockingCollection<IDownloadResult> downloadQueue)
-            : base(memoryManager, downloadQueue)
+            ResultManifest manifest)
+            : base(null, null)  // Resources will be injected via Initialize()
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _statementId = statementId ?? throw new ArgumentNullException(nameof(statementId));
@@ -70,6 +68,18 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             // All URLs are obtained during the initial fetch in FetchAllResultsAsync.
             // URL refresh is not supported for Statement Execution API.
             return Task.FromResult<IDownloadResult?>(null);
+        }
+
+        /// <inheritdoc />
+        public override Task<System.Collections.Generic.IEnumerable<IDownloadResult>> RefreshUrlsAsync(
+            long startChunkIndex,
+            long endChunkIndex,
+            CancellationToken cancellationToken)
+        {
+            // For REST API, presigned URLs from ResultManifest are long-lived (~1 hour).
+            // URL refresh via GetResultChunkAsync() is not currently implemented.
+            // If URLs expire, queries will fail and need to be rerun.
+            return Task.FromResult(System.Linq.Enumerable.Empty<IDownloadResult>());
         }
 
         /// <inheritdoc />
@@ -145,12 +155,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
             // Create download result from REST API link
             var downloadResult = new DownloadResult(
+                chunkIndex: link.ChunkIndex,
                 fileUrl: link.ExternalLinkUrl,
                 startRowOffset: link.RowOffset,
                 rowCount: link.RowCount,
                 byteCount: link.ByteCount,
                 expirationTime: expirationTime,
-                memoryManager: _memoryManager,
+                memoryManager: _memoryManager!,
                 httpHeaders: link.HttpHeaders); // Pass custom headers for cloud storage auth
 
             // Add to download queue

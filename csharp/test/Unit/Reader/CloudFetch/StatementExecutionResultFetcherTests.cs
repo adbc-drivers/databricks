@@ -51,9 +51,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Reader.CloudFetch
             var fetcher = new StatementExecutionResultFetcher(
                 _mockClient.Object,
                 TestStatementId,
-                manifest,
-                _mockMemoryManager.Object,
-                _downloadQueue);
+                manifest);
 
             Assert.NotNull(fetcher);
         }
@@ -67,9 +65,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Reader.CloudFetch
                 new StatementExecutionResultFetcher(
                     null!,
                     TestStatementId,
-                    manifest,
-                    _mockMemoryManager.Object,
-                    _downloadQueue));
+                    manifest));
         }
 
         [Fact]
@@ -81,9 +77,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Reader.CloudFetch
                 new StatementExecutionResultFetcher(
                     _mockClient.Object,
                     null!,
-                    manifest,
-                    _mockMemoryManager.Object,
-                    _downloadQueue));
+                    manifest));
         }
 
         [Fact]
@@ -93,36 +87,6 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Reader.CloudFetch
                 new StatementExecutionResultFetcher(
                     _mockClient.Object,
                     TestStatementId,
-                    null!,
-                    _mockMemoryManager.Object,
-                    _downloadQueue));
-        }
-
-        [Fact]
-        public void Constructor_WithNullMemoryManager_ThrowsArgumentNullException()
-        {
-            var manifest = CreateTestManifest(chunkCount: 1);
-
-            Assert.Throws<ArgumentNullException>(() =>
-                new StatementExecutionResultFetcher(
-                    _mockClient.Object,
-                    TestStatementId,
-                    manifest,
-                    null!,
-                    _downloadQueue));
-        }
-
-        [Fact]
-        public void Constructor_WithNullDownloadQueue_ThrowsArgumentNullException()
-        {
-            var manifest = CreateTestManifest(chunkCount: 1);
-
-            Assert.Throws<ArgumentNullException>(() =>
-                new StatementExecutionResultFetcher(
-                    _mockClient.Object,
-                    TestStatementId,
-                    manifest,
-                    _mockMemoryManager.Object,
                     null!));
         }
 
@@ -477,12 +441,15 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Reader.CloudFetch
 
         private StatementExecutionResultFetcher CreateFetcher(ResultManifest manifest)
         {
-            return new StatementExecutionResultFetcher(
+            var fetcher = new StatementExecutionResultFetcher(
                 _mockClient.Object,
                 TestStatementId,
-                manifest,
-                _mockMemoryManager.Object,
-                _downloadQueue);
+                manifest);
+
+            // Initialize with resources (simulating what CloudFetchDownloadManager does)
+            fetcher.Initialize(_mockMemoryManager.Object, _downloadQueue);
+
+            return fetcher;
         }
 
         private ResultManifest CreateTestManifest(int chunkCount, int linksPerChunk = 1)
