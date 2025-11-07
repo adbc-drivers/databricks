@@ -42,7 +42,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
             : base(statement, schema, response, isLz4Compressed)
         {
             // If we have direct results, initialize the batches from them
-            if (statement.TryGetDirectResults(this.response, out TSparkDirectResults? directResults))
+            if (statement.TryGetDirectResults(this.response!, out TSparkDirectResults? directResults))
             {
                 this.batches = directResults!.ResultSet.Results.ArrowBatches;
                 this.hasNoMoreRows = !directResults.ResultSet.HasMoreRows;
@@ -86,8 +86,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                     {
                         return null;
                     }
+
+                    // Cast to IHiveServer2Statement to access Thrift-specific properties
+                    var hiveStatement = (IHiveServer2Statement)this.statement;
+
                     // TODO: use an expiring cancellationtoken
-                    TFetchResultsReq request = new TFetchResultsReq(this.response.OperationHandle!, TFetchOrientation.FETCH_NEXT, this.statement.BatchSize);
+                    TFetchResultsReq request = new TFetchResultsReq(this.response!.OperationHandle!, TFetchOrientation.FETCH_NEXT, hiveStatement.BatchSize);
 
                     // Set MaxBytes from DatabricksStatement
                     if (this.statement is DatabricksStatement databricksStatement)
@@ -95,7 +99,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                         request.MaxBytes = databricksStatement.MaxBytesPerFetchRequest;
                     }
 
-                    TFetchResultsResp response = await this.statement.Connection.Client!.FetchResults(request, cancellationToken);
+                    TFetchResultsResp response = await hiveStatement.Connection.Client!.FetchResults(request, cancellationToken);
 
                     // Make sure we get the arrowBatches
                     this.batches = response.Results.ArrowBatches;

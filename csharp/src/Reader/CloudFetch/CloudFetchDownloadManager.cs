@@ -82,6 +82,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 new ConcurrentQueue<IDownloadResult>(),
                 config.PrefetchCount * 2);
 
+            // Initialize the fetcher with manager-created resources (if it's a BaseResultFetcher)
+            if (_resultFetcher is BaseResultFetcher baseResultFetcher)
+            {
+                baseResultFetcher.Initialize(_memoryManager, _downloadQueue);
+            }
+
             // Initialize the downloader
             _downloader = new CloudFetchDownloader(
                 tracingStatement,

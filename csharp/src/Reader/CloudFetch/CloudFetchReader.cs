@@ -47,15 +47,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
         /// Protocol-agnostic constructor using dependency injection.
+        /// Works with both Thrift (IHiveServer2Statement) and REST (StatementExecutionStatement) protocols.
         /// </summary>
-        /// <param name="statement">The HiveServer2 statement for tracing and operation closure.</param>
+        /// <param name="statement">The tracing statement (ITracingStatement works for both protocols).</param>
         /// <param name="schema">The Arrow schema.</param>
-        /// <param name="response">The query response for operation closure.</param>
+        /// <param name="response">The query response (nullable for REST API, which doesn't use IResponse).</param>
         /// <param name="downloadManager">The download manager (already initialized and started).</param>
         public CloudFetchReader(
-            IHiveServer2Statement statement,
+            ITracingStatement statement,
             Schema schema,
-            IResponse response,
+            IResponse? response,
             ICloudFetchDownloadManager downloadManager)
             : base(statement, schema, response, isLz4Compressed: false) // isLz4Compressed handled by download manager
         {

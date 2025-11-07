@@ -1174,6 +1174,237 @@ properties["adbc.databricks.cloudfetch.url_expiration_buffer_seconds"] = "60";
 - ✅ **Efficient for REST**: Targeted chunk refresh via API
 - ✅ **Best-effort for Thrift**: Falls back to fetching next batch
 
+### 2.4 Base Classes and Protocol Abstraction
+
+To achieve true protocol independence, we made key architectural changes to the base classes that support both Thrift and REST implementations:
+
+#### Using ITracingStatement Instead of IHiveServer2Statement
+
+**Key Change**: All shared components now use `ITracingStatement` as the common interface instead of `IHiveServer2Statement`.
+
+**Rationale:**
+- `IHiveServer2Statement` is Thrift-specific (only implemented by DatabricksStatement)
+- `ITracingStatement` is protocol-agnostic (implemented by both DatabricksStatement and StatementExecutionStatement)
+- Both protocols support Activity tracing, so `ITracingStatement` provides the common functionality we need
+
+**Updated Base Class:**
+```csharp
+/// <summary>
+/// Base class for Databricks readers that handles common functionality.
+/// Protocol-agnostic - works with both Thrift and REST implementations.
+/// </summary>
+internal abstract class BaseDatabricksReader : TracingReader
+{
+    protected ITracingStatement statement;         // ✅ Changed from IHiveServer2Statement
+    protected readonly Schema schema;
+    protected readonly IResponse? response;        // ✅ Made nullable for REST API
+    protected readonly bool isLz4Compressed;
+
+    /// <summary>
+    /// Protocol-agnostic constructor.
+    /// </summary>
+    /// <param name="statement">The tracing statement (both Thrift and REST implement ITracingStatement).</param>
+    /// <param name="schema">The Arrow schema.</param>
+    /// <param name="response">The query response (nullable for REST API).</param>
+    /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>
+    protected BaseDatabricksReader(
+        ITracingStatement statement,     // ✅ Protocol-agnostic
+        Schema schema,
+        IResponse? response,             // ✅ Nullable for REST
+        bool isLz4Compressed)
+        : base(statement)
+    {
+        this.schema = schema;
+        this.response = response;
+        this.isLz4Compressed = isLz4Compressed;
+        this.statement = statement;
+    }
+
+    /// <summary>
+    /// Closes the current operation (Thrift only).
+    /// </summary>
+    public async Task<bool> CloseOperationAsync()
+    {
+        try
+        {
+            // Only close operation for Thrift protocol (which has IResponse)
+            if (!isClosed && response != null && statement is IHiveServer2Statement hiveStatement)
+            {
+                _ = await HiveServer2Reader.CloseOperationAsync(hiveStatement, this.response);
+                return true;
+            }
+            return false;
+        }
+        finally
+        {
+            isClosed = true;
+        }
+    }
+}
+```
+
+**Protocol-Specific Casting Pattern:**
+
+When protocol-specific properties are needed (e.g., in DatabricksReader which is Thrift-only), we cast back to the specific interface:
+
+```csharp
+internal sealed class DatabricksReader : BaseDatabricksReader
+{
+    public override async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // Cast to IHiveServer2Statement when accessing Thrift-specific properties
+        var hiveStatement = (IHiveServer2Statement)this.statement;
+
+        TFetchResultsReq request = new TFetchResultsReq(
+            this.response!.OperationHandle!,
+            TFetchOrientation.FETCH_NEXT,
+            hiveStatement.BatchSize);      // ✅ Access Thrift-specific property
+
+        TFetchResultsResp response = await hiveStatement.Connection.Client!
+            .FetchResults(request, cancellationToken);
+
+        // ...
+    }
+}
+```
+
+#### Making IResponse Nullable
+
+**Key Change**: The `IResponse` parameter is now nullable (`IResponse?`) to support REST API.
+
+**Rationale:**
+- Thrift protocol uses `IResponse` to track operation handles
+- REST API doesn't have an equivalent concept (uses statement IDs instead)
+- Making it nullable allows both protocols to share the same base classes
+
+**Impact:**
+- Thrift readers pass non-null `IResponse`
+- REST readers pass `null` for `IResponse`
+- Protocol-specific operations (like `CloseOperationAsync`) check for null before using it
+
+#### Late Initialization Pattern for BaseResultFetcher
+
+**Key Change**: `BaseResultFetcher` now supports late initialization of resources via an `Initialize()` method.
+
+**Problem**: CloudFetchDownloadManager creates shared resources (memory manager, download queue) that need to be injected into the fetcher, but we have a circular dependency:
+- Fetcher needs these resources to function
+- Manager creates these resources and needs to pass them to the fetcher
+- Fetcher is created by protocol-specific code before manager exists
+
+**Solution**: Use a two-phase initialization pattern:
+
+```csharp
+/// <summary>
+/// Base class for result fetchers with late initialization support.
+/// </summary>
+internal abstract class BaseResultFetcher : ICloudFetchResultFetcher
+{
+    protected BlockingCollection<IDownloadResult>? _downloadQueue;      // ✅ Nullable
+    protected ICloudFetchMemoryBufferManager? _memoryManager;           // ✅ Nullable
+
+    /// <summary>
+    /// Constructor accepts nullable parameters for late initialization.
+    /// </summary>
+    protected BaseResultFetcher(
+        ICloudFetchMemoryBufferManager? memoryManager,                  // ✅ Can be null
+        BlockingCollection<IDownloadResult>? downloadQueue)             // ✅ Can be null
+    {
+        _memoryManager = memoryManager;
+        _downloadQueue = downloadQueue;
+        _hasMoreResults = true;
+        _isCompleted = false;
+    }
+
+    /// <summary>
+    /// Initializes the fetcher with manager-created resources.
+    /// Called by CloudFetchDownloadManager after creating shared resources.
+    /// </summary>
+    internal virtual void Initialize(
+        ICloudFetchMemoryBufferManager memoryManager,
+        BlockingCollection<IDownloadResult> downloadQueue)
+    {
+        _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
+        _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
+    }
+
+    /// <summary>
+    /// Helper method with null check to ensure initialization.
+    /// </summary>
+    protected void AddDownloadResult(IDownloadResult result, CancellationToken cancellationToken)
+    {
+        if (_downloadQueue == null)
+            throw new InvalidOperationException("Fetcher not initialized. Call Initialize() first.");
+
+        _downloadQueue.Add(result, cancellationToken);
+    }
+}
+```
+
+**Usage in CloudFetchDownloadManager:**
+
+```csharp
+public CloudFetchDownloadManager(
+    ICloudFetchResultFetcher resultFetcher,
+    HttpClient httpClient,
+    CloudFetchConfiguration config,
+    ITracingStatement? tracingStatement = null)
+{
+    _resultFetcher = resultFetcher ?? throw new ArgumentNullException(nameof(resultFetcher));
+
+    // Create shared resources
+    _memoryManager = new CloudFetchMemoryBufferManager(config.MemoryBufferSizeMB);
+    _downloadQueue = new BlockingCollection<IDownloadResult>(...);
+
+    // Initialize the fetcher with manager-created resources (if it's a BaseResultFetcher)
+    if (_resultFetcher is BaseResultFetcher baseResultFetcher)
+    {
+        baseResultFetcher.Initialize(_memoryManager, _downloadQueue);  // ✅ Late initialization
+    }
+
+    // Create downloader
+    _downloader = new CloudFetchDownloader(...);
+}
+```
+
+**Benefits:**
+- ✅ **Clean Separation**: Protocol-specific code creates fetchers without needing manager resources
+- ✅ **Flexible Construction**: Fetchers can be created with null resources for testing or two-phase init
+- ✅ **Type Safety**: Null checks ensure resources are initialized before use
+- ✅ **Backward Compatible**: Existing code that passes resources directly still works
+
+#### Updated CloudFetchReader Constructor
+
+With these changes, `CloudFetchReader` now has a truly protocol-agnostic constructor:
+
+```csharp
+/// <summary>
+/// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
+/// Protocol-agnostic constructor using dependency injection.
+/// Works with both Thrift (IHiveServer2Statement) and REST (StatementExecutionStatement) protocols.
+/// </summary>
+/// <param name="statement">The tracing statement (ITracingStatement works for both protocols).</param>
+/// <param name="schema">The Arrow schema.</param>
+/// <param name="response">The query response (nullable for REST API, which doesn't use IResponse).</param>
+/// <param name="downloadManager">The download manager (already initialized and started).</param>
+public CloudFetchReader(
+    ITracingStatement statement,          // ✅ Protocol-agnostic
+    Schema schema,
+    IResponse? response,                  // ✅ Nullable for REST
+    ICloudFetchDownloadManager downloadManager)
+    : base(statement, schema, response, isLz4Compressed: false)
+{
+    this.downloadManager = downloadManager ?? throw new ArgumentNullException(nameof(downloadManager));
+}
+```
+
+**Key Architectural Principles:**
+1. **Common Interfaces**: Use `ITracingStatement` as the shared interface across protocols
+2. **Nullable References**: Make protocol-specific types nullable (`IResponse?`) for flexibility
+3. **Late Initialization**: Support two-phase initialization for complex dependency graphs
+4. **Type Safety**: Add runtime checks to ensure proper initialization before use
+5. **Protocol Casting**: Cast to specific interfaces only when accessing protocol-specific functionality
+
 ### 3. CloudFetchReader (Refactored - Protocol-Agnostic)
 
 **Before** (Thrift-Coupled):

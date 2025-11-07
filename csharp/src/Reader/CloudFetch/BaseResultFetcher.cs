@@ -36,8 +36,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
     /// </summary>
     internal abstract class BaseResultFetcher : ICloudFetchResultFetcher
     {
-        protected readonly BlockingCollection<IDownloadResult> _downloadQueue;
-        protected readonly ICloudFetchMemoryBufferManager _memoryManager;
+        protected BlockingCollection<IDownloadResult>? _downloadQueue;
+        protected ICloudFetchMemoryBufferManager? _memoryManager;
         protected volatile bool _hasMoreResults;
         protected volatile bool _isCompleted;
         protected Exception? _error;
@@ -47,16 +47,30 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Initializes a new instance of the <see cref="BaseResultFetcher"/> class.
         /// </summary>
-        /// <param name="memoryManager">The memory buffer manager.</param>
-        /// <param name="downloadQueue">The queue to add download tasks to.</param>
+        /// <param name="memoryManager">The memory buffer manager (can be null, will be initialized later).</param>
+        /// <param name="downloadQueue">The queue to add download tasks to (can be null, will be initialized later).</param>
         protected BaseResultFetcher(
+            ICloudFetchMemoryBufferManager? memoryManager,
+            BlockingCollection<IDownloadResult>? downloadQueue)
+        {
+            _memoryManager = memoryManager;
+            _downloadQueue = downloadQueue;
+            _hasMoreResults = true;
+            _isCompleted = false;
+        }
+
+        /// <summary>
+        /// Initializes the fetcher with manager-created resources.
+        /// Called by CloudFetchDownloadManager after creating shared resources.
+        /// </summary>
+        /// <param name="memoryManager">The memory buffer manager.</param>
+        /// <param name="downloadQueue">The download queue.</param>
+        internal virtual void Initialize(
             ICloudFetchMemoryBufferManager memoryManager,
             BlockingCollection<IDownloadResult> downloadQueue)
         {
             _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
-            _hasMoreResults = true;
-            _isCompleted = false;
         }
 
         /// <inheritdoc />
@@ -153,6 +167,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <param name="cancellationToken">The cancellation token.</param>
         protected void AddDownloadResult(IDownloadResult result, CancellationToken cancellationToken)
         {
+            if (_downloadQueue == null)
+                throw new InvalidOperationException("Fetcher not initialized. Call Initialize() first.");
+
             _downloadQueue.Add(result, cancellationToken);
         }
 
@@ -163,6 +180,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 await FetchAllResultsAsync(cancellationToken).ConfigureAwait(false);
 
                 // Add the end of results guard to the queue
+                if (_downloadQueue == null)
+                    throw new InvalidOperationException("Fetcher not initialized. Call Initialize() first.");
+
                 _downloadQueue.Add(EndOfResultsGuard.Instance, cancellationToken);
                 _isCompleted = true;
             }
