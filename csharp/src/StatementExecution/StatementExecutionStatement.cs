@@ -194,14 +194,25 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 // Parameters = ConvertParameters() // TODO: Implement parameter conversion
             };
 
+<<<<<<< HEAD
             // Set warehouse_id or session_id (mutually exclusive)
+=======
+            // Set warehouse_id (always required) and session_id if available
+            request.WarehouseId = _warehouseId;
+
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
             if (_sessionId != null)
             {
                 request.SessionId = _sessionId;
             }
             else
             {
+<<<<<<< HEAD
                 request.WarehouseId = _warehouseId;
+=======
+                // Only set catalog/schema when not using a session
+                // (sessions have their own catalog/schema)
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
                 request.Catalog = _catalogName;
                 request.Schema = _schemaName;
             }
@@ -212,8 +223,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 request.ResultCompression = _resultCompression ?? "lz4";
             }
 
+<<<<<<< HEAD
             // Set wait_timeout (skip if direct results mode is enabled)
             if (!_enableDirectResults)
+=======
+            // Set wait_timeout (skip if direct results mode is enabled OR using a session)
+            // Sessions don't support wait_timeout parameter
+            if (!_enableDirectResults && _sessionId == null)
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
             {
                 request.WaitTimeout = _waitTimeout ?? "10s";  // Default to 10s if not specified
                 request.OnWaitTimeout = "CONTINUE";
@@ -324,11 +341,32 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// <returns>An Arrow array stream reader.</returns>
         private IArrowArrayStream CreateReader(GetStatementResponse response)
         {
+<<<<<<< HEAD
+=======
+            // Check if response is in JSON_ARRAY format (fallback when Arrow not supported)
+            bool isJsonFormat = response.Manifest?.Format?.Equals("JSON_ARRAY", StringComparison.OrdinalIgnoreCase) == true;
+
+            if (isJsonFormat)
+            {
+                // JSON format - convert to Arrow
+                return CreateJsonArrayReader(response);
+            }
+
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
             // Determine actual disposition from response
             // Check Result field first (contains actual data for this response)
             var hasExternalLinks = (response.Result?.ExternalLinks != null && response.Result.ExternalLinks.Any()) ||
                 (response.Manifest?.Chunks?.Any(c => c.ExternalLinks != null && c.ExternalLinks.Any()) == true);
+<<<<<<< HEAD
             var hasInlineData = response.Manifest?.Chunks?
+=======
+
+            // Check for inline data in Result field (INLINE disposition with Arrow bytes)
+            var hasInlineResult = response.Result?.Attachment != null && response.Result.Attachment.Length > 0;
+
+            // Check for inline data in Manifest chunks (INLINE_OR_EXTERNAL_LINKS with Arrow bytes)
+            var hasInlineManifest = response.Manifest?.Chunks?
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
                 .Any(c => c.Attachment != null && c.Attachment.Length > 0) == true;
 
             if (hasExternalLinks)
@@ -336,9 +374,15 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 // External links - use CloudFetch pipeline
                 return CreateExternalLinksReader(response);
             }
+<<<<<<< HEAD
             else if (hasInlineData)
             {
                 // Inline data - parse directly
+=======
+            else if (hasInlineResult || hasInlineManifest)
+            {
+                // Inline Arrow data - parse directly
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
                 return CreateInlineReader(response);
             }
             else
@@ -374,6 +418,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
                 response);  // Pass full response to use Result field
 >>>>>>> defec99 (fix(csharp): use GetStatementResponse.Result and follow next_chunk_index chain)
@@ -383,6 +428,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 =======
                 response);  // Pass full response to use Result field
 >>>>>>> defec99 (fix(csharp): use GetStatementResponse.Result and follow next_chunk_index chain)
+=======
+                response.Manifest);
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
 
             // 2. Parse configuration from REST properties (unified properties work for both Thrift and REST)
             var config = CloudFetchConfiguration.FromProperties(
@@ -409,6 +457,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             downloadManager.StartAsync().GetAwaiter().GetResult();
 
             // 6. Create protocol-agnostic reader
+<<<<<<< HEAD
 
             // 2. Parse configuration from REST properties (unified properties work for both Thrift and REST)
             var config = CloudFetchConfiguration.FromProperties(
@@ -449,6 +498,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
             // Create and return a simple reader that uses the download manager
             // 5. Create protocol-agnostic reader
+=======
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
             return new CloudFetchReader(
                 this,                 // ITracingStatement (both Thrift and REST implement this)
                 schema,
@@ -463,12 +514,85 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// <returns>An inline reader.</returns>
         private IArrowArrayStream CreateInlineReader(GetStatementResponse response)
         {
+<<<<<<< HEAD
             if (response.Manifest == null)
             {
                 throw new InvalidOperationException("Manifest is required for inline disposition");
             }
 
             return new InlineReader(response.Manifest);
+=======
+            // For INLINE disposition, data is in response.Result
+            if (response.Result != null && response.Result.Attachment != null && response.Result.Attachment.Length > 0)
+            {
+                // Check if data is compressed (manifest contains compression metadata)
+                byte[] attachmentData = response.Result.Attachment;
+                string? compression = response.Manifest?.ResultCompression;
+
+                // Decompress if necessary
+                if (!string.IsNullOrEmpty(compression) && !compression.Equals("none", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (compression.Equals("lz4", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var decompressed = Lz4Utilities.DecompressLz4(attachmentData);
+                        attachmentData = decompressed.ToArray();
+                    }
+                    else
+                    {
+                        throw new NotSupportedException($"Compression type '{compression}' is not supported for inline results");
+                    }
+                }
+
+                // Convert ResultData to ResultManifest format for InlineReader
+                var manifest = new ResultManifest
+                {
+                    Format = "arrow_stream",
+                    Chunks = new List<ResultChunk>
+                    {
+                        new ResultChunk
+                        {
+                            ChunkIndex = (int)(response.Result.ChunkIndex ?? 0),
+                            RowCount = response.Result.RowCount ?? 0,
+                            RowOffset = response.Result.RowOffset ?? 0,
+                            ByteCount = response.Result.ByteCount ?? 0,
+                            Attachment = attachmentData  // Use decompressed data
+                        }
+                    }
+                };
+
+                return new InlineReader(manifest);
+            }
+
+            // For INLINE_OR_EXTERNAL_LINKS disposition with inline data, data is in response.Manifest
+            // These chunks should already be decompressed by the server or need similar handling
+            if (response.Manifest != null)
+            {
+                // Check if manifest chunks need decompression
+                if (response.Manifest.Chunks != null && response.Manifest.Chunks.Count > 0)
+                {
+                    string? compression = response.Manifest.ResultCompression;
+                    if (!string.IsNullOrEmpty(compression) && !compression.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Decompress each chunk's attachment
+                        foreach (var chunk in response.Manifest.Chunks)
+                        {
+                            if (chunk.Attachment != null && chunk.Attachment.Length > 0)
+                            {
+                                if (compression.Equals("lz4", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var decompressed = Lz4Utilities.DecompressLz4(chunk.Attachment);
+                                    chunk.Attachment = decompressed.ToArray();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return new InlineReader(response.Manifest);
+            }
+
+            throw new InvalidOperationException("No inline data found in response.Result or response.Manifest");
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
         }
 
         /// <summary>
@@ -487,6 +611,56 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         }
 
         /// <summary>
+<<<<<<< HEAD
+=======
+        /// Creates a reader for JSON_ARRAY format results.
+        /// </summary>
+        /// <param name="response">The statement execution response.</param>
+        /// <returns>A JSON array reader that converts JSON to Arrow format.</returns>
+        private IArrowArrayStream CreateJsonArrayReader(GetStatementResponse response)
+        {
+            if (response.Manifest == null)
+            {
+                throw new InvalidOperationException("Manifest is required for JSON_ARRAY format");
+            }
+
+            // Extract data_array from the response
+            List<List<string>> data;
+
+            if (response.Result?.DataArray != null && response.Result.DataArray.Count > 0)
+            {
+                // Data is in result.data_array - convert List<List<object>> to List<List<string>>
+                data = response.Result.DataArray
+                    .Select(row => row.Select(cell => cell?.ToString() ?? string.Empty).ToList())
+                    .ToList();
+            }
+            else if (response.Manifest.Chunks != null && response.Manifest.Chunks.Count > 0)
+            {
+                // Try to get data from manifest chunks
+                data = new List<List<string>>();
+                foreach (var chunk in response.Manifest.Chunks)
+                {
+                    if (chunk.DataArray != null)
+                    {
+                        // Convert List<List<object>> to List<List<string>>
+                        var chunkData = chunk.DataArray
+                            .Select(row => row.Select(cell => cell?.ToString() ?? string.Empty).ToList())
+                            .ToList();
+                        data.AddRange(chunkData);
+                    }
+                }
+            }
+            else
+            {
+                // Empty result
+                data = new List<List<string>>();
+            }
+
+            return new JsonArrayReader(response.Manifest, data);
+        }
+
+        /// <summary>
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
         /// Converts a REST API result schema to an Arrow schema.
         /// </summary>
         /// <param name="resultSchema">The REST API result schema.</param>
