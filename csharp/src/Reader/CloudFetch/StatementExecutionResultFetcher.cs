@@ -51,16 +51,19 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <param name="client">The Statement Execution API client.</param>
         /// <param name="statementId">The statement ID for fetching results.</param>
         /// <param name="initialResponse">The initial GetStatement response containing the first result.</param>
+<<<<<<< HEAD
         public StatementExecutionResultFetcher(
             IStatementExecutionClient client,
             string statementId,
             GetStatementResponse initialResponse)
             : base(null, null)  // Resources will be injected via Initialize()
         /// <param name="manifest">The result manifest containing chunk information.</param>
+=======
+>>>>>>> defec99 (fix(csharp): use GetStatementResponse.Result and follow next_chunk_index chain)
         public StatementExecutionResultFetcher(
             IStatementExecutionClient client,
             string statementId,
-            ResultManifest manifest)
+            GetStatementResponse initialResponse)
             : base(null, null)  // Resources will be injected via Initialize()
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));

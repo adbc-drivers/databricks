@@ -641,8 +641,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             var resultFetcher = new StatementExecutionResultFetcher(
                 _client,
                 response.StatementId,
+<<<<<<< HEAD
                 response.Manifest);
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
+=======
+                response);  // Pass full response to use Result field
+>>>>>>> defec99 (fix(csharp): use GetStatementResponse.Result and follow next_chunk_index chain)
 
             // 2. Parse configuration from REST properties (unified properties work for both Thrift and REST)
             var config = CloudFetchConfiguration.FromProperties(
