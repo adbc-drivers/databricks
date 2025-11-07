@@ -56,12 +56,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             string statementId,
             GetStatementResponse initialResponse)
             : base(null, null)  // Resources will be injected via Initialize()
-        /// <param name="manifest">The result manifest containing chunk information.</param>
-        public StatementExecutionResultFetcher(
-            IStatementExecutionClient client,
-            string statementId,
-            ResultManifest manifest)
-            : base(null, null)  // Resources will be injected via Initialize()
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _statementId = statementId ?? throw new ArgumentNullException(nameof(statementId));
