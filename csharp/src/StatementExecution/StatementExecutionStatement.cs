@@ -428,6 +428,19 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             downloadManager.StartAsync().GetAwaiter().GetResult();
 
             // 6. Create protocol-agnostic reader
+
+            // 2. Parse configuration from REST properties (unified properties work for both Thrift and REST)
+            var config = CloudFetchConfiguration.FromProperties(
+                schema,
+                isLz4Compressed);
+
+            // Manager creates shared resources and calls Initialize() on the fetcher
+            var downloadManager = new CloudFetchDownloadManager(
+                config,
+                this);                // ITracingStatement for tracing
+
+            downloadManager.StartAsync().GetAwaiter().GetResult();
+
             return new CloudFetchReader(
                 this,                 // ITracingStatement (both Thrift and REST implement this)
                 schema,
