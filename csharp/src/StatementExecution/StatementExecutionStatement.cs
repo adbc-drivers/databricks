@@ -530,6 +530,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
         /// <summary>
         /// Creates a reader for external links results using the CloudFetch pipeline.
+        /// Follows the protocol-agnostic pattern: Create fetcher → Parse config → Create manager → Start → Create reader.
         /// </summary>
         /// <param name="response">The statement execution response.</param>
         /// <returns>A CloudFetch reader.</returns>
