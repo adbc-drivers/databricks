@@ -343,6 +343,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // Sessions don't support wait_timeout parameter
             if (!_enableDirectResults && _sessionId == null)
             if (!_enableDirectResults && _waitTimeout != null)
+            // Set wait_timeout (skip if direct results mode is enabled OR using a session)
+            // Sessions don't support wait_timeout parameter
+            if (!_enableDirectResults && _sessionId == null)
             {
 <<<<<<< HEAD
                 request.WaitTimeout = _waitTimeout ?? "10s";  // Default to 10s if not specified
