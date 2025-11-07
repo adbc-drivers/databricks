@@ -325,8 +325,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         private IArrowArrayStream CreateReader(GetStatementResponse response)
         {
             // Determine actual disposition from response
-            var hasExternalLinks = response.Manifest?.Chunks?
-                .Any(c => c.ExternalLinks != null && c.ExternalLinks.Any()) == true;
+            // Check Result field first (contains actual data for this response)
+            var hasExternalLinks = (response.Result?.ExternalLinks != null && response.Result.ExternalLinks.Any()) ||
+                (response.Manifest?.Chunks?.Any(c => c.ExternalLinks != null && c.ExternalLinks.Any()) == true);
             var hasInlineData = response.Manifest?.Chunks?
                 .Any(c => c.Attachment != null && c.Attachment.Length > 0) == true;
 
@@ -372,6 +373,35 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // Create download and result queues
             var downloadQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
             var resultQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
+
+            // If Result field has external links, add them to the download queue first
+            // (Result contains the first chunk, Manifest may not include it for large results)
+            if (response.Result?.ExternalLinks != null && response.Result.ExternalLinks.Any())
+            {
+                foreach (var link in response.Result.ExternalLinks)
+                {
+                    var expirationTime = DateTime.UtcNow.AddHours(1);
+                    if (!string.IsNullOrEmpty(link.Expiration))
+                    {
+                        try
+                        {
+                            expirationTime = DateTime.Parse(link.Expiration, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind);
+                        }
+                        catch (FormatException) { }
+                    }
+
+                    var downloadResult = new DownloadResult(
+                        fileUrl: link.ExternalLinkUrl,
+                        startRowOffset: link.RowOffset,
+                        rowCount: link.RowCount,
+                        byteCount: link.ByteCount,
+                        expirationTime: expirationTime,
+                        memoryManager: memoryManager,
+                        httpHeaders: link.HttpHeaders);
+
+                    downloadQueue.Add(downloadResult);
+                }
+            }
 
             // Create result fetcher
             var resultFetcher = new StatementExecutionResultFetcher(
