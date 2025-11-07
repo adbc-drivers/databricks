@@ -713,11 +713,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 =======
 >>>>>>> 14b246a (fix(csharp): implement RefreshUrlsAsync for REST API with 1-hour URL expiration)
 =======
 >>>>>>> 14b246a (fix(csharp): implement RefreshUrlsAsync for REST API with 1-hour URL expiration)
+=======
+>>>>>>> d1da2d5 (fix(csharp): implement RefreshUrlsAsync for REST API with 1-hour URL expiration)
             // If Result field has external links, add them to the download queue first
             // (Result contains the first chunk, Manifest may not include it for large results)
             if (response.Result?.ExternalLinks != null && response.Result.ExternalLinks.Any())
@@ -750,11 +753,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 >>>>>>> 77c7a19 (fix(csharp): implement RefreshUrlsAsync for REST API with 1-hour URL expiration)
 =======
 >>>>>>> 14b246a (fix(csharp): implement RefreshUrlsAsync for REST API with 1-hour URL expiration)
 =======
 >>>>>>> 14b246a (fix(csharp): implement RefreshUrlsAsync for REST API with 1-hour URL expiration)
+=======
+>>>>>>> d1da2d5 (fix(csharp): implement RefreshUrlsAsync for REST API with 1-hour URL expiration)
             // Create result fetcher
 =======
             // 1. Create REST-specific result fetcher
@@ -992,11 +998,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 maxUrlRefreshAttempts,
                 urlExpirationBufferSeconds);
 
-            // Create download manager
+            // Create download manager using test constructor (for REST API)
             var downloadManager = new CloudFetchDownloadManager(
-                null, // statement parameter is nullable for REST API
                 schema,
-                isLz4Compressed,
                 resultFetcher,
                 downloader);
 
