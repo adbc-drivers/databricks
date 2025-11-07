@@ -677,6 +677,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> d876949 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
 =======
 >>>>>>> d876949 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
 
@@ -692,6 +695,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
             downloadManager.StartAsync().GetAwaiter().GetResult();
 
+<<<<<<< HEAD
 <<<<<<< HEAD
             return new CloudFetchReader(
                 this,                 // ITracingStatement (both Thrift and REST implement this)
@@ -764,6 +768,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // 5. Create protocol-agnostic reader
 =======
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
+=======
+>>>>>>> d876949 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
             return new CloudFetchReader(
                 this,                 // ITracingStatement (both Thrift and REST implement this)
                 schema,
