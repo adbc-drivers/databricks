@@ -463,6 +463,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
             // 6. Create protocol-agnostic reader
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> d876949 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
 
             // 2. Parse configuration from REST properties (unified properties work for both Thrift and REST)
             var config = CloudFetchConfiguration.FromProperties(
@@ -476,6 +479,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
             downloadManager.StartAsync().GetAwaiter().GetResult();
 
+<<<<<<< HEAD
             return new CloudFetchReader(
                 this,                 // ITracingStatement (both Thrift and REST implement this)
                 schema,
@@ -505,6 +509,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // 5. Create protocol-agnostic reader
 =======
 >>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
+=======
+>>>>>>> d876949 (feat(csharp): implement StatementExecutionStatement with CloudFetch support)
             return new CloudFetchReader(
                 this,                 // ITracingStatement (both Thrift and REST implement this)
                 schema,
