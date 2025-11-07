@@ -51,25 +51,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <param name="client">The Statement Execution API client.</param>
         /// <param name="statementId">The statement ID for fetching results.</param>
         /// <param name="initialResponse">The initial GetStatement response containing the first result.</param>
-<<<<<<< HEAD
         public StatementExecutionResultFetcher(
             IStatementExecutionClient client,
             string statementId,
             GetStatementResponse initialResponse)
-            : base(null, null)  // Resources will be injected via Initialize()
-        /// <param name="manifest">The result manifest containing chunk information.</param>
-=======
->>>>>>> defec99 (fix(csharp): use GetStatementResponse.Result and follow next_chunk_index chain)
-        public StatementExecutionResultFetcher(
-            IStatementExecutionClient client,
-            string statementId,
-            GetStatementResponse initialResponse)
-            : base(null, null)  // Resources will be injected via Initialize()
-        /// <param name="manifest">The result manifest containing chunk information.</param>
-        public StatementExecutionResultFetcher(
-            IStatementExecutionClient client,
-            string statementId,
-            ResultManifest manifest)
             : base(null, null)  // Resources will be injected via Initialize()
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
@@ -161,7 +146,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             var currentResult = _initialResponse.Result;
 
             if (currentResult == null)
-            if (_manifest.TotalChunkCount == 0)
             {
                 // No result data available
                 _hasMoreResults = false;
@@ -177,43 +161,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 if (currentResult.ExternalLinks != null && currentResult.ExternalLinks.Any())
                 {
                     foreach (var link in currentResult.ExternalLinks)
-            // Process all chunks - the manifest may only contain a subset for large result sets
-            // Keep track of which chunk indices we've processed
-            var processedChunkIndices = new HashSet<int>();
-
-            // First, process chunks from the manifest
-            if (_manifest.Chunks != null && _manifest.Chunks.Count > 0)
-            {
-                foreach (var chunk in _manifest.Chunks)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    processedChunkIndices.Add(chunk.ChunkIndex);
-
-                    // Check if chunk has external links in the manifest
-                    if (chunk.ExternalLinks != null && chunk.ExternalLinks.Any())
                     {
-                        // Manifest-based fetching: all links available upfront
-                        foreach (var link in chunk.ExternalLinks)
-                        {
-                            CreateAndAddDownloadResult(link, cancellationToken);
-                        }
-                    }
-                    else
-                    {
-                        // Incremental chunk fetching: fetch external links for this chunk
-                        // This handles cases where the manifest doesn't contain all links upfront
-                        var resultData = await _client.GetResultChunkAsync(
-                            _statementId,
-                            chunk.ChunkIndex,
-                            cancellationToken).ConfigureAwait(false);
-
-                        if (resultData.ExternalLinks != null && resultData.ExternalLinks.Any())
-                        {
-                            foreach (var link in resultData.ExternalLinks)
-                            {
-                                CreateAndAddDownloadResult(link, cancellationToken);
-                            }
-                        }
+                        CreateAndAddDownloadResult(link, cancellationToken);
                     }
                 }
 
@@ -238,35 +187,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 {
                     // No more chunks to fetch
                     currentResult = null;
-            }
-
-            // If the manifest is incomplete (common for large result sets), fetch remaining chunks
-            // The manifest.Chunks list may not contain all chunks for large results
-            if (processedChunkIndices.Count < _manifest.TotalChunkCount)
-            {
-                // Fetch the missing chunk indices
-                for (int chunkIndex = 0; chunkIndex < _manifest.TotalChunkCount; chunkIndex++)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    if (processedChunkIndices.Contains(chunkIndex))
-                    {
-                        continue; // Already processed this chunk
-                    }
-
-                    // Fetch this chunk
-                    var resultData = await _client.GetResultChunkAsync(
-                        _statementId,
-                        chunkIndex,
-                        cancellationToken).ConfigureAwait(false);
-
-                    if (resultData.ExternalLinks != null && resultData.ExternalLinks.Any())
-                    {
-                        foreach (var link in resultData.ExternalLinks)
-                        {
-                            CreateAndAddDownloadResult(link, cancellationToken);
-                        }
-                    }
                 }
             }
 
