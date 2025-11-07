@@ -68,17 +68,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _schema = config?.Schema ?? throw new ArgumentNullException(nameof(config));
 
-            // Set HTTP client timeout (if HttpClient hasn't been used yet)
-            // HttpClient properties can only be modified before sending the first request
-            try
-            {
-                _httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);
-            }
-            catch (InvalidOperationException)
-            {
-                // HttpClient already used, timeout cannot be changed
-                // This is acceptable - the HttpClient may have been configured with an appropriate timeout already
-            }
+            // Set HTTP client timeout
+            _httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);
 
             // Initialize the memory manager
             _memoryManager = new CloudFetchMemoryBufferManager(config.MemoryBufferSizeMB);
@@ -135,17 +126,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             // Parse configuration from properties
             var config = CloudFetchConfiguration.FromProperties(statement.Connection.Properties, schema, isLz4Compressed);
 
-            // Set HTTP client timeout (if HttpClient hasn't been used yet)
-            // HttpClient properties can only be modified before sending the first request
-            try
-            {
-                _httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);
-            }
-            catch (InvalidOperationException)
-            {
-                // HttpClient already used, timeout cannot be changed
-                // This is acceptable - the HttpClient may have been configured with an appropriate timeout already
-            }
+            // Set HTTP client timeout
+            _httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);
 
             // Initialize shared resources
             _memoryManager = new CloudFetchMemoryBufferManager(config.MemoryBufferSizeMB);
