@@ -391,6 +391,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                     }
 
                     var downloadResult = new DownloadResult(
+                        chunkIndex: link.ChunkIndex,
                         fileUrl: link.ExternalLinkUrl,
                         startRowOffset: link.RowOffset,
                         rowCount: link.RowCount,
@@ -487,11 +488,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 maxUrlRefreshAttempts,
                 urlExpirationBufferSeconds);
 
-            // Create download manager
+            // Create download manager using test constructor (for REST API)
             var downloadManager = new CloudFetchDownloadManager(
-                null, // statement parameter is nullable for REST API
                 schema,
-                isLz4Compressed,
                 resultFetcher,
                 downloader);
 

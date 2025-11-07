@@ -1,0 +1,53 @@
+---
+description: working on a JIRA ticket, base on the ticket description, understand the overall design of the feature and scope of the work. 
+---
+
+### User Input
+
+```text
+$ARGUMETENTS
+```
+
+You **MUST** consider the user input before proceeding if empty ask user for a ticket number to work on. 
+
+## Goal
+Implement a JIRA ticket base the overall design of the doc and the scope the JIRA ticket. 
+
+## Steps
+
+
+
+### step 1: understand the overall design of the project
+by looking into the overall design doc in the folder, use your search tool to find the correspond design docfrom the JIRA ticket content
+
+descript what you found you your understand of the problem, ask for confirmation about it. 
+
+### step 2: already create a new branch using git stack
+
+### step 3: discuss the implementation details
+**Important**, please make sure you focus and limit the the scope of the work according the JIRA ticket
+
+**Important**, also you don't need start from scratch, on this design, there should be already a design doc release to this ticket, please make sure you understnd it first, then add details if needed.
+
+ask for confirmation of the implementation of the details. you may got feedbacks on what to change base on this, please make sure you follow the idea.
+
+### step 4: start the implementation
+Always start a new branch using git stack.
+
+make sure the code is clean and simple. don't try to write too much code.
+
+### step 5: write test code
+make sure you have enough test coverage.
+make build and test pass.
+
+### step 6: refresh the design doc
+after all the code change, make sure you go through the related design doc and make the changes according the code if there is any descripency.
+
+this may also include some of the discuss or QnAs during this steps.
+
+### Step 7: Commit and Prepare PR
+Finalize your changes:
+- Commit the changes with a clear commit message
+- Prepare a comprehensive PR title and description following the PR template
+- Use `git stack push` to push changes and create the PR automatically, please be noticed that we are one a really big repo and git stack push may take really long to finish
+

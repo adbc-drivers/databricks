@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
@@ -44,8 +45,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
         /// <summary>
         /// Initializes a new instance of the <see cref="StatementExecutionResultFetcher"/> class.
-        /// Resources (memoryManager, downloadQueue) will be initialized by CloudFetchDownloadManager
-        /// via the Initialize() method.
         /// </summary>
         /// <param name="client">The Statement Execution API client.</param>
         /// <param name="statementId">The statement ID for fetching results.</param>
@@ -55,6 +54,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             string statementId,
             GetStatementResponse initialResponse)
             : base(null, null)  // Resources will be injected via Initialize()
+        public StatementExecutionResultFetcher(
+            IStatementExecutionClient client,
+            string statementId,
+            ResultManifest manifest,
+            ICloudFetchMemoryBufferManager memoryManager,
+            BlockingCollection<IDownloadResult> downloadQueue)
+            : base(memoryManager, downloadQueue)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _statementId = statementId ?? throw new ArgumentNullException(nameof(statementId));
@@ -222,7 +228,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 rowCount: link.RowCount,
                 byteCount: link.ByteCount,
                 expirationTime: expirationTime,
-                memoryManager: _memoryManager!,
+                memoryManager: _memoryManager,
                 httpHeaders: link.HttpHeaders); // Pass custom headers for cloud storage auth
 
             // Add to download queue
