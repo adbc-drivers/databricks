@@ -368,7 +368,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
         /// <summary>
         /// Creates a reader for external links results using the CloudFetch pipeline.
-        /// Follows the protocol-agnostic pattern: Create fetcher → Parse config → Create manager → Start → Create reader.
         /// </summary>
         /// <param name="response">The statement execution response.</param>
         /// <returns>A CloudFetch reader.</returns>
@@ -391,9 +390,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 _client,
                 response.StatementId,
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
                 response);  // Pass full response to use Result field
 >>>>>>> defec99 (fix(csharp): use GetStatementResponse.Result and follow next_chunk_index chain)
+=======
+                response.Manifest);
+>>>>>>> 6c543ed (refactor(csharp): use separate HttpClient for CloudFetch downloads)
 
             // 2. Parse configuration from REST properties (unified properties work for both Thrift and REST)
             var config = CloudFetchConfiguration.FromProperties(
