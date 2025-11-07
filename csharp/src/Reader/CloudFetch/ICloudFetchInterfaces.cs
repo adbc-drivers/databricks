@@ -36,6 +36,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
     internal interface IDownloadResult : IDisposable
     {
         /// <summary>
+        /// Gets the chunk index for this download result.
+        /// Used for targeted URL refresh in REST API.
+        /// </summary>
+        long ChunkIndex { get; }
+
+        /// <summary>
         /// Gets the URL for downloading the file.
         /// </summary>
         string FileUrl { get; }
@@ -202,6 +208,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>The download result for the specified offset, or null if not available.</returns>
         Task<IDownloadResult?> GetDownloadResultAsync(long offset, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Re-fetches URLs for chunks in the specified range.
+        /// Used when URLs expire before download completes.
+        /// </summary>
+        /// <param name="startChunkIndex">The starting chunk index (inclusive).</param>
+        /// <param name="endChunkIndex">The ending chunk index (inclusive).</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A collection of download results with refreshed URLs.</returns>
+        Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startChunkIndex, long endChunkIndex, CancellationToken cancellationToken);
     }
 
     /// <summary>

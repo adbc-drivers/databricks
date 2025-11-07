@@ -34,7 +34,8 @@ using Apache.Hive.Service.Rpc.Thrift;
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
-    /// Reader for CloudFetch results from Databricks Spark Thrift server.
+    /// Reader for CloudFetch results.
+    /// Protocol-agnostic - works with both Thrift and REST implementations.
     /// Handles downloading and processing URL-based result sets.
     /// </summary>
     internal sealed class CloudFetchReader : BaseDatabricksReader
@@ -42,14 +43,36 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         private ICloudFetchDownloadManager? downloadManager;
         private ArrowStreamReader? currentReader;
         private IDownloadResult? currentDownloadResult;
-        private bool isPrefetchEnabled;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
+        /// Protocol-agnostic constructor using dependency injection.
+        /// </summary>
+        /// <param name="statement">The HiveServer2 statement for tracing and operation closure.</param>
+        /// <param name="schema">The Arrow schema.</param>
+        /// <param name="response">The query response for operation closure.</param>
+        /// <param name="downloadManager">The download manager (already initialized and started).</param>
+        public CloudFetchReader(
+            IHiveServer2Statement statement,
+            Schema schema,
+            IResponse response,
+            ICloudFetchDownloadManager downloadManager)
+            : base(statement, schema, response, isLz4Compressed: false) // isLz4Compressed handled by download manager
+        {
+            this.downloadManager = downloadManager ?? throw new ArgumentNullException(nameof(downloadManager));
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
+        /// Legacy Thrift-specific constructor for backward compatibility.
         /// </summary>
         /// <param name="statement">The Databricks statement.</param>
         /// <param name="schema">The Arrow schema.</param>
+        /// <param name="response">The query response.</param>
+        /// <param name="initialResults">Initial results from the server.</param>
         /// <param name="isLz4Compressed">Whether the results are LZ4 compressed.</param>
+        /// <param name="httpClient">The HTTP client for downloads.</param>
+        [Obsolete("Use the protocol-agnostic constructor with ICloudFetchDownloadManager instead.")]
         public CloudFetchReader(
             IHiveServer2Statement statement,
             Schema schema,
@@ -59,35 +82,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             HttpClient httpClient)
             : base(statement, schema, response, isLz4Compressed)
         {
-            // Check if prefetch is enabled
-            var connectionProps = statement.Connection.Properties;
-            isPrefetchEnabled = true; // Default to true
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchPrefetchEnabled, out string? prefetchEnabledStr))
-            {
-                if (bool.TryParse(prefetchEnabledStr, out bool parsedPrefetchEnabled))
-                {
-                    isPrefetchEnabled = parsedPrefetchEnabled;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchPrefetchEnabled}: {prefetchEnabledStr}. Expected a boolean value.");
-                }
-            }
-
-            // Initialize the download manager
-            // Activity context will be captured dynamically by CloudFetch components when events are logged
-            if (isPrefetchEnabled)
-            {
-                downloadManager = new CloudFetchDownloadManager(statement, schema, response, initialResults, isLz4Compressed, httpClient);
-                downloadManager.StartAsync().Wait();
-            }
-            else
-            {
-                // For now, we only support the prefetch implementation
-                // This flag is reserved for future use if we need to support a non-prefetch mode
-                downloadManager = new CloudFetchDownloadManager(statement, schema, response, initialResults, isLz4Compressed, httpClient);
-                downloadManager.StartAsync().Wait();
-            }
+            // Create the download manager using the legacy Thrift-specific constructor
+            downloadManager = new CloudFetchDownloadManager(statement, schema, response, initialResults, isLz4Compressed, httpClient);
+            downloadManager.StartAsync().Wait();
         }
 
         /// <summary>
@@ -128,12 +125,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                     // If we don't have a current reader, get the next downloaded file
                     if (this.downloadManager != null)
                     {
-                        // Start the download manager if it's not already started
-                        if (!this.isPrefetchEnabled)
-                        {
-                            throw new InvalidOperationException("Prefetch must be enabled.");
-                        }
-
                         try
                         {
                             // Get the next downloaded file

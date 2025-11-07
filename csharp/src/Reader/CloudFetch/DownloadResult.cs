@@ -46,6 +46,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Initializes a new instance of the <see cref="DownloadResult"/> class.
         /// </summary>
+        /// <param name="chunkIndex">The chunk index for this download result.</param>
         /// <param name="fileUrl">The URL for downloading the file.</param>
         /// <param name="startRowOffset">The starting row offset for this result chunk.</param>
         /// <param name="rowCount">The number of rows in this result chunk.</param>
@@ -54,6 +55,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <param name="memoryManager">The memory buffer manager.</param>
         /// <param name="httpHeaders">Optional HTTP headers for downloading the file.</param>
         public DownloadResult(
+            long chunkIndex,
             string fileUrl,
             long startRowOffset,
             long rowCount,
@@ -62,6 +64,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             ICloudFetchMemoryBufferManager memoryManager,
             IReadOnlyDictionary<string, string>? httpHeaders = null)
         {
+            ChunkIndex = chunkIndex;
             _fileUrl = fileUrl ?? throw new ArgumentNullException(nameof(fileUrl));
             StartRowOffset = startRowOffset;
             RowCount = rowCount;
@@ -76,10 +79,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Creates a DownloadResult from a Thrift link for backward compatibility.
         /// </summary>
+        /// <param name="chunkIndex">The chunk index for this download result.</param>
         /// <param name="link">The Thrift link information.</param>
         /// <param name="memoryManager">The memory buffer manager.</param>
         /// <returns>A new DownloadResult instance.</returns>
-        public static DownloadResult FromThriftLink(TSparkArrowResultLink link, ICloudFetchMemoryBufferManager memoryManager)
+        public static DownloadResult FromThriftLink(long chunkIndex, TSparkArrowResultLink link, ICloudFetchMemoryBufferManager memoryManager)
         {
             if (link == null) throw new ArgumentNullException(nameof(link));
             if (memoryManager == null) throw new ArgumentNullException(nameof(memoryManager));
@@ -87,6 +91,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             var expirationTime = DateTimeOffset.FromUnixTimeMilliseconds(link.ExpiryTime).UtcDateTime;
 
             return new DownloadResult(
+                chunkIndex: chunkIndex,
                 fileUrl: link.FileLink,
                 startRowOffset: link.StartRowOffset,
                 rowCount: link.RowCount,
@@ -95,6 +100,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 memoryManager: memoryManager,
                 httpHeaders: null);
         }
+
+        /// <inheritdoc />
+        public long ChunkIndex { get; }
 
         /// <inheritdoc />
         public string FileUrl => _fileUrl;

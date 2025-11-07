@@ -49,6 +49,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         private readonly IClock _clock;
         private long _startOffset;
         private long _batchSize;
+        private long _nextChunkIndex = 0;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchResultFetcher"/> class.
@@ -129,7 +130,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         ]);
 
                         // Create a download result for the refreshed link using factory method
-                        var downloadResult = DownloadResult.FromThriftLink(refreshedLink, _memoryManager);
+                        // Use next chunk index for newly fetched links
+                        var downloadResult = DownloadResult.FromThriftLink(_nextChunkIndex++, refreshedLink, _memoryManager);
                         _urlsByOffset[offset] = downloadResult;
 
                         return downloadResult;
@@ -244,8 +246,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 // Process each link
                 foreach (var link in resultLinks)
                 {
-                    // Create download result using factory method
-                    var downloadResult = DownloadResult.FromThriftLink(link, _memoryManager);
+                    // Create download result using factory method with chunk index
+                    var downloadResult = DownloadResult.FromThriftLink(_nextChunkIndex++, link, _memoryManager);
 
                     // Add to download queue and cache
                     AddDownloadResult(downloadResult, cancellationToken);
@@ -292,8 +294,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             // Process each link
             foreach (var link in resultLinks)
             {
-                // Create download result using factory method
-                var downloadResult = DownloadResult.FromThriftLink(link, _memoryManager);
+                // Create download result using factory method with chunk index
+                var downloadResult = DownloadResult.FromThriftLink(_nextChunkIndex++, link, _memoryManager);
 
                 // Add to download queue and cache
                 AddDownloadResult(downloadResult, cancellationToken);
@@ -309,6 +311,61 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
             // Update whether there are more results
             _hasMoreResults = fetchResults.HasMoreRows;
+        }
+
+        /// <inheritdoc />
+        public override async Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(
+            long startChunkIndex,
+            long endChunkIndex,
+            CancellationToken cancellationToken)
+        {
+            // For Thrift, we can't fetch specific chunk indices directly
+            // Best effort: Call FetchResults and return what we get
+            await _fetchLock.WaitAsync(cancellationToken);
+            try
+            {
+                // Create fetch request for next batch
+                TFetchResultsReq request = new TFetchResultsReq(
+                    _response.OperationHandle!,
+                    TFetchOrientation.FETCH_NEXT,
+                    _batchSize);
+
+                // Use the statement's configured query timeout
+                using var timeoutTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(_statement.QueryTimeoutSeconds));
+                using var combinedTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutTokenSource.Token);
+
+                TFetchResultsResp response = await _statement.Client.FetchResults(request, combinedTokenSource.Token).ConfigureAwait(false);
+
+                var refreshedResults = new List<IDownloadResult>();
+
+                // Process the results if available
+                if (response.Status.StatusCode == TStatusCode.SUCCESS_STATUS &&
+                    response.Results.__isset.resultLinks &&
+                    response.Results.ResultLinks != null &&
+                    response.Results.ResultLinks.Count > 0)
+                {
+                    foreach (var link in response.Results.ResultLinks)
+                    {
+                        // Create download result with fresh URL
+                        var downloadResult = DownloadResult.FromThriftLink(_nextChunkIndex++, link, _memoryManager);
+                        refreshedResults.Add(downloadResult);
+
+                        // Update cache
+                        _urlsByOffset[link.StartRowOffset] = downloadResult;
+                    }
+
+                    Activity.Current?.AddEvent("cloudfetch.urls_refreshed", [
+                        new("count", refreshedResults.Count),
+                        new("requested_range", $"{startChunkIndex}-{endChunkIndex}")
+                    ]);
+                }
+
+                return refreshedResults;
+            }
+            finally
+            {
+                _fetchLock.Release();
+            }
         }
     }
 }

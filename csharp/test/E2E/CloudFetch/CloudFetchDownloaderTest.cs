@@ -82,7 +82,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                         BytesNum = 1024,
                         ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds()
                     };
-                    return DownloadResult.FromThriftLink(link, _mockMemoryManager.Object);
+                    return DownloadResult.FromThriftLink(0, link, _mockMemoryManager.Object);
                 });
         }
 
@@ -661,7 +661,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                 BytesNum = 100,
                 ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set new expiry in the future
             };
-            var refreshedResult = DownloadResult.FromThriftLink(refreshedLink, _mockMemoryManager.Object);
+            var refreshedResult = DownloadResult.FromThriftLink(0, refreshedLink, _mockMemoryManager.Object);
             _mockResultFetcher.Setup(f => f.GetDownloadResultAsync(0, It.IsAny<CancellationToken>()))
                 .Callback(() => {
                     getDownloadResultCalled = true;

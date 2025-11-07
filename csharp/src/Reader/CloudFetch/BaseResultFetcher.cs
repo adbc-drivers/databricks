@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -123,6 +124,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
         /// <inheritdoc />
         public abstract Task<IDownloadResult?> GetDownloadResultAsync(long offset, CancellationToken cancellationToken);
+
+        /// <inheritdoc />
+        public abstract Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startChunkIndex, long endChunkIndex, CancellationToken cancellationToken);
 
         /// <summary>
         /// Resets the fetcher state. Called at the beginning of StartAsync.

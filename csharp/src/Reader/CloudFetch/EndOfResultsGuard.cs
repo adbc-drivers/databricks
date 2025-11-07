@@ -46,6 +46,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         }
 
         /// <inheritdoc />
+        public long ChunkIndex => -1;
+
+        /// <inheritdoc />
         public string FileUrl => throw new NotSupportedException("EndOfResultsGuard does not have a file URL.");
 
         /// <inheritdoc />
