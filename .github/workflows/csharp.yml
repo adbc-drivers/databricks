@@ -18,7 +18,7 @@
 name: C#
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
       - 'maint-*'
@@ -60,6 +60,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           submodules: recursive
           persist-credentials: false
@@ -72,9 +73,9 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          ./ci/scripts/csharp_build.sh "$(pwd)"
+          ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
 
       - name: Test
         shell: bash
         run: |
-          ./ci/scripts/csharp_test.sh "$(pwd)"
+          ./ci/scripts/csharp_test.sh "${{ github.workspace }}"
