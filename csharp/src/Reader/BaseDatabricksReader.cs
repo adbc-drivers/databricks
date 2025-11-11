@@ -35,13 +35,18 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
     /// </summary>
     internal abstract class BaseDatabricksReader : TracingReader
     {
-        protected ITracingStatement statement;
         protected readonly Schema schema;
         protected readonly IResponse? response;  // Nullable for protocol-agnostic usage
         protected readonly bool isLz4Compressed;
         protected bool hasNoMoreRows = false;
         private bool isDisposed;
         private bool isClosed;
+
+        /// <summary>
+        /// Gets the statement for this reader. Subclasses can decide how to provide it.
+        /// Used for Thrift operations in DatabricksReader. Not used in CloudFetchReader.
+        /// </summary>
+        protected abstract ITracingStatement Statement { get; }
 
         /// <summary>
         /// Protocol-agnostic constructor.
@@ -56,7 +61,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
             this.schema = schema;
             this.response = response;
             this.isLz4Compressed = isLz4Compressed;
-            this.statement = statement;
         }
 
         public override Schema Schema { get { return schema; } }
@@ -89,7 +93,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
         {
             try
             {
-                if (!isClosed && response != null && statement is IHiveServer2Statement hiveStatement)
+                if (!isClosed && response != null && Statement is IHiveServer2Statement hiveStatement)
                 {
                     // Only close operation for Thrift protocol (which has IResponse)
                     _ = await HiveServer2Reader.CloseOperationAsync(hiveStatement, this.response);

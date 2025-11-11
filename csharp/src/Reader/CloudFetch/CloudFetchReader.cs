@@ -37,12 +37,19 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
     /// Reader for CloudFetch results.
     /// Protocol-agnostic - works with both Thrift and REST implementations.
     /// Handles downloading and processing URL-based result sets.
+    ///
+    /// Note: This reader receives an ITracingStatement for tracing support (required by TracingReader base class),
+    /// but does not use the Statement property for any CloudFetch operations. All CloudFetch logic is handled
+    /// through the downloadManager.
     /// </summary>
     internal sealed class CloudFetchReader : BaseDatabricksReader
     {
+        private readonly ITracingStatement _statement;
         private ICloudFetchDownloadManager? downloadManager;
         private ArrowStreamReader? currentReader;
         private IDownloadResult? currentDownloadResult;
+
+        protected override ITracingStatement Statement => _statement;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
@@ -60,6 +67,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             ICloudFetchDownloadManager downloadManager)
             : base(statement, schema, response, isLz4Compressed: false) // isLz4Compressed handled by download manager
         {
+            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
             this.downloadManager = downloadManager ?? throw new ArgumentNullException(nameof(downloadManager));
         }
 
@@ -83,6 +91,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             HttpClient httpClient)
             : base(statement, schema, response, isLz4Compressed)
         {
+            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
             // Create the download manager using the legacy Thrift-specific constructor
             downloadManager = new CloudFetchDownloadManager(statement, schema, response, initialResults, isLz4Compressed, httpClient);
             downloadManager.StartAsync().Wait();
