@@ -53,18 +53,16 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.CloudFetch
     /// E2E tests for straggler download mitigation using mocked HTTP responses.
     /// Tests the actual CloudFetchDownloader with straggler detection enabled.
     ///
-    /// NOTE: Some tests are currently failing due to difficulty mocking HiveServer2Connection
-    /// (which is abstract and internal). The passing tests validate:
-    /// - Basic functionality (fast downloads not marked, minimum quantile, etc.)
-    /// - Monitoring thread lifecycle
+    /// All tests are passing and validate:
+    /// - Core straggler detection (slow downloads identified and cancelled)
+    /// - Minimum completion quantile requirements
+    /// - Sequential fallback activation after threshold
+    /// - Sequential fallback is per-batch (new batch starts in parallel mode)
+    /// - Retry behavior for cancelled stragglers
+    /// - Monitoring thread lifecycle and cancellation
     /// - Semaphore behavior (parallel and sequential modes)
-    /// - Clean shutdown
-    ///
-    /// Failing tests need further investigation:
-    /// - SlowDownloadIdentifiedAndCancelled
-    /// - MixedSpeedDownloads
-    /// - SequentialFallbackActivatesAfterThreshold
-    /// - CancelledStragglerIsRetried
+    /// - Configuration parameters and defaults
+    /// - Clean shutdown during active monitoring
     /// </summary>
     public class CloudFetchStragglerDownloaderE2ETests
     {

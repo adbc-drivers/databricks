@@ -401,9 +401,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Acquire a download slot
                         await _downloadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-                        bool shouldAcquireSequential = _isSequentialMode;
                         bool acquiredSequential = false;
-                        if (shouldAcquireSequential)
+                        if (_isSequentialMode)
                         {
                             await _sequentialSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
                             acquiredSequential = true;
