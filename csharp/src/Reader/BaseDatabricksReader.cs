@@ -40,7 +40,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
         protected readonly bool isLz4Compressed;
         protected bool hasNoMoreRows = false;
         private bool isDisposed;
-        private bool isClosed;
 
         /// <summary>
         /// Gets the statement for this reader. Subclasses can decide how to provide it.
@@ -67,43 +66,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 
         protected override void Dispose(bool disposing)
         {
-            try
-            {
-                if (!isDisposed)
-                {
-                    if (disposing)
-                    {
-                        _ = CloseOperationAsync().Result;
-                    }
-                }
-            }
-            finally
+            if (!isDisposed)
             {
                 base.Dispose(disposing);
                 isDisposed = true;
-            }
-        }
-
-        /// <summary>
-        /// Closes the current operation.
-        /// </summary>
-        /// <returns>Returns true if the close operation completes successfully, false otherwise.</returns>
-        /// <exception cref="HiveServer2Exception" />
-        public async Task<bool> CloseOperationAsync()
-        {
-            try
-            {
-                if (!isClosed && response != null && Statement is IHiveServer2Statement hiveStatement)
-                {
-                    // Only close operation for Thrift protocol (which has IResponse)
-                    _ = await HiveServer2Reader.CloseOperationAsync(hiveStatement, this.response);
-                    return true;
-                }
-                return false;
-            }
-            finally
-            {
-                isClosed = true;
             }
         }
 

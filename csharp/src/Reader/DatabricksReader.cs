@@ -152,6 +152,39 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
             this.index++;
         }
 
+        private bool _isClosed;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _ = CloseOperationAsync().Result;
+            }
+            base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Closes the Thrift operation.
+        /// </summary>
+        /// <returns>Returns true if the close operation completes successfully, false otherwise.</returns>
+        /// <exception cref="HiveServer2Exception" />
+        private async Task<bool> CloseOperationAsync()
+        {
+            try
+            {
+                if (!_isClosed && this.response != null)
+                {
+                    _ = await HiveServer2Reader.CloseOperationAsync(_statement, this.response);
+                    return true;
+                }
+                return false;
+            }
+            finally
+            {
+                _isClosed = true;
+            }
+        }
+
         sealed class SingleBatch : IArrowReader
         {
             private RecordBatch? _recordBatch;
