@@ -147,7 +147,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error stopping downloader: {ex.Message}");
+                Trace.WriteLine($"Error stopping downloader: {ex}");
             }
             finally
             {

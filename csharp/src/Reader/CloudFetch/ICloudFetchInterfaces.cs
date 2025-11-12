@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -202,6 +203,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         Exception? Error { get; }
 
         /// <summary>
+        /// Initializes the fetcher with manager-created resources.
+        /// Called by CloudFetchDownloadManager after creating shared resources.
+        /// </summary>
+        /// <param name="memoryManager">The memory buffer manager.</param>
+        /// <param name="downloadQueue">The download queue.</param>
+        void Initialize(ICloudFetchMemoryBufferManager memoryManager, BlockingCollection<IDownloadResult> downloadQueue);
+
+        /// <summary>
         /// Gets a download result for the specified offset, fetching or refreshing as needed.
         /// </summary>
         /// <param name="offset">The row offset for which to get a download result.</param>
@@ -213,11 +222,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// Re-fetches URLs for chunks in the specified range.
         /// Used when URLs expire before download completes.
         /// </summary>
-        /// <param name="startChunkIndex">The starting chunk index (inclusive).</param>
-        /// <param name="endChunkIndex">The ending chunk index (inclusive).</param>
+        /// <param name="startRowOffset">The starting row offset to fetch from (for Thrift protocol).</param>
+        /// <param name="startChunkIndex">The starting chunk index (inclusive, for REST protocol).</param>
+        /// <param name="endChunkIndex">The ending chunk index (inclusive, for REST protocol).</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>A collection of download results with refreshed URLs.</returns>
-        Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startChunkIndex, long endChunkIndex, CancellationToken cancellationToken);
+        Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startRowOffset, long startChunkIndex, long endChunkIndex, CancellationToken cancellationToken);
     }
 
     /// <summary>

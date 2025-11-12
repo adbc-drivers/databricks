@@ -192,7 +192,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Error fetching results: {ex.Message}");
+                    Trace.WriteLine($"Error fetching results: {ex}");
                     _error = ex;
                     _hasMoreResults = false;
                     throw;
@@ -230,7 +230,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error fetching results from server: {ex.Message}");
+                Trace.WriteLine($"Error fetching results from server: {ex}");
                 _hasMoreResults = false;
                 throw;
             }
@@ -315,20 +315,27 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
         /// <inheritdoc />
         public override async Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(
+            long startRowOffset,
             long startChunkIndex,
             long endChunkIndex,
             CancellationToken cancellationToken)
         {
-            // For Thrift, we can't fetch specific chunk indices directly
-            // Best effort: Call FetchResults and return what we get
+            // For Thrift, we use startRowOffset to fetch from a specific position
+            // Chunk indices are ignored as Thrift doesn't support fetching by chunk index
             await _fetchLock.WaitAsync(cancellationToken);
             try
             {
-                // Create fetch request for next batch
+                // Create fetch request using startRowOffset
                 TFetchResultsReq request = new TFetchResultsReq(
                     _response.OperationHandle!,
                     TFetchOrientation.FETCH_NEXT,
                     _batchSize);
+
+                // Set the start row offset for Thrift protocol
+                if (startRowOffset > 0)
+                {
+                    request.StartRowOffset = startRowOffset;
+                }
 
                 // Use the statement's configured query timeout
                 using var timeoutTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(_statement.QueryTimeoutSeconds));

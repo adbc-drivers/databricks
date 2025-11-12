@@ -157,7 +157,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                             }
                             catch (Exception ex)
                             {
-                                Debug.WriteLine($"Error creating Arrow reader: {ex.Message}");
+                                Trace.WriteLine($"Error creating Arrow reader: {ex}");
                                 this.currentDownloadResult.Dispose();
                                 this.currentDownloadResult = null;
                                 throw;
@@ -165,7 +165,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"Error getting next downloaded file: {ex.Message}");
+                            Trace.WriteLine($"Error getting next downloaded file: {ex}");
                             throw;
                         }
                     }

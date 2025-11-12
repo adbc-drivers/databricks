@@ -59,13 +59,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             _isCompleted = false;
         }
 
-        /// <summary>
-        /// Initializes the fetcher with manager-created resources.
-        /// Called by CloudFetchDownloadManager after creating shared resources.
-        /// </summary>
-        /// <param name="memoryManager">The memory buffer manager.</param>
-        /// <param name="downloadQueue">The download queue.</param>
-        internal virtual void Initialize(
+        /// <inheritdoc />
+        public virtual void Initialize(
             ICloudFetchMemoryBufferManager memoryManager,
             BlockingCollection<IDownloadResult> downloadQueue)
         {
@@ -102,7 +97,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _fetchTask = FetchResultsWrapperAsync(_cancellationTokenSource.Token);
 
-            // Wait for the fetch task to start
             await Task.Yield();
         }
 
@@ -126,7 +120,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error stopping fetcher: {ex.Message}");
+                Trace.WriteLine($"Error stopping fetcher: {ex.Message}");
             }
             finally
             {
@@ -136,11 +130,24 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Gets a download result for the specified offset, fetching or refreshing as needed.
+        /// </summary>
+        /// <param name="offset">The row offset for which to get a download result.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The download result for the specified offset, or null if not available.</returns>
         public abstract Task<IDownloadResult?> GetDownloadResultAsync(long offset, CancellationToken cancellationToken);
 
-        /// <inheritdoc />
-        public abstract Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startChunkIndex, long endChunkIndex, CancellationToken cancellationToken);
+        /// <summary>
+        /// Re-fetches URLs for chunks in the specified range.
+        /// Used when URLs expire before download completes.
+        /// </summary>
+        /// <param name="startRowOffset">The starting row offset to fetch from (for Thrift protocol).</param>
+        /// <param name="startChunkIndex">The starting chunk index (inclusive, for REST protocol).</param>
+        /// <param name="endChunkIndex">The ending chunk index (inclusive, for REST protocol).</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A collection of download results with refreshed URLs.</returns>
+        public abstract Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startRowOffset, long startChunkIndex, long endChunkIndex, CancellationToken cancellationToken);
 
         /// <summary>
         /// Resets the fetcher state. Called at the beginning of StartAsync.
@@ -203,7 +210,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Unhandled error in fetcher: {ex.Message}");
+                Trace.WriteLine($"Unhandled error in fetcher: {ex}");
                 _error = ex;
                 _hasMoreResults = false;
                 _isCompleted = true;
