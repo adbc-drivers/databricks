@@ -1195,10 +1195,15 @@ To achieve true protocol independence, we made key architectural changes to the 
 /// </summary>
 internal abstract class BaseDatabricksReader : TracingReader
 {
-    protected ITracingStatement statement;         // ✅ Changed from IHiveServer2Statement
     protected readonly Schema schema;
     protected readonly IResponse? response;        // ✅ Made nullable for REST API
     protected readonly bool isLz4Compressed;
+
+    /// <summary>
+    /// Gets the statement for this reader. Subclasses can decide how to provide it.
+    /// Used for tracing support. DatabricksReader also uses it for Thrift operations.
+    /// </summary>
+    protected abstract ITracingStatement Statement { get; }  // ✅ Abstract property instead of field
 
     /// <summary>
     /// Protocol-agnostic constructor.
@@ -1217,54 +1222,90 @@ internal abstract class BaseDatabricksReader : TracingReader
         this.schema = schema;
         this.response = response;
         this.isLz4Compressed = isLz4Compressed;
-        this.statement = statement;
+        // ✅ No longer stores statement - subclasses own their statement field
     }
 
-    /// <summary>
-    /// Closes the current operation (Thrift only).
-    /// </summary>
-    public async Task<bool> CloseOperationAsync()
-    {
-        try
-        {
-            // Only close operation for Thrift protocol (which has IResponse)
-            if (!isClosed && response != null && statement is IHiveServer2Statement hiveStatement)
-            {
-                _ = await HiveServer2Reader.CloseOperationAsync(hiveStatement, this.response);
-                return true;
-            }
-            return false;
-        }
-        finally
-        {
-            isClosed = true;
-        }
-    }
+    // ✅ CloseOperationAsync moved to DatabricksReader (Thrift-specific)
 }
 ```
 
-**Protocol-Specific Casting Pattern:**
+**Subclass Ownership Pattern:**
 
-When protocol-specific properties are needed (e.g., in DatabricksReader which is Thrift-only), we cast back to the specific interface:
+Each reader subclass owns its own statement field and implements the Statement property. This allows:
+- **DatabricksReader** to store `IHiveServer2Statement` for Thrift operations
+- **CloudFetchReader** to store `ITracingStatement` (doesn't need Thrift-specific features)
 
 ```csharp
 internal sealed class DatabricksReader : BaseDatabricksReader
 {
+    private readonly IHiveServer2Statement _statement;  // ✅ Owns Thrift-specific statement
+
+    protected override ITracingStatement Statement => _statement;  // ✅ Implements abstract property
+
+    public DatabricksReader(
+        IHiveServer2Statement statement,
+        Schema schema,
+        IResponse response,
+        TFetchResultsResp? initialResults,
+        bool isLz4Compressed)
+        : base(statement, schema, response, isLz4Compressed)
+    {
+        _statement = statement;  // ✅ Store for direct access
+        // ...
+    }
+
     public override async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(
         CancellationToken cancellationToken = default)
     {
-        // Cast to IHiveServer2Statement when accessing Thrift-specific properties
-        var hiveStatement = (IHiveServer2Statement)this.statement;
-
+        // ✅ Direct access to Thrift-specific statement (no casting needed)
         TFetchResultsReq request = new TFetchResultsReq(
             this.response!.OperationHandle!,
             TFetchOrientation.FETCH_NEXT,
-            hiveStatement.BatchSize);      // ✅ Access Thrift-specific property
+            _statement.BatchSize);      // ✅ Direct access to Thrift property
 
-        TFetchResultsResp response = await hiveStatement.Connection.Client!
+        TFetchResultsResp response = await _statement.Connection.Client!
             .FetchResults(request, cancellationToken);
 
         // ...
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _ = CloseOperationAsync().Result;  // ✅ Thrift-specific cleanup in subclass
+        }
+        base.Dispose(disposing);
+    }
+
+    private async Task<bool> CloseOperationAsync()
+    {
+        // ✅ Moved from base class - Thrift-specific operation
+        if (!_isClosed && this.response != null)
+        {
+            _ = await HiveServer2Reader.CloseOperationAsync(_statement, this.response);
+            return true;
+        }
+        return false;
+    }
+}
+
+internal sealed class CloudFetchReader : BaseDatabricksReader
+{
+    private readonly ITracingStatement _statement;  // ✅ Only needs ITracingStatement
+
+    protected override ITracingStatement Statement => _statement;  // ✅ Implements abstract property
+
+    public CloudFetchReader(
+        ITracingStatement statement,
+        Schema schema,
+        IResponse? response,
+        ICloudFetchDownloadManager downloadManager)
+        : base(statement, schema, response, isLz4Compressed: false)
+    {
+        _statement = statement;  // ✅ Store for tracing only
+        // ✅ Does not use _statement for CloudFetch operations
+        // ✅ Does not need CloseOperationAsync (no Thrift operations)
     }
 }
 ```
