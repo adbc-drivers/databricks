@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -69,16 +70,19 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                 .Returns(Task.CompletedTask);
 
             // Set up result fetcher defaults
-            _mockResultFetcher.Setup(f => f.GetUrlAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            _mockResultFetcher.Setup(f => f.GetDownloadResultAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync((long offset, CancellationToken token) =>
                 {
-                    // Return a URL with the same offset
-                    return new TSparkArrowResultLink
+                    // Return a download result with the same offset
+                    var link = new TSparkArrowResultLink
                     {
                         StartRowOffset = offset,
                         FileLink = $"http://test.com/file{offset}",
+                        RowCount = 100,
+                        BytesNum = 1024,
                         ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds()
                     };
+                    return DownloadResult.FromThriftLink(0, link, _mockMemoryManager.Object);
                 });
         }
 
@@ -142,11 +146,13 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Create a test download result
             var mockDownloadResult = new Mock<IDownloadResult>();
-            var resultLink = new TSparkArrowResultLink {
-                FileLink = "http://test.com/file1",
-                ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set expiry 30 minutes in the future
-            };
-            mockDownloadResult.Setup(r => r.Link).Returns(resultLink);
+            string fileUrl = "http://test.com/file1";
+            DateTime expirationTime = DateTime.UtcNow.AddMinutes(30);
+
+            mockDownloadResult.Setup(r => r.FileUrl).Returns(fileUrl);
+            mockDownloadResult.Setup(r => r.StartRowOffset).Returns(0);
+            mockDownloadResult.Setup(r => r.ExpirationTime).Returns(expirationTime);
+            mockDownloadResult.Setup(r => r.HttpHeaders).Returns((IReadOnlyDictionary<string, string>?)null);
             mockDownloadResult.Setup(r => r.Size).Returns(testContentBytes.Length);
             mockDownloadResult.Setup(r => r.RefreshAttempts).Returns(0);
             mockDownloadResult.Setup(r => r.IsExpiredOrExpiringSoon(It.IsAny<int>())).Returns(false);
@@ -230,11 +236,12 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Create a test download result
             var mockDownloadResult = new Mock<IDownloadResult>();
-            var resultLink = new TSparkArrowResultLink {
-                FileLink = "http://test.com/file1",
-                ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set expiry 30 minutes in the future
-            };
-            mockDownloadResult.Setup(r => r.Link).Returns(resultLink);
+            var fileUrl = "http://test.com/file1";
+            var expirationTime = DateTimeOffset.UtcNow.AddMinutes(30).UtcDateTime;
+            mockDownloadResult.Setup(r => r.FileUrl).Returns(fileUrl);
+            mockDownloadResult.Setup(r => r.StartRowOffset).Returns(0);
+            mockDownloadResult.Setup(r => r.ExpirationTime).Returns(expirationTime);
+            mockDownloadResult.Setup(r => r.HttpHeaders).Returns((IReadOnlyDictionary<string, string>?)null);
             mockDownloadResult.Setup(r => r.Size).Returns(1000); // Some arbitrary size
             mockDownloadResult.Setup(r => r.RefreshAttempts).Returns(0);
             mockDownloadResult.Setup(r => r.IsExpiredOrExpiringSoon(It.IsAny<int>())).Returns(false);
@@ -311,7 +318,12 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                 BytesNum = 100,
                 ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set expiry 30 minutes in the future
             };
-            mockDownloadResult.Setup(r => r.Link).Returns(resultLink);
+            var fileUrl = "http://test.com/file1";
+            var expirationTime = DateTimeOffset.UtcNow.AddMinutes(30).UtcDateTime;
+            mockDownloadResult.Setup(r => r.FileUrl).Returns(fileUrl);
+            mockDownloadResult.Setup(r => r.StartRowOffset).Returns(0);
+            mockDownloadResult.Setup(r => r.ExpirationTime).Returns(expirationTime);
+            mockDownloadResult.Setup(r => r.HttpHeaders).Returns((IReadOnlyDictionary<string, string>?)null);
             mockDownloadResult.Setup(r => r.Size).Returns(100);
             mockDownloadResult.Setup(r => r.RefreshAttempts).Returns(0);
             mockDownloadResult.Setup(r => r.IsExpiredOrExpiringSoon(It.IsAny<int>())).Returns(false);
@@ -420,11 +432,12 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Create a test download result
             var mockDownloadResult = new Mock<IDownloadResult>();
-            var resultLink = new TSparkArrowResultLink {
-                FileLink = "http://test.com/file1",
-                ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set expiry 30 minutes in the future
-            };
-            mockDownloadResult.Setup(r => r.Link).Returns(resultLink);
+            var fileUrl = "http://test.com/file1";
+            var expirationTime = DateTimeOffset.UtcNow.AddMinutes(30).UtcDateTime;
+            mockDownloadResult.Setup(r => r.FileUrl).Returns(fileUrl);
+            mockDownloadResult.Setup(r => r.StartRowOffset).Returns(0);
+            mockDownloadResult.Setup(r => r.ExpirationTime).Returns(expirationTime);
+            mockDownloadResult.Setup(r => r.HttpHeaders).Returns((IReadOnlyDictionary<string, string>?)null);
             mockDownloadResult.Setup(r => r.Size).Returns(100);
             mockDownloadResult.Setup(r => r.RefreshAttempts).Returns(0);
             mockDownloadResult.Setup(r => r.IsExpiredOrExpiringSoon(It.IsAny<int>())).Returns(false);
@@ -511,11 +524,12 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             for (int i = 0; i < totalDownloads; i++)
             {
                 var mockDownloadResult = new Mock<IDownloadResult>();
-                var resultLink = new TSparkArrowResultLink {
-                    FileLink = $"http://test.com/file{i}",
-                    ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set expiry 30 minutes in the future
-                };
-                mockDownloadResult.Setup(r => r.Link).Returns(resultLink);
+                var fileUrl = $"http://test.com/file{i}";
+                var expirationTime = DateTimeOffset.UtcNow.AddMinutes(30).UtcDateTime;
+                mockDownloadResult.Setup(r => r.FileUrl).Returns(fileUrl);
+                mockDownloadResult.Setup(r => r.StartRowOffset).Returns(0);
+                mockDownloadResult.Setup(r => r.ExpirationTime).Returns(expirationTime);
+                mockDownloadResult.Setup(r => r.HttpHeaders).Returns((IReadOnlyDictionary<string, string>?)null);
                 mockDownloadResult.Setup(r => r.Size).Returns(100);
                 mockDownloadResult.Setup(r => r.RefreshAttempts).Returns(0);
                 mockDownloadResult.Setup(r => r.IsExpiredOrExpiringSoon(It.IsAny<int>())).Returns(false);
@@ -579,7 +593,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             // Arrange
             // Create a mock HTTP handler that returns a 403 error for the first request and success for the second
             var mockHttpMessageHandler = new Mock<HttpMessageHandler>();
-            var requestCount = 0;
+            int requestCount = 0;
+            bool httpMockCalled = false;
 
             mockHttpMessageHandler
                 .Protected()
@@ -589,16 +604,19 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                     ItExpr.IsAny<CancellationToken>())
                 .Returns<HttpRequestMessage, CancellationToken>(async (request, token) =>
                 {
+                    httpMockCalled = true;
                     await Task.Delay(1, token); // Small delay to simulate network
 
                     // First request fails with 403 Forbidden (expired URL)
                     if (requestCount == 0)
                     {
                         requestCount++;
+                        Console.WriteLine($"HTTP Mock: Returning 403 Forbidden for request #{requestCount-1}");
                         return new HttpResponseMessage(HttpStatusCode.Forbidden);
                     }
 
                     // Second request succeeds with the refreshed URL
+                    Console.WriteLine($"HTTP Mock: Returning 200 OK for request #{requestCount}");
                     return new HttpResponseMessage(HttpStatusCode.OK)
                     {
                         Content = new StringContent("Test content")
@@ -609,25 +627,47 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Create a test download result
             var mockDownloadResult = new Mock<IDownloadResult>();
-            var resultLink = new TSparkArrowResultLink {
-                StartRowOffset = 0,
-                FileLink = "http://test.com/file1",
-                ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds() // Set expiry in the past
-            };
-            mockDownloadResult.Setup(r => r.Link).Returns(resultLink);
+            string fileUrl = "http://test.com/file1";
+            DateTime expirationTime = DateTime.UtcNow.AddMinutes(-5); // Set expiry in the past
+
+            // Track refresh attempts
+            int refreshAttempts = 0;
+
+            mockDownloadResult.Setup(r => r.FileUrl).Returns(() => refreshAttempts == 0 ? fileUrl : "http://test.com/file1-refreshed");
+            mockDownloadResult.Setup(r => r.StartRowOffset).Returns(0);
+            mockDownloadResult.Setup(r => r.ExpirationTime).Returns(expirationTime);
+            mockDownloadResult.Setup(r => r.HttpHeaders).Returns((IReadOnlyDictionary<string, string>?)null);
             mockDownloadResult.Setup(r => r.Size).Returns(100);
-            mockDownloadResult.Setup(r => r.RefreshAttempts).Returns(0);
+            mockDownloadResult.Setup(r => r.RefreshAttempts).Returns(() => refreshAttempts);
             // Important: Set this to false so the initial URL refresh doesn't happen
             mockDownloadResult.Setup(r => r.IsExpiredOrExpiringSoon(It.IsAny<int>())).Returns(false);
 
+            // Setup UpdateWithRefreshedUrl to increment refresh attempts
+            mockDownloadResult.Setup(r => r.UpdateWithRefreshedUrl(
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<IReadOnlyDictionary<string, string>?>()))
+                .Callback(() => refreshAttempts++);
+
+            // Setup SetCompleted to allow it to be called
+            mockDownloadResult.Setup(r => r.SetCompleted(It.IsAny<Stream>(), It.IsAny<long>()));
+
             // Setup URL refreshing - expect it to be called once during the HTTP 403 error handling
+            bool getDownloadResultCalled = false;
             var refreshedLink = new TSparkArrowResultLink {
                 StartRowOffset = 0,
                 FileLink = "http://test.com/file1-refreshed",
+                RowCount = 100,
+                BytesNum = 100,
                 ExpiryTime = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds() // Set new expiry in the future
             };
-            _mockResultFetcher.Setup(f => f.GetUrlAsync(0, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(refreshedLink);
+            var refreshedResult = DownloadResult.FromThriftLink(0, refreshedLink, _mockMemoryManager.Object);
+            _mockResultFetcher.Setup(f => f.GetDownloadResultAsync(0, It.IsAny<CancellationToken>()))
+                .Callback(() => {
+                    getDownloadResultCalled = true;
+                    Console.WriteLine("GetDownloadResultAsync was called!");
+                })
+                .ReturnsAsync(refreshedResult);
 
             // Create the downloader and add the download to the queue
             var downloader = new CloudFetchDownloader(
@@ -646,18 +686,29 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             await downloader.StartAsync(CancellationToken.None);
             _downloadQueue.Add(mockDownloadResult.Object);
 
-            // Wait for the download to be processed
-            await Task.Delay(200);
-
             // Add the end of results guard to complete the downloader
             _downloadQueue.Add(EndOfResultsGuard.Instance);
 
-            // Assert
-            // Verify that GetUrlAsync was called exactly once to refresh the URL
-            _mockResultFetcher.Verify(f => f.GetUrlAsync(0, It.IsAny<CancellationToken>()), Times.Once);
+            // Wait for the download to actually complete
+            var result = await downloader.GetNextDownloadedFileAsync(CancellationToken.None);
 
-            // Verify that UpdateWithRefreshedLink was called with the refreshed link
-            mockDownloadResult.Verify(r => r.UpdateWithRefreshedLink(refreshedLink), Times.Once);
+            // Debug output
+            Console.WriteLine($"HTTP Mock Called: {httpMockCalled}");
+            Console.WriteLine($"GetDownloadResultAsync Called: {getDownloadResultCalled}");
+            Console.WriteLine($"Request Count: {requestCount}");
+            Console.WriteLine($"Refresh Attempts: {refreshAttempts}");
+
+            // Assert
+            Assert.Same(mockDownloadResult.Object, result);
+
+            // Verify that GetDownloadResultAsync was called exactly once to refresh the URL
+            _mockResultFetcher.Verify(f => f.GetDownloadResultAsync(0, It.IsAny<CancellationToken>()), Times.Once);
+
+            // Verify that UpdateWithRefreshedUrl was called with the refreshed URL
+            mockDownloadResult.Verify(r => r.UpdateWithRefreshedUrl(
+                refreshedResult.FileUrl,
+                refreshedResult.ExpirationTime,
+                refreshedResult.HttpHeaders), Times.Once);
 
             // Cleanup
             await downloader.StopAsync();
