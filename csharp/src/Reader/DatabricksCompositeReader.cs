@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -103,9 +104,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                    initialResults.Results.ResultLinks?.Count > 0;
         }
 
-        private BaseDatabricksReader DetermineReader(TFetchResultsResp initialResults)
+        private BaseDatabricksReader DetermineReader(TFetchResultsResp initialResults, Activity? activity = null)
         {
-            if (ShouldUseCloudFetch(initialResults))
+            bool useCloudFetch = ShouldUseCloudFetch(initialResults);
+            activity?.AddEvent("composite_reader.determine_reader", [
+                new("use_cloudfetch", useCloudFetch),
+                new("has_result_links", initialResults.__isset.results && initialResults.Results.__isset.resultLinks),
+                new("result_links_count", initialResults.Results?.ResultLinks?.Count ?? 0)
+            ]);
+
+            if (useCloudFetch)
             {
                 return CreateCloudFetchReader(initialResults);
             }
@@ -119,12 +127,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
         /// Reads the next record batch from the active reader.
         /// </summary>
         /// <param name="cancellationToken">The cancellation token.</param>
+        /// <param name="activity">The activity for logging.</param>
         /// <returns>The next record batch, or null if there are no more batches.</returns>
-        private async ValueTask<RecordBatch?> ReadNextRecordBatchInternalAsync(CancellationToken cancellationToken = default)
+        private async ValueTask<RecordBatch?> ReadNextRecordBatchInternalAsync(CancellationToken cancellationToken, Activity? activity)
         {
             // Initialize the active reader if not already done
             if (_activeReader == null)
             {
+                activity?.AddEvent("composite_reader.initializing_reader");
                 // if no reader, we did not have direct results
                 // Make a FetchResults call to get the initial result set
                 // and determine the reader based on the result set
@@ -137,7 +147,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                 }
 
                 TFetchResultsResp response = await this._statement.Client!.FetchResults(request, cancellationToken);
-                _activeReader = DetermineReader(response);
+                _activeReader = DetermineReader(response, activity);
+                activity?.AddEvent("composite_reader.reader_determined", [
+                    new("reader_type", _activeReader.GetType().Name)
+                ]);
             }
 
             return await _activeReader.ReadNextRecordBatchAsync(cancellationToken);
@@ -165,43 +178,76 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 
         public override async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
         {
-            var result = await ReadNextRecordBatchInternalAsync(cancellationToken);
-            // Stop the poller when we've reached the end of results
-            if (result == null)
+            return await this.TraceActivityAsync(async activity =>
             {
-                StopOperationStatusPoller();
-            }
-            return result;
+                if (_activeReader != null)
+                {
+                    activity?.SetTag("reader.active_reader_type", _activeReader.GetType().Name);
+                }
+
+                var result = await ReadNextRecordBatchInternalAsync(cancellationToken, activity);
+                // Stop the poller when we've reached the end of results
+                if (result == null)
+                {
+                    activity?.AddEvent("composite_reader.end_of_results");
+                    StopOperationStatusPoller();
+                }
+                else
+                {
+                    activity?.AddEvent("composite_reader.batch_read", [
+                        new("row_count", result.Length)
+                    ]);
+                }
+                return result;
+            });
         }
 
         protected override void Dispose(bool disposing)
         {
-            try
+            this.TraceActivity(activity =>
             {
-                if (!_disposed)
+                if (_activeReader != null)
                 {
-                    if (disposing)
+                    activity?.SetTag("reader.active_reader_type", _activeReader.GetType().Name);
+                }
+
+                try
+                {
+                    if (!_disposed)
                     {
-                        StopOperationStatusPoller();
-                        if (_activeReader == null)
+                        if (disposing)
                         {
-                            _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
-                                .ConfigureAwait(false).GetAwaiter().GetResult();
-                        }
-                        else
-                        {
-                            // Note: Have the contained reader close the operation to avoid duplicate calls.
-                            _activeReader.Dispose();
-                            _activeReader = null;
+                            activity?.AddEvent("composite_reader.disposing");
+                            StopOperationStatusPoller();
+                            if (_activeReader == null)
+                            {
+                                activity?.AddEvent("composite_reader.close_operation_no_reader");
+                                _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
+                                    .ConfigureAwait(false).GetAwaiter().GetResult();
+                            }
+                            else
+                            {
+                                activity?.AddEvent("composite_reader.disposing_active_reader", [
+                                    new("reader_type", _activeReader.GetType().Name)
+                                ]);
+                                // Note: Have the contained reader close the operation to avoid duplicate calls.
+                                _activeReader.Dispose();
+                                _activeReader = null;
+                            }
+                            activity?.AddEvent("composite_reader.disposed");
                         }
                     }
                 }
-            }
-            finally
-            {
-                base.Dispose(disposing);
-                _disposed = true;
-            }
+                catch (Exception ex)
+                {
+                    activity?.AddException(ex, [new("error.context", "composite_reader.dispose")]);
+                }
+                finally
+                {
+                    base.Dispose(disposing);
+                    _disposed = true;
+                }
+            }, activityName: "Dispose");
         }
 
         private void StopOperationStatusPoller()

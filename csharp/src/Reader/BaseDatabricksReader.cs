@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Tracing;
@@ -79,19 +80,30 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
         /// <exception cref="HiveServer2Exception" />
         public async Task<bool> CloseOperationAsync()
         {
-            try
+            return await this.TraceActivityAsync(async activity =>
             {
-                if (!isClosed)
+                try
                 {
-                    _ = await HiveServer2Reader.CloseOperationAsync(this.statement, this.response);
-                    return true;
+                    if (!isClosed)
+                    {
+                        activity?.AddEvent("reader.close_operation_start");
+                        _ = await HiveServer2Reader.CloseOperationAsync(this.statement, this.response);
+                        activity?.AddEvent("reader.close_operation_completed");
+                        return true;
+                    }
+                    activity?.AddEvent("reader.close_operation_skipped", [new("reason", "already_closed")]);
+                    return false;
                 }
-                return false;
-            }
-            finally
-            {
-                isClosed = true;
-            }
+                catch (Exception ex)
+                {
+                    activity?.AddException(ex, [new("error.context", "reader.close_operation")]);
+                    throw;
+                }
+                finally
+                {
+                    isClosed = true;
+                }
+            });
         }
 
         protected void ThrowIfDisposed()
