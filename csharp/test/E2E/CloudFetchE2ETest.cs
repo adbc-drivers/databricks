@@ -25,6 +25,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Databricks;
+using Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -44,19 +45,30 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
 
         public static IEnumerable<object[]> TestCases()
         {
-            // Test cases format: (query, expected row count, use cloud fetch, enable direct results)
+            // Test cases format: (protocol, query, expected row count, use cloud fetch, enable direct results)
 
             string smallQuery = $"SELECT * FROM range(1000)";
-            yield return new object[] { smallQuery, 1000, true, true };
-            yield return new object[] { smallQuery, 1000, false, true };
-            yield return new object[] { smallQuery, 1000, true, false };
-            yield return new object[] { smallQuery, 1000, false, false };
-
             string largeQuery = $"SELECT * FROM main.tpcds_sf10_delta.catalog_sales LIMIT 1000000";
-            yield return new object[] { largeQuery, 1000000, true, true };
-            yield return new object[] { largeQuery, 1000000, false, true };
-            yield return new object[] { largeQuery, 1000000, true, false };
-            yield return new object[] { largeQuery, 1000000, false, false };
+
+            // Thrift protocol test cases - all combinations supported
+            yield return new object[] { "thrift", smallQuery, 1000, true, true };
+            yield return new object[] { "thrift", smallQuery, 1000, false, true };
+            yield return new object[] { "thrift", smallQuery, 1000, true, false };
+            yield return new object[] { "thrift", smallQuery, 1000, false, false };
+            yield return new object[] { "thrift", largeQuery, 1000000, true, true };
+            yield return new object[] { "thrift", largeQuery, 1000000, false, true };
+            yield return new object[] { "thrift", largeQuery, 1000000, true, false };
+            yield return new object[] { "thrift", largeQuery, 1000000, false, false };
+
+            // REST protocol test cases - test all combinations to verify API parameter fixes
+            yield return new object[] { "rest", smallQuery, 1000, true, true };
+            yield return new object[] { "rest", smallQuery, 1000, false, true };
+            yield return new object[] { "rest", smallQuery, 1000, true, false };
+            yield return new object[] { "rest", smallQuery, 1000, false, false };
+            yield return new object[] { "rest", largeQuery, 1000000, true, true };
+            yield return new object[] { "rest", largeQuery, 1000000, false, true };
+            yield return new object[] { "rest", largeQuery, 1000000, true, false };
+            yield return new object[] { "rest", largeQuery, 1000000, false, false };
         }
 
         /// <summary>
@@ -64,16 +76,43 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
         /// </summary>
         [Theory]
         [MemberData(nameof(TestCases))]
-        public async Task TestRealDatabricksCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults)
+        public async Task TestRealDatabricksCloudFetch(string protocol, string query, int rowCount, bool useCloudFetch, bool enableDirectResults)
         {
-            var connection = NewConnection(TestConfiguration, new Dictionary<string, string>
+            // Skip REST tests if Statement Execution API testing is not enabled
+            if (protocol == "rest")
             {
-                [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
-                [DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString(),
-                [DatabricksParameters.CanDecompressLz4] = "true",
-                [DatabricksParameters.MaxBytesPerFile] = "10485760", // 10MB
-                [DatabricksParameters.CloudFetchUrlExpirationBufferSeconds] = (15 * 60 - 2).ToString(),
-            });
+                Skip.IfNot(Environment.GetEnvironmentVariable("USE_REAL_STATEMENT_EXECUTION_ENDPOINT") == "true",
+                    "Statement Execution API testing not enabled. Set USE_REAL_STATEMENT_EXECUTION_ENDPOINT=true to run REST protocol tests.");
+            }
+
+            // Get base properties from environment
+            Dictionary<string, string> connectionProperties;
+
+            if (protocol == "rest")
+            {
+                // Use helper to get REST-specific configuration (extracts host/path from URI)
+                connectionProperties = DatabricksTestHelpers.GetPropertiesWithStatementExecutionEnabled(
+                    TestEnvironment, TestConfiguration);
+            }
+            else
+            {
+                // Use standard Thrift configuration
+                connectionProperties = TestEnvironment.GetDriverParameters(TestConfiguration);
+            }
+
+            // Apply CloudFetch-specific settings
+            connectionProperties[DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString();
+            connectionProperties[DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString();
+            connectionProperties[DatabricksParameters.CanDecompressLz4] = "true";
+            connectionProperties[DatabricksParameters.MaxBytesPerFile] = "10485760"; // 10MB
+
+            // CloudFetchUrlExpirationBufferSeconds is Thrift-specific and not supported by REST API
+            if (protocol == "thrift")
+            {
+                connectionProperties[DatabricksParameters.CloudFetchUrlExpirationBufferSeconds] = (15 * 60 - 2).ToString();
+            }
+
+            var connection = NewConnection(TestConfiguration, connectionProperties);
 
             // Execute a query that generates a large result set using range function
             var statement = connection.CreateStatement();
@@ -95,7 +134,10 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
                 totalRows += batch.Length;
             }
 
-            Assert.True(totalRows >= rowCount);
+            // Log actual row count before assertion for debugging
+            OutputHelper?.WriteLine($"Protocol: {protocol}, Query type: {(rowCount == 1000 ? "small" : "large")}, CloudFetch: {useCloudFetch}, DirectResults: {enableDirectResults}, Rows: {totalRows}");
+
+            Assert.True(totalRows >= rowCount, $"Expected at least {rowCount} rows but got {totalRows}");
 
             Assert.Null(await result.Stream.ReadNextRecordBatchAsync());
 
