@@ -25,6 +25,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Apache.Arrow.Adbc.Drivers.Apache;
+using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks
 {
@@ -48,11 +49,31 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                     ? properties
                     : options
                         .Concat(properties.Where(x => !options.Keys.Contains(x.Key, StringComparer.OrdinalIgnoreCase)))
-                        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-                DatabricksConnection connection = new DatabricksConnection(mergedProperties);
-                connection.OpenAsync().Wait();
-                connection.ApplyServerSidePropertiesAsync().Wait();
-                return connection;
+                        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
+
+                // Check protocol parameter to determine which connection type to create
+                string protocol = "thrift"; // Default to Thrift for backward compatibility
+                if (mergedProperties.TryGetValue(DatabricksParameters.Protocol, out string? protocolValue))
+                {
+                    protocol = protocolValue.ToLowerInvariant();
+                }
+
+                if (protocol == "rest")
+                {
+                    // Create REST API connection using Statement Execution API
+                    return CreateRestConnection(mergedProperties);
+                }
+                else if (protocol == "thrift")
+                {
+                    // Create Thrift connection (existing behavior)
+                    return CreateThriftConnection(mergedProperties);
+                }
+                else
+                {
+                    throw new ArgumentException(
+                        $"Invalid protocol '{protocol}'. Supported values are 'thrift' and 'rest'.",
+                        DatabricksParameters.Protocol);
+                }
             }
             catch (AggregateException ae)
             {
@@ -66,6 +87,35 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Creates a Thrift-based connection (existing behavior).
+        /// </summary>
+        private AdbcConnection CreateThriftConnection(IReadOnlyDictionary<string, string> mergedProperties)
+        {
+            DatabricksConnection connection = new DatabricksConnection(mergedProperties);
+            connection.OpenAsync().Wait();
+            connection.ApplyServerSidePropertiesAsync().Wait();
+            return connection;
+        }
+
+        /// <summary>
+        /// Creates a REST API-based connection using Statement Execution API.
+        /// </summary>
+        private AdbcConnection CreateRestConnection(IReadOnlyDictionary<string, string> mergedProperties)
+        {
+            // Create HTTP client using DatabricksConnection's infrastructure
+            var (httpClient, host) = DatabricksConnection.CreateHttpClientForRestApi(mergedProperties);
+
+            // Create Statement Execution client
+            var client = new StatementExecutionClient(httpClient, host);
+
+            // Create and open connection
+            var connection = new StatementExecutionConnection(client, mergedProperties);
+            connection.OpenAsync().Wait();
+
+            return connection;
         }
     }
 }

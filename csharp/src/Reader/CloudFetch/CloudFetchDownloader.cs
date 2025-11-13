@@ -147,7 +147,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error stopping downloader: {ex.Message}");
+                Activity.Current?.AddEvent("cloudfetch.downloader_stop_error", [
+                    new("error_message", ex.Message),
+                    new("error_type", ex.GetType().Name)
+                ]);
             }
             finally
             {
@@ -266,14 +269,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Check if the URL is expired or about to expire
                         if (downloadResult.IsExpiredOrExpiringSoon(_urlExpirationBufferSeconds))
                         {
-                            // Get a refreshed URL before starting the download
-                            var refreshedLink = await _resultFetcher.GetUrlAsync(downloadResult.Link.StartRowOffset, cancellationToken);
-                            if (refreshedLink != null)
+                            // Get a refreshed download result before starting the download
+                            var refreshedResult = await _resultFetcher.GetDownloadResultAsync(downloadResult.StartRowOffset, cancellationToken);
+                            if (refreshedResult != null)
                             {
-                                // Update the download result with the refreshed link
-                                downloadResult.UpdateWithRefreshedLink(refreshedLink);
+                                // Update the download result with the refreshed URL
+                                downloadResult.UpdateWithRefreshedUrl(refreshedResult.FileUrl, refreshedResult.ExpirationTime, refreshedResult.HttpHeaders);
                                 activity?.AddEvent("cloudfetch.url_refreshed_before_download", [
-                                    new("offset", refreshedLink.StartRowOffset)
+                                    new("offset", refreshedResult.StartRowOffset)
                                 ]);
                             }
                         }
@@ -295,10 +298,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                                 if (t.IsFaulted)
                                 {
                                     Exception ex = t.Exception?.InnerException ?? new Exception("Unknown error");
-                                    string sanitizedUrl = SanitizeUrl(downloadResult.Link.FileLink);
+                                    string sanitizedUrl = SanitizeUrl(downloadResult.FileUrl);
                                     activity?.AddException(ex, [
                                         new("error.context", "cloudfetch.download_failed"),
-                                        new("offset", downloadResult.Link.StartRowOffset),
+                                        new("offset", downloadResult.StartRowOffset),
                                         new("sanitized_url", sanitizedUrl)
                                     ]);
 
@@ -369,15 +372,15 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         {
             await this.TraceActivityAsync(async activity =>
             {
-                string url = downloadResult.Link.FileLink;
-                string sanitizedUrl = SanitizeUrl(downloadResult.Link.FileLink);
+                string url = downloadResult.FileUrl;
+                string sanitizedUrl = SanitizeUrl(downloadResult.FileUrl);
                 byte[]? fileData = null;
 
                 // Use the size directly from the download result
                 long size = downloadResult.Size;
 
                 // Add tags to the Activity for filtering/searching
-                activity?.SetTag("cloudfetch.offset", downloadResult.Link.StartRowOffset);
+                activity?.SetTag("cloudfetch.offset", downloadResult.StartRowOffset);
                 activity?.SetTag("cloudfetch.sanitized_url", sanitizedUrl);
                 activity?.SetTag("cloudfetch.expected_size_bytes", size);
 
@@ -386,7 +389,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
                 // Log download start
                 activity?.AddEvent("cloudfetch.download_start", [
-                new("offset", downloadResult.Link.StartRowOffset),
+                new("offset", downloadResult.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("expected_size_bytes", size),
                     new("expected_size_kb", size / 1024.0)
@@ -400,9 +403,21 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 {
                     try
                     {
+                        // Create HTTP request with optional custom headers
+                        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+
+                        // Add custom headers if provided
+                        if (downloadResult.HttpHeaders != null)
+                        {
+                            foreach (var header in downloadResult.HttpHeaders)
+                            {
+                                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                            }
+                        }
+
                         // Download the file directly
-                        using HttpResponseMessage response = await _httpClient.GetAsync(
-                            url,
+                        using HttpResponseMessage response = await _httpClient.SendAsync(
+                            request,
                             HttpCompletionOption.ResponseHeadersRead,
                             cancellationToken).ConfigureAwait(false);
 
@@ -417,16 +432,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                             }
 
                             // Try to refresh the URL
-                            var refreshedLink = await _resultFetcher.GetUrlAsync(downloadResult.Link.StartRowOffset, cancellationToken);
-                            if (refreshedLink != null)
+                            var refreshedResult = await _resultFetcher.GetDownloadResultAsync(downloadResult.StartRowOffset, cancellationToken);
+                            if (refreshedResult != null)
                             {
-                                // Update the download result with the refreshed link
-                                downloadResult.UpdateWithRefreshedLink(refreshedLink);
-                                url = refreshedLink.FileLink;
+                                // Update the download result with the refreshed URL
+                                downloadResult.UpdateWithRefreshedUrl(refreshedResult.FileUrl, refreshedResult.ExpirationTime, refreshedResult.HttpHeaders);
+                                url = refreshedResult.FileUrl;
                                 sanitizedUrl = SanitizeUrl(url);
 
                                 activity?.AddEvent("cloudfetch.url_refreshed_after_auth_error", [
-                                    new("offset", refreshedLink.StartRowOffset),
+                                    new("offset", refreshedResult.StartRowOffset),
                                     new("sanitized_url", sanitizedUrl)
                                 ]);
 
@@ -447,7 +462,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         if (contentLength.HasValue && contentLength.Value > 0)
                         {
                             activity?.AddEvent("cloudfetch.content_length", [
-                                new("offset", downloadResult.Link.StartRowOffset),
+                                new("offset", downloadResult.StartRowOffset),
                                 new("sanitized_url", sanitizedUrl),
                                 new("content_length_bytes", contentLength.Value),
                                 new("content_length_mb", contentLength.Value / 1024.0 / 1024.0)
@@ -463,7 +478,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Log the error and retry
                         activity?.AddException(ex, [
                             new("error.context", "cloudfetch.download_retry"),
-                            new("offset", downloadResult.Link.StartRowOffset),
+                            new("offset", downloadResult.StartRowOffset),
                             new("sanitized_url", SanitizeUrl(url)),
                             new("attempt", retry + 1),
                             new("max_retries", _maxRetries)
@@ -477,7 +492,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 {
                     stopwatch.Stop();
                     activity?.AddEvent("cloudfetch.download_failed_all_retries", [
-                        new("offset", downloadResult.Link.StartRowOffset),
+                        new("offset", downloadResult.StartRowOffset),
                         new("sanitized_url", sanitizedUrl),
                         new("max_retries", _maxRetries),
                         new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
@@ -508,7 +523,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         decompressStopwatch.Stop();
 
                         activity?.AddEvent("cloudfetch.decompression_complete", [
-                            new("offset", downloadResult.Link.StartRowOffset),
+                            new("offset", downloadResult.StartRowOffset),
                             new("sanitized_url", sanitizedUrl),
                             new("decompression_time_ms", decompressStopwatch.ElapsedMilliseconds),
                             new("compressed_size_bytes", actualSize),
@@ -525,7 +540,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         stopwatch.Stop();
                         activity?.AddException(ex, [
                             new("error.context", "cloudfetch.decompression"),
-                            new("offset", downloadResult.Link.StartRowOffset),
+                            new("offset", downloadResult.StartRowOffset),
                             new("sanitized_url", sanitizedUrl),
                             new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
                         ]);
@@ -544,7 +559,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 stopwatch.Stop();
                 double throughputMBps = (actualSize / 1024.0 / 1024.0) / (stopwatch.ElapsedMilliseconds / 1000.0);
                 activity?.AddEvent("cloudfetch.download_complete", [
-                    new("offset", downloadResult.Link.StartRowOffset),
+                    new("offset", downloadResult.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("actual_size_bytes", actualSize),
                     new("actual_size_kb", actualSize / 1024.0),

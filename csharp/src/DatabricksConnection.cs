@@ -682,6 +682,148 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             return baseHandler;
         }
 
+        /// <summary>
+        /// Creates an HTTP client for REST API connections with the full authentication and handler chain.
+        /// This method is used by DatabricksDatabase to create StatementExecutionConnection instances.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <returns>A tuple containing the configured HttpClient and the host string.</returns>
+        internal static (HttpClient httpClient, string host) CreateHttpClientForRestApi(IReadOnlyDictionary<string, string> properties)
+        {
+            // Merge with environment config (same as DatabricksConnection constructor)
+            properties = MergeWithDefaultEnvironmentConfig(properties);
+
+            // Extract host
+            if (!properties.TryGetValue(SparkParameters.HostName, out string? host) || string.IsNullOrEmpty(host))
+            {
+                throw new ArgumentException($"Missing required property: {SparkParameters.HostName}");
+            }
+
+            // Extract configuration values
+            bool tracePropagationEnabled = true;
+            string traceParentHeaderName = "traceparent";
+            bool traceStateEnabled = false;
+            bool temporarilyUnavailableRetry = true;
+            int temporarilyUnavailableRetryTimeout = 900;
+            string? identityFederationClientId = null;
+
+            if (properties.TryGetValue(DatabricksParameters.TracePropagationEnabled, out string? tracePropStr))
+            {
+                bool.TryParse(tracePropStr, out tracePropagationEnabled);
+            }
+            if (properties.TryGetValue(DatabricksParameters.TraceParentHeaderName, out string? headerName))
+            {
+                traceParentHeaderName = headerName;
+            }
+            if (properties.TryGetValue(DatabricksParameters.TraceStateEnabled, out string? traceStateStr))
+            {
+                bool.TryParse(traceStateStr, out traceStateEnabled);
+            }
+            if (properties.TryGetValue(DatabricksParameters.TemporarilyUnavailableRetry, out string? retryStr))
+            {
+                bool.TryParse(retryStr, out temporarilyUnavailableRetry);
+            }
+            if (properties.TryGetValue(DatabricksParameters.TemporarilyUnavailableRetryTimeout, out string? timeoutStr))
+            {
+                int.TryParse(timeoutStr, out temporarilyUnavailableRetryTimeout);
+            }
+            if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? federationClientId))
+            {
+                identityFederationClientId = federationClientId;
+            }
+
+            // Create base HTTP handler with TLS configuration
+            TlsProperties tlsOptions = HiveServer2TlsImpl.GetHttpTlsOptions(properties);
+            // Note: Proxy support not yet implemented for REST API connections
+            // TODO: Add proxy configurator support if needed
+            HttpMessageHandler baseHandler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, null);
+            HttpMessageHandler baseAuthHandler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, null);
+
+            // Build handler chain (same order as CreateHttpHandler)
+            // Order: Tracing (innermost) → Retry → ThriftErrorMessage → OAuth (outermost)
+
+            // 1. Add tracing handler (innermost - closest to network)
+            if (tracePropagationEnabled)
+            {
+                // Note: For REST API, we pass null for ITracingConnection since we don't have an instance yet
+                baseHandler = new TracingDelegatingHandler(baseHandler, null, traceParentHeaderName, traceStateEnabled);
+                baseAuthHandler = new TracingDelegatingHandler(baseAuthHandler, null, traceParentHeaderName, traceStateEnabled);
+            }
+
+            // 2. Add retry handler
+            if (temporarilyUnavailableRetry)
+            {
+                baseHandler = new RetryHttpHandler(baseHandler, temporarilyUnavailableRetryTimeout);
+                baseAuthHandler = new RetryHttpHandler(baseAuthHandler, temporarilyUnavailableRetryTimeout);
+            }
+
+            // 3. Add Thrift error message handler (REST API can reuse this for HTTP error handling)
+            baseHandler = new ThriftErrorMessageHandler(baseHandler);
+            baseAuthHandler = new ThriftErrorMessageHandler(baseAuthHandler);
+
+            // 4. Add OAuth handlers if OAuth authentication is configured
+            if (properties.TryGetValue(SparkParameters.AuthType, out string? authType) &&
+                SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue) &&
+                authTypeValue == SparkAuthType.OAuth)
+            {
+                HttpClient authHttpClient = new HttpClient(baseAuthHandler);
+                ITokenExchangeClient tokenExchangeClient = new TokenExchangeClient(authHttpClient, host);
+
+                // Add mandatory token exchange handler
+                baseHandler = new MandatoryTokenExchangeDelegatingHandler(
+                    baseHandler,
+                    tokenExchangeClient,
+                    identityFederationClientId);
+
+                // Add OAuth client credentials handler if M2M authentication is configured
+                if (properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantTypeStr) &&
+                    DatabricksOAuthGrantTypeParser.TryParse(grantTypeStr, out DatabricksOAuthGrantType grantType) &&
+                    grantType == DatabricksOAuthGrantType.ClientCredentials)
+                {
+                    properties.TryGetValue(DatabricksParameters.OAuthClientId, out string? clientId);
+                    properties.TryGetValue(DatabricksParameters.OAuthClientSecret, out string? clientSecret);
+                    properties.TryGetValue(DatabricksParameters.OAuthScope, out string? scope);
+
+                    var tokenProvider = new OAuthClientCredentialsProvider(
+                        authHttpClient,
+                        clientId!,
+                        clientSecret!,
+                        host!,
+                        scope: scope ?? "sql",
+                        timeoutMinutes: 1
+                    );
+
+                    baseHandler = new OAuthDelegatingHandler(baseHandler, tokenProvider);
+                }
+                // Add token renewal handler for OAuth access token
+                else if (properties.TryGetValue(DatabricksParameters.TokenRenewLimit, out string? tokenRenewLimitStr) &&
+                    int.TryParse(tokenRenewLimitStr, out int tokenRenewLimit) &&
+                    tokenRenewLimit > 0 &&
+                    properties.TryGetValue(SparkParameters.AccessToken, out string? accessToken))
+                {
+                    if (string.IsNullOrEmpty(accessToken))
+                    {
+                        throw new ArgumentException("Access token is required for OAuth authentication with token renewal.");
+                    }
+
+                    // Check if token is a JWT token by trying to decode it
+                    if (JwtTokenDecoder.TryGetExpirationTime(accessToken, out DateTime expiryTime))
+                    {
+                        baseHandler = new TokenRefreshDelegatingHandler(
+                            baseHandler,
+                            tokenExchangeClient,
+                            accessToken,
+                            expiryTime,
+                            tokenRenewLimit);
+                    }
+                }
+            }
+
+            // Create and return the HTTP client
+            HttpClient httpClient = new HttpClient(baseHandler);
+            return (httpClient, host);
+        }
+
         protected override bool GetObjectsPatternsRequireLowerCase => true;
 
         internal override IArrowArrayStream NewReader<T>(T statement, Schema schema, IResponse response, TGetResultSetMetadataResp? metadataResp = null)

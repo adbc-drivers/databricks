@@ -143,14 +143,29 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
             return await _activeReader.ReadNextRecordBatchAsync(cancellationToken);
         }
 
-                /// <summary>
-        /// Creates a CloudFetchReader instance. Virtual to allow testing.
+        /// <summary>
+        /// Creates a CloudFetchReader instance using the new protocol-agnostic pattern.
+        /// Virtual to allow testing.
         /// </summary>
         /// <param name="initialResults">The initial fetch results.</param>
         /// <returns>A new CloudFetchReader instance.</returns>
         protected virtual BaseDatabricksReader CreateCloudFetchReader(TFetchResultsResp initialResults)
         {
-            return new CloudFetchReader(_statement, _schema, _response, initialResults, _isLz4Compressed, _httpClient);
+            // Create the download manager using the Thrift-specific constructor
+            // which handles all internal resource sharing
+            var downloadManager = new CloudFetchDownloadManager(
+                _statement,
+                _schema,
+                _response,
+                initialResults,
+                _isLz4Compressed,
+                _httpClient);
+
+            // Start the download manager
+            downloadManager.StartAsync().Wait();
+
+            // Create and return the reader with the new protocol-agnostic constructor
+            return new CloudFetchReader(_statement, _schema, _response, downloadManager);
         }
 
         /// <summary>
