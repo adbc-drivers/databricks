@@ -22,11 +22,12 @@
 */
 
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using System.IO;
+using Apache.Arrow.Adbc.Tracing;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks
 {
@@ -34,8 +35,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     /// HTTP handler that implements retry behavior for 408, 429, 502, 503, and 504 responses.
     /// Uses Retry-After header if present, otherwise uses exponential backoff.
     /// </summary>
-    internal class RetryHttpHandler : DelegatingHandler
+    internal class RetryHttpHandler : DelegatingHandler, IActivityTracer
     {
+        private readonly IActivityTracer _activityTracer;
         private readonly int _retryTimeoutSeconds;
         private readonly int _rateLimitRetryTimeoutSeconds;
         private readonly bool _retryTemporarilyUnavailableEnabled;
@@ -47,10 +49,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// Initializes a new instance of the <see cref="RetryHttpHandler"/> class.
         /// </summary>
         /// <param name="innerHandler">The inner handler to delegate to.</param>
+        /// <param name="activityTracer">The activity tracer for logging retry attempts.</param>
         /// <param name="retryTimeoutSeconds">Maximum total time in seconds to retry retryable responses (408, 502, 503, 504) before failing.</param>
         /// <param name="rateLimitRetryTimeoutSeconds">Maximum total time in seconds to retry HTTP 429 responses before failing.</param>
-        public RetryHttpHandler(HttpMessageHandler innerHandler, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds)
-            : this(innerHandler, retryTimeoutSeconds, rateLimitRetryTimeoutSeconds, true, true)
+        public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds)
+            : this(innerHandler, activityTracer, retryTimeoutSeconds, rateLimitRetryTimeoutSeconds, true, true)
         {
         }
 
@@ -58,13 +61,15 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// Initializes a new instance of the <see cref="RetryHttpHandler"/> class.
         /// </summary>
         /// <param name="innerHandler">The inner handler to delegate to.</param>
+        /// <param name="activityTracer">The activity tracer for logging retry attempts.</param>
         /// <param name="retryTimeoutSeconds">Maximum total time in seconds to retry retryable responses (408, 502, 503, 504) before failing.</param>
         /// <param name="rateLimitRetryTimeoutSeconds">Maximum total time in seconds to retry 429 (rate limit) responses before failing.</param>
         /// <param name="retryTemporarilyUnavailableEnabled">Whether to retry temporarily unavailable (408, 502, 503, 504) responses.</param>
         /// <param name="rateLimitRetryEnabled">Whether to retry HTTP 429 responses.</param>
-        public RetryHttpHandler(HttpMessageHandler innerHandler, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled)
+        public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled)
             : base(innerHandler)
         {
+            _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
             _retryTimeoutSeconds = retryTimeoutSeconds;
             _rateLimitRetryTimeoutSeconds = rateLimitRetryTimeoutSeconds;
             _retryTemporarilyUnavailableEnabled = retryTemporarilyUnavailableEnabled;
@@ -90,96 +95,122 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             int totalServiceUnavailableRetrySeconds = 0;
             int totalTooManyRequestsRetrySeconds = 0;
 
-            do
+            // Use TraceActivityAsync to wrap the entire retry logic
+            return await this.TraceActivityAsync(async activity =>
             {
-                // Set the content for each attempt (if needed)
-                if (requestContentClone != null && request.Content == null)
+                do
                 {
-                    request.Content = await CloneHttpContentAsync(requestContentClone);
-                }
-
-                response = await base.SendAsync(request, cancellationToken);
-
-                // If it's not a retryable status code, return immediately
-                if (!IsRetryableStatusCode(response.StatusCode))
-                {
-                    return response;
-                }
-
-                attemptCount++;
-
-                int waitSeconds;
-
-                // Check for Retry-After header
-                if (response.Headers.TryGetValues("Retry-After", out var retryAfterValues))
-                {
-                    // Parse the Retry-After value
-                    string retryAfterValue = string.Join(",", retryAfterValues);
-                    if (int.TryParse(retryAfterValue, out int retryAfterSeconds) && retryAfterSeconds > 0)
+                    // Set the content for each attempt (if needed)
+                    if (requestContentClone != null && request.Content == null)
                     {
-                        // Use the Retry-After value
-                        waitSeconds = retryAfterSeconds;
-                        lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)response.StatusCode}). Using server-specified retry after {waitSeconds} seconds. Attempt {attemptCount}.";
+                        request.Content = await CloneHttpContentAsync(requestContentClone);
+                    }
+
+                    response = await base.SendAsync(request, cancellationToken);
+
+                    // If it's not a retryable status code, return immediately
+                    if (!IsRetryableStatusCode(response.StatusCode))
+                    {
+                        return response;
+                    }
+
+                    attemptCount++;
+
+                    // Capture status code before disposing the response
+                    HttpStatusCode statusCode = response.StatusCode;
+                    bool isTooManyRequests = statusCode == (HttpStatusCode)429;
+
+                    // Log this retry attempt
+                    activity?.SetTag("http.retry.attempt", attemptCount);
+                    activity?.SetTag("http.response.status_code", (int)statusCode);
+
+                    int waitSeconds;
+
+                    // Check for Retry-After header
+                    if (response.Headers.TryGetValues("Retry-After", out var retryAfterValues))
+                    {
+                        // Parse the Retry-After value
+                        string retryAfterValue = string.Join(",", retryAfterValues);
+                        if (int.TryParse(retryAfterValue, out int retryAfterSeconds) && retryAfterSeconds > 0)
+                        {
+                            // Use the Retry-After value
+                            waitSeconds = retryAfterSeconds;
+                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using server-specified retry after {waitSeconds} seconds. Attempt {attemptCount}.";
+                        }
+                        else
+                        {
+                            // Invalid Retry-After value, use exponential backoff
+                            waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
+                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Invalid Retry-After header, using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
+                        }
                     }
                     else
                     {
-                        // Invalid Retry-After value, use exponential backoff
+                        // No Retry-After header, use exponential backoff
                         waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
-                        lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)response.StatusCode}). Invalid Retry-After header, using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
+                        lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
                     }
-                }
-                else
-                {
-                    // No Retry-After header, use exponential backoff
-                    waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
-                    lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)response.StatusCode}). Using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
-                }
 
-                // Dispose the response before retrying
-                response.Dispose();
+                    // Dispose the response before retrying
+                    response.Dispose();
 
-                // Reset the request content for the next attempt
-                request.Content = null;
+                    // Reset the request content for the next attempt
+                    request.Content = null;
 
-                // Check if we would exceed the timeout after waiting, based on error type
-                bool isTooManyRequests = response.StatusCode == (HttpStatusCode)429;
-                if (isTooManyRequests)
-                {
-                    // Check 429 rate limit timeout
-                    if (_rateLimitRetryTimeoutSeconds > 0 && totalTooManyRequestsRetrySeconds + waitSeconds > _rateLimitRetryTimeoutSeconds)
+                    // Check if we would exceed the timeout after waiting, based on error type
+                    if (isTooManyRequests)
                     {
-                        // We've exceeded the rate limit retry timeout, so break out of the loop
-                        break;
+                        // Check 429 rate limit timeout
+                        if (_rateLimitRetryTimeoutSeconds > 0 && totalTooManyRequestsRetrySeconds + waitSeconds > _rateLimitRetryTimeoutSeconds)
+                        {
+                            // We've exceeded the rate limit retry timeout, so break out of the loop
+                            activity?.SetTag("http.retry.outcome", "rate_limit_timeout_exceeded");
+                            activity?.SetTag("http.retry.total_attempts", attemptCount);
+                            break;
+                        }
+                        totalTooManyRequestsRetrySeconds += waitSeconds;
                     }
-                    totalTooManyRequestsRetrySeconds += waitSeconds;
-                }
-                else
-                {
-                    // Check service unavailable timeout for other retryable errors (408, 502, 503, 504)
-                    if (_retryTimeoutSeconds > 0 && totalServiceUnavailableRetrySeconds + waitSeconds > _retryTimeoutSeconds)
+                    else
                     {
-                        // We've exceeded the retry timeout, so break out of the loop
-                        break;
+                        // Check service unavailable timeout for other retryable errors (408, 502, 503, 504)
+                        if (_retryTimeoutSeconds > 0 && totalServiceUnavailableRetrySeconds + waitSeconds > _retryTimeoutSeconds)
+                        {
+                            // We've exceeded the retry timeout, so break out of the loop
+                            activity?.SetTag("http.retry.outcome", "timeout_exceeded");
+                            activity?.SetTag("http.retry.total_attempts", attemptCount);
+                            break;
+                        }
+                        totalServiceUnavailableRetrySeconds += waitSeconds;
                     }
-                    totalServiceUnavailableRetrySeconds += waitSeconds;
+
+                    // Wait for the calculated time
+                    await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
+
+                    // Increase backoff for next attempt (exponential backoff)
+                    currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
+                } while (!cancellationToken.IsCancellationRequested);
+
+                // If we get here, we've either exceeded the timeout or been cancelled
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    activity?.SetTag("http.retry.outcome", "cancelled");
+                    activity?.SetTag("http.retry.total_attempts", attemptCount);
+                    throw new OperationCanceledException("Request cancelled during retry wait", cancellationToken);
                 }
 
-                // Wait for the calculated time
-                await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
-
-                // Increase backoff for next attempt (exponential backoff)
-                currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
-            } while (!cancellationToken.IsCancellationRequested);
-
-            // If we get here, we've either exceeded the timeout or been cancelled
-            if (cancellationToken.IsCancellationRequested)
-            {
-                throw new OperationCanceledException("Request cancelled during retry wait", cancellationToken);
-            }
-
-            throw new DatabricksException(lastErrorMessage ?? "Service temporarily unavailable and retry timeout exceeded", AdbcStatusCode.IOError)
-                .SetSqlState("08001");
+                throw new DatabricksException(lastErrorMessage ?? "Service temporarily unavailable and retry timeout exceeded", AdbcStatusCode.IOError)
+                    .SetSqlState("08001");
+            });
         }
+
+        // IActivityTracer implementation - delegates to the activity tracer (connection)
+        ActivityTrace IActivityTracer.Trace => _activityTracer.Trace;
+
+        string? IActivityTracer.TraceParent => _activityTracer.TraceParent;
+
+        public string AssemblyVersion => _activityTracer.AssemblyVersion;
+
+        public string AssemblyName => _activityTracer.AssemblyName;
 
         /// <summary>
         /// Determines if the status code is one that should be retried.
