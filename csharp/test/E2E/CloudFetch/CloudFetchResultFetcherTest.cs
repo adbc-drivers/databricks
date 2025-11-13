@@ -75,7 +75,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
         #region URL Management Tests
 
         [Fact]
-        public async Task GetUrlAsync_FetchesNewUrl_WhenNotCached()
+        public async Task GetDownloadResultAsync_FetchesNewUrl_WhenNotCached()
         {
             // Arrange
             long offset = 0;
@@ -83,12 +83,12 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             SetupMockClientFetchResults(new List<TSparkArrowResultLink> { resultLink }, true);
 
             // Act
-            var result = await _resultFetcher.GetUrlAsync(offset, CancellationToken.None);
+            var result = await _resultFetcher.GetDownloadResultAsync(offset, CancellationToken.None);
 
             // Assert
             Assert.NotNull(result);
             Assert.Equal(offset, result.StartRowOffset);
-            Assert.Equal("http://test.com/file1", result.FileLink);
+            Assert.Equal("http://test.com/file1", result.FileUrl);
             _mockClient.Verify(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
@@ -113,13 +113,13 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             await Task.Delay(200);
 
             // Get all cached URLs
-            var cachedUrls = _resultFetcher.GetAllCachedUrls();
+            var cachedUrls = _resultFetcher.GetAllCachedResults();
 
             // Assert
             Assert.Equal(3, cachedUrls.Count);
-            Assert.Equal("http://test.com/file1", cachedUrls[0].FileLink);
-            Assert.Equal("http://test.com/file2", cachedUrls[100].FileLink);
-            Assert.Equal("http://test.com/file3", cachedUrls[200].FileLink);
+            Assert.Equal("http://test.com/file1", cachedUrls[0].FileUrl);
+            Assert.Equal("http://test.com/file2", cachedUrls[100].FileUrl);
+            Assert.Equal("http://test.com/file3", cachedUrls[200].FileUrl);
             _mockClient.Verify(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()), Times.Once);
 
             // Verify the fetcher completed
@@ -152,7 +152,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Act
             _resultFetcher.ClearCache();
-            var cachedUrls = _resultFetcher.GetAllCachedUrls();
+            var cachedUrls = _resultFetcher.GetAllCachedResults();
 
             // Assert
             Assert.Empty(cachedUrls);
@@ -166,7 +166,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
         }
 
         [Fact]
-        public async Task GetUrlAsync_RefreshesExpiredUrl()
+        public async Task GetDownloadResultAsync_RefreshesExpiredUrl()
         {
             // Arrange
             long offset = 0;
@@ -180,17 +180,17 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                 .ReturnsAsync(CreateFetchResultsResponse(new List<TSparkArrowResultLink> { refreshedLink }, true));
 
             // First fetch to cache the soon-to-expire URL
-            await _resultFetcher.GetUrlAsync(offset, CancellationToken.None);
+            await _resultFetcher.GetDownloadResultAsync(offset, CancellationToken.None);
 
             // Advance time so the URL is now expired
             _mockClock.AdvanceTime(TimeSpan.FromSeconds(40));
 
             // Act - This should refresh the URL
-            var result = await _resultFetcher.GetUrlAsync(offset, CancellationToken.None);
+            var result = await _resultFetcher.GetDownloadResultAsync(offset, CancellationToken.None);
 
             // Assert
             Assert.NotNull(result);
-            Assert.Equal("http://test.com/refreshed", result.FileLink);
+            Assert.Equal("http://test.com/refreshed", result.FileUrl);
             _mockClient.Verify(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
         }
 
@@ -253,9 +253,9 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             // Verify each download result has the correct link
             for (int i = 0; i < resultLinks.Count; i++)
             {
-                Assert.Equal(resultLinks[i].FileLink, downloadResults[i].Link.FileLink);
-                Assert.Equal(resultLinks[i].StartRowOffset, downloadResults[i].Link.StartRowOffset);
-                Assert.Equal(resultLinks[i].RowCount, downloadResults[i].Link.RowCount);
+                Assert.Equal(resultLinks[i].FileLink, downloadResults[i].FileUrl);
+                Assert.Equal(resultLinks[i].StartRowOffset, downloadResults[i].StartRowOffset);
+                Assert.Equal(resultLinks[i].RowCount, downloadResults[i].RowCount);
             }
 
             // Verify the fetcher state
@@ -527,9 +527,9 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             // Verify each download result has the correct link
             for (int i = 0; i < initialResultLinks.Count; i++)
             {
-                Assert.Equal(initialResultLinks[i].FileLink, downloadResults[i].Link.FileLink);
-                Assert.Equal(initialResultLinks[i].StartRowOffset, downloadResults[i].Link.StartRowOffset);
-                Assert.Equal(initialResultLinks[i].RowCount, downloadResults[i].Link.RowCount);
+                Assert.Equal(initialResultLinks[i].FileLink, downloadResults[i].FileUrl);
+                Assert.Equal(initialResultLinks[i].StartRowOffset, downloadResults[i].StartRowOffset);
+                Assert.Equal(initialResultLinks[i].RowCount, downloadResults[i].RowCount);
             }
 
             // Verify the fetcher completed

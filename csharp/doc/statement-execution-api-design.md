@@ -2343,37 +2343,224 @@ internal class StatementExecutionResultFetcher : BaseResultFetcher
 | Maintainability | Changes in 2 places | Changes in 1 place | 50% reduction |
 | Testability | Test both separately | Test base once | Fewer tests needed |
 
-## Migration Path
+## Implementation Task Breakdown
 
-### Phase 1: Core Implementation (MVP)
-- [ ] Add Statement Execution API configuration parameters
-- [ ] Implement `StatementExecutionClient` with basic REST calls
-- [ ] Implement `StatementExecutionStatement` for query execution
-- [ ] Support `EXTERNAL_LINKS` disposition with `ARROW_STREAM` format
-- [ ] Basic polling for async execution
+### Completed Tasks (Foundation)
+- [x] **PECO-2790**: Configuration and Models
+  - Added `StatementExecutionModels.cs` with request/response models
+  - Added configuration parameters to `DatabricksParameters.cs`
+- [x] **Previous Work**: StatementExecutionClient (REST API layer)
+  - Implemented HTTP client for Statement Execution API endpoints
+- [x] **Previous Work**: CloudFetch Refactoring
+  - Made `IDownloadResult` protocol-agnostic by removing Thrift dependency
+  - Created `DownloadResult` base class with protocol-specific factories
+- [x] **Previous Work**: StatementExecutionResultFetcher
+  - Implements `ICloudFetchResultFetcher` for REST API
 
-### Phase 2: CloudFetch Integration & Refactoring
-- [ ] Create `BaseResultFetcher` abstract base class
-- [ ] Refactor `CloudFetchResultFetcher` to extend `BaseResultFetcher`
-- [ ] Refactor `IDownloadResult` interface to be protocol-agnostic
-- [ ] Update `DownloadResult` with `FromThriftLink()` factory method
-- [ ] Implement `StatementExecutionResultFetcher` extending `BaseResultFetcher`
-- [ ] Enable prefetch and parallel downloads for REST API
-- [ ] Add support for HTTP headers in `CloudFetchDownloader`
+### Current Sprint Tasks (PECO-2791 Breakdown)
 
-### Phase 3: Feature Parity
-- [ ] Support `INLINE` disposition for small results
+#### **PECO-2791-A: StatementExecutionConnection (Session Management)** ✅
+**Estimated Effort:** 1-2 days
+**Dependencies:** PECO-2790
+**Status:** Completed (PECO-2837)
+
+**Scope:**
+- [x] Implement `StatementExecutionConnection` class
+  - Session lifecycle (create on open, delete on close)
+  - Warehouse ID extraction from `http_path`
+  - Parse catalog/schema from properties
+  - Enable/disable session management configuration
+- [x] Unit tests for session management
+  - Test session creation with valid warehouse ID
+  - Test session deletion on dispose
+  - Test warehouse ID extraction from various http_path formats
+  - Test session management enable/disable
+
+**Files:**
+- `StatementExecution/StatementExecutionConnection.cs` (new) ✅
+- `test/Unit/StatementExecution/StatementExecutionConnectionTests.cs` (new) ✅
+- `test/E2E/StatementExecution/StatementExecutionConnectionE2ETests.cs` (new) ✅
+
+**Success Criteria:**
+- ✅ Can create and delete sessions via REST API
+- ✅ Session management can be toggled via configuration
+- ✅ All unit tests pass (20 tests)
+- ✅ All E2E tests pass (16 tests)
+- ✅ Total: 36 tests covering all scenarios
+
+**Implementation Notes:**
+- Uses **existing standard ADBC/Spark parameters** (no new parameters added):
+  - `adbc.spark.path` (SparkParameters.Path) for http_path/warehouse ID extraction
+  - `adbc.connection.catalog` (AdbcOptions.Connection.CurrentCatalog) for catalog
+  - `adbc.connection.db_schema` (AdbcOptions.Connection.CurrentDbSchema) for schema
+- Warehouse ID extraction supports both standard format (`/sql/1.0/warehouses/{id}`) and case-insensitive matching
+- Session deletion errors are swallowed to prevent masking other errors during cleanup
+- `CreateStatement()` method throws `NotImplementedException` with note about PECO-2791-B implementation
+
+---
+
+#### **PECO-2791-B: StatementExecutionStatement (Basic Execution)**
+**Estimated Effort:** 2-3 days
+**Dependencies:** PECO-2791-A
+
+**Scope:**
+- [ ] Implement `StatementExecutionStatement` class
+  - Query execution via `ExecuteStatementAsync`
+  - Polling logic with configurable intervals (default: 1000ms)
+  - Query timeout handling with cancellation
+  - EXTERNAL_LINKS disposition only (no inline yet)
+- [ ] Implement `CloudFetchArrayStreamReader`
+  - Protocol-agnostic reader using `ICloudFetchDownloadManager`
+  - Works with `StatementExecutionResultFetcher`
+- [ ] Add REST API constructor to `CloudFetchDownloadManager`
+  - Accept `ICloudFetchResultFetcher` instead of Thrift dependencies
+  - Parse configuration from properties dictionary
+- [ ] Make `CloudFetchDownloader` statement parameter nullable
+  - Handle tracing when statement is null
+- [ ] Add missing properties to `StatementExecutionStatement`:
+  - Implement `ITracingStatement` interface
+  - Add `CatalogName`, `SchemaName`, `MaxRows`, `QueryTimeoutSeconds` properties
+- [ ] Unit tests for statement execution
+  - Test query execution with polling
+  - Test timeout and cancellation
+  - Test external links result handling
+  - Test schema conversion from REST API format
+
+**Files:**
+- `StatementExecution/StatementExecutionStatement.cs` (new)
+- `Reader/CloudFetch/CloudFetchArrayStreamReader.cs` (new)
+- `Reader/CloudFetch/CloudFetchDownloadManager.cs` (update constructor)
+- `Reader/CloudFetch/CloudFetchDownloader.cs` (make statement nullable)
+- Test files
+
+**Success Criteria:**
+- Can execute queries and poll for completion
+- External links results are downloaded via CloudFetch pipeline
+- Query timeout and cancellation work correctly
+- All unit tests pass
+
+---
+
+#### **PECO-2791-C: Inline Results Support**
+**Estimated Effort:** 1-2 days
+**Dependencies:** PECO-2791-B
+
+**Scope:**
+- [ ] Implement `InlineReader` class
+  - Parse inline Arrow stream data from `ResultChunk.Attachment`
+  - Handle multiple chunks in sequence
+- [ ] Update `StatementExecutionStatement` to support hybrid disposition
+  - Detect whether response has inline data or external links
+  - Create appropriate reader (InlineReader vs CloudFetchArrayStreamReader)
+  - Handle `inline_or_external_links` disposition
+  - Detect and log truncation warnings
+- [ ] Unit tests for inline results
+  - Test single-chunk inline results
+  - Test multi-chunk inline results
+  - Test hybrid disposition selection
+  - Test truncation warning detection
+
+**Files:**
+- `Reader/InlineReader.cs` (new)
+- `StatementExecution/StatementExecutionStatement.cs` (update)
+- Test files
+
+**Success Criteria:**
+- Can handle inline Arrow stream results
+- Hybrid disposition correctly chooses inline vs external based on response
+- Truncation warnings are detected and logged
+- All unit tests pass
+
+---
+
+#### **PECO-2791-D: Protocol Selection & Integration**
+**Estimated Effort:** 2-3 days
+**Dependencies:** PECO-2791-A, PECO-2791-B, PECO-2791-C
+
+**Scope:**
+- [ ] Add protocol selection logic to `DatabricksConnection`
+  - Check `adbc.databricks.protocol` parameter (default: "thrift")
+  - Route to Thrift or REST implementation
+  - Consider using strategy pattern or factory for cleaner design
+- [ ] Add missing `DatabricksParameters` constants:
+  - `ByteLimit`, `ResultFormat`, `ResultCompression` (if not present)
+  - `Protocol`, `EnableSessionManagement`, `ResultDisposition`, `PollingInterval`
+- [ ] Implement `IConnectionImpl` interface pattern (optional but recommended)
+  - Create abstraction for Thrift vs REST connection logic
+  - Helps keep `DatabricksConnection` clean
+- [ ] Fix .NET Framework compatibility issues
+  - `String.Split(char, StringSplitOptions)` overload not available in netstandard2.0/net472
+  - `TimestampType` constructor ambiguity
+- [ ] Integration smoke tests
+  - Test creating connection with protocol="rest"
+  - Test executing simple query end-to-end
+  - Test fallback to Thrift when protocol="thrift" or not specified
+
+**Files:**
+- `DatabricksConnection.cs` (update)
+- `DatabricksParameters.cs` (update)
+- Test files
+
+**Success Criteria:**
+- Can select REST protocol via configuration
+- Thrift remains default for backward compatibility
+- Simple queries work end-to-end with REST protocol
+- All framework targets build successfully
+- Integration smoke tests pass
+
+---
+
+#### **PECO-2791-E: End-to-End Testing & Documentation**
+**Estimated Effort:** 2-3 days
+**Dependencies:** PECO-2791-D
+
+**Scope:**
+- [ ] Comprehensive E2E tests with live warehouse
+  - Test query execution with various result sizes
+  - Test both inline and external links paths
+  - Test compression codecs (LZ4, GZIP, none)
+  - Test session management
+  - Test query timeout and cancellation
+  - Test error scenarios
+- [ ] Performance comparison vs Thrift
+  - Benchmark query execution time
+  - Measure memory usage
+  - Test with large result sets
+- [ ] Update documentation
+  - Add configuration examples to README
+  - Document protocol selection
+  - Migration guide from Thrift to REST
+- [ ] Update design doc with implementation notes
+  - Document any deviations from original design
+  - Add lessons learned
+  - Update architecture diagrams if needed
+
+**Files:**
+- E2E test files
+- README.md (update)
+- Design doc (update)
+
+**Success Criteria:**
+- All E2E tests pass with live warehouse
+- Performance is comparable to or better than Thrift
+- Documentation is complete and accurate
+- Design doc reflects actual implementation
+
+---
+
+### Future Work (Post-PECO-2791)
+
+#### **Phase 3: Feature Parity**
 - [ ] Implement parameterized queries
 - [ ] Support `JSON_ARRAY` and `CSV` formats
-- [ ] Implement statement cancellation
-- [ ] ADBC metadata operations via SQL queries
+- [ ] ADBC metadata operations via SQL queries (`GetObjects`, `GetTableTypes`, etc.)
+- [ ] Direct results mode (no polling, synchronous execution)
 
-### Phase 4: Optimization & Testing
-- [ ] Performance tuning (polling intervals, chunk sizes)
-- [ ] Comprehensive unit tests
-- [ ] E2E tests with live warehouse
-- [ ] Load testing and benchmarking vs Thrift
-- [ ] Documentation and migration guide
+#### **Phase 4: Advanced Features**
+- [ ] Support for result row/byte limits
+- [ ] Advanced error handling and retry logic
+- [ ] Connection pooling and session reuse
+- [ ] Metrics and observability
 
 ## Configuration Examples
 
