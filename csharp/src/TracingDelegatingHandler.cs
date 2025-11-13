@@ -81,7 +81,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                     traceStateValue = currentActivity.TraceStateString;
                 }
             }
-            else if (!string.IsNullOrEmpty(_activityTracer.TraceParent))
+            else if (_activityTracer != null && !string.IsNullOrEmpty(_activityTracer.TraceParent))
             {
                 // Fall back to the trace parent set on the connection
                 traceParentValue = _activityTracer.TraceParent;
