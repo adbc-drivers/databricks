@@ -27,6 +27,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc.Tracing;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
@@ -120,7 +121,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"Error stopping fetcher: {ex.Message}");
+                Activity.Current?.AddEvent("cloudfetch.fetcher_stop_error", [
+                    new("error_message", ex.Message)
+                ]);
             }
             finally
             {
@@ -210,7 +213,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"Unhandled error in fetcher: {ex}");
+                Activity.Current?.AddEvent("cloudfetch.fetcher_unhandled_error", [
+                    new("error_message", ex.Message),
+                    new("error_type", ex.GetType().Name)
+                ]);
                 _error = ex;
                 _hasMoreResults = false;
                 _isCompleted = true;

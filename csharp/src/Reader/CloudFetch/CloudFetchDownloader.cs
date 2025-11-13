@@ -147,7 +147,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"Error stopping downloader: {ex}");
+                Activity.Current?.AddEvent("cloudfetch.downloader_stop_error", [
+                    new("error_message", ex.Message),
+                    new("error_type", ex.GetType().Name)
+                ]);
             }
             finally
             {

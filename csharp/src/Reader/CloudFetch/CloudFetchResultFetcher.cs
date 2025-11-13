@@ -192,7 +192,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"Error fetching results: {ex}");
+                    Activity.Current?.AddEvent("cloudfetch.fetch_results_error", [
+                        new("error_message", ex.Message),
+                        new("error_type", ex.GetType().Name)
+                    ]);
                     _error = ex;
                     _hasMoreResults = false;
                     throw;
@@ -230,7 +233,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"Error fetching results from server: {ex}");
+                Activity.Current?.AddEvent("cloudfetch.fetch_from_server_error", [
+                    new("error_message", ex.Message),
+                    new("error_type", ex.GetType().Name)
+                ]);
                 _hasMoreResults = false;
                 throw;
             }

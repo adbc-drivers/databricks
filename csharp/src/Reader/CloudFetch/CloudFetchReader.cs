@@ -157,7 +157,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                             }
                             catch (Exception ex)
                             {
-                                Trace.WriteLine($"Error creating Arrow reader: {ex}");
+                                Activity.Current?.AddEvent("cloudfetch.arrow_reader_creation_error", [
+                                    new("error_message", ex.Message),
+                                    new("error_type", ex.GetType().Name)
+                                ]);
                                 this.currentDownloadResult.Dispose();
                                 this.currentDownloadResult = null;
                                 throw;
@@ -165,7 +168,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         }
                         catch (Exception ex)
                         {
-                            Trace.WriteLine($"Error getting next downloaded file: {ex}");
+                            Activity.Current?.AddEvent("cloudfetch.get_next_file_error", [
+                                new("error_message", ex.Message),
+                                new("error_type", ex.GetType().Name)
+                            ]);
                             throw;
                         }
                     }
