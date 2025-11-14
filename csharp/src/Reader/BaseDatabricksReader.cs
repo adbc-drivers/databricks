@@ -56,21 +56,31 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 
         protected override void Dispose(bool disposing)
         {
-            try
+            this.TraceActivity(activity =>
             {
-                if (!isDisposed)
+                try
                 {
-                    if (disposing)
+                    if (!isDisposed)
                     {
-                        _ = CloseOperationAsync().Result;
+                        if (disposing)
+                        {
+                            activity?.AddEvent("reader.disposing");
+                            _ = CloseOperationAsync().Result;
+                            activity?.AddEvent("reader.disposed");
+                        }
                     }
                 }
-            }
-            finally
-            {
-                base.Dispose(disposing);
-                isDisposed = true;
-            }
+                catch (Exception ex)
+                {
+                    activity?.AddException(ex, [new("error.context", "reader.dispose")]);
+                    throw;
+                }
+                finally
+                {
+                    base.Dispose(disposing);
+                    isDisposed = true;
+                }
+            }, activityName: "Dispose");
         }
 
         /// <summary>
