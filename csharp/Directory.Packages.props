@@ -35,5 +35,7 @@
 
     <!-- System -->
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
+    <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
+    <PackageVersion Include="System.Reflection.Metadata" Version="8.0.0" />
   </ItemGroup>
 </Project>
