@@ -24,15 +24,4 @@
     <ProjectReference Include="..\src\Apache.Arrow.Adbc.Drivers.Databricks.csproj" />
   </ItemGroup>
 
-  <!-- Fix assembly version conflicts for net472 -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
-    <PackageReference Include="System.Collections.Immutable" />
-    <PackageReference Include="System.Reflection.Metadata" />
-  </ItemGroup>
-
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net472'">
-    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
-  </PropertyGroup>
-
 </Project>

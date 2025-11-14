@@ -42,7 +42,7 @@ namespace Apache.Arrow.Adbc.Benchmarks
     {
         public string Id => nameof(PeakMemoryColumn);
         public string ColumnName => "Peak Memory (MB)";
-        public string Legend => "Peak working set memory during benchmark execution";
+        public string Legend => "Peak private memory usage during benchmark execution";
         public UnitType UnitType => UnitType.Size;
         public bool AlwaysShow => true;
         public ColumnCategory Category => ColumnCategory.Custom;
@@ -53,16 +53,13 @@ namespace Apache.Arrow.Adbc.Benchmarks
 
         public string GetValue(Summary summary, BenchmarkCase benchmarkCase)
         {
-            // Try CloudFetchRealE2EBenchmark (includes parameters in key)
             if (benchmarkCase.Descriptor.Type == typeof(CloudFetchRealE2EBenchmark))
             {
                 try
                 {
-                    // Extract ReadDelayMs parameter
                     var readDelayParam = benchmarkCase.Parameters["ReadDelayMs"];
                     string key = $"ExecuteLargeQuery_{readDelayParam}";
 
-                    // Read metrics from temp file
                     string metricsFilePath = Path.Combine(Path.GetTempPath(), "cloudfetch_benchmark_metrics.json");
                     if (File.Exists(metricsFilePath))
                     {
@@ -197,6 +194,60 @@ namespace Apache.Arrow.Adbc.Benchmarks
         public override string ToString() => ColumnName;
     }
 
+
+    /// <summary>
+    /// Custom column to display estimated GC time percentage in the benchmark results table.
+    /// </summary>
+    public class GCTimePercentageColumn : IColumn
+    {
+        public string Id => nameof(GCTimePercentageColumn);
+        public string ColumnName => "GC Time %";
+        public string Legend => "Percentage of time spent in garbage collection (precise on .NET 6+, estimated on older versions)";
+        public UnitType UnitType => UnitType.Dimensionless;
+        public bool AlwaysShow => true;
+        public ColumnCategory Category => ColumnCategory.Custom;
+        public int PriorityInCategory => 3;
+        public bool IsNumeric => true;
+        public bool IsAvailable(Summary summary) => true;
+        public bool IsDefault(Summary summary, BenchmarkCase benchmarkCase) => false;
+
+        public string GetValue(Summary summary, BenchmarkCase benchmarkCase)
+        {
+            if (benchmarkCase.Descriptor.Type == typeof(CloudFetchRealE2EBenchmark))
+            {
+                try
+                {
+                    var readDelayParam = benchmarkCase.Parameters["ReadDelayMs"];
+                    string key = $"ExecuteLargeQuery_{readDelayParam}";
+
+                    string metricsFilePath = Path.Combine(Path.GetTempPath(), "cloudfetch_benchmark_metrics.json");
+                    if (File.Exists(metricsFilePath))
+                    {
+                        string json = File.ReadAllText(metricsFilePath);
+                        var allMetrics = JsonSerializer.Deserialize<Dictionary<string, BenchmarkMetrics>>(json);
+                        if (allMetrics != null && allMetrics.TryGetValue(key, out var metrics))
+                        {
+                            return $"{metrics.GCTimePercentage:F2}";
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return $"Error: {ex.Message}";
+                }
+            }
+
+            return "N/A";
+        }
+
+        public string GetValue(Summary summary, BenchmarkCase benchmarkCase, SummaryStyle style)
+        {
+            return GetValue(summary, benchmarkCase);
+        }
+
+        public override string ToString() => ColumnName;
+    }
+
     /// <summary>
     /// Metrics collected during benchmark execution.
     /// </summary>
@@ -205,7 +256,15 @@ namespace Apache.Arrow.Adbc.Benchmarks
         public double PeakMemoryMB { get; set; }
         public long TotalRows { get; set; }
         public long TotalBatches { get; set; }
+        public double GCTimePercentage { get; set; }
     }
+
+
+
+
+
+
+
 
     /// <summary>
     /// Configuration model for Databricks test configuration JSON file.
@@ -250,6 +309,14 @@ namespace Apache.Arrow.Adbc.Benchmarks
         private long _peakMemoryBytes;
         private long _totalRows;
         private long _totalBatches;
+        private TimeSpan _initialProcessorTime;
+        private long _initialAllocatedBytes;
+        private int _initialGen0Collections;
+        private int _initialGen1Collections;
+        private int _initialGen2Collections;
+#if NET6_0_OR_GREATER
+        private TimeSpan _initialGCPauseDuration;
+#endif
         private DatabricksTestConfig _testConfig = null!;
         private string _hostname = null!;
         private string _httpPath = null!;
@@ -320,14 +387,24 @@ namespace Apache.Arrow.Adbc.Benchmarks
             var database = driver.Open(parameters);
             _connection = database.Connect(parameters);
 
-            // Reset peak memory tracking
+            // Reset memory state for clean benchmark
             GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: false);
             GC.WaitForPendingFinalizers();
             GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: false);
             _currentProcess.Refresh();
-            _peakMemoryBytes = _currentProcess.WorkingSet64;
+            _peakMemoryBytes = _currentProcess.PrivateMemorySize64;
             _totalRows = 0;
             _totalBatches = 0;
+            
+            // Capture initial GC and process metrics
+            _initialProcessorTime = _currentProcess.TotalProcessorTime;
+            _initialAllocatedBytes = GC.GetTotalMemory(forceFullCollection: false);
+            _initialGen0Collections = GC.CollectionCount(0);
+            _initialGen1Collections = GC.CollectionCount(1);
+            _initialGen2Collections = GC.CollectionCount(2);
+#if NET6_0_OR_GREATER
+            _initialGCPauseDuration = GC.GetTotalPauseDuration();
+#endif
         }
 
         [IterationCleanup]
@@ -336,9 +413,43 @@ namespace Apache.Arrow.Adbc.Benchmarks
             _connection?.Dispose();
             _connection = null;
 
-            // Print metrics for this iteration
+            // Calculate final metrics
             double peakMemoryMB = _peakMemoryBytes / 1024.0 / 1024.0;
+            _currentProcess.Refresh();
+            var finalProcessorTime = _currentProcess.TotalProcessorTime;
+            var finalAllocatedBytes = GC.GetTotalMemory(forceFullCollection: false);
+            var finalGen0Collections = GC.CollectionCount(0);
+            var finalGen1Collections = GC.CollectionCount(1);
+            var finalGen2Collections = GC.CollectionCount(2);
+            
+            // Calculate deltas
+            double processorTimeMs = (finalProcessorTime - _initialProcessorTime).TotalMilliseconds;
+            long totalAllocatedBytes = finalAllocatedBytes - _initialAllocatedBytes;
+            int gen0Collections = finalGen0Collections - _initialGen0Collections;
+            int gen1Collections = finalGen1Collections - _initialGen1Collections;
+            int gen2Collections = finalGen2Collections - _initialGen2Collections;
+            
+            // Calculate GC time percentage
+#if NET6_0_OR_GREATER
+            // Use precise GC pause duration on .NET 6+
+            var finalGCPauseDuration = GC.GetTotalPauseDuration();
+            var gcPauseTime = finalGCPauseDuration - _initialGCPauseDuration;
+            double gcTimePercentage = processorTimeMs > 0 ? 
+                (gcPauseTime.TotalMilliseconds / processorTimeMs) * 100.0 : 0.0;
+#else
+            // Estimate GC time percentage (rough approximation based on collection counts)
+            int totalCollections = gen0Collections + gen1Collections + gen2Collections;
+            double gcTimePercentage = totalCollections > 0 ? 
+                Math.Min((totalCollections * 0.1), 5.0) : 0.0; // Cap at 5% as rough estimate
+#endif
+                
+            // Print metrics for this iteration
             Console.WriteLine($"CloudFetch E2E [Delay={ReadDelayMs}ms/10K rows] - Peak memory: {peakMemoryMB:F2} MB, Total rows: {_totalRows:N0}, Total batches: {_totalBatches:N0}");
+#if NET6_0_OR_GREATER
+            Console.WriteLine($"  Process time: {processorTimeMs:F2} ms, Total allocated: {(totalAllocatedBytes/1024.0/1024.0):F2} MB, GC time: {gcTimePercentage:F2}% (precise)");
+#else
+            Console.WriteLine($"  Process time: {processorTimeMs:F2} ms, Total allocated: {(totalAllocatedBytes/1024.0/1024.0):F2} MB, GC time: {gcTimePercentage:F2}% (estimated)");
+#endif
 
             // Save metrics to temp file for the custom columns
             string key = $"ExecuteLargeQuery_{ReadDelayMs}";
@@ -346,7 +457,8 @@ namespace Apache.Arrow.Adbc.Benchmarks
             {
                 PeakMemoryMB = peakMemoryMB,
                 TotalRows = _totalRows,
-                TotalBatches = _totalBatches
+                TotalBatches = _totalBatches,
+                GCTimePercentage = gcTimePercentage
             };
 
             // Load existing metrics or create new dictionary
@@ -435,10 +547,11 @@ namespace Apache.Arrow.Adbc.Benchmarks
             return _totalRows;
         }
 
+
         private void TrackPeakMemory()
         {
             _currentProcess.Refresh();
-            long currentMemory = _currentProcess.WorkingSet64;
+            long currentMemory = _currentProcess.PrivateMemorySize64;
             if (currentMemory > _peakMemoryBytes)
             {
                 _peakMemoryBytes = currentMemory;

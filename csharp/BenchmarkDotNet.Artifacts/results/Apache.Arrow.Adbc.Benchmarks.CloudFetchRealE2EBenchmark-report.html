@@ -2,7 +2,7 @@
 <html lang='en'>
 <head>
 <meta charset='utf-8' />
-<title>Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-20251114-102833</title>
+<title>Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-20251114-110648</title>
 
 <style type="text/css">
 	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
@@ -14,19 +14,20 @@
 <body>
 <pre><code>
 BenchmarkDotNet v0.14.0, Windows 11 (10.0.26100.4946)
-Apple Silicon, 8 CPU, 8 logical and 8 physical cores
-  [Host]     : .NET Framework 4.8.1 (4.8.9310.0), X64 RyuJIT VectorSize=128
-  Job-OGLPCL : .NET Framework 4.8.1 (4.8.9310.0), X64 RyuJIT VectorSize=128
+Unknown processor
+.NET SDK 9.0.301
+  [Host]     : .NET 8.0.17 (8.0.1725.26602), Arm64 RyuJIT AdvSIMD
+  Job-CGHXRO : .NET 8.0.17 (8.0.1725.26602), Arm64 RyuJIT AdvSIMD
 </code></pre>
 <pre><code>Server=True  InvocationCount=1  IterationCount=3  
-UnrollFactor=1  WarmupCount=1  Error=3.344 s  
-StdDev=0.1833 s  
+UnrollFactor=1  WarmupCount=1  Error=22.306 s  
+StdDev=1.223 s  
 </code></pre>
 
 <table>
-<thead><tr><th>Method     </th><th>ReadDelayMs</th><th>Mean</th><th>Min</th><th>Max</th><th>Median</th><th>Peak Memory (MB)</th><th>Total Rows</th><th>Total Batches</th><th>Gen0 </th><th>Gen1</th><th>Gen2</th><th>Allocated</th>
+<thead><tr><th>Method     </th><th>ReadDelayMs</th><th>Mean</th><th>Min</th><th>Max</th><th>Median</th><th>Peak Memory (MB)</th><th>Total Rows</th><th>Total Batches</th><th>GC Time %</th><th>Gen0</th><th>Gen1</th><th>Gen2</th><th>Allocated</th>
 </tr>
-</thead><tbody><tr><td>ExecuteLargeQuery</td><td>5</td><td>8.988 s</td><td>8.791 s</td><td>9.153 s</td><td>9.021 s</td><td>341.15</td><td>1,439,935</td><td>745</td><td>301000.0000</td><td>38000.0000</td><td>23000.0000</td><td>2.71 GB</td>
+</thead><tbody><tr><td>ExecuteLargeQuery</td><td>5</td><td>9.536 s</td><td>8.679 s</td><td>10.94 s</td><td>8.994 s</td><td>389.64</td><td>1,439,935</td><td>745</td><td>0.54</td><td>21000.0000</td><td>21000.0000</td><td>21000.0000</td><td>1.56 GB</td>
 </tr></tbody></table>
 </body>
 </html>
