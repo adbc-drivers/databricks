@@ -80,5 +80,7 @@ jobs:
 
       - name: Test Databricks E2E
         shell: bash
+        env:
+          DATABRICKS_TEST_CONFIG_FILE: ${{ env.DATABRICKS_TEST_CONFIG_FILE }}
         run: |
           ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"

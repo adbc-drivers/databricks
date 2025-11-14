@@ -23,6 +23,7 @@ set -ex
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-# Run all E2E tests (matches E2E in class name or namespace)
-dotnet test --filter "FullyQualifiedName~E2ETest"
+# Run all E2E tests that require Databricks credentials
+# Includes tests with "E2ETest" in name plus statement/client/driver/value/telemetry test suites
+dotnet test --filter "(FullyQualifiedName~E2ETest)|(FullyQualifiedName~StatementTests)|(FullyQualifiedName~ClientTests)|(FullyQualifiedName~DriverTests)|(FullyQualifiedName~NumericValueTests)|(FullyQualifiedName~DateTimeValueTests)|(FullyQualifiedName~ComplexTypesValueTests)|(FullyQualifiedName~StringValueTests)|(FullyQualifiedName~TelemetryTests)"
 popd
