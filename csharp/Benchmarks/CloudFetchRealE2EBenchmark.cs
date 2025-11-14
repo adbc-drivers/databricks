@@ -395,7 +395,7 @@ namespace Apache.Arrow.Adbc.Benchmarks
             _peakMemoryBytes = _currentProcess.PrivateMemorySize64;
             _totalRows = 0;
             _totalBatches = 0;
-            
+
             // Capture initial GC and process metrics
             _initialProcessorTime = _currentProcess.TotalProcessorTime;
             _initialAllocatedBytes = GC.GetTotalMemory(forceFullCollection: false);
@@ -421,28 +421,28 @@ namespace Apache.Arrow.Adbc.Benchmarks
             var finalGen0Collections = GC.CollectionCount(0);
             var finalGen1Collections = GC.CollectionCount(1);
             var finalGen2Collections = GC.CollectionCount(2);
-            
+
             // Calculate deltas
             double processorTimeMs = (finalProcessorTime - _initialProcessorTime).TotalMilliseconds;
             long totalAllocatedBytes = finalAllocatedBytes - _initialAllocatedBytes;
             int gen0Collections = finalGen0Collections - _initialGen0Collections;
             int gen1Collections = finalGen1Collections - _initialGen1Collections;
             int gen2Collections = finalGen2Collections - _initialGen2Collections;
-            
+
             // Calculate GC time percentage
 #if NET6_0_OR_GREATER
             // Use precise GC pause duration on .NET 6+
             var finalGCPauseDuration = GC.GetTotalPauseDuration();
             var gcPauseTime = finalGCPauseDuration - _initialGCPauseDuration;
-            double gcTimePercentage = processorTimeMs > 0 ? 
+            double gcTimePercentage = processorTimeMs > 0 ?
                 (gcPauseTime.TotalMilliseconds / processorTimeMs) * 100.0 : 0.0;
 #else
             // Estimate GC time percentage (rough approximation based on collection counts)
             int totalCollections = gen0Collections + gen1Collections + gen2Collections;
-            double gcTimePercentage = totalCollections > 0 ? 
+            double gcTimePercentage = totalCollections > 0 ?
                 Math.Min((totalCollections * 0.1), 5.0) : 0.0; // Cap at 5% as rough estimate
 #endif
-                
+
             // Print metrics for this iteration
             Console.WriteLine($"CloudFetch E2E [Delay={ReadDelayMs}ms/10K rows] - Peak memory: {peakMemoryMB:F2} MB, Total rows: {_totalRows:N0}, Total batches: {_totalBatches:N0}");
 #if NET6_0_OR_GREATER
@@ -464,13 +464,13 @@ namespace Apache.Arrow.Adbc.Benchmarks
             // Load existing metrics or create new dictionary
             string metricsFilePath = Path.Combine(Path.GetTempPath(), "cloudfetch_benchmark_metrics.json");
             Dictionary<string, BenchmarkMetrics> allMetrics;
-            
+
             if (File.Exists(metricsFilePath))
             {
                 try
                 {
                     string existingJson = File.ReadAllText(metricsFilePath);
-                    allMetrics = JsonSerializer.Deserialize<Dictionary<string, BenchmarkMetrics>>(existingJson) 
+                    allMetrics = JsonSerializer.Deserialize<Dictionary<string, BenchmarkMetrics>>(existingJson)
                         ?? new Dictionary<string, BenchmarkMetrics>();
                 }
                 catch
