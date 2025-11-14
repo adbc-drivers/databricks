@@ -1,0 +1,84 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/e2e-tests.yml'
+      - 'csharp/src/**'
+      - 'csharp/test/**'
+  pull_request:
+    # Only runs on PRs from the repo itself, not forks
+    paths:
+      - '.github/workflows/e2e-tests.yml'
+      - 'csharp/src/**'
+      - 'csharp/test/**'
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  run-e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_CATALOG: peco
+      DATABRICKS_USER: ${{ secrets.TEST_PECO_SP_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Create Databricks config file
+        run: |
+          mkdir -p ~/.databricks
+          cat > ~/.databricks/connection.json << EOF
+          {
+            "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
+            "adbc.spark.auth_type": "token",
+            "adbc.spark.access_token": "${{ env.DATABRICKS_TOKEN }}",
+            "adbc.connection.catalog": "${{ env.DATABRICKS_CATALOG }}",
+            "adbc.connection.db_schema": "default",
+            "adbc.drivers.databricks.enable_multiple_catalog_support": "true",
+            "adbc.drivers.databricks.enable_direct_results": "true"
+          }
+          EOF
+          echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> $GITHUB_ENV
+
+      - name: Build
+        shell: bash
+        run: |
+          ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
+
+      - name: Test Databricks E2E
+        shell: bash
+        run: |
+          ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
