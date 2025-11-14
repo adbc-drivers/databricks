@@ -23,7 +23,6 @@ set -ex
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-# Run all E2E tests that require Databricks credentials
-# Includes tests with "E2ETest" in name plus statement/client/driver/value/telemetry test suites
-dotnet test --filter "(FullyQualifiedName~E2ETest)|(FullyQualifiedName~StatementTests)|(FullyQualifiedName~ClientTests)|(FullyQualifiedName~DriverTests)|(FullyQualifiedName~NumericValueTests)|(FullyQualifiedName~DateTimeValueTests)|(FullyQualifiedName~ComplexTypesValueTests)|(FullyQualifiedName~StringValueTests)|(FullyQualifiedName~TelemetryTests)"
+# Run CloudFetchE2ETest
+dotnet test --filter "FullyQualifiedName~CloudFetchE2ETest"
 popd

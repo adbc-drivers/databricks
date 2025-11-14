@@ -44,7 +44,6 @@ jobs:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_CATALOG: peco
       DATABRICKS_USER: ${{ secrets.TEST_PECO_SP_ID }}
     steps:
       - name: Checkout repository
@@ -66,8 +65,8 @@ jobs:
             "auth_type": "token",
             "token": "${{ env.DATABRICKS_TOKEN }}",
             "type": "databricks",
-            "catalog": "${{ env.DATABRICKS_CATALOG }}",
-            "db_schema": "default",
+            "catalog": "hive_metastore",
+            "db_schema": "information_schema",
             "enableMultipleCatalogSupport": "true",
             "enableDirectResults": "true"
           }
