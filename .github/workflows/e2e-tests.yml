@@ -43,9 +43,8 @@ jobs:
     environment: azure-staging
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_WAREHOUSE_HTTP_PATH }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_USER: ${{ secrets.TEST_PECO_SP_ID }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
