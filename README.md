@@ -27,6 +27,29 @@ At this time pre-packaged drivers are not yet available.
 
 At this time user documentation is not yet available.
 
+## Benchmarking
+
+The C# driver includes comprehensive benchmarks for performance testing:
+
+```bash
+# Run CloudFetch E2E benchmarks with .NET 8.0
+cd csharp/Benchmarks
+dotnet run -c Release -f net8.0 -- --filter "*CloudFetchRealE2E*"
+
+# Run with .NET Framework 4.7.2 (Windows only)
+dotnet run -c Release -f net472 -- --filter "*CloudFetchRealE2E*"
+```
+
+**Prerequisites:**
+- Set `DATABRICKS_TEST_CONFIG_FILE` environment variable pointing to a JSON config file
+- Config file should contain: `{"uri": "...", "token": "...", "query": "..."}`
+
+**Benchmark Metrics:**
+- Peak Memory (MB) - Peak private memory usage
+- Total Rows/Batches - Actual data processed
+- GC Time % - Precise GC overhead (.NET 6+) or estimated (older versions)
+- Standard BenchmarkDotNet metrics (Gen0/1/2 collections, allocated memory, execution time)
+
 ## Building
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

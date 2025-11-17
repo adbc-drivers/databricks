@@ -26,8 +26,10 @@ This directory contains GitHub Actions workflows for automated testing and valid
 
 **Triggers**:
 - Push to `main` or `maint-*` branches
-- Pull requests to `main` or `maint-*` branches
+- Pull requests (including from forks) to `main` or `maint-*` branches
 - Only runs when C# code or the workflow itself changes
+
+**Security**: Uses `pull_request_target` with safe checkout to support fork PRs in private repositories while maintaining security by checking out the exact PR commit SHA.
 
 **Test Matrix**:
 - **Operating Systems**: Ubuntu Latest, Windows Server 2022, macOS 13 (Intel), macOS Latest (ARM)
@@ -35,15 +37,16 @@ This directory contains GitHub Actions workflows for automated testing and valid
 - **Timeout**: 15 minutes per job
 
 **Steps**:
-1. Checkout repository with submodules
+1. Checkout repository with submodules (uses exact PR commit SHA for safety)
 2. Setup .NET SDK
-3. Build using `csharp/arrow-adbc/ci/scripts/csharp_build.sh`
-4. Test using `csharp/arrow-adbc/ci/scripts/csharp_test.sh`
+3. Build using `ci/scripts/csharp_build.sh`
+4. Test using `ci/scripts/csharp_test.sh`
 
 **Notes**:
 - Workflow skips if PR title contains "WIP"
-- Uses scripts from the apache/arrow-adbc submodule
 - Tests both the main driver and Databricks-specific unit tests
+- **Fork PRs**: Automatically runs on fork PRs by using `pull_request_target` with safe checkout
+- **Security**: Checks out the exact commit SHA from the PR to prevent TOCTOU attacks
 
 ### PR Validation (`pr-validation.yml`)
 
@@ -78,7 +81,9 @@ This directory contains GitHub Actions workflows for automated testing and valid
 
 **Triggers**:
 - Push to `main` or `maint-*` branches
-- Pull requests to `main` or `maint-*` branches
+- Pull requests (including from forks) to `main` or `maint-*` branches
+
+**Security**: Uses `pull_request_target` with safe checkout to support fork PRs in private repositories.
 
 **Checks**:
 - File formatting (trailing whitespace, end-of-file, line endings)
