@@ -10,6 +10,7 @@
   <ItemGroup>
     <PackageReference Include="K4os.Compression.LZ4" />
     <PackageReference Include="K4os.Compression.LZ4.Streams" />
+    <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="readme.md">
