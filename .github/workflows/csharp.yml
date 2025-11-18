@@ -52,7 +52,7 @@ jobs:
         os:
           - ubuntu-latest
           - windows-2022
-          - macos-13  # Intel
+          - macos-15-intel  # Intel
           - macos-latest  # ARM
         dotnet:
           - '8.0.x'
