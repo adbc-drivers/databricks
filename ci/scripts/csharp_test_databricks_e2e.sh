@@ -24,5 +24,5 @@ source_dir=${1}/csharp/test
 
 pushd ${source_dir}
 # Run all E2E tests
-dotnet test --filter "FullyQualifiedName~ClientTests|FullyQualifiedName~CloudFetchE2ETest|FullyQualifiedName~ComplexTypesValueTests|FullyQualifiedName~DatabricksConnectionTest|FullyQualifiedName~DateTimeValueTests|FullyQualifiedName~DriverTests|FullyQualifiedName~NumericValueTests|FullyQualifiedName~ServerSidePropertyE2ETest|FullyQualifiedName~StatementTests|FullyQualifiedName~StringValueTests|FullyQualifiedName~TelemetryTests" --verbosity normal
+dotnet test --filter "FullyQualifiedName~ClientTests|FullyQualifiedName~CloudFetchE2ETest|FullyQualifiedName~ComplexTypesValueTests|FullyQualifiedName~DatabricksConnectionTest|FullyQualifiedName~DateTimeValueTests|FullyQualifiedName~DriverTests|FullyQualifiedName~NumericValueTests|FullyQualifiedName~ServerSidePropertyE2ETest|FullyQualifiedName~StringValueTests|FullyQualifiedName~TelemetryTests" --verbosity normal
 popd
