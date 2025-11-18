@@ -68,6 +68,7 @@ jobs:
             "db_schema": "adbc_testing",
             "query": "SELECT * FROM main.adbc_testing.adbc_testing_table",
             "expectedResults": 2,
+            "isCITesting": true,
             "tracePropagationEnabled": "true",
             "traceParentHeaderName": "traceparent",
             "traceStateEnabled": "false",
