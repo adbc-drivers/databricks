@@ -77,6 +77,37 @@ export DATABRICKS_TEST_CONFIG_FILE=/path/to/databricks-config.json
 
 **Note**: The `query` field specifies the SQL query that will be executed during the benchmark. Use a query that returns a large result set to properly test CloudFetch performance.
 
+## CI/CD Automation
+
+### Automatic Benchmark Runs
+
+Benchmarks run automatically via GitHub Actions on every commit to the `main` branch. The workflow:
+- Runs benchmarks on both .NET 8.0 (Ubuntu) and .NET Framework 4.7.2 (Windows)
+- Uploads detailed results as artifacts (retained for 90 days)
+- Tracks performance trends over time using GitHub Pages
+- Alerts maintainers if performance degrades by more than 150%
+
+### Viewing CI Results
+
+1. **GitHub Actions**: Go to **Actions → Performance Benchmarks** to see run history
+2. **Artifacts**: Download detailed HTML/JSON/CSV reports from each run
+3. **Trend Charts**: View performance trends at `https://<org>.github.io/<repo>/bench/net8/` (once GitHub Pages is enabled)
+
+### Manual Trigger
+
+You can trigger a benchmark run manually:
+1. Go to **Actions → Performance Benchmarks → Run workflow**
+2. Optionally specify a custom SQL query
+3. Click **Run workflow**
+
+### Setup
+
+See [`docs/benchmark-cicd-setup.md`](../../docs/benchmark-cicd-setup.md) for complete setup instructions, including:
+- Required GitHub secrets configuration
+- Enabling GitHub Pages for trend tracking
+- Configuring alert thresholds
+- Troubleshooting common issues
+
 ## Understanding the Results
 
 ### Key Metrics:
