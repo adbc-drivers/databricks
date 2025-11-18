@@ -225,13 +225,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                     }
                     break;
                 case ApacheParameters.BatchSize:
-                    if (long.TryParse(value, out long batchSize) && batchSize > 0)
+                    if (long.TryParse(value, out long batchSize) && batchSize >= 0)
                     {
                         this.BatchSize = batchSize;
                     }
                     else
                     {
-                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than zero.");
+                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than or equal to zero.");
                     }
                     break;
                 default:
