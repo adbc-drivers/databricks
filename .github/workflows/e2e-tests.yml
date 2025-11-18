@@ -66,7 +66,18 @@ jobs:
             "token": "${{ env.DATABRICKS_TOKEN }}",
             "type": "databricks",
             "catalog": "main",
-            "db_schema": "ADBC_Testing"
+            "db_schema": "adbc_testing",
+            "query": "SELECT * FROM main.adbc_testing.adbc_testing_table",
+            "expectedResults": 1,
+            "tracePropagationEnabled": "true",
+            "traceParentHeaderName": "traceparent",
+            "traceStateEnabled": "false",
+            "metadata": {
+              "catalog": "main",
+              "schema": "adbc_testing",
+              "table": "adbc_testing_table",
+              "expectedColumnCount": 19
+            }
           }
           EOF
           echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> $GITHUB_ENV

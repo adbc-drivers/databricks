@@ -23,6 +23,6 @@ set -ex
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-# Skipped E2E tests that are failing currently
-dotnet test --filter "FullyQualifiedName~CloudFetchE2ETest|FullyQualifiedName~ComplexTypesValueTests|FullyQualifiedName~DatabricksConnectionTest|FullyQualifiedName~NumericValueTests|FullyQualifiedName~ServerSidePropertyE2ETest|FullyQualifiedName~StringValueTests" --verbosity minimal
+# Run all E2E tests
+dotnet test --filter "FullyQualifiedName~ClientTests|FullyQualifiedName~CloudFetchE2ETest|FullyQualifiedName~ComplexTypesValueTests|FullyQualifiedName~DatabricksConnectionTest|FullyQualifiedName~DateTimeValueTests|FullyQualifiedName~DriverTests|FullyQualifiedName~NumericValueTests|FullyQualifiedName~ServerSidePropertyE2ETest|FullyQualifiedName~StatementTests|FullyQualifiedName~StringValueTests|FullyQualifiedName~TelemetryTests" --verbosity normal
 popd
