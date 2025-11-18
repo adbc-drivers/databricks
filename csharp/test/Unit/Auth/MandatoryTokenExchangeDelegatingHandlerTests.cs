@@ -178,8 +178,10 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Auth
             var requestDuration = DateTime.UtcNow - startTime;
 
             Assert.Equal(expectedResponse, response);
-            Assert.True(requestDuration >= tokenExchangeDelay,
-                $"Request took {requestDuration.TotalMilliseconds}ms, which is shorter than the token exchange delay of {tokenExchangeDelay.TotalMilliseconds}ms. Expected blocking behavior.");
+            // Allow small tolerance for timing precision (DateTime.UtcNow and Task.Delay variance)
+            var toleranceMs = 10;
+            Assert.True(requestDuration >= tokenExchangeDelay - TimeSpan.FromMilliseconds(toleranceMs),
+                $"Request took {requestDuration.TotalMilliseconds}ms, which is shorter than the token exchange delay of {tokenExchangeDelay.TotalMilliseconds}ms (with {toleranceMs}ms tolerance). Expected blocking behavior.");
 
             Assert.NotNull(capturedRequest);
             Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
