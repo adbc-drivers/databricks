@@ -104,8 +104,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
             // Read all the data, count rows, and ACCESS ACTUAL COLUMN DATA to force materialization
             long totalRows = 0;
             int batchCount = 0;
-            object? firstValue = null;
-            object? lastValue = null;
+            bool? firstIsNull = null;
+            bool? lastIsNull = null;
             var readStartTime = DateTime.UtcNow;
 
             RecordBatch? batch;
@@ -115,14 +115,15 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
                 batchCount++;
 
                 // ACCESS ACTUAL DATA to ensure CloudFetch downloads/decompresses files
+                // Use IsNull() which is available on IArrowArray and forces data access
                 if (batch.Length > 0 && batch.ColumnCount > 0)
                 {
                     var column = batch.Column(0);
-                    if (firstValue == null)
+                    if (firstIsNull == null)
                     {
-                        firstValue = column.GetValue(0);
+                        firstIsNull = column.IsNull(0);
                     }
-                    lastValue = column.GetValue(batch.Length - 1);
+                    lastIsNull = column.IsNull(batch.Length - 1);
                 }
 
                 // Log progress every 100 batches for large result sets
@@ -140,8 +141,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
             OutputHelper?.WriteLine($"=== RESULTS ===");
             OutputHelper?.WriteLine($"Total rows read: {totalRows}");
             OutputHelper?.WriteLine($"Total batches: {batchCount}");
-            OutputHelper?.WriteLine($"First value: {firstValue}");
-            OutputHelper?.WriteLine($"Last value: {lastValue}");
+            OutputHelper?.WriteLine($"First value is null: {firstIsNull}");
+            OutputHelper?.WriteLine($"Last value is null: {lastIsNull}");
             OutputHelper?.WriteLine($"Read duration: {readDuration:F2}s");
             OutputHelper?.WriteLine($"Total test duration: {totalDuration:F2}s");
             OutputHelper?.WriteLine($"=== TEST END at {readEndTime:yyyy-MM-dd HH:mm:ss.fff} UTC ===");
