@@ -51,9 +51,19 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
                   ]
                 : [
                     -1, // CREATE TABLE
-                    affectedRows,  // INSERT
-                    affectedRows,  // INSERT
-                    affectedRows,  // INSERT
+                    affectedRows,  // INSERT (id=1)
+                    affectedRows,  // INSERT (id=2)
+                    affectedRows,  // INSERT (id=3)
+                    affectedRows,  // INSERT (id=4)
+                    affectedRows,  // INSERT (id=5)
+                    affectedRows,  // INSERT (id=6)
+                    affectedRows,  // INSERT (id=7)
+                    affectedRows,  // INSERT (id=8)
+                    affectedRows,  // INSERT (id=9)
+                    affectedRows,  // INSERT (id=10)
+                    affectedRows,  // INSERT (id=11)
+                    affectedRows,  // INSERT (id=12)
+                    affectedRows,  // INSERT (id=13)
                     affectedRows,  // UPDATE
                     affectedRows,  // DELETE
                   ];
