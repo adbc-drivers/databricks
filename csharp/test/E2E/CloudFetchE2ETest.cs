@@ -66,6 +66,17 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
         [MemberData(nameof(TestCases))]
         public async Task TestRealDatabricksCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults)
         {
+            var testStartTime = DateTime.UtcNow;
+            OutputHelper?.WriteLine($"=== TEST START at {testStartTime:yyyy-MM-dd HH:mm:ss.fff} UTC ===");
+            OutputHelper?.WriteLine($"Query: {query}");
+            OutputHelper?.WriteLine($"Expected rows: {rowCount}");
+            OutputHelper?.WriteLine($"UseCloudFetch: {useCloudFetch}");
+            OutputHelper?.WriteLine($"EnableDirectResults: {enableDirectResults}");
+
+            // Add unique comment to query to avoid Databricks result cache
+            string cacheBypassQuery = $"{query} /* test_id:{Guid.NewGuid()} */";
+            OutputHelper?.WriteLine($"Cache-bypass query: {cacheBypassQuery}");
+
             var connection = NewConnection(TestConfiguration, new Dictionary<string, string>
             {
                 [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
@@ -75,32 +86,70 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
                 [DatabricksParameters.CloudFetchUrlExpirationBufferSeconds] = (15 * 60 - 2).ToString(),
             });
 
-            // Execute a query that generates a large result set using range function
             var statement = connection.CreateStatement();
-            statement.SqlQuery = query;
+            statement.SqlQuery = cacheBypassQuery;
 
-            // Execute the query and get the result
+            var queryStartTime = DateTime.UtcNow;
+            OutputHelper?.WriteLine($"Executing query at {queryStartTime:yyyy-MM-dd HH:mm:ss.fff} UTC");
+
             var result = await statement.ExecuteQueryAsync();
+            var queryEndTime = DateTime.UtcNow;
+            OutputHelper?.WriteLine($"Query execution completed at {queryEndTime:yyyy-MM-dd HH:mm:ss.fff} UTC (duration: {(queryEndTime - queryStartTime).TotalSeconds:F2}s)");
 
             if (result.Stream == null)
             {
                 throw new InvalidOperationException("Result stream is null");
             }
 
-            // Read all the data and count rows
+            // Read all the data, count rows, and ACCESS ACTUAL COLUMN DATA to force materialization
             long totalRows = 0;
+            int batchCount = 0;
+            object? firstValue = null;
+            object? lastValue = null;
+            var readStartTime = DateTime.UtcNow;
+
             RecordBatch? batch;
             while ((batch = await result.Stream.ReadNextRecordBatchAsync()) != null)
             {
                 totalRows += batch.Length;
+                batchCount++;
+
+                // ACCESS ACTUAL DATA to ensure CloudFetch downloads/decompresses files
+                if (batch.Length > 0 && batch.ColumnCount > 0)
+                {
+                    var column = batch.Column(0);
+                    if (firstValue == null)
+                    {
+                        firstValue = column.GetValue(0);
+                    }
+                    lastValue = column.GetValue(batch.Length - 1);
+                }
+
+                // Log progress every 100 batches for large result sets
+                if (batchCount % 100 == 0)
+                {
+                    var elapsed = (DateTime.UtcNow - readStartTime).TotalSeconds;
+                    OutputHelper?.WriteLine($"  Progress: {batchCount} batches, {totalRows} rows, {elapsed:F2}s elapsed");
+                }
             }
 
-            Assert.True(totalRows >= rowCount);
+            var readEndTime = DateTime.UtcNow;
+            var readDuration = (readEndTime - readStartTime).TotalSeconds;
+            var totalDuration = (readEndTime - testStartTime).TotalSeconds;
+
+            OutputHelper?.WriteLine($"=== RESULTS ===");
+            OutputHelper?.WriteLine($"Total rows read: {totalRows}");
+            OutputHelper?.WriteLine($"Total batches: {batchCount}");
+            OutputHelper?.WriteLine($"First value: {firstValue}");
+            OutputHelper?.WriteLine($"Last value: {lastValue}");
+            OutputHelper?.WriteLine($"Read duration: {readDuration:F2}s");
+            OutputHelper?.WriteLine($"Total test duration: {totalDuration:F2}s");
+            OutputHelper?.WriteLine($"=== TEST END at {readEndTime:yyyy-MM-dd HH:mm:ss.fff} UTC ===");
+
+            // Use exact assertion instead of >=
+            Assert.Equal(rowCount, totalRows);
 
             Assert.Null(await result.Stream.ReadNextRecordBatchAsync());
-
-            // Also log to the test output helper if available
-            OutputHelper?.WriteLine($"Read {totalRows} rows from range function");
         }
     }
 }

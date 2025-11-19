@@ -23,6 +23,12 @@ set -ex
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-# Skipped E2E tests that are failing currently
-dotnet test --filter "FullyQualifiedName~CloudFetchE2ETest|FullyQualifiedName~ComplexTypesValueTests|FullyQualifiedName~DatabricksConnectionTest|FullyQualifiedName~NumericValueTests|FullyQualifiedName~ServerSidePropertyE2ETest|FullyQualifiedName~StringValueTests" --verbosity minimal
+# TEMPORARY: Run only CloudFetch tests to investigate timing discrepancy
+# Between local (70s for 1M rows) and CI (2-4s for 1M rows)
+# See: https://github.com/adbc-drivers/databricks/pull/49#issuecomment
+echo "=== Running CloudFetch E2E Tests Only ==="
+echo "Purpose: Investigate why CloudFetch tests run 18-36x faster in CI than locally"
+echo "Expected: 1M rows should take ~60-70s, not 2-4s"
+echo ""
+dotnet test --filter "FullyQualifiedName~CloudFetchE2ETest" --verbosity detailed
 popd
