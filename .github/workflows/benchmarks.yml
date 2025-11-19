@@ -101,25 +101,63 @@ jobs:
         run: |
           # Parse BenchmarkDotNet JSON results for trend tracking
           RESULTS_FILE=$(find csharp/Benchmarks/BenchmarkDotNet.Artifacts/results -name "*-report-full-compressed.json" | head -n 1)
-          if [ -f "$RESULTS_FILE" ]; then
-            echo "Found results file: $RESULTS_FILE"
-            # Extract mean time in nanoseconds for the first benchmark
-            MEAN_NS=$(jq -r '.Benchmarks[0].Statistics.Mean' "$RESULTS_FILE")
-            echo "mean_ns=$MEAN_NS" >> $GITHUB_OUTPUT
+          METRICS_FILE=$(find /tmp -name "cloudfetch_benchmark_metrics.json" 2>/dev/null | head -n 1)
 
-            # Convert to milliseconds for better readability
-            MEAN_MS=$(echo "scale=2; $MEAN_NS / 1000000" | bc)
-            echo "mean_ms=$MEAN_MS" >> $GITHUB_OUTPUT
-            echo "Benchmark mean time: ${MEAN_MS}ms"
+          if [ -f "$RESULTS_FILE" ]; then
+            echo "Found BenchmarkDotNet results file: $RESULTS_FILE"
+
+            # Extract memory metrics from BenchmarkDotNet JSON
+            ALLOCATED_BYTES=$(jq -r '.Benchmarks[0].Memory.BytesAllocatedPerOperation // 0' "$RESULTS_FILE")
+            ALLOCATED_MB=$(echo "scale=2; $ALLOCATED_BYTES / 1024 / 1024" | bc)
+            echo "allocated_mb=$ALLOCATED_MB" >> $GITHUB_OUTPUT
+            echo "Allocated memory: ${ALLOCATED_MB} MB"
+
+            GEN2_COLLECTIONS=$(jq -r '.Benchmarks[0].Memory.Gen2Collections // 0' "$RESULTS_FILE")
+            echo "gen2_collections=$GEN2_COLLECTIONS" >> $GITHUB_OUTPUT
+            echo "Gen2 collections: $GEN2_COLLECTIONS"
           else
-            echo "Warning: Could not find benchmark results file"
+            echo "Warning: Could not find BenchmarkDotNet results file"
           fi
+
+          # Extract peak memory from custom metrics file
+          if [ -f "$METRICS_FILE" ]; then
+            echo "Found custom metrics file: $METRICS_FILE"
+            PEAK_MEMORY_MB=$(jq -r 'to_entries | .[0].value.PeakMemoryMB' "$METRICS_FILE")
+            echo "peak_memory_mb=$PEAK_MEMORY_MB" >> $GITHUB_OUTPUT
+            echo "Peak memory: ${PEAK_MEMORY_MB} MB"
+          else
+            echo "Warning: Could not find custom metrics file"
+          fi
+
+      - name: Create benchmark data file for trend tracking
+        if: steps.extract-data.outputs.peak_memory_mb != ''
+        run: |
+          mkdir -p csharp/Benchmarks/BenchmarkDotNet.Artifacts/results
+          cat > csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json << EOF
+          [
+            {
+              "name": "Peak Memory (MB)",
+              "unit": "MB",
+              "value": ${{ steps.extract-data.outputs.peak_memory_mb }}
+            },
+            {
+              "name": "Allocated Memory (MB)",
+              "unit": "MB",
+              "value": ${{ steps.extract-data.outputs.allocated_mb }}
+            },
+            {
+              "name": "Gen2 Collections",
+              "unit": "collections",
+              "value": ${{ steps.extract-data.outputs.gen2_collections }}
+            }
+          ]
+          EOF
 
       - name: Store benchmark results for trend tracking
         uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.mean_ns != ''
+        if: steps.extract-data.outputs.peak_memory_mb != ''
         with:
-          tool: 'customBiggerIsBetter'
+          tool: 'customSmallerIsBetter'
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
@@ -128,20 +166,6 @@ jobs:
           fail-on-alert: false
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
           benchmark-data-dir-path: 'bench/net8'
-
-      - name: Create benchmark data file for trend tracking
-        if: steps.extract-data.outputs.mean_ns != ''
-        run: |
-          mkdir -p csharp/Benchmarks/BenchmarkDotNet.Artifacts/results
-          cat > csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json << EOF
-          [
-            {
-              "name": "CloudFetch E2E Benchmark (net8.0)",
-              "unit": "ms",
-              "value": ${{ steps.extract-data.outputs.mean_ms }}
-            }
-          ]
-          EOF
 
   benchmark-net472:
     name: Benchmark (.NET Framework 4.7.2)
@@ -212,38 +236,65 @@ jobs:
         shell: pwsh
         run: |
           $resultsFile = Get-ChildItem -Path "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" -Filter "*-report-full-compressed.json" | Select-Object -First 1
-          if ($resultsFile) {
-            Write-Host "Found results file: $($resultsFile.FullName)"
-            $results = Get-Content $resultsFile.FullName | ConvertFrom-Json
-            $meanNs = $results.Benchmarks[0].Statistics.Mean
-            echo "mean_ns=$meanNs" >> $env:GITHUB_OUTPUT
+          $metricsFile = Get-ChildItem -Path $env:TEMP -Filter "cloudfetch_benchmark_metrics.json" -ErrorAction SilentlyContinue | Select-Object -First 1
 
-            $meanMs = [math]::Round($meanNs / 1000000, 2)
-            echo "mean_ms=$meanMs" >> $env:GITHUB_OUTPUT
-            Write-Host "Benchmark mean time: ${meanMs}ms"
+          if ($resultsFile) {
+            Write-Host "Found BenchmarkDotNet results file: $($resultsFile.FullName)"
+            $results = Get-Content $resultsFile.FullName | ConvertFrom-Json
+
+            # Extract memory metrics from BenchmarkDotNet JSON
+            $allocatedBytes = if ($results.Benchmarks[0].Memory.BytesAllocatedPerOperation) { $results.Benchmarks[0].Memory.BytesAllocatedPerOperation } else { 0 }
+            $allocatedMB = [math]::Round($allocatedBytes / 1024 / 1024, 2)
+            echo "allocated_mb=$allocatedMB" >> $env:GITHUB_OUTPUT
+            Write-Host "Allocated memory: ${allocatedMB} MB"
+
+            $gen2Collections = if ($results.Benchmarks[0].Memory.Gen2Collections) { $results.Benchmarks[0].Memory.Gen2Collections } else { 0 }
+            echo "gen2_collections=$gen2Collections" >> $env:GITHUB_OUTPUT
+            Write-Host "Gen2 collections: $gen2Collections"
           } else {
-            Write-Host "Warning: Could not find benchmark results file"
+            Write-Host "Warning: Could not find BenchmarkDotNet results file"
+          }
+
+          # Extract peak memory from custom metrics file
+          if ($metricsFile) {
+            Write-Host "Found custom metrics file: $($metricsFile.FullName)"
+            $metrics = Get-Content $metricsFile.FullName | ConvertFrom-Json
+            $peakMemoryMB = ($metrics.PSObject.Properties | Select-Object -First 1).Value.PeakMemoryMB
+            echo "peak_memory_mb=$peakMemoryMB" >> $env:GITHUB_OUTPUT
+            Write-Host "Peak memory: ${peakMemoryMB} MB"
+          } else {
+            Write-Host "Warning: Could not find custom metrics file"
           }
 
       - name: Create benchmark data file for trend tracking
-        if: steps.extract-data.outputs.mean_ns != ''
+        if: steps.extract-data.outputs.peak_memory_mb != ''
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" | Out-Null
           $benchmarkData = @(
             @{
-              name = "CloudFetch E2E Benchmark (net472)"
-              unit = "ms"
-              value = [double]"${{ steps.extract-data.outputs.mean_ms }}"
+              name = "Peak Memory (MB)"
+              unit = "MB"
+              value = [double]"${{ steps.extract-data.outputs.peak_memory_mb }}"
+            },
+            @{
+              name = "Allocated Memory (MB)"
+              unit = "MB"
+              value = [double]"${{ steps.extract-data.outputs.allocated_mb }}"
+            },
+            @{
+              name = "Gen2 Collections"
+              unit = "collections"
+              value = [double]"${{ steps.extract-data.outputs.gen2_collections }}"
             }
           ) | ConvertTo-Json
           $benchmarkData | Out-File -FilePath "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json" -Encoding utf8
 
       - name: Store benchmark results for trend tracking
         uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.mean_ns != ''
+        if: steps.extract-data.outputs.peak_memory_mb != ''
         with:
-          tool: 'customBiggerIsBetter'
+          tool: 'customSmallerIsBetter'
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true

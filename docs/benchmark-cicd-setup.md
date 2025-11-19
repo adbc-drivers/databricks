@@ -26,9 +26,9 @@ This guide explains how the automated benchmark CI/CD pipeline works and how to 
 The benchmark automation system runs CloudFetch E2E performance benchmarks automatically on every commit to the `main` branch. It:
 
 - Executes benchmarks on both .NET 8.0 (Ubuntu) and .NET Framework 4.7.2 (Windows)
-- Tracks performance trends over time
+- Tracks memory consumption trends: Peak Memory, Allocated Memory, and Gen2 Collections
 - Stores detailed results as artifacts
-- Alerts maintainers if performance degrades significantly
+- Alerts maintainers if memory usage increases by 150% or more (2.5x baseline)
 
 ## Architecture
 
@@ -153,13 +153,16 @@ To use a custom query:
 
 ### Performance Alert Threshold
 
-The workflow is configured to alert if performance degrades by **150%** or more compared to the previous run. This threshold can be adjusted in `.github/workflows/benchmarks.yml`:
+The workflow is configured to alert if **memory metrics increase by 150%** or more compared to the previous run (i.e., memory usage reaches 2.5x the baseline). Since lower memory is better, the workflow uses `customSmallerIsBetter` mode.
+
+This threshold can be adjusted in `.github/workflows/benchmarks.yml`:
 
 ```yaml
 - name: Store benchmark results for trend tracking
   uses: benchmark-action/github-action-benchmark@v1
   with:
-    alert-threshold: '150%'  # Adjust this value
+    tool: 'customSmallerIsBetter'  # Lower memory is better
+    alert-threshold: '150%'        # Alert if memory increases to 2.5x baseline
 ```
 
 ### Timeout
@@ -188,27 +191,38 @@ Each artifact contains:
 
 ### Key Metrics
 
-The benchmark tracks:
+The benchmark tracks and monitors trends for the following metrics:
 
-1. **Mean/Median/Min/Max Time**: End-to-end execution time including:
+**Tracked in GitHub Pages (trend analysis):**
+
+1. **Peak Memory (MB)**: Maximum working set memory (private bytes) during execution
+   - Lower is better
+   - Alert threshold: 150% (triggers if memory increases to 2.5x baseline)
+   - Source: Custom metrics from `Process.PrivateMemorySize64`
+
+2. **Allocated Memory (MB)**: Total managed memory allocated during execution
+   - Lower is better
+   - Alert threshold: 150%
+   - Source: BenchmarkDotNet's `MemoryDiagnoser`
+
+3. **Gen2 Collections**: Number of full garbage collections
+   - Lower is better (indicates less memory pressure)
+   - Alert threshold: 150%
+   - Source: BenchmarkDotNet's `MemoryDiagnoser`
+
+**Additional metrics in BenchmarkDotNet reports:**
+
+4. **Mean/Median/Min/Max Time**: End-to-end execution time including:
    - Query execution
    - CloudFetch downloads
    - LZ4 decompression
    - Batch consumption with simulated delays
 
-2. **Peak Memory (MB)**: Maximum working set memory during execution (logged to console)
+5. **Total Rows/Batches**: Data volume processed
 
-3. **Total Rows/Batches**: Data volume processed
+6. **GC Time %**: Percentage of time spent in garbage collection
 
-4. **GC Metrics**:
-   - Gen0/Gen1/Gen2 collection counts
-   - Total allocated managed memory
-   - GC pause time percentage
-
-5. **Custom Metrics** (from console output):
-   - Peak memory usage per iteration
-   - Row processing rate
-   - CloudFetch download performance
+7. **Gen0/Gen1 Collections**: Minor and partial garbage collections
 
 ### Trend Analysis
 
