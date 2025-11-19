@@ -72,5 +72,28 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
 
         [JsonPropertyName("maxBytesPerFetchRequest"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public string MaxBytesPerFetchRequest { get; set; } = string.Empty;
+
+        private string _batchSize = string.Empty;
+
+        /// <summary>
+        /// Hide base class BatchSize property to enforce minimum batch size of 1.
+        /// This prevents fractional calculations (like 2 * 0.1 = 0.2 -> 0) from resulting in zero batch size.
+        /// </summary>
+        public new string BatchSize
+        {
+            get => _batchSize;
+            set
+            {
+                // If the value is "0" or converts to 0, set it to "1" instead
+                if (long.TryParse(value, out long batchSize) && batchSize == 0)
+                {
+                    _batchSize = "1";
+                }
+                else
+                {
+                    _batchSize = value;
+                }
+            }
+        }
     }
 }
