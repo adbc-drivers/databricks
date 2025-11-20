@@ -23,12 +23,14 @@ on:
       - main
     paths:
       - '.github/workflows/e2e-tests.yml'
+      - 'ci/scripts/**'
       - 'csharp/src/**'
       - 'csharp/test/**'
   pull_request:
     # Only runs on PRs from the repo itself, not forks
     paths:
       - '.github/workflows/e2e-tests.yml'
+      - 'ci/scripts/**'
       - 'csharp/src/**'
       - 'csharp/test/**'
 
