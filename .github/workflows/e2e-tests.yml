@@ -46,6 +46,8 @@ jobs:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -56,6 +58,29 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      - name: Generate OAuth access token
+        id: oauth
+        run: |
+          # Generate fresh OAuth JWT token using client credentials
+          OAUTH_RESPONSE=$(curl -s -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/oidc/v1/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${{ env.DATABRICKS_TEST_CLIENT_ID }}" \
+            -d "client_secret=${{ env.DATABRICKS_TEST_CLIENT_SECRET }}" \
+            -d "scope=sql")
+
+          # Extract access token
+          OAUTH_TOKEN=$(echo "$OAUTH_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+
+          if [ -z "$OAUTH_TOKEN" ]; then
+            echo "ERROR: Failed to generate OAuth token"
+            exit 1
+          fi
+
+          # Mask token in logs
+          echo "::add-mask::$OAUTH_TOKEN"
+          echo "OAUTH_TOKEN=$OAUTH_TOKEN" >> $GITHUB_OUTPUT
 
       - name: Create Databricks config file
         run: |
@@ -74,6 +99,9 @@ jobs:
             "tracePropagationEnabled": "true",
             "traceParentHeaderName": "traceparent",
             "traceStateEnabled": "false",
+            "client_id": "${{ env.DATABRICKS_TEST_CLIENT_ID }}",
+            "client_secret": "${{ env.DATABRICKS_TEST_CLIENT_SECRET }}",
+            "access_token": "${{ steps.oauth.outputs.OAUTH_TOKEN }}",
             "metadata": {
               "catalog": "main",
               "schema": "adbc_testing",
