@@ -49,7 +49,7 @@ jobs:
       DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
