@@ -45,7 +45,9 @@ CREATE OR REPLACE TABLE {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (
     STRING
   >,
   varchar VARCHAR(255),
-  char CHAR(10)
+  char CHAR(10),
+  interval_ym INTERVAL YEAR TO MONTH,
+  interval_dt INTERVAL DAY TO SECOND
 ) USING DELTA;
 
 INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (
@@ -58,7 +60,9 @@ INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (
     person,
     map,
     varchar,
-    char
+    char,
+    interval_ym,
+    interval_dt
 )
 VALUES (
     1,
@@ -72,7 +76,9 @@ VALUES (
     STRUCT('John Doe', 30),
     MAP(1, 'John Doe'),
     'John Doe',
-    'John Doe'
+    'John Doe',
+    INTERVAL '1-2' YEAR TO MONTH,
+    INTERVAL '1 02:03:04.567' DAY TO SECOND
 );
 
 INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (
@@ -85,7 +91,9 @@ INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (
     person,
     map,
     varchar,
-    char
+    char,
+    interval_ym,
+    interval_dt
 )
 VALUES (
     2,
@@ -99,7 +107,9 @@ VALUES (
     STRUCT('Jane Doe', 40),
     MAP(1, 'John Doe'),
     'Jane Doe',
-    'Jane Doe'
+    'Jane Doe',
+    INTERVAL '2-3' YEAR TO MONTH,
+    INTERVAL '2 03:04:05.678' DAY TO SECOND
 );
 
 INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (
@@ -112,7 +122,9 @@ INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (
     person,
     map,
     varchar,
-    char
+    char,
+    interval_ym,
+    interval_dt
 )
 VALUES (
     3,
@@ -126,39 +138,41 @@ VALUES (
     STRUCT('Jack Doe', 50),
     MAP(1, 'John Doe'),
     'Jack Doe',
-    'Jack Doe'
+    'Jack Doe',
+    INTERVAL '-1-10' YEAR TO MONTH,
+    INTERVAL '-1 23:59:59.999' DAY TO SECOND
 );
 
 -- Add 10 more rows to bring total to 12 (to fix fractional batch size calculation)
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (4, 10, 100, 1000, 1.1, 2.2, 3.3, TRUE, 'User 4', X'757365723034', '2023-09-10', '2023-09-10 10:00:00', '2023-09-10 10:00:00', '2023-09-10 10:00:00+00:00', ARRAY(10, 11, 12), STRUCT('User 4', 25), MAP(4, 'User 4'), 'User 4', 'User 4');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (4, 10, 100, 1000, 1.1, 2.2, 3.3, TRUE, 'User 4', X'757365723034', '2023-09-10', '2023-09-10 10:00:00', '2023-09-10 10:00:00', '2023-09-10 10:00:00+00:00', ARRAY(10, 11, 12), STRUCT('User 4', 25), MAP(4, 'User 4'), 'User 4', 'User 4', INTERVAL '0-4' YEAR TO MONTH, INTERVAL '4 04:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (5, 11, 110, 1100, 1.2, 2.3, 3.4, FALSE, 'User 5', X'757365723035', '2023-09-11', '2023-09-11 11:00:00', '2023-09-11 11:00:00', '2023-09-11 11:00:00+00:00', ARRAY(13, 14, 15), STRUCT('User 5', 26), MAP(5, 'User 5'), 'User 5', 'User 5');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (5, 11, 110, 1100, 1.2, 2.3, 3.4, FALSE, 'User 5', X'757365723035', '2023-09-11', '2023-09-11 11:00:00', '2023-09-11 11:00:00', '2023-09-11 11:00:00+00:00', ARRAY(13, 14, 15), STRUCT('User 5', 26), MAP(5, 'User 5'), 'User 5', 'User 5', INTERVAL '0-5' YEAR TO MONTH, INTERVAL '5 05:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (6, 12, 120, 1200, 1.3, 2.4, 3.5, TRUE, 'User 6', X'757365723036', '2023-09-12', '2023-09-12 12:00:00', '2023-09-12 12:00:00', '2023-09-12 12:00:00+00:00', ARRAY(16, 17, 18), STRUCT('User 6', 27), MAP(6, 'User 6'), 'User 6', 'User 6');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (6, 12, 120, 1200, 1.3, 2.4, 3.5, TRUE, 'User 6', X'757365723036', '2023-09-12', '2023-09-12 12:00:00', '2023-09-12 12:00:00', '2023-09-12 12:00:00+00:00', ARRAY(16, 17, 18), STRUCT('User 6', 27), MAP(6, 'User 6'), 'User 6', 'User 6', INTERVAL '0-6' YEAR TO MONTH, INTERVAL '6 06:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (7, 13, 130, 1300, 1.4, 2.5, 3.6, FALSE, 'User 7', X'757365723037', '2023-09-13', '2023-09-13 13:00:00', '2023-09-13 13:00:00', '2023-09-13 13:00:00+00:00', ARRAY(19, 20, 21), STRUCT('User 7', 28), MAP(7, 'User 7'), 'User 7', 'User 7');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (7, 13, 130, 1300, 1.4, 2.5, 3.6, FALSE, 'User 7', X'757365723037', '2023-09-13', '2023-09-13 13:00:00', '2023-09-13 13:00:00', '2023-09-13 13:00:00+00:00', ARRAY(19, 20, 21), STRUCT('User 7', 28), MAP(7, 'User 7'), 'User 7', 'User 7', INTERVAL '0-7' YEAR TO MONTH, INTERVAL '7 07:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (8, 14, 140, 1400, 1.5, 2.6, 3.7, TRUE, 'User 8', X'757365723038', '2023-09-14', '2023-09-14 14:00:00', '2023-09-14 14:00:00', '2023-09-14 14:00:00+00:00', ARRAY(22, 23, 24), STRUCT('User 8', 29), MAP(8, 'User 8'), 'User 8', 'User 8');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (8, 14, 140, 1400, 1.5, 2.6, 3.7, TRUE, 'User 8', X'757365723038', '2023-09-14', '2023-09-14 14:00:00', '2023-09-14 14:00:00', '2023-09-14 14:00:00+00:00', ARRAY(22, 23, 24), STRUCT('User 8', 29), MAP(8, 'User 8'), 'User 8', 'User 8', INTERVAL '0-8' YEAR TO MONTH, INTERVAL '8 08:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (9, 15, 150, 1500, 1.6, 2.7, 3.8, FALSE, 'User 9', X'757365723039', '2023-09-15', '2023-09-15 15:00:00', '2023-09-15 15:00:00', '2023-09-15 15:00:00+00:00', ARRAY(25, 26, 27), STRUCT('User 9', 30), MAP(9, 'User 9'), 'User 9', 'User 9');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (9, 15, 150, 1500, 1.6, 2.7, 3.8, FALSE, 'User 9', X'757365723039', '2023-09-15', '2023-09-15 15:00:00', '2023-09-15 15:00:00', '2023-09-15 15:00:00+00:00', ARRAY(25, 26, 27), STRUCT('User 9', 30), MAP(9, 'User 9'), 'User 9', 'User 9', INTERVAL '0-9' YEAR TO MONTH, INTERVAL '9 09:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (10, 16, 160, 1600, 1.7, 2.8, 3.9, TRUE, 'User 10', X'75736572313030', '2023-09-16', '2023-09-16 16:00:00', '2023-09-16 16:00:00', '2023-09-16 16:00:00+00:00', ARRAY(28, 29, 30), STRUCT('User 10', 31), MAP(10, 'User 10'), 'User 10', 'User 10');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (10, 16, 160, 1600, 1.7, 2.8, 3.9, TRUE, 'User 10', X'75736572313030', '2023-09-16', '2023-09-16 16:00:00', '2023-09-16 16:00:00', '2023-09-16 16:00:00+00:00', ARRAY(28, 29, 30), STRUCT('User 10', 31), MAP(10, 'User 10'), 'User 10', 'User 10', INTERVAL '0-10' YEAR TO MONTH, INTERVAL '10 10:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (11, 17, 170, 1700, 1.8, 2.9, 4.0, FALSE, 'User 11', X'75736572313131', '2023-09-17', '2023-09-17 17:00:00', '2023-09-17 17:00:00', '2023-09-17 17:00:00+00:00', ARRAY(31, 32, 33), STRUCT('User 11', 32), MAP(11, 'User 11'), 'User 11', 'User 11');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (11, 17, 170, 1700, 1.8, 2.9, 4.0, FALSE, 'User 11', X'75736572313131', '2023-09-17', '2023-09-17 17:00:00', '2023-09-17 17:00:00', '2023-09-17 17:00:00+00:00', ARRAY(31, 32, 33), STRUCT('User 11', 32), MAP(11, 'User 11'), 'User 11', 'User 11', INTERVAL '0-11' YEAR TO MONTH, INTERVAL '11 11:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (12, 18, 180, 1800, 1.9, 3.0, 4.1, TRUE, 'User 12', X'75736572313232', '2023-09-18', '2023-09-18 18:00:00', '2023-09-18 18:00:00', '2023-09-18 18:00:00+00:00', ARRAY(34, 35, 36), STRUCT('User 12', 33), MAP(12, 'User 12'), 'User 12', 'User 12');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (12, 18, 180, 1800, 1.9, 3.0, 4.1, TRUE, 'User 12', X'75736572313232', '2023-09-18', '2023-09-18 18:00:00', '2023-09-18 18:00:00', '2023-09-18 18:00:00+00:00', ARRAY(34, 35, 36), STRUCT('User 12', 33), MAP(12, 'User 12'), 'User 12', 'User 12', INTERVAL '1-0' YEAR TO MONTH, INTERVAL '12 12:00:00' DAY TO SECOND);
 
-INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char)
-VALUES (13, 19, 190, 1900, 2.0, 3.1, 4.2, FALSE, 'User 13', X'75736572313333', '2023-09-19', '2023-09-19 19:00:00', '2023-09-19 19:00:00', '2023-09-19 19:00:00+00:00', ARRAY(37, 38, 39), STRUCT('User 13', 34), MAP(13, 'User 13'), 'User 13', 'User 13');
+INSERT INTO {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE} (id, byte, short, integer, float, number, decimal, is_active, name, data, date, timestamp, timestamp_ntz, timestamp_ltz, numbers, person, map, varchar, char, interval_ym, interval_dt)
+VALUES (13, 19, 190, 1900, 2.0, 3.1, 4.2, FALSE, 'User 13', X'75736572313333', '2023-09-19', '2023-09-19 19:00:00', '2023-09-19 19:00:00', '2023-09-19 19:00:00+00:00', ARRAY(37, 38, 39), STRUCT('User 13', 34), MAP(13, 'User 13'), 'User 13', 'User 13', INTERVAL '1-1' YEAR TO MONTH, INTERVAL '13 13:00:00' DAY TO SECOND);
 
 UPDATE {ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE}
     SET short = 0
