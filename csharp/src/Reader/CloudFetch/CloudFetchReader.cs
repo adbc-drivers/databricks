@@ -23,7 +23,6 @@
 
 using System;
 using System.Diagnostics;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
@@ -34,60 +33,41 @@ using Apache.Hive.Service.Rpc.Thrift;
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
-    /// Reader for CloudFetch results from Databricks Spark Thrift server.
+    /// Reader for CloudFetch results.
+    /// Protocol-agnostic - works with both Thrift and REST implementations.
     /// Handles downloading and processing URL-based result sets.
+    ///
+    /// Note: This reader receives an ITracingStatement for tracing support (required by TracingReader base class),
+    /// but does not use the Statement property for any CloudFetch operations. All CloudFetch logic is handled
+    /// through the downloadManager.
     /// </summary>
     internal sealed class CloudFetchReader : BaseDatabricksReader
     {
+        private readonly ITracingStatement _statement;
         private ICloudFetchDownloadManager? downloadManager;
         private ArrowStreamReader? currentReader;
         private IDownloadResult? currentDownloadResult;
-        private bool isPrefetchEnabled;
+
+        protected override ITracingStatement Statement => _statement;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
+        /// Protocol-agnostic constructor using dependency injection.
+        /// Works with both Thrift (IHiveServer2Statement) and REST (StatementExecutionStatement) protocols.
         /// </summary>
-        /// <param name="statement">The Databricks statement.</param>
+        /// <param name="statement">The tracing statement (ITracingStatement works for both protocols).</param>
         /// <param name="schema">The Arrow schema.</param>
-        /// <param name="isLz4Compressed">Whether the results are LZ4 compressed.</param>
+        /// <param name="response">The query response (nullable for REST API, which doesn't use IResponse).</param>
+        /// <param name="downloadManager">The download manager (already initialized and started).</param>
         public CloudFetchReader(
-            IHiveServer2Statement statement,
+            ITracingStatement statement,
             Schema schema,
-            IResponse response,
-            TFetchResultsResp? initialResults,
-            bool isLz4Compressed,
-            HttpClient httpClient)
-            : base(statement, schema, response, isLz4Compressed)
+            IResponse? response,
+            ICloudFetchDownloadManager downloadManager)
+            : base(statement, schema, response, isLz4Compressed: false) // isLz4Compressed handled by download manager
         {
-            // Check if prefetch is enabled
-            var connectionProps = statement.Connection.Properties;
-            isPrefetchEnabled = true; // Default to true
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchPrefetchEnabled, out string? prefetchEnabledStr))
-            {
-                if (bool.TryParse(prefetchEnabledStr, out bool parsedPrefetchEnabled))
-                {
-                    isPrefetchEnabled = parsedPrefetchEnabled;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchPrefetchEnabled}: {prefetchEnabledStr}. Expected a boolean value.");
-                }
-            }
-
-            // Initialize the download manager
-            // Activity context will be captured dynamically by CloudFetch components when events are logged
-            if (isPrefetchEnabled)
-            {
-                downloadManager = new CloudFetchDownloadManager(statement, schema, response, initialResults, isLz4Compressed, httpClient);
-                downloadManager.StartAsync().Wait();
-            }
-            else
-            {
-                // For now, we only support the prefetch implementation
-                // This flag is reserved for future use if we need to support a non-prefetch mode
-                downloadManager = new CloudFetchDownloadManager(statement, schema, response, initialResults, isLz4Compressed, httpClient);
-                downloadManager.StartAsync().Wait();
-            }
+            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
+            this.downloadManager = downloadManager ?? throw new ArgumentNullException(nameof(downloadManager));
         }
 
         /// <summary>
@@ -128,12 +108,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                     // If we don't have a current reader, get the next downloaded file
                     if (this.downloadManager != null)
                     {
-                        // Start the download manager if it's not already started
-                        if (!this.isPrefetchEnabled)
-                        {
-                            throw new InvalidOperationException("Prefetch must be enabled.");
-                        }
-
                         try
                         {
                             // Get the next downloaded file
@@ -156,7 +130,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                             }
                             catch (Exception ex)
                             {
-                                Debug.WriteLine($"Error creating Arrow reader: {ex.Message}");
+                                Activity.Current?.AddEvent("cloudfetch.arrow_reader_creation_error", [
+                                    new("error_message", ex.Message),
+                                    new("error_type", ex.GetType().Name)
+                                ]);
                                 this.currentDownloadResult.Dispose();
                                 this.currentDownloadResult = null;
                                 throw;
@@ -164,7 +141,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"Error getting next downloaded file: {ex.Message}");
+                            Activity.Current?.AddEvent("cloudfetch.get_next_file_error", [
+                                new("error_message", ex.Message),
+                                new("error_type", ex.GetType().Name)
+                            ]);
                             throw;
                         }
                     }

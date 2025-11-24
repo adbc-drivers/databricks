@@ -23,32 +23,19 @@
 
 using System;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Hive.Service.Rpc.Thrift;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Manages the CloudFetch download pipeline.
+    /// Protocol-agnostic - works with both Thrift and REST implementations.
+    /// Use <see cref="CloudFetchReaderFactory"/> to create instances.
     /// </summary>
     internal sealed class CloudFetchDownloadManager : ICloudFetchDownloadManager
     {
-        // Default values
-        private const int DefaultParallelDownloads = 3;
-        private const int DefaultPrefetchCount = 2;
-        private const int DefaultMemoryBufferSizeMB = 100;
-        private const bool DefaultPrefetchEnabled = true;
-        private const int DefaultTimeoutMinutes = 5;
-        private const int DefaultMaxUrlRefreshAttempts = 3;
-        private const int DefaultUrlExpirationBufferSeconds = 60;
-
-        private readonly IHiveServer2Statement _statement;
-        private readonly Schema _schema;
-        private readonly bool _isLz4Compressed;
         private readonly ICloudFetchMemoryBufferManager _memoryManager;
         private readonly BlockingCollection<IDownloadResult> _downloadQueue;
         private readonly BlockingCollection<IDownloadResult> _resultQueue;
@@ -61,200 +48,35 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloadManager"/> class.
+        /// All components are pre-built by the factory - this class only orchestrates the pipeline.
         /// </summary>
-        /// <param name="statement">The HiveServer2 statement.</param>
-        /// <param name="schema">The Arrow schema.</param>
-        /// <param name="isLz4Compressed">Whether the results are LZ4 compressed.</param>
+        /// <param name="resultFetcher">The result fetcher (protocol-specific, pre-configured).</param>
+        /// <param name="downloader">The downloader (pre-configured).</param>
+        /// <param name="memoryManager">The memory buffer manager.</param>
+        /// <param name="downloadQueue">The download queue (shared with fetcher and downloader).</param>
+        /// <param name="resultQueue">The result queue (shared with downloader).</param>
+        /// <param name="httpClient">The HTTP client for downloading files.</param>
+        /// <param name="config">The CloudFetch configuration.</param>
         public CloudFetchDownloadManager(
-            IHiveServer2Statement statement,
-            Schema schema,
-            IResponse response,
-            TFetchResultsResp? initialResults,
-            bool isLz4Compressed,
-            HttpClient httpClient)
-        {
-            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
-            _schema = schema ?? throw new ArgumentNullException(nameof(schema));
-            _isLz4Compressed = isLz4Compressed;
-
-            // Get configuration values from connection properties
-            var connectionProps = statement.Connection.Properties;
-
-            // Parse parallel downloads
-            int parallelDownloads = DefaultParallelDownloads;
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchParallelDownloads, out string? parallelDownloadsStr))
-            {
-                if (int.TryParse(parallelDownloadsStr, out int parsedParallelDownloads) && parsedParallelDownloads > 0)
-                {
-                    parallelDownloads = parsedParallelDownloads;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchParallelDownloads}: {parallelDownloadsStr}. Expected a positive integer.");
-                }
-            }
-
-            // Parse prefetch count
-            int prefetchCount = DefaultPrefetchCount;
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchPrefetchCount, out string? prefetchCountStr))
-            {
-                if (int.TryParse(prefetchCountStr, out int parsedPrefetchCount) && parsedPrefetchCount > 0)
-                {
-                    prefetchCount = parsedPrefetchCount;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchPrefetchCount}: {prefetchCountStr}. Expected a positive integer.");
-                }
-            }
-
-            // Parse memory buffer size
-            int memoryBufferSizeMB = DefaultMemoryBufferSizeMB;
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchMemoryBufferSize, out string? memoryBufferSizeStr))
-            {
-                if (int.TryParse(memoryBufferSizeStr, out int parsedMemoryBufferSize) && parsedMemoryBufferSize > 0)
-                {
-                    memoryBufferSizeMB = parsedMemoryBufferSize;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchMemoryBufferSize}: {memoryBufferSizeStr}. Expected a positive integer.");
-                }
-            }
-
-            // Parse max retries
-            int maxRetries = 3;
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchMaxRetries, out string? maxRetriesStr))
-            {
-                if (int.TryParse(maxRetriesStr, out int parsedMaxRetries) && parsedMaxRetries > 0)
-                {
-                    maxRetries = parsedMaxRetries;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchMaxRetries}: {maxRetriesStr}. Expected a positive integer.");
-                }
-            }
-
-            // Parse retry delay
-            int retryDelayMs = 500;
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchRetryDelayMs, out string? retryDelayStr))
-            {
-                if (int.TryParse(retryDelayStr, out int parsedRetryDelay) && parsedRetryDelay > 0)
-                {
-                    retryDelayMs = parsedRetryDelay;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchRetryDelayMs}: {retryDelayStr}. Expected a positive integer.");
-                }
-            }
-
-            // Parse timeout minutes
-            int timeoutMinutes = DefaultTimeoutMinutes;
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchTimeoutMinutes, out string? timeoutStr))
-            {
-                if (int.TryParse(timeoutStr, out int parsedTimeout) && parsedTimeout > 0)
-                {
-                    timeoutMinutes = parsedTimeout;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchTimeoutMinutes}: {timeoutStr}. Expected a positive integer.");
-                }
-            }
-
-            // Parse URL expiration buffer seconds
-            int urlExpirationBufferSeconds = DefaultUrlExpirationBufferSeconds;
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, out string? urlExpirationBufferStr))
-            {
-                if (int.TryParse(urlExpirationBufferStr, out int parsedUrlExpirationBuffer) && parsedUrlExpirationBuffer > 0)
-                {
-                    urlExpirationBufferSeconds = parsedUrlExpirationBuffer;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchUrlExpirationBufferSeconds}: {urlExpirationBufferStr}. Expected a positive integer.");
-                }
-            }
-
-            // Parse max URL refresh attempts
-            int maxUrlRefreshAttempts = DefaultMaxUrlRefreshAttempts;
-            if (connectionProps.TryGetValue(DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, out string? maxUrlRefreshAttemptsStr))
-            {
-                if (int.TryParse(maxUrlRefreshAttemptsStr, out int parsedMaxUrlRefreshAttempts) && parsedMaxUrlRefreshAttempts > 0)
-                {
-                    maxUrlRefreshAttempts = parsedMaxUrlRefreshAttempts;
-                }
-                else
-                {
-                    throw new ArgumentException($"Invalid value for {DatabricksParameters.CloudFetchMaxUrlRefreshAttempts}: {maxUrlRefreshAttemptsStr}. Expected a positive integer.");
-                }
-            }
-
-            // Initialize the memory manager
-            _memoryManager = new CloudFetchMemoryBufferManager(memoryBufferSizeMB);
-
-            // Initialize the queues with bounded capacity
-            _downloadQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), prefetchCount * 2);
-            _resultQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), prefetchCount * 2);
-
-            _httpClient = httpClient;
-            _httpClient.Timeout = TimeSpan.FromMinutes(timeoutMinutes);
-
-            // Initialize the result fetcher with URL management capabilities
-            _resultFetcher = new CloudFetchResultFetcher(
-                _statement,
-                response,
-                initialResults,
-                _memoryManager,
-                _downloadQueue,
-                _statement.BatchSize,
-                urlExpirationBufferSeconds);
-
-            // Initialize the downloader
-            _downloader = new CloudFetchDownloader(
-                _statement,
-                _downloadQueue,
-                _resultQueue,
-                _memoryManager,
-                _httpClient,
-                _resultFetcher,
-                parallelDownloads,
-                _isLz4Compressed,
-                maxRetries,
-                retryDelayMs,
-                maxUrlRefreshAttempts,
-                urlExpirationBufferSeconds);
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="CloudFetchDownloadManager"/> class.
-        /// This constructor is intended for testing purposes only.
-        /// </summary>
-        /// <param name="statement">The HiveServer2 statement.</param>
-        /// <param name="schema">The Arrow schema.</param>
-        /// <param name="isLz4Compressed">Whether the results are LZ4 compressed.</param>
-        /// <param name="resultFetcher">The result fetcher.</param>
-        /// <param name="downloader">The downloader.</param>
-        internal CloudFetchDownloadManager(
-            DatabricksStatement statement,
-            Schema schema,
-            bool isLz4Compressed,
             ICloudFetchResultFetcher resultFetcher,
-            ICloudFetchDownloader downloader)
+            ICloudFetchDownloader downloader,
+            ICloudFetchMemoryBufferManager memoryManager,
+            BlockingCollection<IDownloadResult> downloadQueue,
+            BlockingCollection<IDownloadResult> resultQueue,
+            HttpClient httpClient,
+            CloudFetchConfiguration config)
         {
-            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
-            _schema = schema ?? throw new ArgumentNullException(nameof(schema));
-            _isLz4Compressed = isLz4Compressed;
             _resultFetcher = resultFetcher ?? throw new ArgumentNullException(nameof(resultFetcher));
             _downloader = downloader ?? throw new ArgumentNullException(nameof(downloader));
+            _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
+            _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
+            _resultQueue = resultQueue ?? throw new ArgumentNullException(nameof(resultQueue));
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
 
-            // Create empty collections for the test
-            _memoryManager = new CloudFetchMemoryBufferManager(DefaultMemoryBufferSizeMB);
-            _downloadQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
-            _resultQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
-            _httpClient = new HttpClient();
+            if (config == null) throw new ArgumentNullException(nameof(config));
+
+            // Set HTTP client timeout
+            _httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);
         }
 
         /// <inheritdoc />
