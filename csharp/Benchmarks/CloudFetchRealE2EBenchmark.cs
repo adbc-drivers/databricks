@@ -405,10 +405,10 @@ namespace Apache.Arrow.Adbc.Benchmarks
             else if (!string.IsNullOrEmpty(_testConfig.client_id) && !string.IsNullOrEmpty(_testConfig.client_secret))
             {
                 // OAuth client credentials authentication
-                parameters[DatabricksParameters.AuthType] = "oauth";
-                parameters[DatabricksParameters.GrantType] = "client_credentials";
-                parameters[DatabricksParameters.ClientId] = _testConfig.client_id!;
-                parameters[DatabricksParameters.ClientSecret] = _testConfig.client_secret!;
+                parameters[SparkParameters.AuthType] = "oauth";
+                parameters[DatabricksParameters.OAuthGrantType] = "client_credentials";
+                parameters[DatabricksParameters.OAuthClientId] = _testConfig.client_id!;
+                parameters[DatabricksParameters.OAuthClientSecret] = _testConfig.client_secret!;
             }
 
             var driver = new DatabricksDriver();
