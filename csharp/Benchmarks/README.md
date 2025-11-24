@@ -193,7 +193,7 @@ Each job:
 - Takes two parameters: workspace directory and target framework (net8.0 or net472)
 - Validates framework parameter
 - Checks for `DATABRICKS_TEST_CONFIG_FILE` environment variable
-- Runs BenchmarkDotNet with JSON, HTML, and CSV exporters
+- Runs BenchmarkDotNet with JSON exporter
 - Saves results to `csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/`
 
 ---
@@ -249,9 +249,7 @@ After each CI run, detailed results are uploaded as artifacts (90-day retention)
 - `benchmark-results-net472`: Results from .NET Framework 4.7.2 benchmark
 
 Each artifact contains:
-- **HTML report** (`*-report.html`): Human-readable summary
-- **JSON report** (`*-report-full-compressed.json`): Detailed metrics
-- **CSV export** (`*-report.csv`): Spreadsheet-compatible data
+- **JSON report** (`*-report-full-compressed.json`): Complete benchmark results with detailed metrics used for trend tracking
 
 ### Key Metrics
 

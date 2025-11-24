@@ -56,7 +56,7 @@ pushd ${benchmark_dir}
 # Run the CloudFetch E2E benchmark
 dotnet run -c Release --project DatabricksBenchmarks.csproj --framework $framework -- \
   --filter "*CloudFetchRealE2E*" \
-  --exporters json html csv
+  --exporters json
 
 echo ""
 echo "=================================================="
