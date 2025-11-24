@@ -257,28 +257,30 @@ Each artifact contains:
 
 **Tracked in GitHub Pages (trend analysis):**
 
-1. **Peak Memory (MB)**: Maximum working set memory (private bytes) during execution
+1. **Execution Time (seconds)**: End-to-end execution time including query execution, CloudFetch downloads, LZ4 decompression, and batch consumption
+   - **Mean**: Average execution time across iterations
+   - **Min**: Best (fastest) execution time - tracked across commits to monitor performance improvements
+   - **Max**: Worst (slowest) execution time
+   - **Median**: Middle value, less sensitive to outliers
+   - Lower is better
+   - Source: BenchmarkDotNet timing measurements
+
+2. **Peak Memory (MB)**: Maximum working set memory (private bytes) during execution
    - Lower is better
    - Alert threshold: 150% increase (triggers if memory reaches 2.5x baseline)
    - Source: Custom metrics from `Process.PrivateMemorySize64`
 
-2. **Allocated Memory (MB)**: Total managed memory allocated during execution
+3. **Allocated Memory (MB)**: Total managed memory allocated during execution
    - Lower is better
    - Alert threshold: 150%
    - Source: BenchmarkDotNet's `MemoryDiagnoser`
 
-3. **Gen2 Collections**: Number of full garbage collections
+4. **Gen2 Collections**: Number of full garbage collections
    - Lower is better (indicates less memory pressure)
    - Alert threshold: 150%
    - Source: BenchmarkDotNet's `MemoryDiagnoser`
 
 **Additional metrics in BenchmarkDotNet reports:**
-
-4. **Mean/Median/Min/Max Time**: End-to-end execution time including:
-   - Query execution
-   - CloudFetch downloads
-   - LZ4 decompression
-   - Batch consumption with simulated delays
 
 5. **Total Rows/Batches**: Data volume processed
 
@@ -289,8 +291,9 @@ Each artifact contains:
 ### Trend Analysis
 
 The GitHub Pages dashboard shows:
-- **Performance over time**: Line chart of memory usage across commits
-- **Regression detection**: Automatic alerts when performance degrades
+- **Execution time trends**: Line chart of Mean/Min/Max execution time across commits
+- **Memory usage trends**: Line chart of Peak Memory, Allocated Memory, and Gen2 Collections across commits
+- **Regression detection**: Automatic alerts when performance degrades (memory increases by 150%+)
 - **Comparison view**: Compare performance between different commits
 
 ---
