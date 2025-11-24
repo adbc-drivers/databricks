@@ -324,6 +324,81 @@ The GitHub Pages dashboard shows:
 
 ---
 
+## Frequently Asked Questions
+
+### Does the benchmark run on every commit to main?
+
+**No** - Benchmarks only run when relevant files change:
+
+```yaml
+paths:
+  - '.github/workflows/benchmarks.yml'  # Workflow changes
+  - 'csharp/src/**'                     # Driver source code
+  - 'csharp/Benchmarks/**'              # Benchmark code
+```
+
+**Runs when:**
+- ✅ You change driver source code
+- ✅ You change benchmark code
+- ✅ You modify the workflow itself
+
+**Doesn't run when:**
+- ❌ Documentation-only changes
+- ❌ Test-only changes (unless they affect src/)
+- ❌ Changes to unrelated parts of the repository
+
+This selective triggering saves CI resources and provides faster feedback for non-performance changes.
+
+### Do performance alerts block check-ins?
+
+**No** - Alerts are informational only and do **not** block merges or fail the workflow.
+
+**Configuration:**
+```yaml
+fail-on-alert: false            # Workflow passes even with alerts
+comment-on-alert: false         # No automatic PR comments
+alert-threshold: '150%'         # Alert when memory increases by 2.5x
+```
+
+**What happens when an alert triggers:**
+
+1. ✅ Workflow completes successfully (does not fail)
+2. ✅ Alert appears in GitHub Pages dashboard
+3. ✅ Maintainers are mentioned for awareness (`@databricks/adbc-csharp-maintainers`)
+4. ✅ Commit is already merged (alert happens post-merge on main branch)
+5. 🔍 Team investigates the regression
+6. 🔧 Follow-up PR created if action is needed
+
+**Why non-blocking?**
+- Critical bug fixes shouldn't be blocked by performance alerts
+- Performance trade-offs are sometimes intentional (e.g., more features may require more memory)
+- Alerts provide visibility while allowing teams to make informed decisions
+- Enables faster iteration with maintained oversight
+
+### How do I investigate a performance regression?
+
+When an alert triggers:
+
+1. **Check GitHub Pages dashboard** - View the trend chart to see the increase
+2. **Download artifacts** - Get the detailed benchmark reports from the workflow run
+3. **Compare commits** - Use the comparison view to see what changed
+4. **Review the PR** - Look at the code changes that caused the regression
+5. **Assess trade-off** - Determine if the regression is acceptable (e.g., new feature adds value)
+6. **Create follow-up** - If needed, create a PR to optimize and reduce memory usage
+
+### Can I run benchmarks on a PR before merging?
+
+Yes - Use manual workflow trigger:
+
+1. Push your changes to a feature branch
+2. Temporarily add your branch to the workflow triggers (for testing only)
+3. Remove the temporary trigger before merging
+4. Or, run benchmarks locally using the Quick Start instructions
+
+**Note**: Only main branch benchmarks are tracked in GitHub Pages to maintain clean historical data.
+
+---
+
 ## Best Practices
 
 1. **Run benchmarks on stable infrastructure**: CI uses GitHub-hosted runners which may have variable performance
