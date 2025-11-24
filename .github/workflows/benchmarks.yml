@@ -21,6 +21,7 @@ on:
   push:
     branches:
       - main
+      - feat/benchmark-cicd-automation  # TODO: Remove before merge
     paths:
       - '.github/workflows/benchmarks.yml'
       - 'csharp/src/**'
@@ -45,7 +46,8 @@ jobs:
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -67,8 +69,10 @@ jobs:
           cat > ~/.databricks/connection.json << EOF
           {
             "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
-            "auth_type": "token",
-            "token": "${{ env.DATABRICKS_TOKEN }}",
+            "auth_type": "oauth",
+            "grant_type": "client_credentials",
+            "client_id": "${{ env.DATABRICKS_CLIENT_ID }}",
+            "client_secret": "${{ env.DATABRICKS_CLIENT_SECRET }}",
             "type": "databricks",
             "catalog": "main",
             "db_schema": "ADBC_Testing",
@@ -175,7 +179,8 @@ jobs:
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -200,8 +205,10 @@ jobs:
 
           $config = @{
             uri = "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}"
-            auth_type = "token"
-            token = "${{ env.DATABRICKS_TOKEN }}"
+            auth_type = "oauth"
+            grant_type = "client_credentials"
+            client_id = "${{ env.DATABRICKS_CLIENT_ID }}"
+            client_secret = "${{ env.DATABRICKS_CLIENT_SECRET }}"
             type = "databricks"
             catalog = "main"
             db_schema = "ADBC_Testing"

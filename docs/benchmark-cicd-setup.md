@@ -66,7 +66,8 @@ The benchmark workflow requires the following secrets to be configured in the re
 
 - `DATABRICKS_HOST`: Databricks workspace hostname (e.g., `adb-xxx.azuredatabricks.net`)
 - `TEST_PECO_WAREHOUSE_HTTP_PATH`: SQL warehouse HTTP path (e.g., `/sql/1.0/warehouses/xxx`)
-- `DATABRICKS_TOKEN`: Databricks personal access token with SQL execution permissions
+- `DATABRICKS_TEST_CLIENT_ID`: OAuth client ID for M2M authentication
+- `DATABRICKS_TEST_CLIENT_SECRET`: OAuth client secret for M2M authentication
 
 ### Enabling Trend Tracking (GitHub Pages)
 
