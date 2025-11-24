@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using Apache.Arrow.Adbc.Drivers.Databricks;
 using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
 using Xunit;
 using Xunit.Abstractions;
@@ -115,12 +116,23 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
 
             bool hasToken = parameters.TryGetValue(SparkParameters.Token, out var token) && !string.IsNullOrEmpty(token);
-            bool hasAccessToken = parameters.TryGetValue(SparkParameters.Token, out var access_token) && !string.IsNullOrEmpty(access_token);
+            bool hasAccessToken = parameters.TryGetValue(SparkParameters.AccessToken, out var access_token) && !string.IsNullOrEmpty(access_token);
             bool hasUsername = parameters.TryGetValue(AdbcOptions.Username, out var username) && !string.IsNullOrEmpty(username);
             bool hasPassword = parameters.TryGetValue(AdbcOptions.Password, out var password) && !string.IsNullOrEmpty(password);
+            bool hasOAuthClientId = parameters.TryGetValue(DatabricksParameters.OAuthClientId, out var clientId) && !string.IsNullOrEmpty(clientId);
+            bool hasOAuthClientSecret = parameters.TryGetValue(DatabricksParameters.OAuthClientSecret, out var clientSecret) && !string.IsNullOrEmpty(clientSecret);
+
             if (hasToken)
             {
                 parameters[SparkParameters.Token] = "invalid-token";
+            }
+            else if (hasOAuthClientId && hasOAuthClientSecret)
+            {
+                parameters[DatabricksParameters.OAuthClientSecret] = "invalid-client-secret";
+                if (hasAccessToken)
+                {
+                    parameters.Remove(SparkParameters.AccessToken);
+                }
             }
             else if (hasAccessToken)
             {
@@ -132,7 +144,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
             }
             else
             {
-                Assert.Fail($"Unexpected configuration. Must provide '{SparkParameters.Token}' or '{SparkParameters.AccessToken}' or '{AdbcOptions.Username}' and '{AdbcOptions.Password}'.");
+                Assert.Fail($"Unexpected configuration. Must provide '{SparkParameters.Token}' or '{SparkParameters.AccessToken}' or OAuth client credentials or '{AdbcOptions.Username}' and '{AdbcOptions.Password}'.");
             }
 
             AdbcDatabase database = driver.Open(parameters);

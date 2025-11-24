@@ -52,6 +52,10 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
         [MemberData(nameof(TimestampExtendedData), "TIMESTAMP_NTZ")]
         public async Task TestTimestampNoTimezoneDataDatabricks(DateTimeOffset value, string columnType)
         {
+            // Skip year 1 AD for TIMESTAMP_NTZ due to .NET DateTimeOffset UTC conversion limitations
+            Skip.If(value.Year == 1 && columnType == "TIMESTAMP_NTZ",
+                    "DateTimeOffset.ParseExact cannot handle year 1 AD with UTC conversion for TIMESTAMP_NTZ");
+
             string columnName = "TIMESTAMPTYPE";
             using TemporaryTable table = await NewTemporaryTableAsync(Statement, string.Format("{0} {1}", columnName, columnType));
 
