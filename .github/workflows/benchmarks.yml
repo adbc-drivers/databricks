@@ -21,7 +21,6 @@ on:
   push:
     branches:
       - main
-      - feat/benchmark-cicd-automation  # TODO: Remove before merge
     paths:
       - '.github/workflows/benchmarks.yml'
       - 'csharp/src/**'
