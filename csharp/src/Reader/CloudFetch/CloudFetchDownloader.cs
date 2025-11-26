@@ -30,7 +30,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Tracing;
-using K4os.Compression.LZ4.Streams;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
@@ -39,7 +38,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
     /// </summary>
     internal sealed class CloudFetchDownloader : ICloudFetchDownloader, IActivityTracer
     {
-        private readonly ITracingStatement _statement;
+        private readonly IHiveServer2Statement _statement;
         private readonly BlockingCollection<IDownloadResult> _downloadQueue;
         private readonly BlockingCollection<IDownloadResult> _resultQueue;
         private readonly ICloudFetchMemoryBufferManager _memoryManager;
@@ -61,7 +60,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class.
         /// </summary>
-        /// <param name="statement">The tracing statement for Activity context.</param>
+        /// <param name="statement">The Hive2 statement for Activity context and connection access.</param>
         /// <param name="downloadQueue">The queue of downloads to process.</param>
         /// <param name="resultQueue">The queue to add completed downloads to.</param>
         /// <param name="memoryManager">The memory buffer manager.</param>
@@ -74,7 +73,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <param name="maxUrlRefreshAttempts">The maximum number of URL refresh attempts.</param>
         /// <param name="urlExpirationBufferSeconds">Buffer time in seconds before URL expiration to trigger refresh.</param>
         public CloudFetchDownloader(
-            ITracingStatement statement,
+            IHiveServer2Statement statement,
             BlockingCollection<IDownloadResult> downloadQueue,
             BlockingCollection<IDownloadResult> resultQueue,
             ICloudFetchMemoryBufferManager memoryManager,
@@ -489,7 +488,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 }
 
                 // Process the downloaded file data
-                MemoryStream dataStream;
+                Stream dataStream;
                 long actualSize = fileData.Length;
 
                 // If the data is LZ4 compressed, decompress it
@@ -498,14 +497,20 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                     try
                     {
                         var decompressStopwatch = Stopwatch.StartNew();
-                        dataStream = new MemoryStream();
-                        using (var inputStream = new MemoryStream(fileData))
-                        using (var decompressor = LZ4Stream.Decode(inputStream))
-                        {
-                            await decompressor.CopyToAsync(dataStream, 81920, cancellationToken).ConfigureAwait(false);
-                        }
-                        dataStream.Position = 0;
+
+                        // Use shared Lz4Utilities for decompression with both RecyclableMemoryStream and ArrayPool
+                        // The returned stream must be disposed by Arrow after reading
+                        var connection = (DatabricksConnection)_statement.Connection;
+                        dataStream = await Lz4Utilities.DecompressLz4Async(
+                            fileData,
+                            connection.RecyclableMemoryStreamManager,
+                            connection.Lz4BufferPool,
+                            cancellationToken).ConfigureAwait(false);
+
                         decompressStopwatch.Stop();
+
+                        // Calculate throughput metrics
+                        double compressionRatio = (double)dataStream.Length / actualSize;
 
                         activity?.AddEvent("cloudfetch.decompression_complete", [
                             new("offset", downloadResult.Link.StartRowOffset),
@@ -515,7 +520,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                             new("compressed_size_kb", actualSize / 1024.0),
                             new("decompressed_size_bytes", dataStream.Length),
                             new("decompressed_size_kb", dataStream.Length / 1024.0),
-                            new("compression_ratio", (double)dataStream.Length / actualSize)
+                            new("compression_ratio", compressionRatio)
                         ]);
 
                         actualSize = dataStream.Length;

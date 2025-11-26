@@ -255,3 +255,27 @@ __marimo__/
 
 .doit.db
 validation-report.xml
+
+# .NET / C# build artifacts
+bin/
+obj/
+*.nupkg
+*.snupkg
+*.user
+*.suo
+*.cache
+*.docstates
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+[Oo]bj/
+[Bb]in/
+[Bb]uild/
+*.pidb
+*.svclog
+*.scc
+
+# BenchmarkDotNet artifacts
+BenchmarkDotNet.Artifacts/
+cloudfetch_benchmark_metrics.json

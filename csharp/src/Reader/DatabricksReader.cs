@@ -152,7 +152,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                             new("row_count", batch.RowCount)
                         ]);
 
-                        dataToUse = Lz4Utilities.DecompressLz4(batch.Batch);
+                        // Pass the connection's buffer pool for efficient LZ4 decompression
+                        var connection = (DatabricksConnection)this.statement.Connection;
+                        dataToUse = Lz4Utilities.DecompressLz4(batch.Batch, connection.Lz4BufferPool);
 
                         activity?.AddEvent("databricks_reader.decompress_completed", [
                             new("batch_index", this.index),
