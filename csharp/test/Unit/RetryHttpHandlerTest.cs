@@ -21,11 +21,13 @@
 * limitations under the License.
 */
 
+using System;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Databricks;
+using Apache.Arrow.Adbc.Tracing;
 using Xunit;
 
 namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
@@ -41,6 +43,52 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
     public class RetryHttpHandlerTest
     {
         /// <summary>
+        /// Mock activity tracer for testing.
+        /// </summary>
+        private class MockActivityTracer : IActivityTracer
+        {
+            public string? TraceParent { get; set; }
+            public ActivityTrace Trace => new ActivityTrace("TestSource", "1.0.0", TraceParent);
+            public string AssemblyVersion => "1.0.0";
+            public string AssemblyName => "TestAssembly";
+        }
+
+        /// <summary>
+        /// Tests that RetryHttpHandler implements IActivityTracer and uses TraceActivityAsync for logging.
+        /// </summary>
+        [Fact]
+        public async Task RetryHandlerUsesTraceActivityAsyncForLogging()
+        {
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Headers = { { "Retry-After", "1" } },
+                    Content = new StringContent("Service Unavailable")
+                });
+
+            mockHandler.SetResponseAfterRetryCount(2, new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("Success")
+            });
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true);
+
+            // Verify IActivityTracer implementation
+            IActivityTracer tracerInterface = retryHandler;
+            Assert.NotNull(tracerInterface);
+            Assert.Equal("1.0.0", tracerInterface.AssemblyVersion);
+            Assert.Equal("TestAssembly", tracerInterface.AssemblyName);
+
+            // Verify retry behavior works
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(3, mockHandler.RequestCount);
+        }
+
+        /// <summary>
         /// Tests that the RetryHttpHandler properly processes 503 responses with Retry-After headers.
         /// </summary>
         [Fact]
@@ -55,7 +103,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with retry enabled and a 5-second timeout
-            var retryHandler = new RetryHttpHandler(mockHandler, 5, 5, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 5, 5, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -90,7 +139,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with retry enabled and a 1-second timeout
-            var retryHandler = new RetryHttpHandler(mockHandler, 1, 1, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 1, 1, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -121,7 +171,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with retry enabled
-            var retryHandler = new RetryHttpHandler(mockHandler, 5, 5, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 5, 5, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -149,7 +200,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with retry enabled
-            var retryHandler = new RetryHttpHandler(mockHandler, 5, 5, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 5, 5, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -197,7 +249,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
             });
 
             // Create the RetryHttpHandler with retry enabled
-            var retryHandler = new RetryHttpHandler(mockHandler, 5, 5, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 5, 5, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -229,7 +282,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with retry enabled
-            var retryHandler = new RetryHttpHandler(mockHandler, 5, 5, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 5, 5, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -263,7 +317,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with retry enabled and a generous timeout
-            var retryHandler = new RetryHttpHandler(mockHandler, 10, 10, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -302,7 +357,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with a short timeout to make the test run faster
-            var retryHandler = new RetryHttpHandler(mockHandler, 3, 3, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 3, 3, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -334,7 +390,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with different timeouts: 900s for ServiceUnavailable, 2s for TooManyRequests
-            var retryHandler = new RetryHttpHandler(mockHandler, 900, 2, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 900, 2, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
@@ -369,7 +426,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                 });
 
             // Create the RetryHttpHandler with different timeouts: 900s for ServiceUnavailable, 1s for TooManyRequests
-            var retryHandler = new RetryHttpHandler(mockHandler, 900, 1, true, true);
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 900, 1, true, true);
 
             // Create an HttpClient with our handler
             var httpClient = new HttpClient(retryHandler);
