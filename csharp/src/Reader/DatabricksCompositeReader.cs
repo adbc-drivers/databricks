@@ -238,16 +238,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    activity?.AddException(ex, [new("error.context", "composite_reader.dispose")]);
-                }
                 finally
                 {
                     base.Dispose(disposing);
                     _disposed = true;
                 }
-            }, activityName: "Dispose");
+            }, activityName: nameof(DatabricksCompositeReader) + "." + nameof(Dispose));
         }
 
         private void StopOperationStatusPoller()

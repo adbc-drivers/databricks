@@ -70,17 +70,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    activity?.AddException(ex, [new("error.context", "reader.dispose")]);
-                    throw;
-                }
                 finally
                 {
                     base.Dispose(disposing);
                     isDisposed = true;
                 }
-            }, activityName: "Dispose");
+            }, activityName: nameof(BaseDatabricksReader) + "." + nameof(Dispose));
         }
 
         /// <summary>
@@ -104,16 +99,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                     activity?.AddEvent("reader.close_operation_skipped", [new("reason", "already_closed")]);
                     return false;
                 }
-                catch (Exception ex)
-                {
-                    activity?.AddException(ex, [new("error.context", "reader.close_operation")]);
-                    throw;
-                }
                 finally
                 {
                     isClosed = true;
                 }
-            });
+            }, activityName: nameof(BaseDatabricksReader) + "." + nameof(CloseOperationAsync));
         }
 
         protected void ThrowIfDisposed()

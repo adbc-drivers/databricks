@@ -181,7 +181,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                     };
 
                     activity?.AddException(ex, [
-                        new("error.context", "databricks_reader.process_batch"),
                         new("batch_index", this.index),
                         new("is_lz4_compressed", isLz4Compressed)
                     ]);
@@ -189,7 +188,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                     throw new AdbcException(errorMessage, ex);
                 }
                 this.index++;
-            });
+            }, activityName: nameof(DatabricksReader) + "." + nameof(ProcessFetchedBatches));
         }
 
         sealed class SingleBatch : IArrowReader
