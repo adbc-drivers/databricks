@@ -407,14 +407,6 @@ Yes - Use manual workflow trigger:
 
 ---
 
-## Security Considerations
-
-- Databricks credentials are stored as GitHub secrets and never exposed in logs
-- Config files are created at runtime and contain credentials only in memory
-- Benchmark results do not contain sensitive data (only performance metrics)
-
----
-
 ## References
 
 - [BenchmarkDotNet Documentation](https://benchmarkdotnet.org/)
