@@ -273,6 +273,10 @@ namespace Apache.Arrow.Adbc.Benchmarks
     {
         public string? uri { get; set; }
         public string? token { get; set; }
+        public string? auth_type { get; set; }
+        public string? grant_type { get; set; }
+        public string? client_id { get; set; }
+        public string? client_secret { get; set; }
         public string? query { get; set; }
         public string? type { get; set; }
         public string? catalog { get; set; }
@@ -345,9 +349,19 @@ namespace Apache.Arrow.Adbc.Benchmarks
             _testConfig = JsonSerializer.Deserialize<DatabricksTestConfig>(configJson)
                 ?? throw new InvalidOperationException("Failed to parse config file");
 
-            if (string.IsNullOrEmpty(_testConfig.uri) || string.IsNullOrEmpty(_testConfig.token))
+            if (string.IsNullOrEmpty(_testConfig.uri))
             {
-                throw new InvalidOperationException("Config file must contain 'uri' and 'token' fields");
+                throw new InvalidOperationException("Config file must contain 'uri' field");
+            }
+
+            // Validate authentication: either token or OAuth client credentials
+            bool hasToken = !string.IsNullOrEmpty(_testConfig.token);
+            bool hasOAuth = !string.IsNullOrEmpty(_testConfig.client_id) && !string.IsNullOrEmpty(_testConfig.client_secret);
+
+            if (!hasToken && !hasOAuth)
+            {
+                throw new InvalidOperationException(
+                    "Config file must contain either 'token' field or both 'client_id' and 'client_secret' fields for OAuth authentication");
             }
 
             if (string.IsNullOrEmpty(_testConfig.query))
@@ -376,12 +390,26 @@ namespace Apache.Arrow.Adbc.Benchmarks
             var parameters = new Dictionary<string, string>
             {
                 [AdbcOptions.Uri] = _testConfig.uri!,
-                [SparkParameters.Token] = _testConfig.token!,
                 [DatabricksParameters.UseCloudFetch] = "true",
                 [DatabricksParameters.EnableDirectResults] = "true",
                 [DatabricksParameters.CanDecompressLz4] = "true",
                 [DatabricksParameters.MaxBytesPerFile] = "10485760", // 10MB per file
             };
+
+            // Add authentication parameters based on config
+            if (!string.IsNullOrEmpty(_testConfig.token))
+            {
+                // Token-based authentication
+                parameters[SparkParameters.Token] = _testConfig.token!;
+            }
+            else if (!string.IsNullOrEmpty(_testConfig.client_id) && !string.IsNullOrEmpty(_testConfig.client_secret))
+            {
+                // OAuth client credentials authentication
+                parameters[SparkParameters.AuthType] = "oauth";
+                parameters[DatabricksParameters.OAuthGrantType] = "client_credentials";
+                parameters[DatabricksParameters.OAuthClientId] = _testConfig.client_id!;
+                parameters[DatabricksParameters.OAuthClientSecret] = _testConfig.client_secret!;
+            }
 
             var driver = new DatabricksDriver();
             var database = driver.Open(parameters);

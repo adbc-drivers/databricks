@@ -19,10 +19,10 @@
 
 set -ex
 
-# Run Databricks driver E2E tests
+# Run all tests (both E2E and Unit tests)
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-# Run all E2E tests including Auth tests
-dotnet test --filter "FullyQualifiedName~ClientTests|FullyQualifiedName~CloudFetchE2ETest|FullyQualifiedName~ComplexTypesValueTests|FullyQualifiedName~DatabricksConnectionTest|FullyQualifiedName~DateTimeValueTests|FullyQualifiedName~DriverTests|FullyQualifiedName~NumericValueTests|FullyQualifiedName~OAuthClientCredentialsProviderTests|FullyQualifiedName~ServerSidePropertyE2ETest|FullyQualifiedName~StatementTests|FullyQualifiedName~StringValueTests|FullyQualifiedName~TelemetryTests|FullyQualifiedName~TokenExchangeTests" --verbosity normal
+# Run all tests in the Databricks test project
+dotnet test --verbosity normal
 popd

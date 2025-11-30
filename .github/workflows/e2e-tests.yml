@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: E2E Tests
+name: Tests Workflow
 
 on:
   push:
@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-e2e-tests:
+  run-all-tests:
     runs-on: ubuntu-latest
     environment: azure-prod
     env:
@@ -111,7 +111,7 @@ jobs:
         run: |
           ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
 
-      - name: Test Databricks E2E
+      - name: Run All Tests
         shell: bash
         run: |
           export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
