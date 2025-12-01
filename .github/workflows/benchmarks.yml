@@ -190,6 +190,38 @@ jobs:
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
           benchmark-data-dir-path: 'bench/net8'
 
+      - name: Download baseline benchmark data from gh-pages
+        if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
+        run: |
+          # Create cache directory
+          mkdir -p ./cache
+
+          # Fetch gh-pages branch
+          git fetch origin gh-pages --depth=1
+
+          # Extract baseline data from gh-pages
+          git show origin/gh-pages:bench/net8/data.js > ./cache/data.js || echo "[]" > ./cache/data.js
+
+          # Convert from data.js format to JSON
+          # data.js has format: window.BENCHMARK_DATA = {...}
+          # We need to extract the last entry's benches array
+          node -e "
+            const fs = require('fs');
+            const content = fs.readFileSync('./cache/data.js', 'utf8');
+            const dataMatch = content.match(/window\.BENCHMARK_DATA\s*=\s*(.+)/s);
+            if (dataMatch) {
+              const data = JSON.parse(dataMatch[1]);
+              const lastEntry = data.entries[data.entries.length - 1];
+              if (lastEntry) {
+                fs.writeFileSync('./cache/benchmark-data.json', JSON.stringify(lastEntry.benches, null, 2));
+              } else {
+                fs.writeFileSync('./cache/benchmark-data.json', '[]');
+              }
+            } else {
+              fs.writeFileSync('./cache/benchmark-data.json', '[]');
+            }
+          " || echo "[]" > ./cache/benchmark-data.json
+
       - name: Compare with baseline and comment on PR
         uses: benchmark-action/github-action-benchmark@v1
         if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
@@ -359,6 +391,41 @@ jobs:
           fail-on-alert: false
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
           benchmark-data-dir-path: 'bench/net472'
+
+      - name: Download baseline benchmark data from gh-pages
+        if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          # Create cache directory
+          New-Item -ItemType Directory -Force -Path ./cache | Out-Null
+
+          # Fetch gh-pages branch
+          git fetch origin gh-pages --depth=1
+
+          # Extract baseline data from gh-pages
+          try {
+            git show origin/gh-pages:bench/net472/data.js | Out-File -FilePath ./cache/data.js -Encoding utf8
+          } catch {
+            "[]" | Out-File -FilePath ./cache/data.js -Encoding utf8
+          }
+
+          # Convert from data.js format to JSON
+          try {
+            $content = Get-Content ./cache/data.js -Raw
+            if ($content -match 'window\.BENCHMARK_DATA\s*=\s*(.+)') {
+              $data = $matches[1] | ConvertFrom-Json
+              $lastEntry = $data.entries[-1]
+              if ($lastEntry) {
+                $lastEntry.benches | ConvertTo-Json -Depth 10 | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+              } else {
+                "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+              }
+            } else {
+              "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+            }
+          } catch {
+            "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+          }
 
       - name: Compare with baseline and comment on PR
         uses: benchmark-action/github-action-benchmark@v1
