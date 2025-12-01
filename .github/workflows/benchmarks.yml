@@ -26,6 +26,11 @@ on:
       - '.github/workflows/benchmarks.yml'
       - 'csharp/src/**'
       - 'csharp/Benchmarks/**'
+  pull_request:
+    paths:
+      - '.github/workflows/benchmarks.yml'
+      - 'csharp/src/**'
+      - 'csharp/Benchmarks/**'
   workflow_dispatch:
     inputs:
       query:
