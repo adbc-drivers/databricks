@@ -192,7 +192,7 @@ jobs:
 
       - name: Compare with baseline and comment on PR
         uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'pull_request'
+        if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
         with:
           tool: 'customSmallerIsBetter'
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
@@ -362,7 +362,7 @@ jobs:
 
       - name: Compare with baseline and comment on PR
         uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'pull_request'
+        if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
         with:
           tool: 'customSmallerIsBetter'
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
