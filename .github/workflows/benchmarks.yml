@@ -39,7 +39,8 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write  # Required to push benchmark results to gh-pages branch
+  contents: write       # Required to push benchmark results to gh-pages branch
+  pull-requests: write  # Required to post comparison comments on PRs
 
 jobs:
   benchmark-net8:
