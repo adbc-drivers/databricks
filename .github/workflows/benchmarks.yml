@@ -162,7 +162,7 @@ jobs:
 
       - name: Store benchmark results for trend tracking
         uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/eric/fix-benchmark-permissions')
         with:
           tool: 'customSmallerIsBetter'
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
@@ -302,7 +302,7 @@ jobs:
 
       - name: Store benchmark results for trend tracking
         uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/eric/fix-benchmark-permissions')
         with:
           tool: 'customSmallerIsBetter'
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
