@@ -230,6 +230,7 @@ jobs:
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: false
+          comment-always: true
           alert-threshold: '110%'
           comment-on-alert: true
           fail-on-alert: false
