@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764572340689,
+  "lastUpdate": 1764573107844,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -38,6 +38,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Gen2 Collections",
             "value": 61,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "b17c1200e3fff8c0d8eef7cfaf9f9c7ffe5e39f4",
+          "message": "feat(ci): add Min Execution Time to benchmark tracking\n\nExtracts and tracks the minimum execution time from BenchmarkDotNet results.\nThis metric appears at the top of the GitHub Pages dashboard.\n\nThe Min time represents the best (fastest) execution time across all\nbenchmark iterations, useful for tracking performance improvements.\n\nTime is converted from nanoseconds to seconds with 3 decimal places.",
+          "timestamp": "2025-11-30T23:09:19-08:00",
+          "tree_id": "a230f11e784826680a2c85fbe5006f57a2d03ac4",
+          "url": "https://github.com/adbc-drivers/databricks/commit/b17c1200e3fff8c0d8eef7cfaf9f9c7ffe5e39f4"
+        },
+        "date": 1764573107107,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Min Execution Time (s)",
+            "value": 4.14,
+            "unit": "seconds"
+          },
+          {
+            "name": "Peak Memory (MB)",
+            "value": 427.7265625,
+            "unit": "MB"
+          },
+          {
+            "name": "Allocated Memory (MB)",
+            "value": 280.07,
+            "unit": "MB"
+          },
+          {
+            "name": "Gen2 Collections",
+            "value": 66,
             "unit": "collections"
           }
         ]
