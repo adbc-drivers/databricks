@@ -223,21 +223,112 @@ jobs:
             }
           " || echo "[]" > ./cache/benchmark-data.json
 
-      - name: Compare with baseline and comment on PR
-        uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
+      - name: Post PR comment with benchmark comparison (.NET 8.0)
+        if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != ''
+        uses: actions/github-script@v7
         with:
-          tool: 'customSmallerIsBetter'
-          output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          comment-always: true
-          alert-threshold: '110%'
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
-          external-data-json-path: ./cache/benchmark-data.json
-          benchmark-data-dir-path: 'bench/net8'
+          script: |
+            const fs = require('fs');
+
+            try {
+              // Read current benchmark data
+              const currentData = JSON.parse(fs.readFileSync('csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json', 'utf8'));
+
+              // Read baseline data
+              let baselineData = [];
+              try {
+                baselineData = JSON.parse(fs.readFileSync('./cache/benchmark-data.json', 'utf8'));
+              } catch (e) {
+                console.log('No baseline data found');
+              }
+
+              // Create metrics map
+              const currentMetrics = {};
+              currentData.forEach(item => {
+                currentMetrics[item.name] = item.value;
+              });
+
+              const baselineMetrics = {};
+              baselineData.forEach(item => {
+                baselineMetrics[item.name] = item.value;
+              });
+
+              // Build comparison table
+              let tableRows = '';
+              const metrics = ['Min Execution Time (s)', 'Peak Memory (MB)', 'Allocated Memory (MB)', 'Gen2 Collections'];
+
+              metrics.forEach(metricName => {
+                const current = currentMetrics[metricName] || 0;
+                const baseline = baselineMetrics[metricName] || 0;
+
+                let change = 'N/A';
+                let status = '➖';
+
+                if (baseline > 0) {
+                  const changePercent = ((current - baseline) / baseline) * 100;
+                  change = (changePercent >= 0 ? '+' : '') + changePercent.toFixed(1) + '%';
+
+                  if (changePercent < -10) {
+                    status = '🟢'; // Improvement
+                  } else if (changePercent > 10) {
+                    status = '⚠️'; // Regression
+                  } else {
+                    status = '✅'; // No significant change
+                  }
+                } else {
+                  change = 'New metric';
+                }
+
+                tableRows += `| ${metricName} | ${baseline.toFixed(3)} | ${current.toFixed(3)} | ${change} | ${status} |\n`;
+              });
+
+              const body = `## 🎯 Benchmark Results (.NET 8.0)
+
+            | Metric | Baseline (main) | This PR | Change | Status |
+            |--------|----------------|---------|--------|--------|
+            ${tableRows}
+            **Indicators:**
+            - 🟢 **Improvement** - Metric improved by >10%
+            - ✅ **No significant change** - Within ±10%
+            - ⚠️ **Regression** - Metric degraded by >10%
+            - ➖ **New metric** - No baseline data available
+
+            📊 [View detailed results](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
+
+              // Look for existing comment
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              });
+
+              const existingComment = comments.data.find(comment =>
+                comment.user.login === 'github-actions[bot]' &&
+                comment.body.includes('Benchmark Results (.NET 8.0)')
+              );
+
+              // Delete existing comment if found
+              if (existingComment) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                });
+              }
+
+              // Create new comment
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+
+              console.log('Successfully posted benchmark comparison comment');
+            } catch (error) {
+              console.error('Failed to post comment:', error);
+              throw error;
+            }
 
   benchmark-net472:
     name: Benchmark (.NET Framework 4.7.2)
@@ -429,18 +520,109 @@ jobs:
             "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
           }
 
-      - name: Compare with baseline and comment on PR
-        uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
+      - name: Post PR comment with benchmark comparison (.NET Framework 4.7.2)
+        if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != ''
+        uses: actions/github-script@v7
         with:
-          tool: 'customSmallerIsBetter'
-          output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          comment-always: true
-          alert-threshold: '110%'
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
-          external-data-json-path: ./cache/benchmark-data.json
-          benchmark-data-dir-path: 'bench/net472'
+          script: |
+            const fs = require('fs');
+
+            try {
+              // Read current benchmark data
+              const currentData = JSON.parse(fs.readFileSync('csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json', 'utf8'));
+
+              // Read baseline data
+              let baselineData = [];
+              try {
+                baselineData = JSON.parse(fs.readFileSync('./cache/benchmark-data.json', 'utf8'));
+              } catch (e) {
+                console.log('No baseline data found');
+              }
+
+              // Create metrics map
+              const currentMetrics = {};
+              currentData.forEach(item => {
+                currentMetrics[item.name] = item.value;
+              });
+
+              const baselineMetrics = {};
+              baselineData.forEach(item => {
+                baselineMetrics[item.name] = item.value;
+              });
+
+              // Build comparison table
+              let tableRows = '';
+              const metrics = ['Min Execution Time (s)', 'Peak Memory (MB)', 'Allocated Memory (MB)', 'Gen2 Collections'];
+
+              metrics.forEach(metricName => {
+                const current = currentMetrics[metricName] || 0;
+                const baseline = baselineMetrics[metricName] || 0;
+
+                let change = 'N/A';
+                let status = '➖';
+
+                if (baseline > 0) {
+                  const changePercent = ((current - baseline) / baseline) * 100;
+                  change = (changePercent >= 0 ? '+' : '') + changePercent.toFixed(1) + '%';
+
+                  if (changePercent < -10) {
+                    status = '🟢'; // Improvement
+                  } else if (changePercent > 10) {
+                    status = '⚠️'; // Regression
+                  } else {
+                    status = '✅'; // No significant change
+                  }
+                } else {
+                  change = 'New metric';
+                }
+
+                tableRows += `| ${metricName} | ${baseline.toFixed(3)} | ${current.toFixed(3)} | ${change} | ${status} |\n`;
+              });
+
+              const body = `## 🎯 Benchmark Results (.NET Framework 4.7.2)
+
+            | Metric | Baseline (main) | This PR | Change | Status |
+            |--------|----------------|---------|--------|--------|
+            ${tableRows}
+            **Indicators:**
+            - 🟢 **Improvement** - Metric improved by >10%
+            - ✅ **No significant change** - Within ±10%
+            - ⚠️ **Regression** - Metric degraded by >10%
+            - ➖ **New metric** - No baseline data available
+
+            📊 [View detailed results](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
+
+              // Look for existing comment
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              });
+
+              const existingComment = comments.data.find(comment =>
+                comment.user.login === 'github-actions[bot]' &&
+                comment.body.includes('Benchmark Results (.NET Framework 4.7.2)')
+              );
+
+              // Delete existing comment if found
+              if (existingComment) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                });
+              }
+
+              // Create new comment
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+
+              console.log('Successfully posted benchmark comparison comment');
+            } catch (error) {
+              console.error('Failed to post comment:', error);
+              throw error;
+            }
