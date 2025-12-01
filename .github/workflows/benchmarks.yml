@@ -27,10 +27,7 @@ on:
       - 'csharp/src/**'
       - 'csharp/Benchmarks/**'
   pull_request:
-    paths:
-      - '.github/workflows/benchmarks.yml'
-      - 'csharp/src/**'
-      - 'csharp/Benchmarks/**'
+    types: [labeled]  # Trigger when a label is added to the PR
   workflow_dispatch:
     inputs:
       query:
@@ -48,6 +45,10 @@ permissions:
 jobs:
   benchmark-net8:
     name: Benchmark (.NET 8.0)
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: azure-prod
@@ -190,8 +191,27 @@ jobs:
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
           benchmark-data-dir-path: 'bench/net8'
 
+      - name: Compare with baseline and comment on PR
+        uses: benchmark-action/github-action-benchmark@v1
+        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'pull_request'
+        with:
+          tool: 'customSmallerIsBetter'
+          output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          alert-threshold: '110%'
+          comment-on-alert: true
+          fail-on-alert: false
+          alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
+          external-data-json-path: ./cache/benchmark-data.json
+          benchmark-data-dir-path: 'bench/net8'
+
   benchmark-net472:
     name: Benchmark (.NET Framework 4.7.2)
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
     runs-on: windows-2022
     timeout-minutes: 30
     environment: azure-prod
@@ -339,4 +359,19 @@ jobs:
           comment-on-alert: false
           fail-on-alert: false
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
+          benchmark-data-dir-path: 'bench/net472'
+
+      - name: Compare with baseline and comment on PR
+        uses: benchmark-action/github-action-benchmark@v1
+        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'pull_request'
+        with:
+          tool: 'customSmallerIsBetter'
+          output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          alert-threshold: '110%'
+          comment-on-alert: true
+          fail-on-alert: false
+          alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
+          external-data-json-path: ./cache/benchmark-data.json
           benchmark-data-dir-path: 'bench/net472'
