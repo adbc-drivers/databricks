@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764573107844,
+  "lastUpdate": 1764573326307,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -82,6 +82,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Gen2 Collections",
             "value": 66,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "6a065767e83e0934a1daeb5adaadacd3da026e21",
+          "message": "feat(ci): enable benchmark workflow on pull requests\n\nAllows benchmarks to run automatically on PRs that modify:\n- Benchmark workflow itself\n- C# driver source code\n- Benchmark code\n\nKey behaviors:\n- Benchmarks run and produce artifacts for review\n- Results are NOT pushed to gh-pages (main branch only)\n- Any contributor can trigger via PR (no special permissions needed)\n- Provides performance feedback before merging\n\nThis helps developers understand performance impact of their changes\nwithout requiring manual workflow triggers or admin access.",
+          "timestamp": "2025-11-30T23:12:56-08:00",
+          "tree_id": "a0fbcaa21ea5c87ecfd4c8a6cbe193fcde06bb23",
+          "url": "https://github.com/adbc-drivers/databricks/commit/6a065767e83e0934a1daeb5adaadacd3da026e21"
+        },
+        "date": 1764573325569,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Min Execution Time (s)",
+            "value": 4.231,
+            "unit": "seconds"
+          },
+          {
+            "name": "Peak Memory (MB)",
+            "value": 436.41796875,
+            "unit": "MB"
+          },
+          {
+            "name": "Allocated Memory (MB)",
+            "value": 284.13,
+            "unit": "MB"
+          },
+          {
+            "name": "Gen2 Collections",
+            "value": 60,
             "unit": "collections"
           }
         ]
