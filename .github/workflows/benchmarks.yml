@@ -122,6 +122,12 @@ jobs:
             GEN2_COLLECTIONS=$(jq -r '.Benchmarks[0].Memory.Gen2Collections // 0' "$RESULTS_FILE")
             echo "gen2_collections=$GEN2_COLLECTIONS" >> $GITHUB_OUTPUT
             echo "Gen2 collections: $GEN2_COLLECTIONS"
+
+            # Extract timing metrics (convert from nanoseconds to seconds)
+            MIN_TIME_NS=$(jq -r '.Benchmarks[0].Statistics.Min // 0' "$RESULTS_FILE")
+            MIN_TIME_S=$(echo "scale=3; $MIN_TIME_NS / 1000000000" | bc)
+            echo "min_time_s=$MIN_TIME_S" >> $GITHUB_OUTPUT
+            echo "Min execution time: ${MIN_TIME_S} seconds"
           else
             echo "Warning: Could not find BenchmarkDotNet results file"
           fi
@@ -142,6 +148,11 @@ jobs:
           mkdir -p csharp/Benchmarks/BenchmarkDotNet.Artifacts/results
           cat > csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json << EOF
           [
+            {
+              "name": "Min Execution Time (s)",
+              "unit": "seconds",
+              "value": ${{ steps.extract-data.outputs.min_time_s }}
+            },
             {
               "name": "Peak Memory (MB)",
               "unit": "MB",
@@ -261,6 +272,12 @@ jobs:
             $gen2Collections = if ($results.Benchmarks[0].Memory.Gen2Collections) { $results.Benchmarks[0].Memory.Gen2Collections } else { 0 }
             echo "gen2_collections=$gen2Collections" >> $env:GITHUB_OUTPUT
             Write-Host "Gen2 collections: $gen2Collections"
+
+            # Extract timing metrics (convert from nanoseconds to seconds)
+            $minTimeNs = if ($results.Benchmarks[0].Statistics.Min) { $results.Benchmarks[0].Statistics.Min } else { 0 }
+            $minTimeS = [math]::Round($minTimeNs / 1000000000, 3)
+            echo "min_time_s=$minTimeS" >> $env:GITHUB_OUTPUT
+            Write-Host "Min execution time: ${minTimeS} seconds"
           } else {
             Write-Host "Warning: Could not find BenchmarkDotNet results file"
           }
@@ -282,6 +299,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" | Out-Null
           $benchmarkData = @(
+            @{
+              name = "Min Execution Time (s)"
+              unit = "seconds"
+              value = [double]"${{ steps.extract-data.outputs.min_time_s }}"
+            },
             @{
               name = "Peak Memory (MB)"
               unit = "MB"
