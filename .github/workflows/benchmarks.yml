@@ -36,6 +36,9 @@ concurrency:
   group: ${{ github.repository }}-${{ github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
+permissions:
+  contents: write  # Required to push benchmark results to gh-pages branch
+
 jobs:
   benchmark-net8:
     name: Benchmark (.NET 8.0)
