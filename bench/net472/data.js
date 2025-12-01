@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764574223476,
+  "lastUpdate": 1764617703484,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -170,6 +170,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Gen2 Collections",
             "value": 9,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59075d157489cea7f9b93f4536a5f23a731bda73",
+          "message": "feat(csharp): improvement for benchmark ci/cd (#57)\n\n## Summary\n\nThis PR enhances the benchmark workflow with permissions fixes, new\nmetrics, and PR-based performance testing capabilities.\n\n### 1. Fixed gh-pages Push Permissions ✅\n\n**Problem:** Benchmark workflow was failing with 403 error when trying\nto push results to gh-pages:\n```\nremote: Write access to repository not granted.\nfatal: unable to access 'https://github.com/adbc-drivers/databricks.git/': The requested URL returned error: 403\n```\n\n**Solution:** Added explicit `contents: write` permission to the\nworkflow, following the principle of least privilege.\n\n### 2. Added Min Execution Time Tracking 📊\n\n**New Metric:** Min Execution Time (seconds) - the fastest execution\ntime across benchmark iterations\n\n- Tracks performance improvements over time\n- Displayed at the top of GitHub Pages dashboard\n- Extracted from BenchmarkDotNet's `Statistics.Min`\n- Converted from nanoseconds to seconds (3 decimal precision)\n\n**Tracked Metrics (in order):**\n1. Min Execution Time (s)\n2. Peak Memory (MB)\n3. Allocated Memory (MB)\n4. Gen2 Collections\n\n### 3. Label-Based PR Benchmarking 🏷️\n\n**Feature:** Run benchmarks on PRs by adding the `benchmark` label\n\n**How it works:**\n1. Add `benchmark` label to any PR\n2. Workflow triggers automatically (~30 minutes)\n3. Automatic comparison comment posted on PR\n4. Review performance impact before merging\n\n**Benefits:**\n- ✅ **Opt-in:** Only runs when explicitly requested (cost-effective)\n- ✅ **Accessible:** Any contributor with write access can add labels\n- ✅ **Informative:** Immediate feedback on performance changes\n- ✅ **Non-blocking:** Alerts don't fail the workflow\n- ✅ **Clean:** PR results don't pollute gh-pages history\n\n### 4. Automatic PR Comparison Comments 💬\n\n**Feature:** Automatic performance comparison against main branch\nbaseline\n\n**Example comment:**\n```markdown\n## 🎯 Benchmark Results (.NET 8.0)\n\n| Metric | Baseline (main) | This PR | Change | Status |\n|--------|----------------|---------|--------|--------|\n| Min Execution Time (s) | 3.794 | 3.821 | +0.7% | ✅ |\n| Peak Memory (MB) | 420.98 | 398.12 | -5.4% | 🟢 |\n| Allocated Memory (MB) | 286.19 | 275.43 | -3.8% | 🟢 |\n| Gen2 Collections | 61 | 58 | -4.9% | 🟢 |\n```\n\n**Alert Thresholds:**\n- **PRs:** 110% (alerts if metrics regress >10%)\n- **Main branch:** 150% (alerts if metrics regress >50%)\n\n**Visual Indicators:**\n- 🟢 **Improvement** - Metric improved (lower is better)\n- ✅ **No significant change** - Within acceptable range\n- ⚠️ **Regression** - Metric degraded significantly\n\n### 5. Created `benchmark` Label 🏷️\n\nCreated repository label for easy discovery:\n- **Name:** `benchmark`\n- **Description:** \"Run performance benchmarks on this PR\"\n- **Color:** Green (#0E8A16)\n\nAvailable in dropdown when adding labels to PRs.\n\n### 6. Updated Documentation 📚\n\nComprehensive README updates in `csharp/Benchmarks/README.md`:\n- New section: \"Pull Request Benchmarking (Label-Based)\"\n- Step-by-step instructions with examples\n- Updated overview to include all 4 tracked metrics\n- Documented alert thresholds for PRs vs main\n- Clarified Min Execution Time as primary performance metric\n\n## Testing\n\nTested on this PR branch (`eric/fix-benchmark-permissions`):\n1. ✅ Workflow successfully pushed to gh-pages (no 403 errors)\n2. ✅ Min Execution Time extracted and tracked\n3. ✅ Label-based triggering works correctly\n4. ✅ All 4 metrics tracked and displayed\n5. ✅ GitHub Pages updated with new data structure\n\nView results: https://adbc-drivers.github.io/databricks/bench/net8/\n\n## Usage After Merge\n\n**For Main Branch (Automatic):**\n- Benchmarks run on every merge to main\n- Results published to GitHub Pages\n- Historical trend tracking\n\n**For Pull Requests (Label-Based):**\n1. Add `benchmark` label to PR\n2. Wait ~30 minutes for workflow completion\n3. Review automatic comparison comment\n4. Make informed decisions about performance trade-offs\n\n## Impact\n\n- **Cost-effective:** No benchmark runs on every PR commit (only when\nlabeled)\n- **Developer-friendly:** Easy to test performance impact of changes\n- **Informative:** Clear comparison against baseline with visual\nindicators\n- **Non-disruptive:** PR benchmarks don't affect historical tracking on\ngh-pages\n\n## References\n\n- Original error:\nhttps://github.com/adbc-drivers/databricks/actions/runs/19756218411/job/56731242926\n- Benchmark action:\nhttps://github.com/benchmark-action/github-action-benchmark\n- GitHub Pages dashboard:\nhttps://adbc-drivers.github.io/databricks/bench/net8/\n\n---\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-01T11:31:07-08:00",
+          "tree_id": "62d39073ba709de13ff88475ab31c9b3dce787f3",
+          "url": "https://github.com/adbc-drivers/databricks/commit/59075d157489cea7f9b93f4536a5f23a731bda73"
+        },
+        "date": 1764617697384,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Min Execution Time (s)",
+            "value": 5.731,
+            "unit": "seconds"
+          },
+          {
+            "name": "Peak Memory (MB)",
+            "value": 354.1953125,
+            "unit": "MB"
+          },
+          {
+            "name": "Allocated Memory (MB)",
+            "value": 528.63,
+            "unit": "MB"
+          },
+          {
+            "name": "Gen2 Collections",
+            "value": 6,
             "unit": "collections"
           }
         ]
