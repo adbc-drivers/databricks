@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764573326307,
+  "lastUpdate": 1764574154448,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -126,6 +126,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Gen2 Collections",
             "value": 60,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "60131a9abc2a7acf6ce4d4d37308dcccab696cfd",
+          "message": "feat(ci): add label-based PR benchmarks with automatic comparison\n\nImplements two key features for PR performance testing:\n\n1. Label-Based Triggering:\n   - Only runs when 'benchmark' label is added to PR\n   - Opt-in approach saves CI resources\n   - No runs on every commit - developers choose when to benchmark\n\n2. Automatic PR Comparison Comments:\n   - Compares PR results against main branch baseline (gh-pages)\n   - Posts detailed comparison comment on the PR\n   - Alert threshold: 110% (alerts if metrics regress by >10%)\n   - Shows all 4 metrics: Min Time, Peak Memory, Allocated Memory, Gen2 Collections\n   - Visual indicators for improvements/regressions\n\nUsage:\n1. Open a PR that modifies driver/benchmark code\n2. Add 'benchmark' label to the PR\n3. Workflow runs automatically (~30 minutes)\n4. Comment appears with comparison vs baseline\n5. Review performance impact before merging\n\nBenefits:\n- Cost-effective: only runs when explicitly requested\n- Accessible: any contributor with write access can add labels\n- Informative: immediate feedback on performance changes\n- Non-blocking: alerts don't fail the workflow",
+          "timestamp": "2025-11-30T23:26:44-08:00",
+          "tree_id": "f8a47277bd6bd3cdbcd67ab8bde8a67c3addc5fe",
+          "url": "https://github.com/adbc-drivers/databricks/commit/60131a9abc2a7acf6ce4d4d37308dcccab696cfd"
+        },
+        "date": 1764574152981,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Min Execution Time (s)",
+            "value": 2.452,
+            "unit": "seconds"
+          },
+          {
+            "name": "Peak Memory (MB)",
+            "value": 461.328125,
+            "unit": "MB"
+          },
+          {
+            "name": "Allocated Memory (MB)",
+            "value": 306.92,
+            "unit": "MB"
+          },
+          {
+            "name": "Gen2 Collections",
+            "value": 38,
             "unit": "collections"
           }
         ]
