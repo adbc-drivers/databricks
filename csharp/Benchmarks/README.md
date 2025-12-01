@@ -109,10 +109,11 @@ WorkloadResult   1: 1 op, 8752445353.00 ns, 8.7524 s/op
 Benchmarks run automatically via GitHub Actions on every commit to the `main` branch:
 
 - **Multi-platform**: .NET 8.0 (Ubuntu) and .NET Framework 4.7.2 (Windows)
-- **Memory tracking**: Peak Memory, Allocated Memory, and Gen2 Collections
+- **Performance tracking**: Min Execution Time, Peak Memory, Allocated Memory, and Gen2 Collections
 - **Artifact storage**: Detailed results retained for 90 days
 - **Trend tracking**: GitHub Pages with interactive performance charts
-- **Regression alerts**: Triggers if memory usage increases by 150% (2.5x baseline)
+- **Regression alerts**: Triggers if metrics regress significantly
+- **PR benchmarking**: Label-based performance testing with automatic comparison comments
 
 ### Viewing CI Results
 
@@ -129,10 +130,64 @@ You can manually trigger a benchmark run:
 3. Optionally specify a custom SQL query
 4. Click **Run workflow**
 
+**Note**: Manual triggers require write access to the repository.
+
+### Pull Request Benchmarking (Label-Based)
+
+Test performance impact of your changes **before merging** using label-based PR benchmarks:
+
+#### How to Run Benchmarks on a PR:
+
+1. **Open your PR** (or navigate to an existing PR)
+2. **Add the `benchmark` label**:
+   - Click "Labels" in the right sidebar
+   - Select `benchmark` from the dropdown
+   - Save
+3. **Wait ~30 minutes** for the workflow to complete
+4. **Review the comparison comment** automatically posted on your PR
+
+#### What You Get:
+
+The workflow will automatically post a comment comparing your PR against the main branch baseline:
+
+```markdown
+## 🎯 Benchmark Results (.NET 8.0)
+
+| Metric | Baseline (main) | This PR | Change | Status |
+|--------|----------------|---------|--------|--------|
+| Min Execution Time (s) | 3.794 | 3.821 | +0.7% | ✅ |
+| Peak Memory (MB) | 420.98 | 398.12 | -5.4% | 🟢 |
+| Allocated Memory (MB) | 286.19 | 275.43 | -3.8% | 🟢 |
+| Gen2 Collections | 61 | 58 | -4.9% | 🟢 |
+```
+
+**Indicators:**
+- 🟢 **Improvement** - Metric improved (lower is better)
+- ✅ **No significant change** - Within acceptable range (<10% change)
+- ⚠️ **Regression** - Metric degraded by >10%
+
+#### Key Features:
+
+- ✅ **Opt-in**: Only runs when you add the label (cost-effective)
+- ✅ **Automatic comparison**: Shows exact performance impact vs baseline
+- ✅ **Non-blocking**: Alerts don't fail the workflow
+- ✅ **Accessible**: Any contributor with write access can add labels
+- ✅ **No gh-pages pollution**: PR results aren't added to historical tracking
+
+#### Alert Threshold:
+
+The workflow alerts if any metric regresses by **>10%** compared to baseline. This helps identify:
+- Performance regressions before merging
+- Memory leaks or increased allocations
+- Changes that trigger excessive garbage collections
+
+**Note**: Alerts are informational only and won't block your PR. Use them to make informed decisions about performance trade-offs.
+
 ### Automatic Triggers
 
 Benchmarks run automatically on:
 - Every push to the `main` branch (when changes affect `.github/workflows/benchmarks.yml`, `csharp/src/**`, or `csharp/Benchmarks/**`)
+- When the `benchmark` label is added to a pull request
 
 ---
 
@@ -255,22 +310,21 @@ Each artifact contains:
 
 **Tracked in GitHub Pages (trend analysis):**
 
-1. **Execution Time (seconds)**: End-to-end execution time including query execution, CloudFetch downloads, LZ4 decompression, and batch consumption
-   - **Mean**: Average execution time across iterations
-   - **Min**: Best (fastest) execution time - tracked across commits to monitor performance improvements
-   - **Max**: Worst (slowest) execution time
-   - **Median**: Middle value, less sensitive to outliers
-   - Lower is better
-   - Source: BenchmarkDotNet timing measurements
+1. **Min Execution Time (seconds)**: Best (fastest) execution time across benchmark iterations
+   - Primary performance metric tracked on GitHub Pages
+   - End-to-end time including query execution, CloudFetch downloads, LZ4 decompression, and batch consumption
+   - Lower is better (tracks performance improvements)
+   - Alert threshold: 110% on PRs (10% regression warning)
+   - Source: BenchmarkDotNet's `Statistics.Min`
 
 2. **Peak Memory (MB)**: Maximum working set memory (private bytes) during execution
    - Lower is better
-   - Alert threshold: 150% increase (triggers if memory reaches 2.5x baseline)
+   - Alert threshold: 150% on main, 110% on PRs
    - Source: Custom metrics from `Process.PrivateMemorySize64`
 
 3. **Allocated Memory (MB)**: Total managed memory allocated during execution
    - Lower is better
-   - Alert threshold: 150%
+   - Alert threshold: 150% on main, 110% on PRs
    - Source: BenchmarkDotNet's `MemoryDiagnoser`
 
 4. **Gen2 Collections**: Number of full garbage collections
