@@ -440,7 +440,8 @@ jobs:
               value = [double]"${{ steps.extract-data.outputs.gen2_collections }}"
             }
           ) | ConvertTo-Json
-          $benchmarkData | Out-File -FilePath "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json" -Encoding utf8
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          [System.IO.File]::WriteAllText("$PWD/csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json", $benchmarkData, $utf8NoBom)
 
       - name: Store benchmark results for trend tracking
         uses: benchmark-action/github-action-benchmark@v1
