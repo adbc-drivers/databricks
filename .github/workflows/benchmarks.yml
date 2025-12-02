@@ -70,6 +70,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Create Databricks config file
+        shell: bash
         run: |
           mkdir -p ~/.databricks
           BENCHMARK_QUERY="${{ github.event.inputs.query }}"
