@@ -39,7 +39,8 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write  # Required to push benchmark results to gh-pages branch
+  contents: write       # Required to push benchmark results to gh-pages branch
+  pull-requests: write  # Required to post comparison comments on PRs
 
 jobs:
   benchmark-net8:
@@ -190,20 +191,115 @@ jobs:
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
           benchmark-data-dir-path: 'bench/net8'
 
-      - name: Compare with baseline and comment on PR
-        uses: benchmark-action/github-action-benchmark@v1
+      - name: Download baseline benchmark data from gh-pages
         if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
+        run: |
+          # Create cache directory
+          mkdir -p ./cache
+
+          # Fetch gh-pages branch
+          git fetch origin gh-pages --depth=1
+
+          # Extract baseline data from gh-pages
+          git show origin/gh-pages:bench/net8/data.js > ./cache/data.js || echo "[]" > ./cache/data.js
+
+          # Convert from data.js format to JSON
+          # data.js has format: window.BENCHMARK_DATA = { entries: { "Benchmark": [...] } }
+          # We need to extract the last entry's benches array
+          node -e "
+            const fs = require('fs');
+            const content = fs.readFileSync('./cache/data.js', 'utf8');
+            const dataMatch = content.match(/window\.BENCHMARK_DATA\s*=\s*(.+)/s);
+            if (dataMatch) {
+              const data = JSON.parse(dataMatch[1]);
+              // entries is an object with 'Benchmark' key, not an array
+              const benchmarkEntries = data.entries['Benchmark'] || data.entries[Object.keys(data.entries)[0]] || [];
+              const lastEntry = benchmarkEntries[benchmarkEntries.length - 1];
+              if (lastEntry && lastEntry.benches) {
+                fs.writeFileSync('./cache/benchmark-data.json', JSON.stringify(lastEntry.benches, null, 2));
+              } else {
+                fs.writeFileSync('./cache/benchmark-data.json', '[]');
+              }
+            } else {
+              fs.writeFileSync('./cache/benchmark-data.json', '[]');
+            }
+          " || echo "[]" > ./cache/benchmark-data.json
+
+      - name: Post PR comment with benchmark comparison (.NET 8.0)
+        if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != ''
+        uses: actions/github-script@v7
         with:
-          tool: 'customSmallerIsBetter'
-          output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          alert-threshold: '110%'
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
-          external-data-json-path: ./cache/benchmark-data.json
-          benchmark-data-dir-path: 'bench/net8'
+          script: |
+            const fs = require('fs');
+            const currentData = JSON.parse(fs.readFileSync('csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json', 'utf8'));
+
+            let baselineData = [];
+            try {
+              baselineData = JSON.parse(fs.readFileSync('./cache/benchmark-data.json', 'utf8'));
+            } catch (e) {
+              console.log('No baseline data found');
+            }
+
+            const currentMetrics = {};
+            currentData.forEach(item => { currentMetrics[item.name] = item.value; });
+            const baselineMetrics = {};
+            baselineData.forEach(item => { baselineMetrics[item.name] = item.value; });
+
+            let tableRows = '';
+            ['Min Execution Time (s)', 'Peak Memory (MB)', 'Allocated Memory (MB)', 'Gen2 Collections'].forEach(metricName => {
+              const current = currentMetrics[metricName] || 0;
+              const baseline = baselineMetrics[metricName] || 0;
+              let change = 'N/A';
+              let status = '➖';
+
+              if (baseline > 0) {
+                const changePercent = ((current - baseline) / baseline) * 100;
+                change = (changePercent >= 0 ? '+' : '') + changePercent.toFixed(1) + '%';
+                status = changePercent < -30 ? '🟢' : changePercent > 30 ? '⚠️' : '✅';
+              } else {
+                change = 'New metric';
+              }
+              tableRows += `| ${metricName} | ${baseline.toFixed(3)} | ${current.toFixed(3)} | ${change} | ${status} |\n`;
+            });
+
+            const body = `## 🎯 Benchmark Results (.NET 8.0)
+
+            | Metric | Baseline (main) | This PR | Change | Status |
+            |--------|----------------|---------|--------|--------|
+            ${tableRows}
+            **Indicators:**
+            - 🟢 **Improvement** - Metric improved by >30%
+            - ✅ **No significant change** - Within ±30%
+            - ⚠️ **Regression** - Metric degraded by >30%
+            - ➖ **New metric** - No baseline data available
+
+            📊 [View detailed results](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.data.find(comment =>
+              comment.user.login === 'github-actions[bot]' &&
+              comment.body.includes('Benchmark Results (.NET 8.0)')
+            );
+
+            if (existingComment) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+              });
+            }
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
 
   benchmark-net472:
     name: Benchmark (.NET Framework 4.7.2)
@@ -360,17 +456,112 @@ jobs:
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
           benchmark-data-dir-path: 'bench/net472'
 
-      - name: Compare with baseline and comment on PR
-        uses: benchmark-action/github-action-benchmark@v1
+      - name: Download baseline benchmark data from gh-pages
         if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          # Create cache directory
+          mkdir -p ./cache
+
+          # Fetch gh-pages branch
+          git fetch origin gh-pages --depth=1
+
+          # Extract baseline data from gh-pages
+          git show origin/gh-pages:bench/net472/data.js > ./cache/data.js || echo "[]" > ./cache/data.js
+
+          # Convert from data.js format to JSON (using Node.js which works reliably)
+          # data.js has format: window.BENCHMARK_DATA = { entries: { "Benchmark": [...] } }
+          node -e "
+            const fs = require('fs');
+            const content = fs.readFileSync('./cache/data.js', 'utf8');
+            const dataMatch = content.match(/window\.BENCHMARK_DATA\s*=\s*(.+)/s);
+            if (dataMatch) {
+              const data = JSON.parse(dataMatch[1]);
+              // entries is an object with 'Benchmark' key, not an array
+              const benchmarkEntries = data.entries['Benchmark'] || data.entries[Object.keys(data.entries)[0]] || [];
+              const lastEntry = benchmarkEntries[benchmarkEntries.length - 1];
+              if (lastEntry && lastEntry.benches) {
+                fs.writeFileSync('./cache/benchmark-data.json', JSON.stringify(lastEntry.benches, null, 2));
+              } else {
+                fs.writeFileSync('./cache/benchmark-data.json', '[]');
+              }
+            } else {
+              fs.writeFileSync('./cache/benchmark-data.json', '[]');
+            }
+          " || echo "[]" > ./cache/benchmark-data.json
+
+      - name: Post PR comment with benchmark comparison (.NET Framework 4.7.2)
+        if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != ''
+        uses: actions/github-script@v7
         with:
-          tool: 'customSmallerIsBetter'
-          output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          alert-threshold: '110%'
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
-          external-data-json-path: ./cache/benchmark-data.json
-          benchmark-data-dir-path: 'bench/net472'
+          script: |
+            const fs = require('fs');
+            const currentData = JSON.parse(fs.readFileSync('csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json', 'utf8'));
+
+            let baselineData = [];
+            try {
+              baselineData = JSON.parse(fs.readFileSync('./cache/benchmark-data.json', 'utf8'));
+            } catch (e) {
+              console.log('No baseline data found');
+            }
+
+            const currentMetrics = {};
+            currentData.forEach(item => { currentMetrics[item.name] = item.value; });
+            const baselineMetrics = {};
+            baselineData.forEach(item => { baselineMetrics[item.name] = item.value; });
+
+            let tableRows = '';
+            ['Min Execution Time (s)', 'Peak Memory (MB)', 'Allocated Memory (MB)', 'Gen2 Collections'].forEach(metricName => {
+              const current = currentMetrics[metricName] || 0;
+              const baseline = baselineMetrics[metricName] || 0;
+              let change = 'N/A';
+              let status = '➖';
+
+              if (baseline > 0) {
+                const changePercent = ((current - baseline) / baseline) * 100;
+                change = (changePercent >= 0 ? '+' : '') + changePercent.toFixed(1) + '%';
+                status = changePercent < -30 ? '🟢' : changePercent > 30 ? '⚠️' : '✅';
+              } else {
+                change = 'New metric';
+              }
+              tableRows += `| ${metricName} | ${baseline.toFixed(3)} | ${current.toFixed(3)} | ${change} | ${status} |\n`;
+            });
+
+            const body = `## 🎯 Benchmark Results (.NET Framework 4.7.2)
+
+            | Metric | Baseline (main) | This PR | Change | Status |
+            |--------|----------------|---------|--------|--------|
+            ${tableRows}
+            **Indicators:**
+            - 🟢 **Improvement** - Metric improved by >30%
+            - ✅ **No significant change** - Within ±30%
+            - ⚠️ **Regression** - Metric degraded by >30%
+            - ➖ **New metric** - No baseline data available
+
+            📊 [View detailed results](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.data.find(comment =>
+              comment.user.login === 'github-actions[bot]' &&
+              comment.body.includes('Benchmark Results (.NET Framework 4.7.2)')
+            );
+
+            if (existingComment) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+              });
+            }
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
