@@ -375,6 +375,21 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         public const int DefaultAsyncExecPollIntervalMs = 100;
 
         /// <summary>
+        /// Default timeout in seconds for retrying temporarily unavailable responses (408, 502, 503, 504).
+        /// </summary>
+        public const int DefaultTemporarilyUnavailableRetryTimeout = 900; // 15 minutes
+
+        /// <summary>
+        /// Default timeout in seconds for retrying rate-limited responses (429).
+        /// </summary>
+        public const int DefaultRateLimitRetryTimeout = 120; // 2 minutes
+
+        /// <summary>
+        /// Default timeout in minutes for CloudFetch HTTP operations.
+        /// </summary>
+        public const int DefaultCloudFetchTimeoutMinutes = 5;
+
+        /// <summary>
         /// OAuth grant type constants
         /// </summary>
         public static class OAuthGrantTypes

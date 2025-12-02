@@ -81,8 +81,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         private long _maxBytesPerFetchRequest = DefaultMaxBytesPerFetchRequest;
         private const bool DefaultRetryOnUnavailable = true;
         private const bool DefaultRateLimitRetry = true;
-        private const int DefaultTemporarilyUnavailableRetryTimeout = 900;
-        private const int DefaultRateLimitRetryTimeout = 120;
         private bool _useDescTableExtended = false;
 
         // Trace propagation configuration
@@ -439,7 +437,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// <summary>
         /// Gets the maximum total time in seconds to retry retryable responses (408, 502, 503, 504) before failing.
         /// </summary>
-        protected int TemporarilyUnavailableRetryTimeout { get; private set; } = DefaultTemporarilyUnavailableRetryTimeout;
+        protected int TemporarilyUnavailableRetryTimeout { get; private set; } = DatabricksConstants.DefaultTemporarilyUnavailableRetryTimeout;
 
         /// <summary>
         /// Gets a value indicating whether to retry requests that receive HTTP 429 responses.
@@ -449,7 +447,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         /// <summary>
         /// Gets the number of seconds to wait before stopping an attempt to retry HTTP 429 responses.
         /// </summary>
-        protected int RateLimitRetryTimeout { get; private set; } = DefaultRateLimitRetryTimeout;
+        protected int RateLimitRetryTimeout { get; private set; } = DatabricksConstants.DefaultRateLimitRetryTimeout;
 
         protected override HttpMessageHandler CreateHttpHandler()
         {

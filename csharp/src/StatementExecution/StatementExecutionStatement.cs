@@ -17,17 +17,23 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch;
+using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 {
     /// <summary>
     /// Statement implementation using the Databricks Statement Execution REST API.
     /// Handles query execution, polling, and result retrieval.
+    /// Extends TracingStatement for consistent tracing support with Thrift protocol.
     /// </summary>
-    internal class StatementExecutionStatement : AdbcStatement
+    internal class StatementExecutionStatement : TracingStatement
     {
         private readonly IStatementExecutionClient _client;
         private readonly string? _sessionId;
@@ -49,6 +55,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
         private readonly System.Buffers.ArrayPool<byte> _lz4BufferPool;
 
+        // HTTP client for CloudFetch downloads
+        private readonly HttpClient _httpClient;
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
@@ -66,7 +75,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             int pollingIntervalMs,
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager recyclableMemoryStreamManager,
-            System.Buffers.ArrayPool<byte> lz4BufferPool)
+            System.Buffers.ArrayPool<byte> lz4BufferPool,
+            HttpClient httpClient,
+            StatementExecutionConnection connection)
+            : base(connection) // Initialize TracingStatement base class with TracingConnection
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _sessionId = sessionId;
@@ -81,6 +93,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         }
 
         /// <summary>
@@ -112,13 +125,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
             // Build the execute statement request
             // Note: warehouse_id is always required by the Databricks Statement Execution API
+            // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
             {
                 Statement = _sqlQuery,
                 WarehouseId = _warehouseId,
                 SessionId = _sessionId,
-                Catalog = _catalog,
-                Schema = _schema,
+                Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
+                Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
                 Disposition = _resultDisposition,
                 Format = _resultFormat,
                 ResultCompression = _resultCompression,
@@ -248,19 +262,125 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
             if (hasExternalLinks)
             {
-                // TODO: Implement CloudFetch for external links
-                throw new NotImplementedException("CloudFetch support for Statement Execution API is not yet implemented");
+                // Use CloudFetch for external links
+                return CreateCloudFetchReader(response);
             }
             else if (response.Result != null && response.Result.Attachment != null && response.Result.Attachment.Length > 0)
             {
-                // Inline results with Arrow stream format
-                return new InlineArrowStreamReader(response.Result.Attachment);
+                // Check if data is LZ4 compressed
+                bool isLz4Compressed = response.Manifest?.ResultCompression?.ToUpperInvariant() == "LZ4_FRAME";
+
+                // Inline results - may be split across multiple chunks
+                int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
+                return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
+                    isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken);
             }
             else
             {
                 // No inline data - return empty reader
                 return new EmptyArrowArrayStream();
             }
+        }
+
+        /// <summary>
+        /// Creates a CloudFetch reader for external link results.
+        /// </summary>
+        private IArrowArrayStream CreateCloudFetchReader(ExecuteStatementResponse response)
+        {
+            var manifest = response.Manifest!;
+
+            // Build schema from manifest
+            var schema = GetSchemaFromManifest(manifest);
+
+            // The Statement Execution API response structure:
+            // - manifest.chunks: Array of ChunkInfo with metadata for ALL chunks (row counts, offsets, etc.)
+            // - result.external_links: Presigned URL for chunk 0 only (subsequent chunks fetched via GetChunk API)
+            //
+            // We pass the initial external links separately to avoid mutating the manifest.
+            var initialExternalLinks = response.Result?.ExternalLinks;
+
+            return CloudFetchReaderFactory.CreateStatementExecutionReader(
+                _client,
+                _currentStatementId!,
+                schema,
+                manifest,
+                initialExternalLinks,
+                _httpClient,
+                _properties,
+                _recyclableMemoryStreamManager,
+                _lz4BufferPool,
+                this); // Pass statement as ITracingStatement (via TracingStatement base class)
+        }
+
+        /// <summary>
+        /// Extracts the Arrow schema from the result manifest.
+        /// </summary>
+        private Schema GetSchemaFromManifest(ResultManifest manifest)
+        {
+            if (manifest.Schema == null || manifest.Schema.Columns == null || manifest.Schema.Columns.Count == 0)
+            {
+                throw new AdbcException("Result manifest does not contain schema information");
+            }
+
+            var fields = new List<Field>();
+            foreach (var column in manifest.Schema.Columns)
+            {
+                var arrowType = MapDatabricksTypeToArrowType(column.TypeName);
+                fields.Add(new Field(column.Name, arrowType, true));
+            }
+
+            return new Schema(fields, null);
+        }
+
+        /// <summary>
+        /// Maps Databricks SQL type names to Arrow types.
+        /// </summary>
+        private IArrowType MapDatabricksTypeToArrowType(string typeName)
+        {
+            // Handle parameterized types (e.g., DECIMAL(10,2), VARCHAR(100))
+            var baseType = typeName.Split('(')[0].ToUpperInvariant();
+
+            return baseType switch
+            {
+                "BOOLEAN" => BooleanType.Default,
+                "BYTE" or "TINYINT" => Int8Type.Default,
+                "SHORT" or "SMALLINT" => Int16Type.Default,
+                "INT" or "INTEGER" => Int32Type.Default,
+                "LONG" or "BIGINT" => Int64Type.Default,
+                "FLOAT" or "REAL" => FloatType.Default,
+                "DOUBLE" => DoubleType.Default,
+                "DECIMAL" or "NUMERIC" => ParseDecimalType(typeName),
+                "STRING" or "VARCHAR" or "CHAR" => StringType.Default,
+                "BINARY" or "VARBINARY" => BinaryType.Default,
+                "DATE" => Date32Type.Default,
+                "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
+                "INTERVAL" => StringType.Default, // Intervals as strings for now
+                "ARRAY" => StringType.Default, // Complex types as strings for now
+                "MAP" => StringType.Default,
+                "STRUCT" => StringType.Default,
+                "NULL" or "VOID" => NullType.Default,
+                _ => StringType.Default // Default to string for unknown types
+            };
+        }
+
+        /// <summary>
+        /// Parses a DECIMAL type to determine precision and scale.
+        /// </summary>
+        private IArrowType ParseDecimalType(string typeName)
+        {
+            // Default precision and scale
+            int precision = 38;
+            int scale = 18;
+
+            // Try to parse DECIMAL(precision, scale)
+            var match = System.Text.RegularExpressions.Regex.Match(typeName, @"DECIMAL\((\d+),\s*(\d+)\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                precision = int.Parse(match.Groups[1].Value);
+                scale = int.Parse(match.Groups[2].Value);
+            }
+
+            return new Decimal128Type(precision, scale);
         }
 
         /// <summary>
@@ -282,13 +402,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             }
 
             // Build the execute statement request
+            // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
             {
                 Statement = _sqlQuery,
                 WarehouseId = _warehouseId,
                 SessionId = _sessionId,
-                Catalog = _catalog,
-                Schema = _schema,
+                Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
+                Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
                 Disposition = _resultDisposition,
                 Format = _resultFormat,
                 ResultCompression = _resultCompression,
@@ -380,7 +501,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Arrow array stream for inline results in Arrow IPC stream format.
+        /// Reader for inline results in Arrow IPC stream format.
+        /// Handles both single-chunk and multi-chunk inline results by fetching
+        /// all chunks and concatenating them into a single Arrow stream.
+        /// Supports LZ4_FRAME compressed data.
         /// </summary>
         private class InlineArrowStreamReader : IArrowArrayStream
         {
@@ -388,14 +512,24 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             private readonly System.IO.MemoryStream _memoryStream;
             private bool _disposed;
 
-            public InlineArrowStreamReader(byte[] arrowData)
+            public InlineArrowStreamReader(
+                IStatementExecutionClient client,
+                string statementId,
+                byte[] firstChunkData,
+                bool isLz4Compressed,
+                int totalChunks,
+                System.Buffers.ArrayPool<byte> bufferPool,
+                CancellationToken cancellationToken)
             {
-                if (arrowData == null || arrowData.Length == 0)
+                if (firstChunkData == null || firstChunkData.Length == 0)
                 {
-                    throw new ArgumentException("Arrow data cannot be null or empty", nameof(arrowData));
+                    throw new ArgumentException("First chunk data cannot be null or empty", nameof(firstChunkData));
                 }
 
-                _memoryStream = new System.IO.MemoryStream(arrowData);
+                // Fetch and concatenate all chunks
+                var allData = FetchAllChunksAsync(client, statementId, firstChunkData, isLz4Compressed, totalChunks, bufferPool, cancellationToken).GetAwaiter().GetResult();
+
+                _memoryStream = new System.IO.MemoryStream(allData);
                 _streamReader = new ArrowStreamReader(_memoryStream);
             }
 
@@ -420,6 +554,65 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                     _disposed = true;
                 }
             }
+
+            private static async Task<byte[]> FetchAllChunksAsync(
+                IStatementExecutionClient client,
+                string statementId,
+                byte[] firstChunkData,
+                bool isLz4Compressed,
+                int totalChunks,
+                System.Buffers.ArrayPool<byte> bufferPool,
+                CancellationToken cancellationToken)
+            {
+                // Start with the first chunk (already have it inline)
+                var chunks = new List<byte[]>();
+
+                // Decompress first chunk if needed
+                if (isLz4Compressed)
+                {
+                    var decompressed = Lz4Utilities.DecompressLz4(firstChunkData, bufferPool);
+                    chunks.Add(decompressed.ToArray());
+                }
+                else
+                {
+                    chunks.Add(firstChunkData);
+                }
+
+                // Fetch remaining chunks (chunks are 0-indexed, chunk 0 is already inline)
+                for (int i = 1; i < totalChunks; i++)
+                {
+                    var chunkResult = await client.GetResultChunkAsync(statementId, i, cancellationToken).ConfigureAwait(false);
+
+                    if (chunkResult.Attachment != null && chunkResult.Attachment.Length > 0)
+                    {
+                        if (isLz4Compressed)
+                        {
+                            var decompressed = Lz4Utilities.DecompressLz4(chunkResult.Attachment, bufferPool);
+                            chunks.Add(decompressed.ToArray());
+                        }
+                        else
+                        {
+                            chunks.Add(chunkResult.Attachment);
+                        }
+                    }
+                }
+
+                // Concatenate all chunks
+                int totalLength = chunks.Sum(c => c.Length);
+                byte[] result = new byte[totalLength];
+                int offset = 0;
+                foreach (var chunk in chunks)
+                {
+                    Buffer.BlockCopy(chunk, 0, result, offset, chunk.Length);
+                    offset += chunk.Length;
+                }
+
+                return result;
+            }
         }
+
+        // TracingStatement implementation
+        public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
+        public override string AssemblyName => "Apache.Arrow.Adbc.Drivers.Databricks";
     }
 }

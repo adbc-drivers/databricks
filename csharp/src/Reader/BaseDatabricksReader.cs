@@ -42,15 +42,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
         private bool isDisposed;
 
         /// <summary>
-        /// Gets the statement for this reader. Subclasses can decide how to provide it.
-        /// Used for Thrift operations in DatabricksReader. Not used in CloudFetchReader.
-        /// </summary>
-        protected abstract ITracingStatement Statement { get; }
-
-        /// <summary>
         /// Protocol-agnostic constructor.
         /// </summary>
-        /// <param name="statement">The tracing statement (both Thrift and REST implement ITracingStatement).</param>
+        /// <param name="statement">The tracing statement (both Thrift and REST statements implement ITracingStatement).</param>
         /// <param name="schema">The Arrow schema.</param>
         /// <param name="response">The query response (nullable for REST API).</param>
         /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>

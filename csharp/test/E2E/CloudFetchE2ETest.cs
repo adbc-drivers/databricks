@@ -1,4 +1,4 @@
-﻿/*
+/*
 * Copyright (c) 2025 ADBC Drivers Contributors
 *
 * This file has been modified from its original version, which is
@@ -23,6 +23,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Databricks;
 using Xunit;
@@ -32,55 +34,154 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
 {
     /// <summary>
     /// End-to-end tests for the CloudFetch feature in the Databricks ADBC driver.
+    /// Tests both Thrift and Statement Execution REST API protocols.
     /// </summary>
-    public class CloudFetchE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
+    public class CloudFetchE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IDisposable
     {
+        private readonly ActivityListener? _activityListener;
+        private bool _disposed;
+
+        // Activity source names for Databricks drivers
+        private static readonly string[] s_activitySourceNames = new[]
+        {
+            "Apache.Arrow.Adbc.Drivers.Databricks",
+            "Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution"
+        };
+
         public CloudFetchE2ETest(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
             // Skip the test if the DATABRICKS_TEST_CONFIG_FILE environment variable is not set
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
+
+            // Set up activity listener to capture and output trace information
+            _activityListener = new ActivityListener
+            {
+                ShouldListenTo = source => s_activitySourceNames.Contains(source.Name),
+                Sample = (ref ActivityCreationOptions<ActivityContext> options) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStarted = activity =>
+                {
+                    var msg = $"[TRACE START] {activity.OperationName} | TraceId: {activity.TraceId} | SpanId: {activity.SpanId}";
+                    Debug.WriteLine(msg);
+                    OutputHelper?.WriteLine(msg);
+                    foreach (var tag in activity.Tags)
+                    {
+                        var tagMsg = $"  Tag: {tag.Key} = {tag.Value}";
+                        Debug.WriteLine(tagMsg);
+                        OutputHelper?.WriteLine(tagMsg);
+                    }
+                },
+                ActivityStopped = activity =>
+                {
+                    var duration = activity.Duration.TotalMilliseconds;
+                    var msg = $"[TRACE END] {activity.OperationName} | Duration: {duration:F2}ms | Status: {activity.Status}";
+                    Debug.WriteLine(msg);
+                    OutputHelper?.WriteLine(msg);
+                    foreach (var evt in activity.Events)
+                    {
+                        var evtMsg = $"  Event: {evt.Name} at {evt.Timestamp:O}";
+                        Debug.WriteLine(evtMsg);
+                        OutputHelper?.WriteLine(evtMsg);
+                        foreach (var tag in evt.Tags)
+                        {
+                            var tagMsg = $"    {tag.Key} = {tag.Value}";
+                            Debug.WriteLine(tagMsg);
+                            OutputHelper?.WriteLine(tagMsg);
+                        }
+                    }
+                }
+            };
+            ActivitySource.AddActivityListener(_activityListener);
         }
 
+        public new void Dispose()
+        {
+            if (!_disposed)
+            {
+                _activityListener?.Dispose();
+                _disposed = true;
+            }
+            base.Dispose();
+        }
+
+        /// <summary>
+        /// Test cases for CloudFetch with protocol dimension.
+        /// Format: (query, expected row count, use cloud fetch, enable direct results, protocol)
+        /// </summary>
         public static IEnumerable<object[]> TestCases()
         {
-            // Test cases format: (query, expected row count, use cloud fetch, enable direct results)
+            string[] protocols = { "thrift", "rest" };
 
-            string smallQuery = $"SELECT * FROM range(1000)";
-            yield return new object[] { smallQuery, 1000, true, true };
-            yield return new object[] { smallQuery, 1000, false, true };
-            yield return new object[] { smallQuery, 1000, true, false };
-            yield return new object[] { smallQuery, 1000, false, false };
+            string smallQuery = "SELECT * FROM range(1000)";
+            string largeQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
-            string largeQuery = $"SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
-            yield return new object[] { largeQuery, 1000000, true, true };
-            yield return new object[] { largeQuery, 1000000, false, true };
-            yield return new object[] { largeQuery, 1000000, true, false };
-            yield return new object[] { largeQuery, 1000000, false, false };
+            foreach (var protocol in protocols)
+            {
+                // Small query test cases
+                yield return new object[] { smallQuery, 1000, true, true, protocol };
+                yield return new object[] { smallQuery, 1000, false, true, protocol };
+                yield return new object[] { smallQuery, 1000, true, false, protocol };
+                yield return new object[] { smallQuery, 1000, false, false, protocol };
+
+                // Large query test cases
+                yield return new object[] { largeQuery, 1000000, true, true, protocol };
+                yield return new object[] { largeQuery, 1000000, false, true, protocol };
+                yield return new object[] { largeQuery, 1000000, true, false, protocol };
+                yield return new object[] { largeQuery, 1000000, false, false, protocol };
+            }
         }
 
         /// <summary>
         /// Integration test for running queries against a real Databricks cluster with different CloudFetch settings.
+        /// Tests both Thrift and Statement Execution REST API protocols.
         /// </summary>
         [Theory]
         [MemberData(nameof(TestCases))]
-        public async Task TestRealDatabricksCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults)
+        public async Task TestCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults, string protocol)
         {
-            var connection = NewConnection(TestConfiguration, new Dictionary<string, string>
+            var parameters = new Dictionary<string, string>
             {
+                [DatabricksParameters.Protocol] = protocol,
                 [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
                 [DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString(),
                 [DatabricksParameters.CanDecompressLz4] = "true",
                 [DatabricksParameters.MaxBytesPerFile] = "10485760", // 10MB
                 [DatabricksParameters.CloudFetchUrlExpirationBufferSeconds] = (15 * 60 - 2).ToString(),
-            });
+            };
 
-            // Execute a query that generates a large result set using range function
+            // For REST API, configure result disposition based on CloudFetch setting
+            if (protocol == "rest")
+            {
+                // Map useCloudFetch to result disposition:
+                // - useCloudFetch=true -> EXTERNAL_LINKS (forces CloudFetch)
+                // - useCloudFetch=false -> INLINE_OR_EXTERNAL_LINKS (server decides, prefers inline for small results)
+                // Note: API expects uppercase values
+                parameters[DatabricksParameters.ResultDisposition] = "INLINE_OR_EXTERNAL_LINKS";
+                parameters[DatabricksParameters.ResultFormat] = "ARROW_STREAM";
+                parameters[DatabricksParameters.ResultCompression] = "LZ4_FRAME";
+            }
+
+            var connection = NewConnection(TestConfiguration, parameters);
+            var protocolName = protocol == "rest" ? "REST API" : "Thrift";
+
+            await ExecuteAndValidateQuery(connection, query, rowCount, protocolName);
+        }
+
+        /// <summary>
+        /// Executes a query and validates the row count.
+        /// </summary>
+        private async Task ExecuteAndValidateQuery(AdbcConnection connection, string query, int expectedRowCount, string protocolName)
+        {
+            Console.WriteLine($"[TEST] ExecuteAndValidateQuery START - {protocolName}");
+            // Execute a query that generates a large result set
             var statement = connection.CreateStatement();
+            Console.WriteLine($"[TEST] Statement created");
             statement.SqlQuery = query;
 
             // Execute the query and get the result
+            Console.WriteLine($"[TEST] Executing query...");
             var result = await statement.ExecuteQueryAsync();
+            Console.WriteLine($"[TEST] Query executed, RowCount={result.RowCount}");
 
             if (result.Stream == null)
             {
@@ -89,19 +190,28 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
 
             // Read all the data and count rows
             long totalRows = 0;
+            int batchCount = 0;
             RecordBatch? batch;
+            Console.WriteLine($"[TEST] Reading batches...");
             while ((batch = await result.Stream.ReadNextRecordBatchAsync()) != null)
             {
                 totalRows += batch.Length;
+                batchCount++;
+                if (batchCount % 10 == 0)
+                {
+                    Console.WriteLine($"[TEST] Read {batchCount} batches, {totalRows} rows so far");
+                }
             }
+            Console.WriteLine($"[TEST] Finished reading {batchCount} batches, {totalRows} total rows");
 
-            Assert.True(totalRows >= rowCount);
+            Assert.True(totalRows >= expectedRowCount,
+                $"Expected at least {expectedRowCount} rows but got {totalRows} using {protocolName}");
 
             Assert.Null(await result.Stream.ReadNextRecordBatchAsync());
             statement.Dispose();
 
             // Also log to the test output helper if available
-            OutputHelper?.WriteLine($"Read {totalRows} rows from range function");
+            OutputHelper?.WriteLine($"[{protocolName}] Read {totalRows} rows");
         }
     }
 }
