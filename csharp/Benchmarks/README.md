@@ -148,8 +148,9 @@ Test performance impact of your changes **before merging** using label-based PR 
 
 #### What You Get:
 
-The workflow will automatically post a comment comparing your PR against the main branch baseline:
+The workflow will automatically post **two separate comments** comparing your PR against the main branch baseline:
 
+**Comment 1: .NET 8.0 Results**
 ```markdown
 ## 🎯 Benchmark Results (.NET 8.0)
 
@@ -161,10 +162,23 @@ The workflow will automatically post a comment comparing your PR against the mai
 | Gen2 Collections | 61 | 58 | -4.9% | 🟢 |
 ```
 
+**Comment 2: .NET Framework 4.7.2 Results**
+```markdown
+## 🎯 Benchmark Results (.NET Framework 4.7.2)
+
+| Metric | Baseline (main) | This PR | Change | Status |
+|--------|----------------|---------|--------|--------|
+| Min Execution Time (s) | 4.123 | 4.201 | +1.9% | ✅ |
+| Peak Memory (MB) | 346.19 | 331.03 | -4.4% | 🟢 |
+| Allocated Memory (MB) | 539.65 | 530.39 | -1.7% | ✅ |
+| Gen2 Collections | 7 | 7 | 0.0% | ✅ |
+```
+
 **Indicators:**
-- 🟢 **Improvement** - Metric improved (lower is better)
-- ✅ **No significant change** - Within acceptable range (<10% change)
+- 🟢 **Improvement** - Metric improved by >10%
+- ✅ **No significant change** - Within ±10%
 - ⚠️ **Regression** - Metric degraded by >10%
+- ➖ **New metric** - No baseline data available (first run)
 
 #### Key Features:
 
