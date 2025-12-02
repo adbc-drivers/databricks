@@ -64,6 +64,7 @@ jobs:
           submodules: recursive
 
       - name: Set up .NET
+        if: runner.environment == 'github-hosted'  # Skip on self-hosted runners
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
@@ -323,6 +324,7 @@ jobs:
           submodules: recursive
 
       - name: Set up .NET
+        if: runner.environment == 'github-hosted'  # Skip on self-hosted runners
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
