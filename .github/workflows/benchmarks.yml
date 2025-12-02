@@ -354,15 +354,17 @@ jobs:
           echo "DATABRICKS_TEST_CONFIG_FILE=$configPath" >> $env:GITHUB_ENV
 
       - name: Build
-        shell: bash
+        shell: powershell
         run: |
-          ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
+          Set-Location "${{ github.workspace }}\csharp\src"
+          dotnet build Apache.Arrow.Adbc.Drivers.Databricks.csproj
 
       - name: Run Benchmark (net472)
-        shell: bash
+        shell: powershell
         run: |
-          export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
-          ./ci/scripts/csharp_benchmark.sh "${{ github.workspace }}" "net472"
+          $env:DATABRICKS_TEST_CONFIG_FILE = "$env:USERPROFILE\.databricks\connection.json"
+          Set-Location "${{ github.workspace }}\csharp\Benchmarks"
+          dotnet run -c Release --project DatabricksBenchmarks.csproj --framework net472 -- --filter "*CloudFetchRealE2E*" --exporters json
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
