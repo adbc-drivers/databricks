@@ -49,7 +49,7 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, benchmark-runner]
     timeout-minutes: 30
     environment: azure-prod
     env:
@@ -307,7 +307,7 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
-    runs-on: windows-2022
+    runs-on: [self-hosted, Windows, benchmark-runner]
     timeout-minutes: 30
     environment: azure-prod
     env:
