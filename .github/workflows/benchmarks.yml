@@ -204,7 +204,7 @@ jobs:
           git show origin/gh-pages:bench/net8/data.js > ./cache/data.js || echo "[]" > ./cache/data.js
 
           # Convert from data.js format to JSON
-          # data.js has format: window.BENCHMARK_DATA = {...}
+          # data.js has format: window.BENCHMARK_DATA = { entries: { "Benchmark": [...] } }
           # We need to extract the last entry's benches array
           node -e "
             const fs = require('fs');
@@ -212,8 +212,10 @@ jobs:
             const dataMatch = content.match(/window\.BENCHMARK_DATA\s*=\s*(.+)/s);
             if (dataMatch) {
               const data = JSON.parse(dataMatch[1]);
-              const lastEntry = data.entries[data.entries.length - 1];
-              if (lastEntry) {
+              // entries is an object with 'Benchmark' key, not an array
+              const benchmarkEntries = data.entries['Benchmark'] || data.entries[Object.keys(data.entries)[0]] || [];
+              const lastEntry = benchmarkEntries[benchmarkEntries.length - 1];
+              if (lastEntry && lastEntry.benches) {
                 fs.writeFileSync('./cache/benchmark-data.json', JSON.stringify(lastEntry.benches, null, 2));
               } else {
                 fs.writeFileSync('./cache/benchmark-data.json', '[]');
@@ -503,13 +505,20 @@ jobs:
           }
 
           # Convert from data.js format to JSON
+          # data.js has format: window.BENCHMARK_DATA = { entries: { "Benchmark": [...] } }
           try {
             $content = Get-Content ./cache/data.js -Raw
             if ($content -match 'window\.BENCHMARK_DATA\s*=\s*(.+)') {
               $data = $matches[1] | ConvertFrom-Json
-              $lastEntry = $data.entries[-1]
-              if ($lastEntry) {
-                $lastEntry.benches | ConvertTo-Json -Depth 10 | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+              # entries is an object with 'Benchmark' key, not an array
+              $benchmarkEntries = if ($data.entries.Benchmark) { $data.entries.Benchmark } else { $data.entries.PSObject.Properties.Value | Select-Object -First 1 }
+              if ($benchmarkEntries -and $benchmarkEntries.Count -gt 0) {
+                $lastEntry = $benchmarkEntries[-1]
+                if ($lastEntry.benches) {
+                  $lastEntry.benches | ConvertTo-Json -Depth 10 | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+                } else {
+                  "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+                }
               } else {
                 "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
               }
