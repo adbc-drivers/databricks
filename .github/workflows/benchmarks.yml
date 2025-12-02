@@ -374,7 +374,7 @@ jobs:
 
       - name: Extract benchmark data for trend tracking
         id: extract-data
-        shell: pwsh
+        shell: powershell
         run: |
           $resultsFile = Get-ChildItem -Path "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" -Filter "*-report-full-compressed.json" | Select-Object -First 1
           $metricsFile = Get-ChildItem -Path $env:TEMP -Filter "cloudfetch_benchmark_metrics.json" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -415,7 +415,7 @@ jobs:
 
       - name: Create benchmark data file for trend tracking
         if: steps.extract-data.outputs.peak_memory_mb != ''
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" | Out-Null
           $benchmarkData = @(
