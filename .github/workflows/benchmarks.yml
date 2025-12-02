@@ -489,62 +489,37 @@ jobs:
 
       - name: Download baseline benchmark data from gh-pages
         if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
-        shell: pwsh
+        shell: bash
         run: |
           # Create cache directory
-          New-Item -ItemType Directory -Force -Path ./cache | Out-Null
+          mkdir -p ./cache
 
           # Fetch gh-pages branch
           git fetch origin gh-pages --depth=1
 
           # Extract baseline data from gh-pages
-          try {
-            git show origin/gh-pages:bench/net472/data.js | Out-File -FilePath ./cache/data.js -Encoding utf8
-          } catch {
-            "[]" | Out-File -FilePath ./cache/data.js -Encoding utf8
-          }
+          git show origin/gh-pages:bench/net472/data.js > ./cache/data.js || echo "[]" > ./cache/data.js
 
-          # Convert from data.js format to JSON
+          # Convert from data.js format to JSON (using Node.js which works reliably)
           # data.js has format: window.BENCHMARK_DATA = { entries: { "Benchmark": [...] } }
-          try {
-            $content = Get-Content ./cache/data.js -Raw
-            if ($content -match 'window\.BENCHMARK_DATA\s*=\s*(.+)') {
-              $data = $matches[1] | ConvertFrom-Json
-
-              # entries is an object with 'Benchmark' key, not an array
-              # Access it using PSObject.Properties to handle property names correctly
-              $entriesObj = $data.entries
-              $benchmarkEntries = $null
-
-              # Try to get 'Benchmark' property
-              $benchmarkProp = $entriesObj.PSObject.Properties | Where-Object { $_.Name -eq 'Benchmark' }
-              if ($benchmarkProp) {
-                $benchmarkEntries = $benchmarkProp.Value
+          node -e "
+            const fs = require('fs');
+            const content = fs.readFileSync('./cache/data.js', 'utf8');
+            const dataMatch = content.match(/window\.BENCHMARK_DATA\s*=\s*(.+)/s);
+            if (dataMatch) {
+              const data = JSON.parse(dataMatch[1]);
+              // entries is an object with 'Benchmark' key, not an array
+              const benchmarkEntries = data.entries['Benchmark'] || data.entries[Object.keys(data.entries)[0]] || [];
+              const lastEntry = benchmarkEntries[benchmarkEntries.length - 1];
+              if (lastEntry && lastEntry.benches) {
+                fs.writeFileSync('./cache/benchmark-data.json', JSON.stringify(lastEntry.benches, null, 2));
               } else {
-                # Fallback: get first property
-                $firstProp = $entriesObj.PSObject.Properties | Select-Object -First 1
-                if ($firstProp) {
-                  $benchmarkEntries = $firstProp.Value
-                }
-              }
-
-              if ($benchmarkEntries -and $benchmarkEntries.Count -gt 0) {
-                $lastEntry = $benchmarkEntries[-1]
-                if ($lastEntry.benches) {
-                  $lastEntry.benches | ConvertTo-Json -Depth 10 -Compress | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
-                } else {
-                  "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
-                }
-              } else {
-                "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+                fs.writeFileSync('./cache/benchmark-data.json', '[]');
               }
             } else {
-              "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+              fs.writeFileSync('./cache/benchmark-data.json', '[]');
             }
-          } catch {
-            Write-Host "Error parsing baseline data: $_"
-            "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
-          }
+          " || echo "[]" > ./cache/benchmark-data.json
 
       - name: Post PR comment with benchmark comparison (.NET Framework 4.7.2)
         if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != ''
