@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764617703484,
+  "lastUpdate": 1764640464838,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -214,6 +214,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Gen2 Collections",
             "value": 6,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "96666162e250716f19514ea50c712b828ef6040d",
+          "message": "fix(ci): fetch baseline data from gh-pages for PR comparison (#59)\n\n## Summary\n\nFixes the PR benchmark comparison by adding baseline data fetch from\ngh-pages and adding the required `pull-requests: write` permission.\n\n## Problem 1: Missing Baseline Data\n\nWhen adding the `benchmark` label to PRs, the comparison step was\nshowing a warning:\n```\nWarning: Could not find external JSON file for benchmark data at \nD:\\a\\databricks\\databricks\\cache\\benchmark-data.json. \nUsing empty default: Error: ENOENT: no such file or directory\n```\n\nThis happened because the workflow expected baseline data in\n`./cache/benchmark-data.json` but never fetched it from gh-pages.\n\n## Problem 2: Missing PR Comment Permission\n\nEven after fixing the baseline data fetch, comments were not being\nposted on PRs because the workflow lacked `pull-requests: write`\npermission.\n\n## Solution\n\n### 1. Added baseline data fetch step\n\n**\"Download baseline benchmark data from gh-pages\"**\n\nThis step runs before the comparison and:\n1. ✅ Fetches the `gh-pages` branch (shallow, depth=1 for speed)\n2. ✅ Extracts the `data.js` file from `bench/net8/` or `bench/net472/`\n3. ✅ Parses the JavaScript format: `window.BENCHMARK_DATA = {...}`\n4. ✅ Extracts the last entry's benches array (most recent baseline from\nmain)\n5. ✅ Saves it as JSON to `./cache/benchmark-data.json`\n6. ✅ Handles errors gracefully (uses empty array if no baseline found)\n\nImplemented for both platforms:\n- **Linux (.NET 8.0)**: Bash script with Node.js for JSON parsing\n- **Windows (.NET Framework 4.7.2)**: PowerShell script\n\n### 2. Added pull-requests write permission\n\n```yaml\npermissions:\n  contents: write       # Required to push benchmark results to gh-pages branch\n  pull-requests: write  # Required to post comparison comments on PRs\n```\n\n## Impact\n\n**Before:**\n```\n⚠️ Warning: Could not find external JSON file\nUsing empty default (no comparison data)\n❌ No comments posted on PRs\n```\n\n**After:**\n```\n## 🎯 Benchmark Results (.NET 8.0)\n\n| Metric | Baseline (main) | This PR | Change | Status |\n|--------|----------------|---------|--------|--------|\n| Min Execution Time (s) | 3.794 | 5.41 | +42.6% | ⚠️ |\n| Peak Memory (MB) | 420.98 | 360.30 | -14.4% | 🟢 |\n| Allocated Memory (MB) | 286.19 | 530.57 | +85.3% | ⚠️ |\n| Gen2 Collections | 61 | 7 | -88.5% | 🟢 |\n```\n\nNow PR comparison comments show:\n- ✅ Actual baseline values from main branch (most recent run on\ngh-pages)\n- ✅ PR values from current run\n- ✅ Percentage change for each metric\n- ✅ Visual indicators for improvements (🟢) and regressions (⚠️)\n- ✅ No more warnings about missing baseline data\n- ✅ Comments posted automatically on PRs\n\n## Testing\n\nTo test, add the `benchmark` label to this PR and verify:\n- ✅ Baseline data successfully downloaded from gh-pages\n- ✅ Comparison shows actual baseline vs PR values with percentage\nchanges\n- ✅ Warning eliminated\n- ✅ All 4 metrics tracked and compared correctly\n- ✅ Comments posted by both jobs (.NET 8.0 and .NET 4.7.2)\n\n## Dependencies\n\nBuilds on PR #57 (already merged) which added:\n- Label-based PR benchmarking\n- Min Execution Time tracking\n- PR comparison infrastructure\n\nThis PR completes the feature by:\n- Fixing the baseline data fetch\n- Adding the required permission for PR comments\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-01T17:50:46-08:00",
+          "tree_id": "9f0c7feac8750f08fcec8fbb467b1aa2013be02a",
+          "url": "https://github.com/adbc-drivers/databricks/commit/96666162e250716f19514ea50c712b828ef6040d"
+        },
+        "date": 1764640459463,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Min Execution Time (s)",
+            "value": 5.692,
+            "unit": "seconds"
+          },
+          {
+            "name": "Peak Memory (MB)",
+            "value": 357.078125,
+            "unit": "MB"
+          },
+          {
+            "name": "Allocated Memory (MB)",
+            "value": 526.47,
+            "unit": "MB"
+          },
+          {
+            "name": "Gen2 Collections",
+            "value": 8,
             "unit": "collections"
           }
         ]
