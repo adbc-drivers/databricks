@@ -510,12 +510,28 @@ jobs:
             $content = Get-Content ./cache/data.js -Raw
             if ($content -match 'window\.BENCHMARK_DATA\s*=\s*(.+)') {
               $data = $matches[1] | ConvertFrom-Json
+
               # entries is an object with 'Benchmark' key, not an array
-              $benchmarkEntries = if ($data.entries.Benchmark) { $data.entries.Benchmark } else { $data.entries.PSObject.Properties.Value | Select-Object -First 1 }
+              # Access it using PSObject.Properties to handle property names correctly
+              $entriesObj = $data.entries
+              $benchmarkEntries = $null
+
+              # Try to get 'Benchmark' property
+              $benchmarkProp = $entriesObj.PSObject.Properties | Where-Object { $_.Name -eq 'Benchmark' }
+              if ($benchmarkProp) {
+                $benchmarkEntries = $benchmarkProp.Value
+              } else {
+                # Fallback: get first property
+                $firstProp = $entriesObj.PSObject.Properties | Select-Object -First 1
+                if ($firstProp) {
+                  $benchmarkEntries = $firstProp.Value
+                }
+              }
+
               if ($benchmarkEntries -and $benchmarkEntries.Count -gt 0) {
                 $lastEntry = $benchmarkEntries[-1]
                 if ($lastEntry.benches) {
-                  $lastEntry.benches | ConvertTo-Json -Depth 10 | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
+                  $lastEntry.benches | ConvertTo-Json -Depth 10 -Compress | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
                 } else {
                   "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
                 }
@@ -526,6 +542,7 @@ jobs:
               "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
             }
           } catch {
+            Write-Host "Error parsing baseline data: $_"
             "[]" | Out-File -FilePath ./cache/benchmark-data.json -Encoding utf8
           }
 
