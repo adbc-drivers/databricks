@@ -327,7 +327,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Create Databricks config file
-        shell: pwsh
+        shell: powershell
         run: |
           $configDir = Join-Path $env:USERPROFILE ".databricks"
           New-Item -ItemType Directory -Force -Path $configDir | Out-Null
