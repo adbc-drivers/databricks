@@ -80,8 +80,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                 {
                     // Use Statement Execution REST API
                     // The connection creates its own HTTP client with proper handler chain
-                    // including TracingDelegatingHandler and RetryHttpHandler
-                    // TODO (PECO-2790): Add OAuth authentication handlers (OAuth, token refresh, token exchange)
+                    // including TracingDelegatingHandler, RetryHttpHandler, and OAuth authentication
+                    // handlers (OAuthDelegatingHandler, TokenRefreshDelegatingHandler,
+                    // MandatoryTokenExchangeDelegatingHandler) when OAuth auth is configured
                     connection = new StatementExecutionConnection(
                         mergedProperties,
                         this.RecyclableMemoryStreamManager,

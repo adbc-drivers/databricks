@@ -36,6 +36,7 @@ using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2.Client;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
+using Apache.Arrow.Adbc.Drivers.Databricks.Http;
 using Apache.Arrow.Adbc.Drivers.Databricks.Reader;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -455,114 +456,34 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             HttpMessageHandler baseHandler = base.CreateHttpHandler();
             HttpMessageHandler baseAuthHandler = HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator);
 
-            // IMPORTANT: Handler Order Matters!
-            //
-            // HTTP delegating handlers form a chain where execution flows from outermost to innermost
-            // on the request, and then innermost to outermost on the response.
-            //
-            // Request flow (outer → inner):  Handler1 → Handler2 → Handler3 → Network
-            // Response flow (inner → outer): Network → Handler3 → Handler2 → Handler1
-            //
-            // Current chain order (outermost to innermost):
-            // 1. OAuth handlers (OAuthDelegatingHandler, etc.) - only on baseHandler for API requests
-            // 2. ThriftErrorMessageHandler - extracts x-thriftserver-error-message and throws descriptive exceptions
-            // 3. RetryHttpHandler - retries 408, 429, 502, 503, 504 with Retry-After support
-            // 4. TracingDelegatingHandler - propagates W3C trace context
-            // 5. Base HTTP handler - actual network communication
-            //
-            // Why this order:
-            // - TracingDelegatingHandler must be innermost (closest to network) to capture full request timing
-            // - RetryHttpHandler must be INSIDE ThriftErrorMessageHandler so it can retry 503 responses
-            //   (e.g., during cluster auto-start) before ThriftErrorMessageHandler throws an exception
-            // - ThriftErrorMessageHandler must be OUTSIDE RetryHttpHandler so it only processes final
-            //   error responses after all retry attempts are exhausted
-            // - OAuth handlers are outermost since they modify request headers and don't need retry logic
-            //
-            // DO NOT change this order without understanding the implications!
-
-            // Add tracing handler to propagate W3C trace context if enabled (INNERMOST - closest to network)
-            if (_tracePropagationEnabled)
+            var config = new HttpHandlerFactory.HandlerConfig
             {
-                baseHandler = new TracingDelegatingHandler(baseHandler, this, _traceParentHeaderName, _traceStateEnabled);
-                baseAuthHandler = new TracingDelegatingHandler(baseAuthHandler, this, _traceParentHeaderName, _traceStateEnabled);
-            }
+                BaseHandler = baseHandler,
+                BaseAuthHandler = baseAuthHandler,
+                Properties = Properties,
+                Host = GetHost(),
+                ActivityTracer = this,
+                TracePropagationEnabled = _tracePropagationEnabled,
+                TraceParentHeaderName = _traceParentHeaderName,
+                TraceStateEnabled = _traceStateEnabled,
+                IdentityFederationClientId = _identityFederationClientId,
+                TemporarilyUnavailableRetry = TemporarilyUnavailableRetry,
+                TemporarilyUnavailableRetryTimeout = TemporarilyUnavailableRetryTimeout,
+                RateLimitRetry = RateLimitRetry,
+                RateLimitRetryTimeout = RateLimitRetryTimeout,
+                TimeoutMinutes = 1,
+                AddThriftErrorHandler = true
+            };
 
-            if (TemporarilyUnavailableRetry || RateLimitRetry)
-            {
-                // Add retry handler for 408, 429, 502, 503, 504 responses with Retry-After support
-                // This must be INSIDE ThriftErrorMessageHandler so retries happen before exceptions are thrown
-                baseHandler = new RetryHttpHandler(baseHandler, this, TemporarilyUnavailableRetryTimeout, RateLimitRetryTimeout, TemporarilyUnavailableRetry, RateLimitRetry);
-                baseAuthHandler = new RetryHttpHandler(baseAuthHandler, this, TemporarilyUnavailableRetryTimeout, RateLimitRetryTimeout, TemporarilyUnavailableRetry, RateLimitRetry);
-            }
+            var result = HttpHandlerFactory.CreateHandlers(config);
 
-            // Add Thrift error message handler AFTER retry handler (OUTSIDE in the chain)
-            // This ensures retryable status codes (408, 429, 502, 503, 504) are retried by RetryHttpHandler
-            // before ThriftErrorMessageHandler throws exceptions with Thrift error messages
-            baseHandler = new ThriftErrorMessageHandler(baseHandler);
-            baseAuthHandler = new ThriftErrorMessageHandler(baseAuthHandler);
-
-            if (Properties.TryGetValue(SparkParameters.AuthType, out string? authType) &&
-                SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue) &&
-                authTypeValue == SparkAuthType.OAuth)
+            if (result.AuthHttpClient != null)
             {
                 Debug.Assert(_authHttpClient == null, "Auth HttpClient should not be initialized yet.");
-                _authHttpClient = new HttpClient(baseAuthHandler);
-
-                string host = GetHost();
-                ITokenExchangeClient tokenExchangeClient = new TokenExchangeClient(_authHttpClient, host);
-
-                // Mandatory token exchange should be the inner handler so that it happens
-                // AFTER the OAuth handlers (e.g. after M2M sets the access token)
-                baseHandler = new MandatoryTokenExchangeDelegatingHandler(
-                    baseHandler,
-                    tokenExchangeClient,
-                    _identityFederationClientId);
-
-                // Add OAuth client credentials handler if OAuth M2M authentication is being used
-                if (Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantTypeStr) &&
-                    DatabricksOAuthGrantTypeParser.TryParse(grantTypeStr, out DatabricksOAuthGrantType grantType) &&
-                    grantType == DatabricksOAuthGrantType.ClientCredentials)
-                {
-                    Properties.TryGetValue(DatabricksParameters.OAuthClientId, out string? clientId);
-                    Properties.TryGetValue(DatabricksParameters.OAuthClientSecret, out string? clientSecret);
-                    Properties.TryGetValue(DatabricksParameters.OAuthScope, out string? scope);
-
-                    var tokenProvider = new OAuthClientCredentialsProvider(
-                        _authHttpClient,
-                        clientId!,
-                        clientSecret!,
-                        host!,
-                        scope: scope ?? "sql",
-                        timeoutMinutes: 1
-                    );
-
-                    baseHandler = new OAuthDelegatingHandler(baseHandler, tokenProvider);
-                }
-                // Add token renewal handler for OAuth access token
-                else if (Properties.TryGetValue(DatabricksParameters.TokenRenewLimit, out string? tokenRenewLimitStr) &&
-                    int.TryParse(tokenRenewLimitStr, out int tokenRenewLimit) &&
-                    tokenRenewLimit > 0 &&
-                    Properties.TryGetValue(SparkParameters.AccessToken, out string? accessToken))
-                {
-                    if (string.IsNullOrEmpty(accessToken))
-                    {
-                        throw new ArgumentException("Access token is required for OAuth authentication with token renewal.");
-                    }
-
-                    // Check if token is a JWT token by trying to decode it
-                    if (JwtTokenDecoder.TryGetExpirationTime(accessToken, out DateTime expiryTime))
-                    {
-                        baseHandler = new TokenRefreshDelegatingHandler(
-                            baseHandler,
-                            tokenExchangeClient,
-                            accessToken,
-                            expiryTime,
-                            tokenRenewLimit);
-                    }
-                }
+                _authHttpClient = result.AuthHttpClient;
             }
 
-            return baseHandler;
+            return result.Handler;
         }
 
         protected override bool GetObjectsPatternsRequireLowerCase => true;
@@ -850,17 +771,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
         protected override AuthenticationHeaderValue? GetAuthenticationHeaderValue(SparkAuthType authType)
         {
-            if (authType == SparkAuthType.OAuth)
-            {
-                Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantTypeStr);
-                if (DatabricksOAuthGrantTypeParser.TryParse(grantTypeStr, out DatabricksOAuthGrantType grantType) &&
-                    grantType == DatabricksOAuthGrantType.ClientCredentials)
-                {
-                    // Return null for client credentials flow since OAuth handler will handle authentication
-                    return null;
-                }
-            }
-            return base.GetAuthenticationHeaderValue(authType);
+            // All authentication is handled by delegating handlers in HttpHandlerFactory:
+            // - Token authentication -> StaticBearerTokenHandler
+            // - OAuth authentication -> OAuthDelegatingHandler / TokenRefreshDelegatingHandler / StaticBearerTokenHandler
+            // Return null to let handlers manage authentication rather than setting default headers
+            return null;
         }
 
         protected override void ValidateOAuthParameters()

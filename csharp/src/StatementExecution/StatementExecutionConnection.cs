@@ -21,6 +21,8 @@ using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
+using Apache.Arrow.Adbc.Drivers.Databricks.Http;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 
@@ -61,6 +63,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         private readonly bool _tracePropagationEnabled;
         private readonly string _traceParentHeaderName;
         private readonly bool _traceStateEnabled;
+
+        // Authentication support
+        private HttpClient? _authHttpClient;
+        private readonly string? _identityFederationClientId;
 
         // Default retry configuration
         private const int DefaultTemporarilyUnavailableRetryTimeout = 900; // 15 minutes
@@ -205,6 +211,12 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 activitySourceName: "Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution",
                 activitySourceVersion: AssemblyVersion));
 
+            // Authentication configuration
+            if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
+            {
+                _identityFederationClientId = identityFederationClientId;
+            }
+
             // Create or use provided HTTP client
             if (httpClient != null)
             {
@@ -220,68 +232,83 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Creates an HTTP client with proper handler chain (tracing, retry) for the Statement Execution API.
+        /// Creates an HTTP client with proper handler chain for the Statement Execution API.
         /// Handler chain order (outermost to innermost):
-        /// 1. RetryHttpHandler - retries 408, 429, 502, 503, 504 with Retry-After support
-        /// 2. TracingDelegatingHandler - propagates W3C trace context (closest to network)
-        /// 3. HttpClientHandler - actual network communication
+        /// 1. OAuthDelegatingHandler (if OAuth M2M) OR TokenRefreshDelegatingHandler (if token refresh) - token management
+        /// 2. MandatoryTokenExchangeDelegatingHandler (if OAuth) - workload identity federation
+        /// 3. RetryHttpHandler - retries 408, 429, 502, 503, 504 with Retry-After support
+        /// 4. TracingDelegatingHandler - propagates W3C trace context (closest to network)
+        /// 5. HttpClientHandler - actual network communication
         /// </summary>
         private HttpClient CreateHttpClient(IReadOnlyDictionary<string, string> properties)
         {
-            // Start with base HTTP handler
-            HttpMessageHandler handler = new HttpClientHandler();
-
-            // Add tracing handler (INNERMOST - closest to network) if enabled
-            if (_tracePropagationEnabled)
-            {
-                handler = new TracingDelegatingHandler(handler, this, _traceParentHeaderName, _traceStateEnabled);
-            }
-
             // Retry configuration
             bool temporarilyUnavailableRetry = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TemporarilyUnavailableRetry, true);
             bool rateLimitRetry = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.RateLimitRetry, true);
             int temporarilyUnavailableRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.TemporarilyUnavailableRetryTimeout, DefaultTemporarilyUnavailableRetryTimeout);
             int rateLimitRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.RateLimitRetryTimeout, DefaultRateLimitRetryTimeout);
-
-            // Add retry handler (OUTSIDE tracing)
-            if (temporarilyUnavailableRetry || rateLimitRetry)
-            {
-                handler = new RetryHttpHandler(
-                    handler,
-                    this, // Use this connection as the activity tracer
-                    temporarilyUnavailableRetryTimeout,
-                    rateLimitRetryTimeout,
-                    temporarilyUnavailableRetry,
-                    rateLimitRetry);
-            }
-
-            // Get timeout configuration
             int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DefaultCloudFetchTimeoutMinutes);
 
-            var httpClient = new HttpClient(handler)
+            var config = new HttpHandlerFactory.HandlerConfig
+            {
+                BaseHandler = new HttpClientHandler(),
+                BaseAuthHandler = new HttpClientHandler(),
+                Properties = properties,
+                Host = GetHost(properties),
+                ActivityTracer = this,
+                TracePropagationEnabled = _tracePropagationEnabled,
+                TraceParentHeaderName = _traceParentHeaderName,
+                TraceStateEnabled = _traceStateEnabled,
+                IdentityFederationClientId = _identityFederationClientId,
+                TemporarilyUnavailableRetry = temporarilyUnavailableRetry,
+                TemporarilyUnavailableRetryTimeout = temporarilyUnavailableRetryTimeout,
+                RateLimitRetry = rateLimitRetry,
+                RateLimitRetryTimeout = rateLimitRetryTimeout,
+                TimeoutMinutes = timeoutMinutes,
+                AddThriftErrorHandler = false
+            };
+
+            var result = HttpHandlerFactory.CreateHandlers(config);
+
+            if (result.AuthHttpClient != null)
+            {
+                _authHttpClient = result.AuthHttpClient;
+            }
+
+            var httpClient = new HttpClient(result.Handler)
             {
                 Timeout = TimeSpan.FromMinutes(timeoutMinutes)
             };
-
-            // Add authentication header
-            // Try access_token first, then fall back to token
-            string authToken = PropertyHelper.GetStringProperty(properties, SparkParameters.AccessToken, string.Empty);
-            if (string.IsNullOrEmpty(authToken))
-            {
-                authToken = PropertyHelper.GetStringProperty(properties, SparkParameters.Token, string.Empty);
-            }
-
-            if (!string.IsNullOrEmpty(authToken))
-            {
-                httpClient.DefaultRequestHeaders.Authorization =
-                    new AuthenticationHeaderValue("Bearer", authToken);
-            }
 
             // Set user agent
             string userAgent = GetUserAgent(properties);
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
 
             return httpClient;
+        }
+
+        /// <summary>
+        /// Gets the host from the connection properties.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <returns>The host URL.</returns>
+        private static string GetHost(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(SparkParameters.HostName, out string? host) && !string.IsNullOrEmpty(host))
+            {
+                return host;
+            }
+
+            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri))
+            {
+                // Parse the URI to extract the host
+                if (Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+                {
+                    return parsedUri.Host;
+                }
+            }
+
+            throw new ArgumentException("Host not found in connection properties. Please provide a valid host using either 'hostName' or 'uri' property.");
         }
 
         /// <summary>
@@ -420,6 +447,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             {
                 _httpClient.Dispose();
             }
+
+            // Dispose the auth HTTP client if it was created
+            _authHttpClient?.Dispose();
 
             _sessionLock.Dispose();
         }
