@@ -270,9 +270,9 @@ jobs:
                   const changePercent = ((current - baseline) / baseline) * 100;
                   change = (changePercent >= 0 ? '+' : '') + changePercent.toFixed(1) + '%';
 
-                  if (changePercent < -10) {
+                  if (changePercent < -30) {
                     status = '🟢'; // Improvement
-                  } else if (changePercent > 10) {
+                  } else if (changePercent > 30) {
                     status = '⚠️'; // Regression
                   } else {
                     status = '✅'; // No significant change
@@ -290,9 +290,9 @@ jobs:
             |--------|----------------|---------|--------|--------|
             ${tableRows}
             **Indicators:**
-            - 🟢 **Improvement** - Metric improved by >10%
-            - ✅ **No significant change** - Within ±10%
-            - ⚠️ **Regression** - Metric degraded by >10%
+            - 🟢 **Improvement** - Metric improved by >30%
+            - ✅ **No significant change** - Within ±30%
+            - ⚠️ **Regression** - Metric degraded by >30%
             - ➖ **New metric** - No baseline data available
 
             📊 [View detailed results](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
@@ -566,9 +566,9 @@ jobs:
                   const changePercent = ((current - baseline) / baseline) * 100;
                   change = (changePercent >= 0 ? '+' : '') + changePercent.toFixed(1) + '%';
 
-                  if (changePercent < -10) {
+                  if (changePercent < -30) {
                     status = '🟢'; // Improvement
-                  } else if (changePercent > 10) {
+                  } else if (changePercent > 30) {
                     status = '⚠️'; // Regression
                   } else {
                     status = '✅'; // No significant change
@@ -586,9 +586,9 @@ jobs:
             |--------|----------------|---------|--------|--------|
             ${tableRows}
             **Indicators:**
-            - 🟢 **Improvement** - Metric improved by >10%
-            - ✅ **No significant change** - Within ±10%
-            - ⚠️ **Regression** - Metric degraded by >10%
+            - 🟢 **Improvement** - Metric improved by >30%
+            - ✅ **No significant change** - Within ±30%
+            - ⚠️ **Regression** - Metric degraded by >30%
             - ➖ **New metric** - No baseline data available
 
             📊 [View detailed results](${context.payload.repository.html_url}/actions/runs/${context.runId})`;

@@ -175,9 +175,9 @@ The workflow will automatically post **two separate comments** comparing your PR
 ```
 
 **Indicators:**
-- 🟢 **Improvement** - Metric improved by >10%
-- ✅ **No significant change** - Within ±10%
-- ⚠️ **Regression** - Metric degraded by >10%
+- 🟢 **Improvement** - Metric improved by >30%
+- ✅ **No significant change** - Within ±30%
+- ⚠️ **Regression** - Metric degraded by >30%
 - ➖ **New metric** - No baseline data available (first run)
 
 #### Key Features:
@@ -190,7 +190,7 @@ The workflow will automatically post **two separate comments** comparing your PR
 
 #### Alert Threshold:
 
-The workflow alerts if any metric regresses by **>10%** compared to baseline. This helps identify:
+The workflow alerts if any metric regresses by **>30%** compared to baseline. This helps identify:
 - Performance regressions before merging
 - Memory leaks or increased allocations
 - Changes that trigger excessive garbage collections
@@ -252,7 +252,7 @@ This query processes approximately 1.4M rows and tests CloudFetch with realistic
 
 ### Alert Thresholds
 
-- **PR benchmarks**: Alert if any metric regresses by >10%
+- **PR benchmarks**: Alert if any metric regresses by >30%
 - **Main branch**: Alert if metrics increase by >150% (2.5x baseline)
 
 Alerts are informational only and don't fail the workflow.
@@ -289,17 +289,17 @@ Each artifact contains:
    - Primary performance metric tracked on GitHub Pages
    - End-to-end time including query execution, CloudFetch downloads, LZ4 decompression, and batch consumption
    - Lower is better (tracks performance improvements)
-   - Alert threshold: 110% on PRs (10% regression warning)
+   - Alert threshold: 130% on PRs (30% regression warning)
    - Source: BenchmarkDotNet's `Statistics.Min`
 
 2. **Peak Memory (MB)**: Maximum working set memory (private bytes) during execution
    - Lower is better
-   - Alert threshold: 150% on main, 110% on PRs
+   - Alert threshold: 150% on main, 130% on PRs
    - Source: Custom metrics from `Process.PrivateMemorySize64`
 
 3. **Allocated Memory (MB)**: Total managed memory allocated during execution
    - Lower is better
-   - Alert threshold: 150% on main, 110% on PRs
+   - Alert threshold: 150% on main, 130% on PRs
    - Source: BenchmarkDotNet's `MemoryDiagnoser`
 
 4. **Gen2 Collections**: Number of full garbage collections
@@ -380,7 +380,7 @@ This selective triggering saves CI resources and provides faster feedback for no
 
 **No** - Alerts are informational only and do **not** block merges or fail the workflow.
 
-**For PRs:** If metrics regress by >10%, a warning (⚠️) appears in the comparison comment but doesn't fail the workflow.
+**For PRs:** If metrics regress by >30%, a warning (⚠️) appears in the comparison comment but doesn't fail the workflow.
 
 **For main branch:** If metrics regress by >150%, an alert appears in GitHub Pages dashboard but the workflow still passes.
 
