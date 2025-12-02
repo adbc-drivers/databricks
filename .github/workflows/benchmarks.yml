@@ -35,8 +35,8 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
+  group: benchmark-runner  # Single queue for all benchmark runs
+  cancel-in-progress: false  # Queue runs instead of canceling
 
 permissions:
   contents: write       # Required to push benchmark results to gh-pages branch
@@ -303,6 +303,7 @@ jobs:
 
   benchmark-net472:
     name: Benchmark (.NET Framework 4.7.2)
+    needs: [benchmark-net8]  # Wait for .NET 8.0 to complete first
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
