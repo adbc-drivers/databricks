@@ -1,0 +1,42 @@
+[
+  {
+    "name": "catalog_sales",
+    "description": "Catalog sales - 1.4M rows, 34 columns (current default)",
+    "query": "select * from main.tpcds_sf1_delta.catalog_sales",
+    "expected_rows": 1441548,
+    "columns": 34,
+    "category": "large-wide"
+  },
+  {
+    "name": "store_sales",
+    "description": "Store sales - 2.8M rows, 23 columns (largest)",
+    "query": "select * from main.tpcds_sf1_delta.store_sales",
+    "expected_rows": 2880404,
+    "columns": 23,
+    "category": "large-medium"
+  },
+  {
+    "name": "inventory",
+    "description": "Inventory - 11.7M rows, 5 columns (narrow & huge)",
+    "query": "select * from main.tpcds_sf1_delta.inventory",
+    "expected_rows": 11745000,
+    "columns": 5,
+    "category": "xlarge-narrow"
+  },
+  {
+    "name": "web_sales",
+    "description": "Web sales - 720K rows, 34 columns (medium)",
+    "query": "select * from main.tpcds_sf1_delta.web_sales",
+    "expected_rows": 719384,
+    "columns": 34,
+    "category": "medium-wide"
+  },
+  {
+    "name": "customer",
+    "description": "Customer - 100K rows, 18 columns (small)",
+    "query": "select * from main.tpcds_sf1_delta.customer",
+    "expected_rows": 100000,
+    "columns": 18,
+    "category": "small-medium"
+  }
+]
