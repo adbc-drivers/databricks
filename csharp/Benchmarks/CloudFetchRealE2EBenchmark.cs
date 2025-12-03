@@ -58,7 +58,9 @@ namespace Apache.Arrow.Adbc.Benchmarks
                 try
                 {
                     var readDelayParam = benchmarkCase.Parameters["ReadDelayMs"];
-                    string key = $"ExecuteLargeQuery_{readDelayParam}";
+                    var queryParam = benchmarkCase.Parameters["benchmarkQuery"] as BenchmarkQuery;
+                    string queryName = queryParam?.name ?? "default";
+                    string key = $"ExecuteLargeQuery_{queryName}_{readDelayParam}";
 
                     string metricsFilePath = Path.Combine(Path.GetTempPath(), "cloudfetch_benchmark_metrics.json");
                     if (File.Exists(metricsFilePath))
@@ -111,7 +113,9 @@ namespace Apache.Arrow.Adbc.Benchmarks
                 try
                 {
                     var readDelayParam = benchmarkCase.Parameters["ReadDelayMs"];
-                    string key = $"ExecuteLargeQuery_{readDelayParam}";
+                    var queryParam = benchmarkCase.Parameters["benchmarkQuery"] as BenchmarkQuery;
+                    string queryName = queryParam?.name ?? "default";
+                    string key = $"ExecuteLargeQuery_{queryName}_{readDelayParam}";
 
                     string metricsFilePath = Path.Combine(Path.GetTempPath(), "cloudfetch_benchmark_metrics.json");
                     if (File.Exists(metricsFilePath))
@@ -164,7 +168,9 @@ namespace Apache.Arrow.Adbc.Benchmarks
                 try
                 {
                     var readDelayParam = benchmarkCase.Parameters["ReadDelayMs"];
-                    string key = $"ExecuteLargeQuery_{readDelayParam}";
+                    var queryParam = benchmarkCase.Parameters["benchmarkQuery"] as BenchmarkQuery;
+                    string queryName = queryParam?.name ?? "default";
+                    string key = $"ExecuteLargeQuery_{queryName}_{readDelayParam}";
 
                     string metricsFilePath = Path.Combine(Path.GetTempPath(), "cloudfetch_benchmark_metrics.json");
                     if (File.Exists(metricsFilePath))
@@ -218,7 +224,9 @@ namespace Apache.Arrow.Adbc.Benchmarks
                 try
                 {
                     var readDelayParam = benchmarkCase.Parameters["ReadDelayMs"];
-                    string key = $"ExecuteLargeQuery_{readDelayParam}";
+                    var queryParam = benchmarkCase.Parameters["benchmarkQuery"] as BenchmarkQuery;
+                    string queryName = queryParam?.name ?? "default";
+                    string key = $"ExecuteLargeQuery_{queryName}_{readDelayParam}";
 
                     string metricsFilePath = Path.Combine(Path.GetTempPath(), "cloudfetch_benchmark_metrics.json");
                     if (File.Exists(metricsFilePath))
@@ -284,6 +292,19 @@ namespace Apache.Arrow.Adbc.Benchmarks
     }
 
     /// <summary>
+    /// Query definition for benchmark suite.
+    /// </summary>
+    internal class BenchmarkQuery
+    {
+        public string name { get; set; } = string.Empty;
+        public string description { get; set; } = string.Empty;
+        public string query { get; set; } = string.Empty;
+        public int expected_rows { get; set; }
+        public int columns { get; set; }
+        public string category { get; set; } = string.Empty;
+    }
+
+    /// <summary>
     /// Real E2E performance benchmark for Databricks CloudFetch with actual cluster.
     ///
     /// Prerequisites:
@@ -324,9 +345,58 @@ namespace Apache.Arrow.Adbc.Benchmarks
         private DatabricksTestConfig _testConfig = null!;
         private string _hostname = null!;
         private string _httpPath = null!;
+        private static List<BenchmarkQuery>? _benchmarkQueries;
+        private string _currentQueryName = "default";
 
         [Params(5)] // Read delay in milliseconds per 10K rows (5 = simulate Power BI)
         public int ReadDelayMs { get; set; }
+
+        // Load queries from benchmark-queries.json file
+        public static IEnumerable<BenchmarkQuery> GetQueries()
+        {
+            if (_benchmarkQueries != null)
+            {
+                return _benchmarkQueries;
+            }
+
+            // Check for queries file path from environment variable
+            string? queriesFile = Environment.GetEnvironmentVariable("DATABRICKS_BENCHMARK_QUERIES_FILE");
+            if (string.IsNullOrEmpty(queriesFile))
+            {
+                // Fall back to single query mode from config file
+                string? configFile = Environment.GetEnvironmentVariable("DATABRICKS_TEST_CONFIG_FILE");
+                if (string.IsNullOrEmpty(configFile))
+                {
+                    throw new InvalidOperationException("Either DATABRICKS_BENCHMARK_QUERIES_FILE or DATABRICKS_TEST_CONFIG_FILE must be set");
+                }
+
+                string configJson = File.ReadAllText(configFile);
+                var config = JsonSerializer.Deserialize<DatabricksTestConfig>(configJson);
+                if (config == null || string.IsNullOrEmpty(config.query))
+                {
+                    throw new InvalidOperationException("Config file must contain 'query' field");
+                }
+
+                _benchmarkQueries = new List<BenchmarkQuery>
+                {
+                    new BenchmarkQuery
+                    {
+                        name = "default",
+                        description = "Query from config file",
+                        query = config.query,
+                        category = "custom"
+                    }
+                };
+                return _benchmarkQueries;
+            }
+
+            // Load queries from JSON file
+            string queriesJson = File.ReadAllText(queriesFile);
+            _benchmarkQueries = JsonSerializer.Deserialize<List<BenchmarkQuery>>(queriesJson)
+                ?? throw new InvalidOperationException("Failed to parse queries file");
+
+            return _benchmarkQueries;
+        }
 
         [GlobalSetup]
         public void GlobalSetup()
@@ -379,8 +449,11 @@ namespace Apache.Arrow.Adbc.Benchmarks
             Console.WriteLine($"Loaded config from: {configFile}");
             Console.WriteLine($"Hostname: {_hostname}");
             Console.WriteLine($"HTTP Path: {_httpPath}");
-            Console.WriteLine($"Query: {_testConfig.query}");
             Console.WriteLine($"Benchmark will test CloudFetch with {ReadDelayMs}ms per 10K rows read delay");
+
+            // Load queries to validate they exist
+            var queries = GetQueries().ToList();
+            Console.WriteLine($"Loaded {queries.Count} benchmark queries");
         }
 
         [IterationSetup]
@@ -472,7 +545,7 @@ namespace Apache.Arrow.Adbc.Benchmarks
 #endif
 
             // Print metrics for this iteration
-            Console.WriteLine($"CloudFetch E2E [Delay={ReadDelayMs}ms/10K rows] - Peak memory: {peakMemoryMB:F2} MB, Total rows: {_totalRows:N0}, Total batches: {_totalBatches:N0}");
+            Console.WriteLine($"CloudFetch E2E [{_currentQueryName}, Delay={ReadDelayMs}ms/10K rows] - Peak memory: {peakMemoryMB:F2} MB, Total rows: {_totalRows:N0}, Total batches: {_totalBatches:N0}");
 #if NET6_0_OR_GREATER
             Console.WriteLine($"  Process time: {processorTimeMs:F2} ms, Total allocated: {(totalAllocatedBytes/1024.0/1024.0):F2} MB, GC time: {gcTimePercentage:F2}% (precise)");
 #else
@@ -480,7 +553,8 @@ namespace Apache.Arrow.Adbc.Benchmarks
 #endif
 
             // Save metrics to temp file for the custom columns
-            string key = $"ExecuteLargeQuery_{ReadDelayMs}";
+            // Key includes both query name and read delay to uniquely identify each benchmark combination
+            string key = $"ExecuteLargeQuery_{_currentQueryName}_{ReadDelayMs}";
             var metrics = new BenchmarkMetrics
             {
                 PeakMemoryMB = peakMemoryMB,
@@ -520,19 +594,26 @@ namespace Apache.Arrow.Adbc.Benchmarks
         /// <summary>
         /// Execute a large query against Databricks and consume all result batches.
         /// Simulates client behavior like Power BI reading data.
-        /// Uses the query from the config file.
+        /// Uses the query from the config file or benchmark queries file.
         /// </summary>
         [Benchmark]
-        public async Task<long> ExecuteLargeQuery()
+        [ArgumentsSource(nameof(GetQueries))]
+        public async Task<long> ExecuteLargeQuery(BenchmarkQuery benchmarkQuery)
         {
             if (_connection == null)
             {
                 throw new InvalidOperationException("Connection not initialized");
             }
 
-            // Execute query from config file
+            // Store current query name for metrics
+            _currentQueryName = benchmarkQuery.name;
+
+            Console.WriteLine($"\n=== Running query: {benchmarkQuery.name} ===");
+            Console.WriteLine($"Description: {benchmarkQuery.description}");
+
+            // Execute query
             var statement = _connection.CreateStatement();
-            statement.SqlQuery = _testConfig.query;
+            statement.SqlQuery = benchmarkQuery.query;
 
             var result = await statement.ExecuteQueryAsync();
             if (result.Stream == null)

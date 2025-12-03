@@ -143,30 +143,14 @@ jobs:
         run: |
           ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
 
-      - name: Run benchmarks sequentially
+      - name: Run benchmark suite
         shell: bash
         run: |
           mkdir -p ~/.databricks
           mkdir -p benchmark-results
 
-          QUERIES='${{ needs.setup.outputs.queries_json }}'
-          QUERY_COUNT=$(echo "$QUERIES" | jq 'length')
-
-          echo "=== Running $QUERY_COUNT queries sequentially ==="
-
-          for i in $(seq 0 $(($QUERY_COUNT - 1))); do
-            QUERY_NAME=$(echo "$QUERIES" | jq -r ".[$i].name")
-            QUERY_SQL=$(echo "$QUERIES" | jq -r ".[$i].query")
-            QUERY_DESC=$(echo "$QUERIES" | jq -r ".[$i].description")
-
-            echo ""
-            echo "=========================================="
-            echo "Query $((i + 1))/$QUERY_COUNT: $QUERY_NAME"
-            echo "Description: $QUERY_DESC"
-            echo "=========================================="
-
-            # Create config file for this query
-            cat > ~/.databricks/connection.json << EOF
+          # Create config file with connection details (query will be read from benchmark-queries.json)
+          cat > ~/.databricks/connection.json << EOF
           {
             "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
             "auth_type": "oauth",
@@ -176,31 +160,29 @@ jobs:
             "type": "databricks",
             "catalog": "main",
             "db_schema": "ADBC_Testing",
-            "query": "$QUERY_SQL"
+            "query": "select 1"
           }
           EOF
 
-            export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
+          export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
+          export DATABRICKS_BENCHMARK_QUERIES_FILE="${{ github.workspace }}/csharp/Benchmarks/benchmark-queries.json"
 
-            # Run benchmark
-            if ./ci/scripts/csharp_benchmark.sh "${{ github.workspace }}" "net8.0"; then
-              echo "✅ Query $QUERY_NAME completed successfully"
+          QUERY_COUNT=$(jq 'length' "$DATABRICKS_BENCHMARK_QUERIES_FILE")
+          echo "=== Running benchmark suite with $QUERY_COUNT queries ==="
+          echo "Queries will be executed by BenchmarkDotNet in a single session"
 
-              # Save results with query name
-              if [ -d "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" ]; then
-                mkdir -p "benchmark-results/$QUERY_NAME"
-                cp -r csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/* "benchmark-results/$QUERY_NAME/"
+          # Run benchmark once - BenchmarkDotNet will run all queries via ArgumentsSource
+          if ./ci/scripts/csharp_benchmark.sh "${{ github.workspace }}" "net8.0"; then
+            echo "✅ Benchmark suite completed successfully"
 
-                # Clean up for next iteration
-                rm -rf csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/*
-              fi
-            else
-              echo "❌ Query $QUERY_NAME failed"
+            # Save all results
+            if [ -d "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" ]; then
+              cp -r csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/* benchmark-results/
             fi
-          done
-
-          echo ""
-          echo "=== Benchmark suite completed ==="
+          else
+            echo "❌ Benchmark suite failed"
+            exit 1
+          fi
 
       - name: Upload all benchmark results
         uses: actions/upload-artifact@v4
@@ -214,19 +196,16 @@ jobs:
         run: |
           echo "# Benchmark Suite Results (.NET 8.0)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Query | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "All queries executed in a single BenchmarkDotNet session to avoid redundant builds." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-          for dir in benchmark-results/*; do
-            if [ -d "$dir" ]; then
-              query_name=$(basename "$dir")
-              if [ -f "$dir"/*-report-full-compressed.json ]; then
-                echo "| $query_name | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "| $query_name | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-              fi
-            fi
-          done
+          if [ -f "benchmark-results"/*-report-full-compressed.json ]; then
+            echo "✅ Benchmark suite completed successfully" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Results include all $(jq 'length' csharp/Benchmarks/benchmark-queries.json) queries from benchmark-queries.json" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Benchmark suite failed" >> $GITHUB_STEP_SUMMARY
+          fi
 
   benchmark-net472:
     name: Benchmark Suite (.NET Framework 4.7.2)
@@ -259,71 +238,53 @@ jobs:
         run: |
           ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
 
-      - name: Run benchmarks sequentially
+      - name: Run benchmark suite
         shell: pwsh
         run: |
           $configDir = Join-Path $env:USERPROFILE ".databricks"
           New-Item -ItemType Directory -Force -Path $configDir | Out-Null
           New-Item -ItemType Directory -Force -Path "benchmark-results" | Out-Null
 
-          $queries = '${{ needs.setup.outputs.queries_json }}' | ConvertFrom-Json
-          $queryCount = $queries.Count
+          # Create config file with connection details (query will be read from benchmark-queries.json)
+          $config = @{
+            uri = "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}"
+            auth_type = "oauth"
+            grant_type = "client_credentials"
+            client_id = "${{ env.DATABRICKS_CLIENT_ID }}"
+            client_secret = "${{ env.DATABRICKS_CLIENT_SECRET }}"
+            type = "databricks"
+            catalog = "main"
+            db_schema = "ADBC_Testing"
+            query = "select 1"
+          } | ConvertTo-Json
 
-          Write-Host "=== Running $queryCount queries sequentially ==="
+          $configPath = Join-Path $configDir "connection.json"
+          $config | Out-File -FilePath $configPath -Encoding utf8
+          $env:DATABRICKS_TEST_CONFIG_FILE = $configPath
 
-          for ($i = 0; $i -lt $queryCount; $i++) {
-            $query = $queries[$i]
-            $queryName = $query.name
-            $querySQL = $query.query
-            $queryDesc = $query.description
+          $queriesFile = Join-Path "${{ github.workspace }}" "csharp/Benchmarks/benchmark-queries.json"
+          $env:DATABRICKS_BENCHMARK_QUERIES_FILE = $queriesFile
 
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "Query $($i + 1)/$queryCount : $queryName"
-            Write-Host "Description: $queryDesc"
-            Write-Host "=========================================="
+          $queryCount = (Get-Content $queriesFile | ConvertFrom-Json).Count
+          Write-Host "=== Running benchmark suite with $queryCount queries ==="
+          Write-Host "Queries will be executed by BenchmarkDotNet in a single session"
 
-            # Create config file for this query
-            $config = @{
-              uri = "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}"
-              auth_type = "oauth"
-              grant_type = "client_credentials"
-              client_id = "${{ env.DATABRICKS_CLIENT_ID }}"
-              client_secret = "${{ env.DATABRICKS_CLIENT_SECRET }}"
-              type = "databricks"
-              catalog = "main"
-              db_schema = "ADBC_Testing"
-              query = $querySQL
-            } | ConvertTo-Json
+          # Run benchmark once - BenchmarkDotNet will run all queries via ArgumentsSource
+          $benchmarkPath = Join-Path "${{ github.workspace }}" "ci/scripts/csharp_benchmark.sh"
+          bash $benchmarkPath "${{ github.workspace }}" "net472"
 
-            $configPath = Join-Path $configDir "connection.json"
-            $config | Out-File -FilePath $configPath -Encoding utf8
-            $env:DATABRICKS_TEST_CONFIG_FILE = $configPath
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Benchmark suite completed successfully"
 
-            # Run benchmark
-            $benchmarkPath = Join-Path "${{ github.workspace }}" "ci/scripts/csharp_benchmark.sh"
-            bash $benchmarkPath "${{ github.workspace }}" "net472"
-
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "✅ Query $queryName completed successfully"
-
-              # Save results with query name
-              $resultsPath = "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results"
-              if (Test-Path $resultsPath) {
-                $destPath = "benchmark-results/$queryName"
-                New-Item -ItemType Directory -Force -Path $destPath | Out-Null
-                Copy-Item -Path "$resultsPath/*" -Destination $destPath -Recurse -Force
-
-                # Clean up for next iteration
-                Remove-Item -Path "$resultsPath/*" -Recurse -Force
-              }
-            } else {
-              Write-Host "❌ Query $queryName failed"
+            # Save all results
+            $resultsPath = "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results"
+            if (Test-Path $resultsPath) {
+              Copy-Item -Path "$resultsPath/*" -Destination "benchmark-results/" -Recurse -Force
             }
+          } else {
+            Write-Host "❌ Benchmark suite failed"
+            exit 1
           }
-
-          Write-Host ""
-          Write-Host "=== Benchmark suite completed ==="
 
       - name: Upload all benchmark results
         uses: actions/upload-artifact@v4
@@ -338,16 +299,13 @@ jobs:
         run: |
           echo "# Benchmark Suite Results (.NET Framework 4.7.2)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Query | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "All queries executed in a single BenchmarkDotNet session to avoid redundant builds." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-          for dir in benchmark-results/*; do
-            if [ -d "$dir" ]; then
-              query_name=$(basename "$dir")
-              if [ -f "$dir"/*-report-full-compressed.json ]; then
-                echo "| $query_name | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "| $query_name | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-              fi
-            fi
-          done
+          if [ -f "benchmark-results"/*-report-full-compressed.json ]; then
+            echo "✅ Benchmark suite completed successfully" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Results include all $(jq 'length' csharp/Benchmarks/benchmark-queries.json) queries from benchmark-queries.json" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Benchmark suite failed" >> $GITHUB_STEP_SUMMARY
+          fi
