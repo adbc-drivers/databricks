@@ -198,6 +198,7 @@ jobs:
 
       - name: Download baseline benchmark data from gh-pages
         if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
+        shell: bash
         run: |
           # Create cache directory
           mkdir -p ./cache
