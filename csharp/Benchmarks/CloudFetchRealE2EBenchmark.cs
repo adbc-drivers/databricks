@@ -294,7 +294,7 @@ namespace Apache.Arrow.Adbc.Benchmarks
     /// <summary>
     /// Query definition for benchmark suite.
     /// </summary>
-    internal class BenchmarkQuery
+    public class BenchmarkQuery
     {
         public string name { get; set; } = string.Empty;
         public string description { get; set; } = string.Empty;
