@@ -328,50 +328,120 @@ jobs:
           name: benchmark-results-net472
           path: results-net472
 
-      - name: Parse and post results
+      - name: Download baseline results from main
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Find the markdown results files
-          NET8_RESULTS=$(find results-net8 -name "*-report-github.md" | head -1)
-          NET472_RESULTS=$(find results-net472 -name "*-report-github.md" | head -1)
+          # Find the latest successful workflow run on main branch
+          MAIN_RUN_ID=$(gh run list \
+            --repo ${{ github.repository }} \
+            --workflow benchmarks.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+
+          if [ -n "$MAIN_RUN_ID" ]; then
+            echo "Found baseline run: $MAIN_RUN_ID"
+            mkdir -p baseline-net8 baseline-net472
+
+            # Download baseline artifacts
+            gh run download $MAIN_RUN_ID \
+              --repo ${{ github.repository }} \
+              --name benchmark-results-net8 \
+              --dir baseline-net8 || echo "No baseline for .NET 8.0"
+
+            gh run download $MAIN_RUN_ID \
+              --repo ${{ github.repository }} \
+              --name benchmark-results-net472 \
+              --dir baseline-net472 || echo "No baseline for .NET Framework 4.7.2"
+          else
+            echo "No baseline run found on main branch"
+          fi
+
+      - name: Compare and post results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Find the result files
+          NET8_RESULTS=$(find results-net8 -name "*-report-full-compressed.json" | head -1)
+          NET472_RESULTS=$(find results-net472 -name "*-report-full-compressed.json" | head -1)
+          NET8_BASELINE=$(find baseline-net8 -name "*-report-full-compressed.json" 2>/dev/null | head -1)
+          NET472_BASELINE=$(find baseline-net472 -name "*-report-full-compressed.json" 2>/dev/null | head -1)
 
           # Create comment body
           cat > comment.md << 'EOF'
           ## 📊 CloudFetch Benchmark Results
 
-          <details open>
-          <summary><b>.NET 8.0</b></summary>
-
           EOF
 
-          if [ -f "$NET8_RESULTS" ]; then
-            cat "$NET8_RESULTS" >> comment.md
-          else
-            echo "⚠️ Results not found" >> comment.md
-          fi
+          # Function to format comparison
+          format_results() {
+            local CURRENT=$1
+            local BASELINE=$2
+            local PLATFORM=$3
 
+            if [ ! -f "$CURRENT" ]; then
+              echo "⚠️ Results not found"
+              return
+            fi
+
+            echo "| Query | Mean (ms) | Baseline | Diff | Rows | Columns |"
+            echo "|-------|-----------|----------|------|------|---------|"
+
+            # Parse current results
+            jq -r '.Benchmarks[] | "\(.Parameters.benchmarkQuery)|\(.Statistics.Mean / 1000000)|\(.Statistics.N)"' "$CURRENT" | while IFS='|' read -r query mean n; do
+              # Format mean to 2 decimal places
+              mean_formatted=$(printf "%.2f" "$mean")
+
+              # Try to find baseline
+              if [ -f "$BASELINE" ]; then
+                baseline_mean=$(jq -r --arg q "$query" '.Benchmarks[] | select(.Parameters.benchmarkQuery == $q) | .Statistics.Mean / 1000000' "$BASELINE" 2>/dev/null || echo "")
+                if [ -n "$baseline_mean" ]; then
+                  baseline_formatted=$(printf "%.2f" "$baseline_mean")
+                  # Calculate percentage difference
+                  diff=$(echo "scale=2; (($mean - $baseline_mean) / $baseline_mean) * 100" | bc)
+                  if (( $(echo "$diff > 0" | bc -l) )); then
+                    diff_formatted="🔴 +${diff}%"
+                  elif (( $(echo "$diff < 0" | bc -l) )); then
+                    diff_formatted="🟢 ${diff}%"
+                  else
+                    diff_formatted="⚪ 0%"
+                  fi
+                  echo "| $query | $mean_formatted | $baseline_formatted | $diff_formatted | $n | - |"
+                else
+                  echo "| $query | $mean_formatted | - | - | $n | - |"
+                fi
+              else
+                echo "| $query | $mean_formatted | - | - | $n | - |"
+              fi
+            done
+          }
+
+          # .NET 8.0 results
+          echo "<details open>" >> comment.md
+          echo "<summary><b>.NET 8.0</b></summary>" >> comment.md
+          echo "" >> comment.md
+          format_results "$NET8_RESULTS" "$NET8_BASELINE" ".NET 8.0" >> comment.md
+          echo "" >> comment.md
+          echo "</details>" >> comment.md
+          echo "" >> comment.md
+
+          # .NET Framework 4.7.2 results
+          echo "<details>" >> comment.md
+          echo "<summary><b>.NET Framework 4.7.2</b></summary>" >> comment.md
+          echo "" >> comment.md
+          format_results "$NET472_RESULTS" "$NET472_BASELINE" ".NET Framework 4.7.2" >> comment.md
+          echo "" >> comment.md
+          echo "</details>" >> comment.md
+
+          # Footer
           cat >> comment.md << 'EOF'
-
-          </details>
-
-          <details>
-          <summary><b>.NET Framework 4.7.2</b></summary>
-
-          EOF
-
-          if [ -f "$NET472_RESULTS" ]; then
-            cat "$NET472_RESULTS" >> comment.md
-          else
-            echo "⚠️ Results not found" >> comment.md
-          fi
-
-          cat >> comment.md << 'EOF'
-
-          </details>
 
           ---
-          *Benchmark suite includes 7 queries testing CloudFetch across different data characteristics (100K-11.7M rows, 5-54 columns)*
+          *🟢 Improvement | 🔴 Regression | ⚪ No change | Baseline from latest main branch run*
           EOF
 
           # Post comment to PR
