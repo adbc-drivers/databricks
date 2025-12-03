@@ -67,7 +67,7 @@ jobs:
           HAS_BENCHMARK_LABEL="${{ contains(github.event.pull_request.labels.*.name, 'benchmark') }}"
 
           if [ -n "$QUERIES_INPUT" ]; then
-            # Multi-query mode via workflow_dispatch
+            # Multi-query mode via workflow_dispatch with queries input
             echo "Multi-query mode detected - queries input: $QUERIES_INPUT"
             if [ "$QUERIES_INPUT" = "all" ]; then
               MATRIX=$(jq -c '.' csharp/Benchmarks/benchmark-queries.json)
@@ -79,13 +79,18 @@ jobs:
               MATRIX=$(jq -c --argjson names "$FILTER" '[.[] | select(.name as $n | $names | index($n))]' csharp/Benchmarks/benchmark-queries.json)
             fi
             IS_MULTI_QUERY="true"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # Multi-query mode on push to main
+            echo "Multi-query mode detected - push to main"
+            MATRIX=$(jq -c '.' csharp/Benchmarks/benchmark-queries.json)
+            IS_MULTI_QUERY="true"
           elif [ "$HAS_BENCHMARK_LABEL" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
             # Multi-query mode via PR benchmark label
             echo "Multi-query mode detected - benchmark label on PR"
             MATRIX=$(jq -c '.' csharp/Benchmarks/benchmark-queries.json)
             IS_MULTI_QUERY="true"
           else
-            # Single-query mode (push or manual with query input)
+            # Single-query mode (manual workflow_dispatch with custom query)
             echo "Single-query mode detected"
             if [ -n "$QUERY_INPUT" ]; then
               QUERY="$QUERY_INPUT"
