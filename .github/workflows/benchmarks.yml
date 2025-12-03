@@ -45,7 +45,10 @@ permissions:
 jobs:
   benchmark-net8:
     name: Benchmark (.NET 8.0)
-    if: false  # Temporarily disabled - run net472 only
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
     runs-on: [self-hosted, Windows, benchmark-runner]
     timeout-minutes: 30
     environment: azure-prod
@@ -302,6 +305,7 @@ jobs:
 
   benchmark-net472:
     name: Benchmark (.NET Framework 4.7.2)
+    needs: [benchmark-net8]  # Wait for .NET 8.0 to complete first
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
