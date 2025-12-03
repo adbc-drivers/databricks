@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764640383987,
+  "lastUpdate": 1764720956434,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -258,6 +258,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Gen2 Collections",
             "value": 47,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "111902719+jadewang-db@users.noreply.github.com",
+            "name": "Jade Wang",
+            "username": "jadewang-db"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f74d92c24494e1009230b2618758e1d2ab563a3d",
+          "message": "feat(csharp): implement Statement Execution REST API support (PECO-2791) (#54)\n\n## 🥞 Stacked PR\nUse this\n[link](https://github.com/adbc-drivers/databricks/pull/54/files) to\nreview incremental changes.\n-\n[**stack/PECO-2791-rest-execution-flow-v2**](https://github.com/adbc-drivers/databricks/pull/54)\n[[Files\nchanged](https://github.com/adbc-drivers/databricks/pull/54/files)]\n-\n[stack/PECO-2857-oauth-auth-statement-execution](https://github.com/adbc-drivers/databricks/pull/62)\n[[Files\nchanged](https://github.com/adbc-drivers/databricks/pull/62/files/e0ccba1d406dea5550fc9b015ee966c9a7d4c235..67476f2a845e6112b664e5ca5fd20b04f3c51ba6)]\n\n---------\n## Summary\n\nThis PR implements the core execution flow for the Databricks Statement\nExecution REST API as an alternative to the Thrift protocol, addressing\nPECO-2791 (Phase 1 MVP).\n\n## What's Changed\n\n### New Components\n\n1. **StatementExecutionConnection**\n(`csharp/src/StatementExecution/StatementExecutionConnection.cs`)\n- Manages session lifecycle (create/delete sessions with warehouse_id)\n   - Handles configuration for REST API parameters\n   - Manages HTTP client and memory pooling for CloudFetch\n\n2. **StatementExecutionStatement**\n(`csharp/src/StatementExecution/StatementExecutionStatement.cs`)\n   - Executes queries via REST API with configurable wait timeout\n   - Implements polling for async queries (default: 1000ms interval)\n   - Supports hybrid result disposition (inline_or_external_links)\n   - Handles truncated results warnings\n   - Proper disposal and resource cleanup\n\n3. **Protocol Selection** (`DatabricksDatabase.cs`)\n   - Routes connections based on `adbc.databricks.protocol` parameter\n- Supports \"thrift\" (default, backward compatible) and \"rest\" protocols\n   - Validates protocol selection and provides clear error messages\n\n4. **Configuration Parameters** (`DatabricksParameters.cs`)\n   - Added `adbc.databricks.warehouse_id` (required for REST API)\n- REST-specific parameters: result_disposition, result_format,\nresult_compression\n- Wait timeout, polling interval, and session management configuration\n\n### Scope\n\n✅ **Implemented in this PR:**\n- Core query execution flow via REST API\n- Protocol selection logic in DatabricksDatabase\n- Session management (create/delete)\n- Polling for async query execution\n- Hybrid result disposition support\n- Truncated results warning handling\n- Configuration infrastructure\n\n❌ **Not in scope (future work):**\n- Metadata operations (GetObjects, GetTableTypes) → PECO-2792\n- CloudFetch integration for external links → PECO-2790  \n- Inline results reader implementation → PECO-2792\n- Authentication handlers (OAuth, token refresh, token exchange) →\nFuture work\n- Unit and integration tests → Follow-up work\n\n### Design\n\nThis implementation follows the design documented in\n`csharp/doc/statement-execution-api-design.md`, specifically\nimplementing Phase 1 (Core Implementation MVP).\n\n**Key design decisions:**\n- Backward compatible: Existing Thrift implementation unchanged\n- Protocol selection at connection creation time\n- Reuses existing HTTP client infrastructure (TODO: add auth handlers)\n- Throws NotImplementedException for unimplemented features (metadata,\nCloudFetch, inline reader)\n\n### Testing\n\n- ✅ Build succeeds for all target frameworks (net472, netstandard2.0,\nnet8.0)\n- ⚠️ Unit and integration tests to be added in follow-up work\n\n### Breaking Changes\n\nNone. This PR is fully backward compatible as it defaults to the Thrift\nprotocol.\n\nCloses #PECO-2791.\n\nCo-authored-by: Jade Wang <jade.wang+data@databricks.com>\nCo-authored-by: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-02T16:13:30-08:00",
+          "tree_id": "055f2974912222ac7155272a425030cc0ed18d33",
+          "url": "https://github.com/adbc-drivers/databricks/commit/f74d92c24494e1009230b2618758e1d2ab563a3d"
+        },
+        "date": 1764720955406,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Min Execution Time (s)",
+            "value": 3.065,
+            "unit": "seconds"
+          },
+          {
+            "name": "Peak Memory (MB)",
+            "value": 433.7421875,
+            "unit": "MB"
+          },
+          {
+            "name": "Allocated Memory (MB)",
+            "value": 297.18,
+            "unit": "MB"
+          },
+          {
+            "name": "Gen2 Collections",
+            "value": 51,
             "unit": "collections"
           }
         ]
