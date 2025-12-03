@@ -8,14 +8,6 @@
     "category": "medium-wide"
   },
   {
-    "name": "store_sales",
-    "description": "Store sales - 2.8M rows, 23 columns (largest)",
-    "query": "select * from main.tpcds_sf1_delta.store_sales",
-    "expected_rows": 2880404,
-    "columns": 23,
-    "category": "medium-wide"
-  },
-  {
     "name": "inventory",
     "description": "Inventory - 11.7M rows, 5 columns (narrow & huge)",
     "query": "select * from main.tpcds_sf1_delta.inventory",
@@ -46,14 +38,6 @@
     "expected_rows": 2880404,
     "columns": 16,
     "category": "medium-medium"
-  },
-  {
-    "name": "customer_with_address",
-    "description": "Customer joined with address - testing string-heavy join result",
-    "query": "select c.c_customer_id, c.c_salutation, c.c_first_name, c.c_last_name, c.c_preferred_cust_flag, c.c_birth_country, c.c_login, c.c_email_address, c.c_last_review_date_sk, ca.ca_street_number, ca.ca_street_name, ca.ca_street_type, ca.ca_suite_number, ca.ca_city, ca.ca_county, ca.ca_state, ca.ca_zip, ca.ca_country, ca.ca_location_type from main.tpcds_sf1_delta.customer c join main.tpcds_sf1_delta.customer_address ca on c.c_current_addr_sk = ca.ca_address_sk",
-    "expected_rows": 100000,
-    "columns": 19,
-    "category": "small-medium"
   },
   {
     "name": "sales_with_timestamps",
