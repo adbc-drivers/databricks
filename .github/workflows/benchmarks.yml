@@ -30,28 +30,90 @@ on:
   workflow_dispatch:
     inputs:
       query:
-        description: 'Custom SQL query to benchmark (optional)'
+        description: 'Custom SQL query (single query mode - backward compatible)'
         required: false
+        type: string
+      queries:
+        description: 'Query names from benchmark-queries.json (comma-separated or "all" for multi-query mode)'
+        required: false
+        default: ''
         type: string
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
+  group: benchmarks-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write       # Required to push benchmark results to gh-pages branch
   pull-requests: write  # Required to post comparison comments on PRs
 
 jobs:
+  setup:
+    name: Determine Benchmark Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      is_multi_query: ${{ steps.set-matrix.outputs.is_multi_query }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create benchmark matrix
+        id: set-matrix
+        run: |
+          QUERIES_INPUT="${{ github.event.inputs.queries }}"
+          QUERY_INPUT="${{ github.event.inputs.query }}"
+          IS_MULTI_QUERY="false"
+
+          if [ -n "$QUERIES_INPUT" ]; then
+            # Multi-query mode via workflow_dispatch
+            echo "Multi-query mode detected - queries input: $QUERIES_INPUT"
+            if [ "$QUERIES_INPUT" = "all" ]; then
+              MATRIX=$(jq -c '.' csharp/Benchmarks/benchmark-queries.json)
+            else
+              # Filter specific queries by name
+              IFS=',' read -ra QUERY_NAMES <<< "$QUERIES_INPUT"
+              FILTER=$(printf '"%s",' "${QUERY_NAMES[@]}")
+              FILTER="[${FILTER%,}]"
+              MATRIX=$(jq -c --argjson names "$FILTER" '[.[] | select(.name as $n | $names | index($n))]' csharp/Benchmarks/benchmark-queries.json)
+            fi
+            IS_MULTI_QUERY="true"
+          else
+            # Single-query mode (push, PR, or manual with query input)
+            echo "Single-query mode detected"
+            if [ -n "$QUERY_INPUT" ]; then
+              QUERY="$QUERY_INPUT"
+            else
+              QUERY="select * from main.tpcds_sf1_delta.catalog_sales"
+            fi
+            MATRIX=$(jq -n --arg q "$QUERY" '[{
+              "name": "default",
+              "description": "Custom or default query",
+              "query": $q,
+              "category": "custom"
+            }]')
+          fi
+
+          echo "is_multi_query=$IS_MULTI_QUERY" >> $GITHUB_OUTPUT
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Benchmark matrix configuration:"
+          echo "$MATRIX" | jq '.'
+          echo "Multi-query mode: $IS_MULTI_QUERY"
+
   benchmark-net8:
-    name: Benchmark (.NET 8.0)
+    name: Benchmark - ${{ matrix.query.name }} (.NET 8.0)
+    needs: setup
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: azure-prod
+    strategy:
+      fail-fast: false
+      matrix:
+        query: ${{ fromJson(needs.setup.outputs.matrix) }}
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
@@ -71,10 +133,6 @@ jobs:
       - name: Create Databricks config file
         run: |
           mkdir -p ~/.databricks
-          BENCHMARK_QUERY="${{ github.event.inputs.query }}"
-          if [ -z "$BENCHMARK_QUERY" ]; then
-            BENCHMARK_QUERY="select * from main.tpcds_sf1_delta.catalog_sales"
-          fi
           cat > ~/.databricks/connection.json << EOF
           {
             "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
@@ -85,10 +143,12 @@ jobs:
             "type": "databricks",
             "catalog": "main",
             "db_schema": "ADBC_Testing",
-            "query": "$BENCHMARK_QUERY"
+            "query": "${{ matrix.query.query }}"
           }
           EOF
           echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> $GITHUB_ENV
+          echo "Running benchmark for query: ${{ matrix.query.name }}"
+          echo "Description: ${{ matrix.query.description }}"
 
       - name: Build
         shell: bash
@@ -104,7 +164,7 @@ jobs:
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-net8
+          name: benchmark-results-net8-${{ matrix.query.name }}
           path: |
             csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/*
           retention-days: 90
@@ -179,7 +239,7 @@ jobs:
 
       - name: Store benchmark results for trend tracking
         uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.query.name == 'default'
         with:
           tool: 'customSmallerIsBetter'
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
@@ -190,6 +250,18 @@ jobs:
           fail-on-alert: false
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
           benchmark-data-dir-path: 'bench/net8'
+
+      - name: Store multi-query benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name != 'pull_request' && needs.setup.outputs.is_multi_query == 'true'
+        with:
+          tool: 'customSmallerIsBetter'
+          output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '150%'
+          fail-on-alert: false
+          benchmark-data-dir-path: 'bench/${{ matrix.query.name }}'
 
       - name: Download baseline benchmark data from gh-pages
         if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
@@ -226,7 +298,7 @@ jobs:
           " || echo "[]" > ./cache/benchmark-data.json
 
       - name: Post PR comment with benchmark comparison (.NET 8.0)
-        if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != ''
+        if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != '' && matrix.query.name == 'default'
         uses: actions/github-script@v7
         with:
           script: |
@@ -302,14 +374,19 @@ jobs:
             });
 
   benchmark-net472:
-    name: Benchmark (.NET Framework 4.7.2)
+    name: Benchmark - ${{ matrix.query.name }} (.NET Framework 4.7.2)
+    needs: setup
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: azure-prod
+    strategy:
+      fail-fast: false
+      matrix:
+        query: ${{ fromJson(needs.setup.outputs.matrix) }}
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
@@ -332,11 +409,6 @@ jobs:
           $configDir = Join-Path $env:USERPROFILE ".databricks"
           New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
-          $benchmarkQuery = "${{ github.event.inputs.query }}"
-          if ([string]::IsNullOrEmpty($benchmarkQuery)) {
-            $benchmarkQuery = "select * from main.tpcds_sf1_delta.catalog_sales"
-          }
-
           $config = @{
             uri = "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}"
             auth_type = "oauth"
@@ -346,12 +418,14 @@ jobs:
             type = "databricks"
             catalog = "main"
             db_schema = "ADBC_Testing"
-            query = $benchmarkQuery
+            query = "${{ matrix.query.query }}"
           } | ConvertTo-Json
 
           $configPath = Join-Path $configDir "connection.json"
           $config | Out-File -FilePath $configPath -Encoding utf8
           echo "DATABRICKS_TEST_CONFIG_FILE=$configPath" >> $env:GITHUB_ENV
+          Write-Host "Running benchmark for query: ${{ matrix.query.name }}"
+          Write-Host "Description: ${{ matrix.query.description }}"
 
       - name: Build
         shell: bash
@@ -367,7 +441,7 @@ jobs:
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-net472
+          name: benchmark-results-net472-${{ matrix.query.name }}
           path: |
             csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/*
           retention-days: 90
@@ -444,7 +518,7 @@ jobs:
 
       - name: Store benchmark results for trend tracking
         uses: benchmark-action/github-action-benchmark@v1
-        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.query.name == 'default'
         with:
           tool: 'customSmallerIsBetter'
           output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
@@ -455,6 +529,18 @@ jobs:
           fail-on-alert: false
           alert-comment-cc-users: '@databricks/adbc-csharp-maintainers'
           benchmark-data-dir-path: 'bench/net472'
+
+      - name: Store multi-query benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        if: steps.extract-data.outputs.peak_memory_mb != '' && github.event_name != 'pull_request' && needs.setup.outputs.is_multi_query == 'true'
+        with:
+          tool: 'customSmallerIsBetter'
+          output-file-path: csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/benchmark-data.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '150%'
+          fail-on-alert: false
+          benchmark-data-dir-path: 'bench/${{ matrix.query.name }}'
 
       - name: Download baseline benchmark data from gh-pages
         if: steps.extract-data.outputs.peak_memory_mb != '' && steps.extract-data.outputs.min_time_s != '' && github.event_name == 'pull_request'
@@ -491,7 +577,7 @@ jobs:
           " || echo "[]" > ./cache/benchmark-data.json
 
       - name: Post PR comment with benchmark comparison (.NET Framework 4.7.2)
-        if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != ''
+        if: github.event_name == 'pull_request' && steps.extract-data.outputs.peak_memory_mb != '' && matrix.query.name == 'default'
         uses: actions/github-script@v7
         with:
           script: |
@@ -565,3 +651,51 @@ jobs:
               repo: context.repo.repo,
               body: body
             });
+
+  summary:
+    name: Benchmark Summary
+    needs: [setup, benchmark-net8, benchmark-net472]
+    if: always() && needs.setup.outputs.is_multi_query == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: benchmark-results
+
+      - name: Generate summary
+        run: |
+          echo "# Benchmark Suite Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## .NET 8.0" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Query | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          for dir in benchmark-results/benchmark-results-net8-*; do
+            if [ -d "$dir" ]; then
+              query_name=$(basename "$dir" | sed 's/benchmark-results-net8-//')
+              if [ -f "$dir"/*-report-full-compressed.json ]; then
+                echo "| $query_name | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| $query_name | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## .NET Framework 4.7.2" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Query | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          for dir in benchmark-results/benchmark-results-net472-*; do
+            if [ -d "$dir" ]; then
+              query_name=$(basename "$dir" | sed 's/benchmark-results-net472-//')
+              if [ -f "$dir"/*-report-full-compressed.json ]; then
+                echo "| $query_name | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| $query_name | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          done
