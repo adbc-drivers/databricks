@@ -39,11 +39,12 @@ namespace Apache.Arrow.Adbc.Benchmarks
 #endif
             // Configure with custom columns for CloudFetch-specific metrics + built-in GC columns
             var config = DefaultConfig.Instance
-                .AddColumn(new PeakMemoryColumn())
+                .AddColumn(new ColumnsColumn())
                 .AddColumn(new TotalRowsColumn())
+                .AddColumn(new PeakMemoryColumn())
                 .AddColumn(new TotalBatchesColumn())
                 .AddColumn(new GCTimePercentageColumn())
-                .HideColumns("Error", "StdDev");  // Hide statistical columns that are confusing with few iterations
+                .HideColumns("Method", "Error", "StdDev");  // Hide Method (always same) and statistical columns
 
             // Run only the real E2E CloudFetch benchmark
             var summary = BenchmarkSwitcher.FromTypes(new[] {

@@ -258,6 +258,61 @@ namespace Apache.Arrow.Adbc.Benchmarks
     }
 
     /// <summary>
+    /// Custom column to display number of columns in the result set.
+    /// </summary>
+    public class ColumnsColumn : IColumn
+    {
+        public string Id => nameof(ColumnsColumn);
+        public string ColumnName => "Columns";
+        public string Legend => "Number of columns in the query result";
+        public UnitType UnitType => UnitType.Dimensionless;
+        public bool AlwaysShow => true;
+        public ColumnCategory Category => ColumnCategory.Custom;
+        public int PriorityInCategory => 4;
+        public bool IsNumeric => true;
+        public bool IsAvailable(Summary summary) => true;
+        public bool IsDefault(Summary summary, BenchmarkCase benchmarkCase) => false;
+
+        public string GetValue(Summary summary, BenchmarkCase benchmarkCase)
+        {
+            if (benchmarkCase.Descriptor.Type == typeof(CloudFetchRealE2EBenchmark))
+            {
+                try
+                {
+                    var readDelayParam = benchmarkCase.Parameters["ReadDelayMs"];
+                    var queryParam = benchmarkCase.Parameters["benchmarkQuery"] as BenchmarkQuery;
+                    string queryName = queryParam?.name ?? "default";
+                    string key = $"ExecuteLargeQuery_{queryName}_{readDelayParam}";
+
+                    string metricsFilePath = Path.Combine(Path.GetTempPath(), "cloudfetch_benchmark_metrics.json");
+                    if (File.Exists(metricsFilePath))
+                    {
+                        string json = File.ReadAllText(metricsFilePath);
+                        var allMetrics = JsonSerializer.Deserialize<Dictionary<string, BenchmarkMetrics>>(json);
+                        if (allMetrics != null && allMetrics.TryGetValue(key, out var metrics))
+                        {
+                            return metrics.Columns.ToString();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return $"Error: {ex.Message}";
+                }
+            }
+
+            return "N/A";
+        }
+
+        public string GetValue(Summary summary, BenchmarkCase benchmarkCase, SummaryStyle style)
+        {
+            return GetValue(summary, benchmarkCase);
+        }
+
+        public override string ToString() => ColumnName;
+    }
+
+    /// <summary>
     /// Metrics collected during benchmark execution.
     /// </summary>
     internal class BenchmarkMetrics
@@ -265,6 +320,7 @@ namespace Apache.Arrow.Adbc.Benchmarks
         public double PeakMemoryMB { get; set; }
         public long TotalRows { get; set; }
         public long TotalBatches { get; set; }
+        public int Columns { get; set; }
         public double GCTimePercentage { get; set; }
     }
 
@@ -353,6 +409,7 @@ namespace Apache.Arrow.Adbc.Benchmarks
         private string _httpPath = null!;
         private static List<BenchmarkQuery>? _benchmarkQueries;
         private string _currentQueryName = "default";
+        private int _columns;
 
         [Params(5)] // Read delay in milliseconds per 10K rows (5 = simulate Power BI)
         public int ReadDelayMs { get; set; }
@@ -502,6 +559,7 @@ namespace Apache.Arrow.Adbc.Benchmarks
             _peakMemoryBytes = _currentProcess.PrivateMemorySize64;
             _totalRows = 0;
             _totalBatches = 0;
+            _columns = 0;
 
             // Capture initial GC and process metrics
             _initialProcessorTime = _currentProcess.TotalProcessorTime;
@@ -566,6 +624,7 @@ namespace Apache.Arrow.Adbc.Benchmarks
                 PeakMemoryMB = peakMemoryMB,
                 TotalRows = _totalRows,
                 TotalBatches = _totalBatches,
+                Columns = _columns,
                 GCTimePercentage = gcTimePercentage
             };
 
@@ -632,6 +691,12 @@ namespace Apache.Arrow.Adbc.Benchmarks
 
             while ((batch = await result.Stream.ReadNextRecordBatchAsync()) != null)
             {
+                // Capture columns count from first batch
+                if (_totalBatches == 0)
+                {
+                    _columns = batch.ColumnCount;
+                }
+
                 _totalRows += batch.Length;
                 _totalBatches++;
 
