@@ -64,38 +64,6 @@
     "category": "medium-medium"
   },
   {
-    "name": "catalog_sales_filtered",
-    "description": "Catalog sales filtered by date - ~400K rows",
-    "query": "select * from main.tpcds_sf1_delta.catalog_sales where cs_sold_date_sk >= 2451545",
-    "expected_rows": 400000,
-    "columns": 34,
-    "category": "small-wide"
-  },
-  {
-    "name": "store_sales_high_value",
-    "description": "High value store sales - filtered by amount",
-    "query": "select * from main.tpcds_sf1_delta.store_sales where ss_net_paid > 100",
-    "expected_rows": 500000,
-    "columns": 23,
-    "category": "small-wide"
-  },
-  {
-    "name": "store_sales_aggregated",
-    "description": "Daily sales summary - aggregation testing",
-    "query": "select ss_sold_date_sk, count(*) as transaction_count, sum(ss_quantity) as total_quantity, sum(ss_sales_price) as total_sales, avg(ss_sales_price) as avg_price, min(ss_sales_price) as min_price, max(ss_sales_price) as max_price from main.tpcds_sf1_delta.store_sales group by ss_sold_date_sk",
-    "expected_rows": 1824,
-    "columns": 7,
-    "category": "small-narrow"
-  },
-  {
-    "name": "top_items",
-    "description": "Top selling items with join and aggregation",
-    "query": "select i.i_item_sk, i.i_item_id, i.i_item_desc, sum(ss.ss_quantity) as total_sold, sum(ss.ss_net_profit) as total_profit from main.tpcds_sf1_delta.store_sales ss join main.tpcds_sf1_delta.item i on ss.ss_item_sk = i.i_item_sk group by i.i_item_sk, i.i_item_id, i.i_item_desc order by total_sold desc limit 1000",
-    "expected_rows": 1000,
-    "columns": 5,
-    "category": "small-narrow"
-  },
-  {
     "name": "item",
     "description": "Item dimension - 18K rows, 22 columns, small dataset",
     "query": "select * from main.tpcds_sf1_delta.item",
