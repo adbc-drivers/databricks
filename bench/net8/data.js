@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764720956434,
+  "lastUpdate": 1764785907133,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -302,6 +302,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Gen2 Collections",
             "value": 51,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "a23274232606f4ef70db6c90abf7bf0f75de38ce",
+          "message": "feat(ci): add parallel benchmark suite workflow\n\nAdd new workflow for running multiple benchmark queries in parallel using\nmatrix strategy. Queries are defined in benchmark-queries.json config.\n\nFeatures:\n- Matrix strategy runs queries in parallel (faster than sequential)\n- Weekly schedule (Sunday 2 AM UTC)\n- Manual trigger with query selection\n- Separate GitHub Pages tracking per query (bench/{query_name}/)\n- Summary report showing all query results\n\nIncluded queries:\n- catalog_sales: 1.4M rows, 34 cols (current default)\n- store_sales: 2.8M rows, 23 cols (largest)\n- inventory: 11.7M rows, 5 cols (narrow & huge)\n- web_sales: 720K rows, 34 cols (medium)\n- customer: 100K rows, 18 cols (small)\n\nUsage:\n- Automatic: Runs weekly on schedule\n- Manual: Actions → Benchmark Suite → Run workflow\n  - Select \"all\" or comma-separated query names\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-03T10:15:37-08:00",
+          "tree_id": "a2f1bdb1f2fdb6a89487cdc85c71832e997ad03e",
+          "url": "https://github.com/adbc-drivers/databricks/commit/a23274232606f4ef70db6c90abf7bf0f75de38ce"
+        },
+        "date": 1764785906280,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Min Execution Time (s)",
+            "value": 4.255,
+            "unit": "seconds"
+          },
+          {
+            "name": "Peak Memory (MB)",
+            "value": 431.95703125,
+            "unit": "MB"
+          },
+          {
+            "name": "Allocated Memory (MB)",
+            "value": 286.17,
+            "unit": "MB"
+          },
+          {
+            "name": "Gen2 Collections",
+            "value": 50,
             "unit": "collections"
           }
         ]
