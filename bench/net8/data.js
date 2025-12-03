@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764785907133,
+  "lastUpdate": 1764786470684,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -346,6 +346,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Gen2 Collections",
             "value": 50,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "e1d3149781a6bd374a169344e00284e9e9c6cb83",
+          "message": "Revert \"feat(ci): add parallel benchmark suite workflow\"\n\nThis reverts commit a23274232606f4ef70db6c90abf7bf0f75de38ce.",
+          "timestamp": "2025-12-03T10:25:21-08:00",
+          "tree_id": "055f2974912222ac7155272a425030cc0ed18d33",
+          "url": "https://github.com/adbc-drivers/databricks/commit/e1d3149781a6bd374a169344e00284e9e9c6cb83"
+        },
+        "date": 1764786470010,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Min Execution Time (s)",
+            "value": 4.09,
+            "unit": "seconds"
+          },
+          {
+            "name": "Peak Memory (MB)",
+            "value": 412.55859375,
+            "unit": "MB"
+          },
+          {
+            "name": "Allocated Memory (MB)",
+            "value": 283.12,
+            "unit": "MB"
+          },
+          {
+            "name": "Gen2 Collections",
+            "value": 60,
             "unit": "collections"
           }
         ]
