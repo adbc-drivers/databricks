@@ -64,6 +64,7 @@ jobs:
           QUERIES_INPUT="${{ github.event.inputs.queries }}"
           QUERY_INPUT="${{ github.event.inputs.query }}"
           IS_MULTI_QUERY="false"
+          HAS_SUITE_LABEL="${{ contains(github.event.pull_request.labels.*.name, 'benchmark-suite') }}"
 
           if [ -n "$QUERIES_INPUT" ]; then
             # Multi-query mode via workflow_dispatch
@@ -77,6 +78,11 @@ jobs:
               FILTER="[${FILTER%,}]"
               MATRIX=$(jq -c --argjson names "$FILTER" '[.[] | select(.name as $n | $names | index($n))]' csharp/Benchmarks/benchmark-queries.json)
             fi
+            IS_MULTI_QUERY="true"
+          elif [ "$HAS_SUITE_LABEL" = "true" ]; then
+            # Multi-query mode via PR label
+            echo "Multi-query mode detected - benchmark-suite label on PR"
+            MATRIX=$(jq -c '.' csharp/Benchmarks/benchmark-queries.json)
             IS_MULTI_QUERY="true"
           else
             # Single-query mode (push, PR, or manual with query input)
@@ -106,7 +112,7 @@ jobs:
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
+      (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'benchmark') || contains(github.event.pull_request.labels.*.name, 'benchmark-suite')))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: azure-prod
@@ -379,7 +385,7 @@ jobs:
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
+      (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'benchmark') || contains(github.event.pull_request.labels.*.name, 'benchmark-suite')))
     runs-on: windows-2022
     timeout-minutes: 45
     environment: azure-prod
