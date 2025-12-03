@@ -113,6 +113,7 @@ jobs:
 
       - name: Extract benchmark data for trend tracking
         id: extract-data
+        shell: bash
         run: |
           # Parse BenchmarkDotNet JSON results for trend tracking
           RESULTS_FILE=$(find csharp/Benchmarks/BenchmarkDotNet.Artifacts/results -name "*-report-full-compressed.json" | head -n 1)
