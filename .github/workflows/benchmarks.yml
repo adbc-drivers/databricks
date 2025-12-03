@@ -309,3 +309,70 @@ jobs:
           else
             echo "❌ Benchmark suite failed" >> $GITHUB_STEP_SUMMARY
           fi
+
+  post-results:
+    name: Post Benchmark Results to PR
+    needs: [setup, benchmark-net8, benchmark-net472]
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download .NET 8.0 results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results-net8
+          path: results-net8
+
+      - name: Download .NET Framework 4.7.2 results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results-net472
+          path: results-net472
+
+      - name: Parse and post results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Find the markdown results files
+          NET8_RESULTS=$(find results-net8 -name "*-report-github.md" | head -1)
+          NET472_RESULTS=$(find results-net472 -name "*-report-github.md" | head -1)
+
+          # Create comment body
+          cat > comment.md << 'EOF'
+          ## 📊 CloudFetch Benchmark Results
+
+          <details open>
+          <summary><b>.NET 8.0</b></summary>
+
+          EOF
+
+          if [ -f "$NET8_RESULTS" ]; then
+            cat "$NET8_RESULTS" >> comment.md
+          else
+            echo "⚠️ Results not found" >> comment.md
+          fi
+
+          cat >> comment.md << 'EOF'
+
+          </details>
+
+          <details>
+          <summary><b>.NET Framework 4.7.2</b></summary>
+
+          EOF
+
+          if [ -f "$NET472_RESULTS" ]; then
+            cat "$NET472_RESULTS" >> comment.md
+          else
+            echo "⚠️ Results not found" >> comment.md
+          fi
+
+          cat >> comment.md << 'EOF'
+
+          </details>
+
+          ---
+          *Benchmark suite includes 7 queries testing CloudFetch across different data characteristics (100K-11.7M rows, 5-54 columns)*
+          EOF
+
+          # Post comment to PR
+          gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body-file comment.md
