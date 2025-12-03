@@ -25,6 +25,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Apache.Arrow.Adbc.Drivers.Apache;
+using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks
 {
@@ -66,11 +67,49 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                         .Concat(properties.Where(x => !options.Keys.Contains(x.Key, StringComparer.OrdinalIgnoreCase)))
                         .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
-                // Share the RecyclableMemoryStreamManager with this connection via constructor
-                DatabricksConnection connection = new DatabricksConnection(mergedProperties, this.RecyclableMemoryStreamManager, this.Lz4BufferPool);
+                // Check protocol selection
+                string protocol = "thrift"; // default
+                if (mergedProperties.TryGetValue(DatabricksParameters.Protocol, out var protocolValue))
+                {
+                    protocol = protocolValue.ToLowerInvariant();
+                }
 
-                connection.OpenAsync().Wait();
-                connection.ApplyServerSidePropertiesAsync().Wait();
+                AdbcConnection connection;
+
+                if (protocol == "rest")
+                {
+                    // Use Statement Execution REST API
+                    // The connection creates its own HTTP client with proper handler chain
+                    // including TracingDelegatingHandler and RetryHttpHandler
+                    // TODO (PECO-2790): Add OAuth authentication handlers (OAuth, token refresh, token exchange)
+                    connection = new StatementExecutionConnection(
+                        mergedProperties,
+                        this.RecyclableMemoryStreamManager,
+                        this.Lz4BufferPool);
+
+                    // Open the connection to create session if needed
+                    var statementConnection = (StatementExecutionConnection)connection;
+                    statementConnection.OpenAsync().Wait();
+                }
+                else if (protocol == "thrift")
+                {
+                    // Use traditional Thrift/HiveServer2 protocol
+                    connection = new DatabricksConnection(
+                        mergedProperties,
+                        this.RecyclableMemoryStreamManager,
+                        this.Lz4BufferPool);
+
+                    var databricksConnection = (DatabricksConnection)connection;
+                    databricksConnection.OpenAsync().Wait();
+                    databricksConnection.ApplyServerSidePropertiesAsync().Wait();
+                }
+                else
+                {
+                    throw new ArgumentException(
+                        $"Unsupported protocol: '{protocol}'. Supported values are 'thrift' and 'rest'.",
+                        nameof(mergedProperties));
+                }
+
                 return connection;
             }
             catch (AggregateException ae)

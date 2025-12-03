@@ -135,16 +135,18 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         public List<StatementParameter>? Parameters { get; set; }
 
         /// <summary>
-        /// Result disposition: "inline", "external_links", or "inline_or_external_links".
+        /// Result disposition: "INLINE", "EXTERNAL_LINKS", or "INLINE_OR_EXTERNAL_LINKS".
+        /// INLINE_OR_EXTERNAL_LINKS returns small results inline and larger results via CloudFetch.
+        /// EXTERNAL_LINKS always returns results via CloudFetch download links.
         /// </summary>
         [JsonPropertyName("disposition")]
-        public string Disposition { get; set; } = "external_links";
+        public string Disposition { get; set; } = "INLINE_OR_EXTERNAL_LINKS";
 
         /// <summary>
-        /// Result format: "arrow_stream", "json_array", or "csv".
+        /// Result format: "ARROW_STREAM", "JSON_ARRAY", or "CSV".
         /// </summary>
         [JsonPropertyName("format")]
-        public string Format { get; set; } = "arrow_stream";
+        public string Format { get; set; } = "ARROW_STREAM";
 
         /// <summary>
         /// Result compression: "lz4", "gzip", or "none".

@@ -245,118 +245,20 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
         private void ValidateProperties()
         {
-            if (Properties.TryGetValue(DatabricksParameters.EnablePKFK, out string? enablePKFKStr))
-            {
-                if (bool.TryParse(enablePKFKStr, out bool enablePKFKValue))
-                {
-                    _enablePKFK = enablePKFKValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.EnablePKFK}' value '{enablePKFKStr}' could not be parsed. Valid values are 'true', 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.EnableMultipleCatalogSupport, out string? enableMultipleCatalogSupportStr))
-            {
-                if (bool.TryParse(enableMultipleCatalogSupportStr, out bool enableMultipleCatalogSupportValue))
-                {
-                    _enableMultipleCatalogSupport = enableMultipleCatalogSupportValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.EnableMultipleCatalogSupport}' value '{enableMultipleCatalogSupportStr}' could not be parsed. Valid values are 'true', 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.ApplySSPWithQueries, out string? applySSPWithQueriesStr))
-            {
-                if (bool.TryParse(applySSPWithQueriesStr, out bool applySSPWithQueriesValue))
-                {
-                    _applySSPWithQueries = applySSPWithQueriesValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.ApplySSPWithQueries}' value '{applySSPWithQueriesStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.EnableDirectResults, out string? enableDirectResultsStr))
-            {
-                if (bool.TryParse(enableDirectResultsStr, out bool enableDirectResultsValue))
-                {
-                    _enableDirectResults = enableDirectResultsValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.EnableDirectResults}' value '{enableDirectResultsStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
+            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnablePKFK, _enablePKFK);
+            _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableMultipleCatalogSupport, _enableMultipleCatalogSupport);
+            _applySSPWithQueries = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.ApplySSPWithQueries, _applySSPWithQueries);
+            _enableDirectResults = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableDirectResults, _enableDirectResults);
 
             // Parse CloudFetch options from connection properties
-            if (Properties.TryGetValue(DatabricksParameters.UseCloudFetch, out string? useCloudFetchStr))
-            {
-                if (bool.TryParse(useCloudFetchStr, out bool useCloudFetchValue))
-                {
-                    _useCloudFetch = useCloudFetchValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.UseCloudFetch}' value '{useCloudFetchStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
+            _useCloudFetch = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseCloudFetch, _useCloudFetch);
+            _canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.CanDecompressLz4, _canDecompressLz4);
+            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseDescTableExtended, _useDescTableExtended);
+            _runAsyncInThrift = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableRunAsyncInThriftOp, _runAsyncInThrift);
 
-            if (Properties.TryGetValue(DatabricksParameters.CanDecompressLz4, out string? canDecompressLz4Str))
+            if (Properties.ContainsKey(DatabricksParameters.MaxBytesPerFile))
             {
-                if (bool.TryParse(canDecompressLz4Str, out bool canDecompressLz4Value))
-                {
-                    _canDecompressLz4 = canDecompressLz4Value;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.CanDecompressLz4}' value '{canDecompressLz4Str}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.UseDescTableExtended, out string? useDescTableExtendedStr))
-            {
-                if (bool.TryParse(useDescTableExtendedStr, out bool useDescTableExtended))
-                {
-                    _useDescTableExtended = useDescTableExtended;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.UseDescTableExtended}' value '{useDescTableExtendedStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.EnableRunAsyncInThriftOp, out string? enableRunAsyncInThriftStr))
-            {
-                if (bool.TryParse(enableRunAsyncInThriftStr, out bool enableRunAsyncInThrift))
-                {
-                    _runAsyncInThrift = enableRunAsyncInThrift;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.EnableRunAsyncInThriftOp}' value '{enableRunAsyncInThriftStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.MaxBytesPerFile, out string? maxBytesPerFileStr))
-            {
-                if (!long.TryParse(maxBytesPerFileStr, out long maxBytesPerFileValue))
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.MaxBytesPerFile}' value '{maxBytesPerFileStr}' could not be parsed. Valid values are positive integers.");
-                }
-
-                if (maxBytesPerFileValue <= 0)
-                {
-                    throw new ArgumentOutOfRangeException(
-                        nameof(Properties),
-                        maxBytesPerFileValue,
-                        $"Parameter '{DatabricksParameters.MaxBytesPerFile}' value must be a positive integer.");
-                }
-                _maxBytesPerFile = maxBytesPerFileValue;
+                _maxBytesPerFile = PropertyHelper.GetPositiveLongPropertyWithValidation(Properties, DatabricksParameters.MaxBytesPerFile, _maxBytesPerFile);
             }
 
             if (Properties.TryGetValue(DatabricksParameters.MaxBytesPerFetchRequest, out string? maxBytesPerFetchRequestStr))
@@ -402,18 +304,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             _defaultNamespace = ns;
 
             // Parse trace propagation options
-            if (Properties.TryGetValue(DatabricksParameters.TracePropagationEnabled, out string? tracePropagationEnabledStr))
-            {
-                if (bool.TryParse(tracePropagationEnabledStr, out bool tracePropagationEnabled))
-                {
-                    _tracePropagationEnabled = tracePropagationEnabled;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.TracePropagationEnabled}' value '{tracePropagationEnabledStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
+            _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.TracePropagationEnabled, _tracePropagationEnabled);
             if (Properties.TryGetValue(DatabricksParameters.TraceParentHeaderName, out string? traceParentHeaderName))
             {
                 if (!string.IsNullOrWhiteSpace(traceParentHeaderName))
@@ -425,18 +316,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                     throw new ArgumentException($"Parameter '{DatabricksParameters.TraceParentHeaderName}' cannot be empty.");
                 }
             }
-
-            if (Properties.TryGetValue(DatabricksParameters.TraceStateEnabled, out string? traceStateEnabledStr))
-            {
-                if (bool.TryParse(traceStateEnabledStr, out bool traceStateEnabled))
-                {
-                    _traceStateEnabled = traceStateEnabled;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.TraceStateEnabled}' value '{traceStateEnabledStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
+            _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.TraceStateEnabled, _traceStateEnabled);
 
             if (!Properties.ContainsKey(ApacheParameters.QueryTimeoutSeconds))
             {
@@ -449,38 +329,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                 _identityFederationClientId = identityFederationClientId;
             }
 
-            if (Properties.TryGetValue(DatabricksParameters.FetchHeartbeatInterval, out string? fetchHeartbeatIntervalStr))
+            if (Properties.ContainsKey(DatabricksParameters.FetchHeartbeatInterval))
             {
-                if (!int.TryParse(fetchHeartbeatIntervalStr, out int fetchHeartbeatIntervalValue))
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.FetchHeartbeatInterval}' value '{fetchHeartbeatIntervalStr}' could not be parsed. Valid values are positive integers.");
-                }
-
-                if (fetchHeartbeatIntervalValue <= 0)
-                {
-                    throw new ArgumentOutOfRangeException(
-                        nameof(Properties),
-                        fetchHeartbeatIntervalValue,
-                        $"Parameter '{DatabricksParameters.FetchHeartbeatInterval}' value must be a positive integer.");
-                }
-                _fetchHeartbeatIntervalSeconds = fetchHeartbeatIntervalValue;
+                _fetchHeartbeatIntervalSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(Properties, DatabricksParameters.FetchHeartbeatInterval, _fetchHeartbeatIntervalSeconds);
             }
 
-            if (Properties.TryGetValue(DatabricksParameters.OperationStatusRequestTimeout, out string? operationStatusRequestTimeoutStr))
+            if (Properties.ContainsKey(DatabricksParameters.OperationStatusRequestTimeout))
             {
-                if (!int.TryParse(operationStatusRequestTimeoutStr, out int operationStatusRequestTimeoutValue))
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.OperationStatusRequestTimeout}' value '{operationStatusRequestTimeoutStr}' could not be parsed. Valid values are positive integers.");
-                }
-
-                if (operationStatusRequestTimeoutValue <= 0)
-                {
-                    throw new ArgumentOutOfRangeException(
-                        nameof(Properties),
-                        operationStatusRequestTimeoutValue,
-                        $"Parameter '{DatabricksParameters.OperationStatusRequestTimeout}' value must be a positive integer.");
-                }
-                _operationStatusRequestTimeoutSeconds = operationStatusRequestTimeoutValue;
+                _operationStatusRequestTimeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(Properties, DatabricksParameters.OperationStatusRequestTimeout, _operationStatusRequestTimeoutSeconds);
             }
         }
 

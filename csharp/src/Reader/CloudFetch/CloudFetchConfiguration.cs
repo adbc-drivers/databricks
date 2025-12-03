@@ -125,80 +125,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             var config = new CloudFetchConfiguration
             {
                 Schema = schema ?? throw new ArgumentNullException(nameof(schema)),
-                IsLz4Compressed = isLz4Compressed
+                IsLz4Compressed = isLz4Compressed,
+                ParallelDownloads = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchParallelDownloads, DefaultParallelDownloads),
+                PrefetchCount = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchPrefetchCount, DefaultPrefetchCount),
+                MemoryBufferSizeMB = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMemoryBufferSize, DefaultMemoryBufferSizeMB),
+                TimeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DefaultTimeoutMinutes),
+                MaxRetries = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxRetries, DefaultMaxRetries),
+                RetryDelayMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryDelayMs, DefaultRetryDelayMs),
+                MaxUrlRefreshAttempts = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, DefaultMaxUrlRefreshAttempts),
+                UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds)
             };
-
-            // Parse parallel downloads
-            if (properties.TryGetValue(DatabricksParameters.CloudFetchParallelDownloads, out string? parallelStr))
-            {
-                if (int.TryParse(parallelStr, out int parallel) && parallel > 0)
-                    config.ParallelDownloads = parallel;
-                else
-                    throw new ArgumentException($"Invalid {DatabricksParameters.CloudFetchParallelDownloads}: {parallelStr}. Expected a positive integer.");
-            }
-
-            // Parse prefetch count
-            if (properties.TryGetValue(DatabricksParameters.CloudFetchPrefetchCount, out string? prefetchStr))
-            {
-                if (int.TryParse(prefetchStr, out int prefetch) && prefetch > 0)
-                    config.PrefetchCount = prefetch;
-                else
-                    throw new ArgumentException($"Invalid {DatabricksParameters.CloudFetchPrefetchCount}: {prefetchStr}. Expected a positive integer.");
-            }
-
-            // Parse memory buffer size
-            if (properties.TryGetValue(DatabricksParameters.CloudFetchMemoryBufferSize, out string? memoryStr))
-            {
-                if (int.TryParse(memoryStr, out int memory) && memory > 0)
-                    config.MemoryBufferSizeMB = memory;
-                else
-                    throw new ArgumentException($"Invalid {DatabricksParameters.CloudFetchMemoryBufferSize}: {memoryStr}. Expected a positive integer.");
-            }
-
-            // Parse timeout
-            if (properties.TryGetValue(DatabricksParameters.CloudFetchTimeoutMinutes, out string? timeoutStr))
-            {
-                if (int.TryParse(timeoutStr, out int timeout) && timeout > 0)
-                    config.TimeoutMinutes = timeout;
-                else
-                    throw new ArgumentException($"Invalid {DatabricksParameters.CloudFetchTimeoutMinutes}: {timeoutStr}. Expected a positive integer.");
-            }
-
-            // Parse max retries
-            if (properties.TryGetValue(DatabricksParameters.CloudFetchMaxRetries, out string? retriesStr))
-            {
-                if (int.TryParse(retriesStr, out int retries) && retries > 0)
-                    config.MaxRetries = retries;
-                else
-                    throw new ArgumentException($"Invalid {DatabricksParameters.CloudFetchMaxRetries}: {retriesStr}. Expected a positive integer.");
-            }
-
-            // Parse retry delay
-            if (properties.TryGetValue(DatabricksParameters.CloudFetchRetryDelayMs, out string? retryDelayStr))
-            {
-                if (int.TryParse(retryDelayStr, out int retryDelay) && retryDelay > 0)
-                    config.RetryDelayMs = retryDelay;
-                else
-                    throw new ArgumentException($"Invalid {DatabricksParameters.CloudFetchRetryDelayMs}: {retryDelayStr}. Expected a positive integer.");
-            }
-
-            // Parse max URL refresh attempts
-            if (properties.TryGetValue(DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, out string? maxUrlRefreshStr))
-            {
-                if (int.TryParse(maxUrlRefreshStr, out int maxUrlRefresh) && maxUrlRefresh > 0)
-                    config.MaxUrlRefreshAttempts = maxUrlRefresh;
-                else
-                    throw new ArgumentException($"Invalid {DatabricksParameters.CloudFetchMaxUrlRefreshAttempts}: {maxUrlRefreshStr}. Expected a positive integer.");
-            }
-
-            // Parse URL expiration buffer
-            if (properties.TryGetValue(DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, out string? urlExpirationStr))
-            {
-                if (int.TryParse(urlExpirationStr, out int urlExpiration) && urlExpiration > 0)
-                    config.UrlExpirationBufferSeconds = urlExpiration;
-                else
-                    throw new ArgumentException($"Invalid {DatabricksParameters.CloudFetchUrlExpirationBufferSeconds}: {urlExpirationStr}. Expected a positive integer.");
-            }
 
             return config;
         }
