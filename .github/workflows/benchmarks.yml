@@ -21,7 +21,6 @@ on:
   push:
     branches:
       - main
-      - feature/benchmark-suite  # For testing - remove before merging
     paths:
       - '.github/workflows/benchmarks.yml'
       - 'csharp/src/**'
