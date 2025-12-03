@@ -48,30 +48,6 @@
     "category": "medium-medium"
   },
   {
-    "name": "item",
-    "description": "Item dimension - 18K rows, 22 columns, small dataset",
-    "query": "select * from main.tpcds_sf1_delta.item",
-    "expected_rows": 18000,
-    "columns": 22,
-    "category": "small-wide"
-  },
-  {
-    "name": "time_dim",
-    "description": "Time dimension - 86K rows, 10 columns, minimal width",
-    "query": "select * from main.tpcds_sf1_delta.time_dim",
-    "expected_rows": 86400,
-    "columns": 10,
-    "category": "small-medium"
-  },
-  {
-    "name": "store",
-    "description": "Store dimension - 12 rows, 29 columns (widest, minimal data)",
-    "query": "select * from main.tpcds_sf1_delta.store",
-    "expected_rows": 12,
-    "columns": 29,
-    "category": "small-wide"
-  },
-  {
     "name": "wide_sales_analysis",
     "description": "X-wide query with 54 columns: 18 strings, 18 numerics, 18 timestamps - comprehensive data type test",
     "query": "select ss.ss_sold_date_sk, ss.ss_item_sk, ss.ss_customer_sk, ss.ss_quantity, ss.ss_wholesale_cost, ss.ss_list_price, ss.ss_sales_price, ss.ss_ext_discount_amt, ss.ss_ext_sales_price, ss.ss_ext_wholesale_cost, ss.ss_ext_list_price, ss.ss_ext_tax, ss.ss_coupon_amt, ss.ss_net_paid, ss.ss_net_paid_inc_tax, ss.ss_net_profit, c.c_customer_id, c.c_salutation, c.c_first_name, c.c_last_name, c.c_birth_country, c.c_login, c.c_email_address, i.i_item_id, i.i_item_desc, i.i_brand, i.i_class, i.i_category, i.i_product_name, i.i_color, i.i_units, i.i_size, i.i_manager_id, cast(d.d_date as timestamp) as sale_date, cast(d.d_date as timestamp) + interval 1 hour as processing_time, cast(d.d_date as timestamp) + interval 2 hours as quality_check_time, cast(d.d_date as timestamp) + interval 4 hours as packaging_time, cast(d.d_date as timestamp) + interval 1 day as shipment_time, cast(d.d_date as timestamp) + interval 2 days as in_transit_time, cast(d.d_date as timestamp) + interval 3 days as delivery_time, cast(d.d_date as timestamp) + interval 5 days as customer_received_time, cast(d.d_date as timestamp) + interval 7 days as return_window_start, cast(d.d_date as timestamp) + interval 14 days as return_window_mid, cast(d.d_date as timestamp) + interval 30 days as return_window_end, cast(d.d_date as timestamp) + interval 60 days as warranty_start, cast(d.d_date as timestamp) + interval 180 days as warranty_mid, cast(d.d_date as timestamp) + interval 365 days as warranty_end, cast(d.d_date as timestamp) + interval 730 days as extended_warranty_end, current_timestamp() as record_created_at, current_timestamp() + interval 1 year as record_expires_at from main.tpcds_sf1_delta.store_sales ss join main.tpcds_sf1_delta.customer c on ss.ss_customer_sk = c.c_customer_sk join main.tpcds_sf1_delta.item i on ss.ss_item_sk = i.i_item_sk join main.tpcds_sf1_delta.date_dim d on ss.ss_sold_date_sk = d.d_date_sk",
