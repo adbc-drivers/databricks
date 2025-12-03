@@ -56,12 +56,12 @@
     "category": "small-join-string-heavy"
   },
   {
-    "name": "sales_with_dates",
-    "description": "Store sales joined with date dimension - 2.8M rows with date/timestamp columns",
-    "query": "select ss.ss_sold_date_sk, ss.ss_item_sk, ss.ss_customer_sk, ss.ss_quantity, ss.ss_sales_price, d.d_date, d.d_date_id, d.d_month_seq, d.d_week_seq, d.d_quarter_seq, d.d_year, d.d_dow, d.d_moy, d.d_dom, d.d_qoy, d.d_fy_year, d.d_fy_quarter_seq, d.d_fy_week_seq, d.d_day_name, d.d_quarter_name, d.d_holiday, d.d_weekend, d.d_following_holiday, d.d_first_dom, d.d_last_dom, d.d_same_day_ly, d.d_same_day_lq, d.d_current_day, d.d_current_week, d.d_current_month, d.d_current_quarter, d.d_current_year from main.tpcds_sf1_delta.store_sales ss join main.tpcds_sf1_delta.date_dim d on ss.ss_sold_date_sk = d.d_date_sk",
+    "name": "sales_with_timestamps",
+    "description": "Store sales with multiple timestamp columns - 2.8M rows testing timestamp serialization",
+    "query": "select ss.ss_sold_date_sk, ss.ss_item_sk, ss.ss_customer_sk, ss.ss_quantity, ss.ss_sales_price, cast(d.d_date as timestamp) as sale_timestamp, cast(d.d_date as timestamp) + interval 1 hour as processing_timestamp, cast(d.d_date as timestamp) + interval 1 day as shipment_timestamp, cast(d.d_date as timestamp) + interval 3 days as delivery_timestamp, cast(d.d_date as timestamp) + interval 7 days as return_deadline, cast(d.d_date as timestamp) + interval 30 days as warranty_start, cast(d.d_date as timestamp) + interval 365 days as warranty_end, current_timestamp() as record_created_at from main.tpcds_sf1_delta.store_sales ss join main.tpcds_sf1_delta.date_dim d on ss.ss_sold_date_sk = d.d_date_sk",
     "expected_rows": 2880404,
-    "columns": 32,
-    "category": "large-date-heavy"
+    "columns": 13,
+    "category": "large-timestamp-heavy"
   },
   {
     "name": "catalog_sales_filtered",
