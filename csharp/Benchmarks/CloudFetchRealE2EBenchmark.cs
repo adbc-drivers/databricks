@@ -303,6 +303,11 @@ namespace Apache.Arrow.Adbc.Benchmarks
         public int expected_rows { get; set; }
         public int columns { get; set; }
         public string category { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Override ToString to display query name in BenchmarkDotNet results table.
+        /// </summary>
+        public override string ToString() => name;
     }
 
     /// <summary>
