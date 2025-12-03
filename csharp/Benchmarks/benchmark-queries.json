@@ -38,5 +38,85 @@
     "expected_rows": 100000,
     "columns": 18,
     "category": "small-medium"
+  },
+  {
+    "name": "store_sales_numeric",
+    "description": "Store sales numeric columns - testing decimal/float heavy data",
+    "query": "select ss_sold_date_sk, ss_item_sk, ss_customer_sk, ss_quantity, ss_wholesale_cost, ss_list_price, ss_sales_price, ss_ext_discount_amt, ss_ext_sales_price, ss_ext_wholesale_cost, ss_ext_list_price, ss_ext_tax, ss_coupon_amt, ss_net_paid, ss_net_paid_inc_tax, ss_net_profit from main.tpcds_sf1_delta.store_sales",
+    "expected_rows": 2880404,
+    "columns": 16,
+    "category": "large-numeric-heavy"
+  },
+  {
+    "name": "customer_with_address",
+    "description": "Customer joined with address - testing string-heavy join result",
+    "query": "select c.c_customer_id, c.c_salutation, c.c_first_name, c.c_last_name, c.c_preferred_cust_flag, c.c_birth_country, c.c_login, c.c_email_address, c.c_last_review_date_sk, ca.ca_street_number, ca.ca_street_name, ca.ca_street_type, ca.ca_suite_number, ca.ca_city, ca.ca_county, ca.ca_state, ca.ca_zip, ca.ca_country, ca.ca_location_type from main.tpcds_sf1_delta.customer c join main.tpcds_sf1_delta.customer_address ca on c.c_current_addr_sk = ca.ca_address_sk",
+    "expected_rows": 100000,
+    "columns": 19,
+    "category": "small-join-string-heavy"
+  },
+  {
+    "name": "date_dim",
+    "description": "Date dimension - 73K rows, 28 columns, date/string heavy",
+    "query": "select * from main.tpcds_sf1_delta.date_dim",
+    "expected_rows": 73049,
+    "columns": 28,
+    "category": "small-wide-date-heavy"
+  },
+  {
+    "name": "catalog_sales_filtered",
+    "description": "Catalog sales filtered by date - ~400K rows",
+    "query": "select * from main.tpcds_sf1_delta.catalog_sales where cs_sold_date_sk >= 2451545",
+    "expected_rows": 400000,
+    "columns": 34,
+    "category": "medium-filtered"
+  },
+  {
+    "name": "store_sales_high_value",
+    "description": "High value store sales - filtered by amount",
+    "query": "select * from main.tpcds_sf1_delta.store_sales where ss_net_paid > 100",
+    "expected_rows": 500000,
+    "columns": 23,
+    "category": "medium-filtered"
+  },
+  {
+    "name": "store_sales_aggregated",
+    "description": "Daily sales summary - aggregation testing",
+    "query": "select ss_sold_date_sk, count(*) as transaction_count, sum(ss_quantity) as total_quantity, sum(ss_sales_price) as total_sales, avg(ss_sales_price) as avg_price, min(ss_sales_price) as min_price, max(ss_sales_price) as max_price from main.tpcds_sf1_delta.store_sales group by ss_sold_date_sk",
+    "expected_rows": 1824,
+    "columns": 7,
+    "category": "small-aggregated"
+  },
+  {
+    "name": "top_items",
+    "description": "Top selling items with join and aggregation",
+    "query": "select i.i_item_sk, i.i_item_id, i.i_item_desc, sum(ss.ss_quantity) as total_sold, sum(ss.ss_net_profit) as total_profit from main.tpcds_sf1_delta.store_sales ss join main.tpcds_sf1_delta.item i on ss.ss_item_sk = i.i_item_sk group by i.i_item_sk, i.i_item_id, i.i_item_desc order by total_sold desc limit 1000",
+    "expected_rows": 1000,
+    "columns": 5,
+    "category": "small-join-aggregated"
+  },
+  {
+    "name": "item",
+    "description": "Item dimension - 18K rows, 22 columns, small dataset",
+    "query": "select * from main.tpcds_sf1_delta.item",
+    "expected_rows": 18000,
+    "columns": 22,
+    "category": "small-dimension"
+  },
+  {
+    "name": "time_dim",
+    "description": "Time dimension - 86K rows, 10 columns, minimal width",
+    "query": "select * from main.tpcds_sf1_delta.time_dim",
+    "expected_rows": 86400,
+    "columns": 10,
+    "category": "small-narrow"
+  },
+  {
+    "name": "store",
+    "description": "Store dimension - 12 rows, 29 columns (widest, minimal data)",
+    "query": "select * from main.tpcds_sf1_delta.store",
+    "expected_rows": 12,
+    "columns": 29,
+    "category": "minimal-wide"
   }
 ]
