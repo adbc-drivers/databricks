@@ -392,51 +392,72 @@ jobs:
             echo "| Query | Mean (ms) | Baseline | Diff | Rows | Columns |"
             echo "|-------|-----------|----------|------|------|---------|"
 
-            # Parse current results
-            jq -r '.Benchmarks[] | "\(.Parameters.benchmarkQuery)|\(.Statistics.Mean / 1000000)|\(.Statistics.N)"' "$CURRENT" | while IFS='|' read -r query mean n; do
+            # Parse current results - Parameters is a string like "ReadDelayMs=5&benchmarkQuery=catalog_sales"
+            jq -r '.Benchmarks[] | "\(.Parameters)|\(.Statistics.Mean / 1000000)"' "$CURRENT" | while IFS='|' read -r params mean; do
+              # Extract query name from parameters string
+              query=$(echo "$params" | sed -n 's/.*benchmarkQuery=\([^&]*\).*/\1/p')
+
+              if [ -z "$query" ]; then
+                continue
+              fi
+
+              # Get rows and columns from the benchmark-queries.json if available
+              rows="-"
+              cols="-"
+              if [ -f "csharp/Benchmarks/benchmark-queries.json" ]; then
+                rows=$(jq -r --arg q "$query" '.[] | select(.name == $q) | .expected_rows // "-"' csharp/Benchmarks/benchmark-queries.json 2>/dev/null || echo "-")
+                cols=$(jq -r --arg q "$query" '.[] | select(.name == $q) | .columns // "-"' csharp/Benchmarks/benchmark-queries.json 2>/dev/null || echo "-")
+              fi
+
               # Format mean to 2 decimal places
               mean_formatted=$(printf "%.2f" "$mean")
 
               # Try to find baseline
               if [ -f "$BASELINE" ]; then
-                baseline_mean=$(jq -r --arg q "$query" '.Benchmarks[] | select(.Parameters.benchmarkQuery == $q) | .Statistics.Mean / 1000000' "$BASELINE" 2>/dev/null || echo "")
-                if [ -n "$baseline_mean" ]; then
+                baseline_mean=$(jq -r --arg q "$query" '.Benchmarks[] | select(.Parameters | contains("benchmarkQuery=" + $q)) | .Statistics.Mean / 1000000' "$BASELINE" 2>/dev/null | head -1)
+                if [ -n "$baseline_mean" ] && [ "$baseline_mean" != "null" ]; then
                   baseline_formatted=$(printf "%.2f" "$baseline_mean")
                   # Calculate percentage difference
-                  diff=$(echo "scale=2; (($mean - $baseline_mean) / $baseline_mean) * 100" | bc)
-                  if (( $(echo "$diff > 0" | bc -l) )); then
+                  diff=$(echo "scale=1; (($mean - $baseline_mean) / $baseline_mean) * 100" | bc)
+                  if (( $(echo "$diff > 0.5" | bc -l) )); then
                     diff_formatted="🔴 +${diff}%"
-                  elif (( $(echo "$diff < 0" | bc -l) )); then
+                  elif (( $(echo "$diff < -0.5" | bc -l) )); then
                     diff_formatted="🟢 ${diff}%"
                   else
-                    diff_formatted="⚪ 0%"
+                    diff_formatted="⚪ ~0%"
                   fi
-                  echo "| $query | $mean_formatted | $baseline_formatted | $diff_formatted | $n | - |"
+                  echo "| $query | $mean_formatted | $baseline_formatted | $diff_formatted | $rows | $cols |"
                 else
-                  echo "| $query | $mean_formatted | - | - | $n | - |"
+                  echo "| $query | $mean_formatted | - | - | $rows | $cols |"
                 fi
               else
-                echo "| $query | $mean_formatted | - | - | $n | - |"
+                echo "| $query | $mean_formatted | - | - | $rows | $cols |"
               fi
             done
           }
 
+          # Checkout to get benchmark-queries.json
+          git clone --depth 1 --branch ${{ github.base_ref || 'main' }} https://github.com/${{ github.repository }}.git repo-checkout
+          cd repo-checkout
+
           # .NET 8.0 results
-          echo "<details open>" >> comment.md
-          echo "<summary><b>.NET 8.0</b></summary>" >> comment.md
-          echo "" >> comment.md
-          format_results "$NET8_RESULTS" "$NET8_BASELINE" ".NET 8.0" >> comment.md
-          echo "" >> comment.md
-          echo "</details>" >> comment.md
-          echo "" >> comment.md
+          echo "<details open>" >> ../comment.md
+          echo "<summary><b>.NET 8.0</b></summary>" >> ../comment.md
+          echo "" >> ../comment.md
+          format_results "../$NET8_RESULTS" "../$NET8_BASELINE" ".NET 8.0" >> ../comment.md
+          echo "" >> ../comment.md
+          echo "</details>" >> ../comment.md
+          echo "" >> ../comment.md
 
           # .NET Framework 4.7.2 results
-          echo "<details>" >> comment.md
-          echo "<summary><b>.NET Framework 4.7.2</b></summary>" >> comment.md
-          echo "" >> comment.md
-          format_results "$NET472_RESULTS" "$NET472_BASELINE" ".NET Framework 4.7.2" >> comment.md
-          echo "" >> comment.md
-          echo "</details>" >> comment.md
+          echo "<details>" >> ../comment.md
+          echo "<summary><b>.NET Framework 4.7.2</b></summary>" >> ../comment.md
+          echo "" >> ../comment.md
+          format_results "../$NET472_RESULTS" "../$NET472_BASELINE" ".NET Framework 4.7.2" >> ../comment.md
+          echo "" >> ../comment.md
+          echo "</details>" >> ../comment.md
+
+          cd ..
 
           # Footer
           cat >> comment.md << 'EOF'
