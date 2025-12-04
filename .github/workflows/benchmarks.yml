@@ -317,6 +317,9 @@ jobs:
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download .NET 8.0 results
         uses: actions/download-artifact@v4
         with:
@@ -436,28 +439,22 @@ jobs:
             done
           }
 
-          # Checkout to get benchmark-queries.json
-          git clone --depth 1 --branch ${{ github.base_ref || 'main' }} https://github.com/${{ github.repository }}.git repo-checkout
-          cd repo-checkout
-
           # .NET 8.0 results
-          echo "<details open>" >> ../comment.md
-          echo "<summary><b>.NET 8.0</b></summary>" >> ../comment.md
-          echo "" >> ../comment.md
-          format_results "../$NET8_RESULTS" "../$NET8_BASELINE" ".NET 8.0" >> ../comment.md
-          echo "" >> ../comment.md
-          echo "</details>" >> ../comment.md
-          echo "" >> ../comment.md
+          echo "<details open>" >> comment.md
+          echo "<summary><b>.NET 8.0</b></summary>" >> comment.md
+          echo "" >> comment.md
+          format_results "$NET8_RESULTS" "$NET8_BASELINE" ".NET 8.0" >> comment.md
+          echo "" >> comment.md
+          echo "</details>" >> comment.md
+          echo "" >> comment.md
 
           # .NET Framework 4.7.2 results
-          echo "<details>" >> ../comment.md
-          echo "<summary><b>.NET Framework 4.7.2</b></summary>" >> ../comment.md
-          echo "" >> ../comment.md
-          format_results "../$NET472_RESULTS" "../$NET472_BASELINE" ".NET Framework 4.7.2" >> ../comment.md
-          echo "" >> ../comment.md
-          echo "</details>" >> ../comment.md
-
-          cd ..
+          echo "<details>" >> comment.md
+          echo "<summary><b>.NET Framework 4.7.2</b></summary>" >> comment.md
+          echo "" >> comment.md
+          format_results "$NET472_RESULTS" "$NET472_BASELINE" ".NET Framework 4.7.2" >> comment.md
+          echo "" >> comment.md
+          echo "</details>" >> comment.md
 
           # Footer
           cat >> comment.md << 'EOF'
