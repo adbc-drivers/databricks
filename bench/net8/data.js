@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764786470684,
+  "lastUpdate": 1764961920530,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Benchmark": [
@@ -391,6 +391,74 @@ window.BENCHMARK_DATA = {
             "name": "Gen2 Collections",
             "value": 60,
             "unit": "collections"
+          }
+        ]
+      }
+    ],
+    "CloudFetch Benchmark Suite": [
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "0d4b239cca9ac416a8a31c71ba0425907ed172d3",
+          "message": "fix(ci): correct benchmark report filename for gh-pages publishing\n\nUse actual BenchmarkDotNet report filename which uses the RootNamespace\n(Apache.Arrow.Adbc.Benchmarks) instead of AssemblyName (DatabricksBenchmarks).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-05T10:58:33-08:00",
+          "tree_id": "a64c10a3949f31fb848488e763e14ec8aff3bc51",
+          "url": "https://github.com/adbc-drivers/databricks/commit/0d4b239cca9ac416a8a31c71ba0425907ed172d3"
+        },
+        "date": 1764961919138,
+        "tool": "benchmarkdotnet",
+        "benches": [
+          {
+            "name": "Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark.ExecuteLargeQuery(benchmarkQuery: catalog_sales, ReadDelayMs: 5)",
+            "value": 2384779558,
+            "unit": "ns",
+            "range": "± 278049155.15042937"
+          },
+          {
+            "name": "Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark.ExecuteLargeQuery(benchmarkQuery: customer, ReadDelayMs: 5)",
+            "value": 583877088.8333334,
+            "unit": "ns",
+            "range": "± 5354986.411030595"
+          },
+          {
+            "name": "Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark.ExecuteLargeQuery(benchmarkQuery: inventory, ReadDelayMs: 5)",
+            "value": 6919675937.166667,
+            "unit": "ns",
+            "range": "± 553818689.9937263"
+          },
+          {
+            "name": "Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark.ExecuteLargeQuery(benchmarkQuery: sales_with_timestamps, ReadDelayMs: 5)",
+            "value": 3308207705.1666665,
+            "unit": "ns",
+            "range": "± 84380545.47696155"
+          },
+          {
+            "name": "Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark.ExecuteLargeQuery(benchmarkQuery: store_sales_numeric, ReadDelayMs: 5)",
+            "value": 3081779042.3333335,
+            "unit": "ns",
+            "range": "± 154522638.48704335"
+          },
+          {
+            "name": "Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark.ExecuteLargeQuery(benchmarkQuery: web_sales, ReadDelayMs: 5)",
+            "value": 1376052754.3333333,
+            "unit": "ns",
+            "range": "± 69427159.47516981"
+          },
+          {
+            "name": "Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark.ExecuteLargeQuery(benchmarkQuery: wide_sales_analysis, ReadDelayMs: 5)",
+            "value": 9997510674.166666,
+            "unit": "ns",
+            "range": "± 847402033.9362408"
           }
         ]
       }
