@@ -21,7 +21,7 @@ on:
   push:
     branches:
       - main
-      - feature/benchmark-suite  # For testing - remove before merging
+      - feature/gh-pages-publishing  # For testing - remove before merging
     paths:
       - '.github/workflows/benchmarks.yml'
       - 'csharp/src/**'
@@ -469,7 +469,7 @@ jobs:
   publish-to-gh-pages:
     name: Publish Benchmark Results to GitHub Pages
     needs: [benchmark-net8, benchmark-net472]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/gh-pages-publishing')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
