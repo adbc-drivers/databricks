@@ -465,3 +465,54 @@ jobs:
 
           # Post comment to PR
           gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body-file comment.md
+
+  publish-to-gh-pages:
+    name: Publish Benchmark Results to GitHub Pages
+    needs: [benchmark-net8, benchmark-net472]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download .NET 8.0 results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results-net8
+          path: results-net8
+
+      - name: Download .NET Framework 4.7.2 results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results-net472
+          path: results-net472
+
+      - name: Publish .NET 8.0 results to GitHub Pages
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: CloudFetch Benchmark Suite
+          tool: 'benchmarkdotnet'
+          output-file-path: results-net8/DatabricksBenchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/net8
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+          alert-comment-cc-users: '@eric-wang-1990'
+
+      - name: Publish .NET Framework 4.7.2 results to GitHub Pages
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: CloudFetch Benchmark Suite (.NET Framework)
+          tool: 'benchmarkdotnet'
+          output-file-path: results-net472/DatabricksBenchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/net472
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+          alert-comment-cc-users: '@eric-wang-1990'
