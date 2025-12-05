@@ -492,7 +492,7 @@ jobs:
         with:
           name: CloudFetch Benchmark Suite
           tool: 'benchmarkdotnet'
-          output-file-path: results-net8/DatabricksBenchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json
+          output-file-path: results-net8/Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           gh-pages-branch: gh-pages
@@ -507,7 +507,7 @@ jobs:
         with:
           name: CloudFetch Benchmark Suite (.NET Framework)
           tool: 'benchmarkdotnet'
-          output-file-path: results-net472/DatabricksBenchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json
+          output-file-path: results-net472/Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           gh-pages-branch: gh-pages
