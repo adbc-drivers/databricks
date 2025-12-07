@@ -109,10 +109,11 @@ WorkloadResult   1: 1 op, 8752445353.00 ns, 8.7524 s/op
 Benchmarks run automatically via GitHub Actions on every commit to the `main` branch:
 
 - **Multi-platform**: .NET 8.0 (Ubuntu) and .NET Framework 4.7.2 (Windows)
-- **Memory tracking**: Peak Memory, Allocated Memory, and Gen2 Collections
+- **Performance tracking**: Min Execution Time, Peak Memory, Allocated Memory, and Gen2 Collections
 - **Artifact storage**: Detailed results retained for 90 days
 - **Trend tracking**: GitHub Pages with interactive performance charts
-- **Regression alerts**: Triggers if memory usage increases by 150% (2.5x baseline)
+- **Regression alerts**: Triggers if metrics regress significantly
+- **PR benchmarking**: Label-based performance testing with automatic comparison comments
 
 ### Viewing CI Results
 
@@ -129,10 +130,72 @@ You can manually trigger a benchmark run:
 3. Optionally specify a custom SQL query
 4. Click **Run workflow**
 
-### Automatic Triggers
+**Note**: Manual triggers require write access to the repository.
 
-Benchmarks run automatically on:
-- Every push to the `main` branch (when changes affect `.github/workflows/benchmarks.yml`, `csharp/src/**`, or `csharp/Benchmarks/**`)
+### Pull Request Benchmarking (Label-Based)
+
+Test performance impact of your changes **before merging** using label-based PR benchmarks:
+
+#### How to Run Benchmarks on a PR:
+
+1. **Open your PR** (or navigate to an existing PR)
+2. **Add the `benchmark` label**:
+   - Click "Labels" in the right sidebar
+   - Select `benchmark` from the dropdown
+   - Save
+3. **Wait ~30 minutes** for the workflow to complete
+4. **Review the comparison comment** automatically posted on your PR
+
+#### What You Get:
+
+The workflow will automatically post **two separate comments** comparing your PR against the main branch baseline:
+
+**Comment 1: .NET 8.0 Results**
+```markdown
+## 🎯 Benchmark Results (.NET 8.0)
+
+| Metric | Baseline (main) | This PR | Change | Status |
+|--------|----------------|---------|--------|--------|
+| Min Execution Time (s) | 3.794 | 3.821 | +0.7% | ✅ |
+| Peak Memory (MB) | 420.98 | 398.12 | -5.4% | 🟢 |
+| Allocated Memory (MB) | 286.19 | 275.43 | -3.8% | 🟢 |
+| Gen2 Collections | 61 | 58 | -4.9% | 🟢 |
+```
+
+**Comment 2: .NET Framework 4.7.2 Results**
+```markdown
+## 🎯 Benchmark Results (.NET Framework 4.7.2)
+
+| Metric | Baseline (main) | This PR | Change | Status |
+|--------|----------------|---------|--------|--------|
+| Min Execution Time (s) | 4.123 | 4.201 | +1.9% | ✅ |
+| Peak Memory (MB) | 346.19 | 331.03 | -4.4% | 🟢 |
+| Allocated Memory (MB) | 539.65 | 530.39 | -1.7% | ✅ |
+| Gen2 Collections | 7 | 7 | 0.0% | ✅ |
+```
+
+**Indicators:**
+- 🟢 **Improvement** - Metric improved by >30%
+- ✅ **No significant change** - Within ±30%
+- ⚠️ **Regression** - Metric degraded by >30%
+- ➖ **New metric** - No baseline data available (first run)
+
+#### Key Features:
+
+- ✅ **Opt-in**: Only runs when you add the label (cost-effective)
+- ✅ **Automatic comparison**: Shows exact performance impact vs baseline
+- ✅ **Non-blocking**: Alerts don't fail the workflow
+- ✅ **Accessible**: Any contributor with write access can add labels
+- ✅ **No gh-pages pollution**: PR results aren't added to historical tracking
+
+#### Alert Threshold:
+
+The workflow alerts if any metric regresses by **>30%** compared to baseline. This helps identify:
+- Performance regressions before merging
+- Memory leaks or increased allocations
+- Changes that trigger excessive garbage collections
+
+**Note**: Alerts are informational only and won't block your PR. Use them to make informed decisions about performance trade-offs.
 
 ---
 
@@ -170,32 +233,6 @@ The workflow uses [`benchmark-action/github-action-benchmark`](https://github.co
 - Subsequent runs will push benchmark data to this branch
 - GitHub Pages will be available at: `https://<organization>.github.io/<repository>/bench/net8/`
 
-### Architecture
-
-**Workflow:** `.github/workflows/benchmarks.yml`
-
-Two parallel jobs run on each commit to main:
-1. **benchmark-net8**: Runs on `ubuntu-latest` with .NET 8.0
-2. **benchmark-net472**: Runs on `windows-2022` with .NET Framework 4.7.2
-
-Each job:
-1. Checks out the repository (with submodules)
-2. Sets up .NET SDK
-3. Creates Databricks configuration from secrets (OAuth client credentials)
-4. Builds the driver
-5. Runs benchmarks using `ci/scripts/csharp_benchmark.sh`
-6. Uploads results as artifacts (90-day retention)
-7. Extracts memory metrics (Peak Memory, Allocated, Gen2 Collections)
-8. Stores results for trend tracking (main branch only)
-
-**CI Script:** `ci/scripts/csharp_benchmark.sh`
-
-- Takes two parameters: workspace directory and target framework (net8.0 or net472)
-- Validates framework parameter
-- Checks for `DATABRICKS_TEST_CONFIG_FILE` environment variable
-- Runs BenchmarkDotNet with JSON exporter
-- Saves results to `csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/`
-
 ---
 
 ## Configuration
@@ -213,19 +250,12 @@ This query processes approximately 1.4M rows and tests CloudFetch with realistic
 2. Enter your custom query in the "Custom SQL query" field
 3. The query will be added to the config file automatically
 
-### Performance Alert Threshold
+### Alert Thresholds
 
-The workflow alerts if **memory metrics increase by 150%** or more (2.5x baseline). Since lower memory is better, the workflow uses `customSmallerIsBetter` mode.
+- **PR benchmarks**: Alert if any metric regresses by >30%
+- **Main branch**: Alert if metrics increase by >150% (2.5x baseline)
 
-Adjust in `.github/workflows/benchmarks.yml`:
-
-```yaml
-- name: Store benchmark results for trend tracking
-  uses: benchmark-action/github-action-benchmark@v1
-  with:
-    tool: 'customSmallerIsBetter'  # Lower memory is better
-    alert-threshold: '150%'        # Alert if memory increases to 2.5x baseline
-```
+Alerts are informational only and don't fail the workflow.
 
 ### Timeout
 
@@ -255,22 +285,21 @@ Each artifact contains:
 
 **Tracked in GitHub Pages (trend analysis):**
 
-1. **Execution Time (seconds)**: End-to-end execution time including query execution, CloudFetch downloads, LZ4 decompression, and batch consumption
-   - **Mean**: Average execution time across iterations
-   - **Min**: Best (fastest) execution time - tracked across commits to monitor performance improvements
-   - **Max**: Worst (slowest) execution time
-   - **Median**: Middle value, less sensitive to outliers
-   - Lower is better
-   - Source: BenchmarkDotNet timing measurements
+1. **Min Execution Time (seconds)**: Best (fastest) execution time across benchmark iterations
+   - Primary performance metric tracked on GitHub Pages
+   - End-to-end time including query execution, CloudFetch downloads, LZ4 decompression, and batch consumption
+   - Lower is better (tracks performance improvements)
+   - Alert threshold: 130% on PRs (30% regression warning)
+   - Source: BenchmarkDotNet's `Statistics.Min`
 
 2. **Peak Memory (MB)**: Maximum working set memory (private bytes) during execution
    - Lower is better
-   - Alert threshold: 150% increase (triggers if memory reaches 2.5x baseline)
+   - Alert threshold: 150% on main, 130% on PRs
    - Source: Custom metrics from `Process.PrivateMemorySize64`
 
 3. **Allocated Memory (MB)**: Total managed memory allocated during execution
    - Lower is better
-   - Alert threshold: 150%
+   - Alert threshold: 150% on main, 130% on PRs
    - Source: BenchmarkDotNet's `MemoryDiagnoser`
 
 4. **Gen2 Collections**: Number of full garbage collections
@@ -351,27 +380,14 @@ This selective triggering saves CI resources and provides faster feedback for no
 
 **No** - Alerts are informational only and do **not** block merges or fail the workflow.
 
-**Configuration:**
-```yaml
-fail-on-alert: false            # Workflow passes even with alerts
-comment-on-alert: false         # No automatic PR comments
-alert-threshold: '150%'         # Alert when memory increases by 2.5x
-```
+**For PRs:** If metrics regress by >30%, a warning (⚠️) appears in the comparison comment but doesn't fail the workflow.
 
-**What happens when an alert triggers:**
-
-1. ✅ Workflow completes successfully (does not fail)
-2. ✅ Alert appears in GitHub Pages dashboard
-3. ✅ Maintainers are mentioned for awareness (`@databricks/adbc-csharp-maintainers`)
-4. ✅ Commit is already merged (alert happens post-merge on main branch)
-5. 🔍 Team investigates the regression
-6. 🔧 Follow-up PR created if action is needed
+**For main branch:** If metrics regress by >150%, an alert appears in GitHub Pages dashboard but the workflow still passes.
 
 **Why non-blocking?**
 - Critical bug fixes shouldn't be blocked by performance alerts
-- Performance trade-offs are sometimes intentional (e.g., more features may require more memory)
-- Alerts provide visibility while allowing teams to make informed decisions
-- Enables faster iteration with maintained oversight
+- Performance trade-offs are sometimes intentional
+- Alerts provide visibility while allowing informed decisions
 
 ### How do I investigate a performance regression?
 
@@ -380,20 +396,9 @@ When an alert triggers:
 1. **Check GitHub Pages dashboard** - View the trend chart to see the increase
 2. **Download artifacts** - Get the detailed benchmark reports from the workflow run
 3. **Compare commits** - Use the comparison view to see what changed
-4. **Review the PR** - Look at the code changes that caused the regression
-5. **Assess trade-off** - Determine if the regression is acceptable (e.g., new feature adds value)
-6. **Create follow-up** - If needed, create a PR to optimize and reduce memory usage
-
-### Can I run benchmarks on a PR before merging?
-
-Yes - Use manual workflow trigger:
-
-1. Push your changes to a feature branch
-2. Temporarily add your branch to the workflow triggers (for testing only)
-3. Remove the temporary trigger before merging
-4. Or, run benchmarks locally using the Quick Start instructions
-
-**Note**: Only main branch benchmarks are tracked in GitHub Pages to maintain clean historical data.
+4. **Review the code** - Look at the changes that caused the regression
+5. **Assess trade-off** - Determine if the regression is acceptable
+6. **Create follow-up** - If needed, create a PR to optimize performance
 
 ---
 

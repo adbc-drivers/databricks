@@ -98,6 +98,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
             Assert.True(totalRows >= rowCount);
 
             Assert.Null(await result.Stream.ReadNextRecordBatchAsync());
+            statement.Dispose();
 
             // Also log to the test output helper if available
             OutputHelper?.WriteLine($"Read {totalRows} rows from range function");

@@ -36,54 +36,30 @@ using Apache.Hive.Service.Rpc.Thrift;
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
-    /// Fetches result chunks from the Thrift server and manages URL caching and refreshing.
+    /// Base class for result fetchers that manages pipeline and fetching logic.
+    /// Protocol-specific implementations should inherit from this class.
     /// </summary>
-    internal class CloudFetchResultFetcher : ICloudFetchResultFetcher
+    internal abstract class CloudFetchResultFetcher : ICloudFetchResultFetcher
     {
-        private readonly IHiveServer2Statement _statement;
-        private readonly IResponse _response;
-        private readonly TFetchResultsResp? _initialResults;
-        private readonly ICloudFetchMemoryBufferManager _memoryManager;
-        private readonly BlockingCollection<IDownloadResult> _downloadQueue;
-        private readonly SemaphoreSlim _fetchLock = new SemaphoreSlim(1, 1);
-        private readonly ConcurrentDictionary<long, IDownloadResult> _urlsByOffset = new ConcurrentDictionary<long, IDownloadResult>();
-        private readonly int _expirationBufferSeconds;
-        private readonly IClock _clock;
-        private long _startOffset;
-        private bool _hasMoreResults;
-        private bool _isCompleted;
+        protected readonly ICloudFetchMemoryBufferManager _memoryManager;
+        protected readonly BlockingCollection<IDownloadResult> _downloadQueue;
+        protected volatile bool _hasMoreResults;
+        protected volatile bool _isCompleted;
         private Task? _fetchTask;
         private CancellationTokenSource? _cancellationTokenSource;
         private Exception? _error;
-        private long _batchSize;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchResultFetcher"/> class.
         /// </summary>
-        /// <param name="statement">The HiveServer2 statement interface.</param>
         /// <param name="memoryManager">The memory buffer manager.</param>
         /// <param name="downloadQueue">The queue to add download tasks to.</param>
-        /// <param name="batchSize">The number of rows to fetch in each batch.</param>
-        /// <param name="expirationBufferSeconds">Buffer time in seconds before URL expiration to trigger refresh.</param>
-        /// <param name="clock">Clock implementation for time operations. If null, uses system clock.</param>
-        public CloudFetchResultFetcher(
-            IHiveServer2Statement statement,
-            IResponse response,
-            TFetchResultsResp? initialResults,
+        protected CloudFetchResultFetcher(
             ICloudFetchMemoryBufferManager memoryManager,
-            BlockingCollection<IDownloadResult> downloadQueue,
-            long batchSize,
-            int expirationBufferSeconds = 60,
-            IClock? clock = null)
+            BlockingCollection<IDownloadResult> downloadQueue)
         {
-            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
-            _response = response;
-            _initialResults = initialResults;
             _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
-            _batchSize = batchSize;
-            _expirationBufferSeconds = expirationBufferSeconds;
-            _clock = clock ?? new SystemClock();
             _hasMoreResults = true;
             _isCompleted = false;
         }
@@ -109,16 +85,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
 
             // Reset state
-            _startOffset = 0;
             _hasMoreResults = true;
             _isCompleted = false;
             _error = null;
-            _urlsByOffset.Clear();
+            ResetState();
 
             _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _fetchTask = FetchResultsAsync(_cancellationTokenSource.Token);
 
-            // Wait for the fetch task to start
             await Task.Yield();
         }
 
@@ -142,7 +116,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error stopping fetcher: {ex.Message}");
+                Activity.Current?.AddEvent("cloudfetch.fetcher_stop_error", [
+                    new("error_message", ex.Message)
+                ]);
             }
             finally
             {
@@ -151,93 +127,56 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 _fetchTask = null;
             }
         }
-        /// <inheritdoc />
-        public async Task<TSparkArrowResultLink?> GetUrlAsync(long offset, CancellationToken cancellationToken)
-        {
-            // Check if we have a non-expired URL in the cache
-            if (_urlsByOffset.TryGetValue(offset, out var cachedResult) && !cachedResult.IsExpiredOrExpiringSoon(_expirationBufferSeconds))
-            {
-                return cachedResult.Link;
-            }
-
-            // Need to fetch or refresh the URL
-            await _fetchLock.WaitAsync(cancellationToken);
-            try
-            {
-                // Create fetch request for the specific offset
-                TFetchResultsReq request = new TFetchResultsReq(
-                    _response.OperationHandle!,
-                    TFetchOrientation.FETCH_NEXT,
-                    1);
-
-                request.StartRowOffset = offset;
-
-                // Cancelling mid-request breaks the client; Dispose() should not break the underlying client
-                CancellationToken expiringToken = ApacheUtility.GetCancellationToken(_statement.QueryTimeoutSeconds, ApacheUtility.TimeUnit.Seconds);
-
-                // Fetch results
-                TFetchResultsResp response = await _statement.Client.FetchResults(request, expiringToken);
-
-                // Process the results
-                if (response.Status.StatusCode == TStatusCode.SUCCESS_STATUS &&
-                    response.Results.__isset.resultLinks &&
-                    response.Results.ResultLinks != null &&
-                    response.Results.ResultLinks.Count > 0)
-                {
-                    var refreshedLink = response.Results.ResultLinks.FirstOrDefault(l => l.StartRowOffset == offset);
-                    if (refreshedLink != null)
-                    {
-                        Activity.Current?.AddEvent("cloudfetch.url_fetched", [
-                            new("offset", offset),
-                            new("url_length", refreshedLink.FileLink?.Length ?? 0)
-                        ]);
-
-                        // Create a download result for the refreshed link
-                        var downloadResult = new DownloadResult(refreshedLink, _memoryManager);
-                        _urlsByOffset[offset] = downloadResult;
-
-                        return refreshedLink;
-                    }
-                }
-
-                Activity.Current?.AddEvent("cloudfetch.url_fetch_failed", [new("offset", offset)]);
-                return null;
-            }
-            finally
-            {
-                _fetchLock.Release();
-            }
-        }
 
         /// <summary>
-        /// Gets all currently cached URLs.
+        /// Re-fetches URLs for chunks starting from the specified row offset.
+        /// Used when URLs expire before download completes.
         /// </summary>
-        /// <returns>A dictionary mapping offsets to their URL links.</returns>
-        public Dictionary<long, TSparkArrowResultLink> GetAllCachedUrls()
-        {
-            return _urlsByOffset.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Link);
-        }
+        /// <param name="startRowOffset">The starting row offset to fetch from.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A collection of download results with refreshed URLs.</returns>
+        public abstract Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startRowOffset, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Clears all cached URLs.
+        /// Resets the fetcher state. Called at the beginning of StartAsync.
+        /// Subclasses should override to reset protocol-specific state.
         /// </summary>
-        public void ClearCache()
-        {
-            _urlsByOffset.Clear();
-        }
+        protected abstract void ResetState();
+
+        /// <summary>
+        /// Checks if initial results are available from the protocol.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>True if initial results are available, false otherwise.</returns>
+        protected abstract Task<bool> HasInitialResultsAsync(CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Processes initial results from the protocol.
+        /// This method should add IDownloadResult objects to _downloadQueue.
+        /// It should also update _hasMoreResults based on whether there are more results available.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        protected abstract void ProcessInitialResultsAsync(CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Fetches the next batch of results from the protocol.
+        /// This method should add IDownloadResult objects to _downloadQueue.
+        /// It should also update _hasMoreResults based on whether there are more results available.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        protected abstract Task FetchNextBatchAsync(CancellationToken cancellationToken);
 
         private async Task FetchResultsAsync(CancellationToken cancellationToken)
         {
             try
             {
                 // Process direct results first, if available
-                if ((_statement.TryGetDirectResults(_response, out TSparkDirectResults? directResults)
-                    && directResults!.ResultSet?.Results?.ResultLinks?.Count > 0)
-                    || _initialResults?.Results?.ResultLinks?.Count > 0)
+                if (await HasInitialResultsAsync(cancellationToken))
                 {
                     // Yield execution so the download queue doesn't get blocked before downloader is started
                     await Task.Yield();
-                    ProcessDirectResultsAsync(cancellationToken);
+                    ProcessInitialResultsAsync(cancellationToken);
                 }
 
                 // Continue fetching as needed
@@ -246,7 +185,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                     try
                     {
                         // Fetch more results from the server
-                        await FetchNextResultBatchAsync(null, cancellationToken).ConfigureAwait(false);
+                        await FetchNextBatchAsync(cancellationToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -255,147 +194,47 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                     }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine($"Error fetching results: {ex.Message}");
+                        Activity.Current?.AddEvent("cloudfetch.fetch_results_error", [
+                            new("error_message", ex.Message),
+                            new("error_type", ex.GetType().Name)
+                        ]);
                         _error = ex;
                         _hasMoreResults = false;
                         throw;
                     }
                 }
-
-                // Add the end of results guard to the queue
-                _downloadQueue.Add(EndOfResultsGuard.Instance, cancellationToken);
-                _isCompleted = true;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Unhandled error in fetcher: {ex.Message}");
+                Activity.Current?.AddEvent("cloudfetch.fetcher_unhandled_error", [
+                    new("error_message", ex.Message),
+                    new("error_type", ex.GetType().Name)
+                ]);
                 _error = ex;
                 _hasMoreResults = false;
-                _isCompleted = true;
-
-                // Add the end of results guard to the queue even in case of error
+            }
+            finally
+            {
+                // Always add the end of results guard to signal completion to the downloader.
+                // Use Add with cancellation token to exit promptly when cancelled.
                 try
                 {
-                    _downloadQueue.TryAdd(EndOfResultsGuard.Instance, 0);
+                    _downloadQueue.Add(EndOfResultsGuard.Instance, cancellationToken);
+                    Activity.Current?.AddEvent("cloudfetch.end_of_results_guard_added");
                 }
-                catch (Exception)
+                catch (OperationCanceledException)
                 {
-                    // Ignore any errors when adding the guard in case of error
+                    Activity.Current?.AddEvent("cloudfetch.end_of_results_guard_cancelled");
                 }
-            }
-        }
-
-        private async Task FetchNextResultBatchAsync(long? offset, CancellationToken cancellationToken)
-        {
-            // Create fetch request
-            TFetchResultsReq request = new TFetchResultsReq(_response.OperationHandle!, TFetchOrientation.FETCH_NEXT, _batchSize);
-
-            if (_statement is DatabricksStatement databricksStatement)
-            {
-                request.MaxBytes = databricksStatement.MaxBytesPerFetchRequest;
-            }
-
-            // Set the start row offset
-            long startOffset = offset ?? _startOffset;
-            if (startOffset > 0)
-            {
-                request.StartRowOffset = startOffset;
-            }
-
-            // Fetch results
-            TFetchResultsResp response;
-            try
-            {
-                // Use the statement's configured query timeout
-
-                using var timeoutTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(_statement.QueryTimeoutSeconds));
-                using var combinedTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutTokenSource.Token);
-
-                response = await _statement.Client.FetchResults(request, combinedTokenSource.Token).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error fetching results from server: {ex.Message}");
-                _hasMoreResults = false;
-                throw;
-            }
-
-            // Check if we have URL-based results
-            if (response.Results.__isset.resultLinks &&
-                response.Results.ResultLinks != null &&
-                response.Results.ResultLinks.Count > 0)
-            {
-                List<TSparkArrowResultLink> resultLinks = response.Results.ResultLinks;
-                long maxOffset = 0;
-
-                // Process each link
-                foreach (var link in resultLinks)
+                catch (Exception ex)
                 {
-                    // Create download result
-                    var downloadResult = new DownloadResult(link, _memoryManager);
-
-                    // Add to download queue and cache
-                    _downloadQueue.Add(downloadResult, cancellationToken);
-                    _urlsByOffset[link.StartRowOffset] = downloadResult;
-
-                    // Track the maximum offset for future fetches
-                    long endOffset = link.StartRowOffset + link.RowCount;
-                    maxOffset = Math.Max(maxOffset, endOffset);
+                    Activity.Current?.AddEvent("cloudfetch.end_of_results_guard_error", [
+                        new("error_message", ex.Message),
+                        new("error_type", ex.GetType().Name)
+                    ]);
                 }
-
-                // Update the start offset for the next fetch
-                if (!offset.HasValue)  // Only update if this was a sequential fetch
-                {
-                    _startOffset = maxOffset;
-                }
-
-                // Update whether there are more results
-                _hasMoreResults = response.HasMoreRows;
+                _isCompleted = true;
             }
-            else
-            {
-                // No more results
-                _hasMoreResults = false;
-            }
-        }
-
-        private void ProcessDirectResultsAsync(CancellationToken cancellationToken)
-        {
-            TFetchResultsResp fetchResults;
-            if (_statement.TryGetDirectResults(_response, out TSparkDirectResults? directResults)
-                && directResults!.ResultSet?.Results?.ResultLinks?.Count > 0)
-            {
-                fetchResults = directResults.ResultSet;
-            }
-            else
-            {
-                fetchResults = _initialResults!;
-            }
-
-            List<TSparkArrowResultLink> resultLinks = fetchResults.Results.ResultLinks;
-
-            long maxOffset = 0;
-
-            // Process each link
-            foreach (var link in resultLinks)
-            {
-                // Create download result
-                var downloadResult = new DownloadResult(link, _memoryManager);
-
-                // Add to download queue and cache
-                _downloadQueue.Add(downloadResult, cancellationToken);
-                _urlsByOffset[link.StartRowOffset] = downloadResult;
-
-                // Track the maximum offset for future fetches
-                long endOffset = link.StartRowOffset + link.RowCount;
-                maxOffset = Math.Max(maxOffset, endOffset);
-            }
-
-            // Update the start offset for the next fetch
-            _startOffset = maxOffset;
-
-            // Update whether there are more results
-            _hasMoreResults = fetchResults.HasMoreRows;
         }
     }
 }

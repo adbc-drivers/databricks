@@ -36,6 +36,7 @@ using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2.Client;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
+using Apache.Arrow.Adbc.Drivers.Databricks.Http;
 using Apache.Arrow.Adbc.Drivers.Databricks.Reader;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -245,118 +246,20 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
         private void ValidateProperties()
         {
-            if (Properties.TryGetValue(DatabricksParameters.EnablePKFK, out string? enablePKFKStr))
-            {
-                if (bool.TryParse(enablePKFKStr, out bool enablePKFKValue))
-                {
-                    _enablePKFK = enablePKFKValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.EnablePKFK}' value '{enablePKFKStr}' could not be parsed. Valid values are 'true', 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.EnableMultipleCatalogSupport, out string? enableMultipleCatalogSupportStr))
-            {
-                if (bool.TryParse(enableMultipleCatalogSupportStr, out bool enableMultipleCatalogSupportValue))
-                {
-                    _enableMultipleCatalogSupport = enableMultipleCatalogSupportValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.EnableMultipleCatalogSupport}' value '{enableMultipleCatalogSupportStr}' could not be parsed. Valid values are 'true', 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.ApplySSPWithQueries, out string? applySSPWithQueriesStr))
-            {
-                if (bool.TryParse(applySSPWithQueriesStr, out bool applySSPWithQueriesValue))
-                {
-                    _applySSPWithQueries = applySSPWithQueriesValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.ApplySSPWithQueries}' value '{applySSPWithQueriesStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.EnableDirectResults, out string? enableDirectResultsStr))
-            {
-                if (bool.TryParse(enableDirectResultsStr, out bool enableDirectResultsValue))
-                {
-                    _enableDirectResults = enableDirectResultsValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.EnableDirectResults}' value '{enableDirectResultsStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
+            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnablePKFK, _enablePKFK);
+            _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableMultipleCatalogSupport, _enableMultipleCatalogSupport);
+            _applySSPWithQueries = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.ApplySSPWithQueries, _applySSPWithQueries);
+            _enableDirectResults = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableDirectResults, _enableDirectResults);
 
             // Parse CloudFetch options from connection properties
-            if (Properties.TryGetValue(DatabricksParameters.UseCloudFetch, out string? useCloudFetchStr))
-            {
-                if (bool.TryParse(useCloudFetchStr, out bool useCloudFetchValue))
-                {
-                    _useCloudFetch = useCloudFetchValue;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.UseCloudFetch}' value '{useCloudFetchStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
+            _useCloudFetch = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseCloudFetch, _useCloudFetch);
+            _canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.CanDecompressLz4, _canDecompressLz4);
+            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseDescTableExtended, _useDescTableExtended);
+            _runAsyncInThrift = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableRunAsyncInThriftOp, _runAsyncInThrift);
 
-            if (Properties.TryGetValue(DatabricksParameters.CanDecompressLz4, out string? canDecompressLz4Str))
+            if (Properties.ContainsKey(DatabricksParameters.MaxBytesPerFile))
             {
-                if (bool.TryParse(canDecompressLz4Str, out bool canDecompressLz4Value))
-                {
-                    _canDecompressLz4 = canDecompressLz4Value;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.CanDecompressLz4}' value '{canDecompressLz4Str}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.UseDescTableExtended, out string? useDescTableExtendedStr))
-            {
-                if (bool.TryParse(useDescTableExtendedStr, out bool useDescTableExtended))
-                {
-                    _useDescTableExtended = useDescTableExtended;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.UseDescTableExtended}' value '{useDescTableExtendedStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.EnableRunAsyncInThriftOp, out string? enableRunAsyncInThriftStr))
-            {
-                if (bool.TryParse(enableRunAsyncInThriftStr, out bool enableRunAsyncInThrift))
-                {
-                    _runAsyncInThrift = enableRunAsyncInThrift;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.EnableRunAsyncInThriftOp}' value '{enableRunAsyncInThriftStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
-            if (Properties.TryGetValue(DatabricksParameters.MaxBytesPerFile, out string? maxBytesPerFileStr))
-            {
-                if (!long.TryParse(maxBytesPerFileStr, out long maxBytesPerFileValue))
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.MaxBytesPerFile}' value '{maxBytesPerFileStr}' could not be parsed. Valid values are positive integers.");
-                }
-
-                if (maxBytesPerFileValue <= 0)
-                {
-                    throw new ArgumentOutOfRangeException(
-                        nameof(Properties),
-                        maxBytesPerFileValue,
-                        $"Parameter '{DatabricksParameters.MaxBytesPerFile}' value must be a positive integer.");
-                }
-                _maxBytesPerFile = maxBytesPerFileValue;
+                _maxBytesPerFile = PropertyHelper.GetPositiveLongPropertyWithValidation(Properties, DatabricksParameters.MaxBytesPerFile, _maxBytesPerFile);
             }
 
             if (Properties.TryGetValue(DatabricksParameters.MaxBytesPerFetchRequest, out string? maxBytesPerFetchRequestStr))
@@ -402,18 +305,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             _defaultNamespace = ns;
 
             // Parse trace propagation options
-            if (Properties.TryGetValue(DatabricksParameters.TracePropagationEnabled, out string? tracePropagationEnabledStr))
-            {
-                if (bool.TryParse(tracePropagationEnabledStr, out bool tracePropagationEnabled))
-                {
-                    _tracePropagationEnabled = tracePropagationEnabled;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.TracePropagationEnabled}' value '{tracePropagationEnabledStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
-
+            _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.TracePropagationEnabled, _tracePropagationEnabled);
             if (Properties.TryGetValue(DatabricksParameters.TraceParentHeaderName, out string? traceParentHeaderName))
             {
                 if (!string.IsNullOrWhiteSpace(traceParentHeaderName))
@@ -425,18 +317,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                     throw new ArgumentException($"Parameter '{DatabricksParameters.TraceParentHeaderName}' cannot be empty.");
                 }
             }
-
-            if (Properties.TryGetValue(DatabricksParameters.TraceStateEnabled, out string? traceStateEnabledStr))
-            {
-                if (bool.TryParse(traceStateEnabledStr, out bool traceStateEnabled))
-                {
-                    _traceStateEnabled = traceStateEnabled;
-                }
-                else
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.TraceStateEnabled}' value '{traceStateEnabledStr}' could not be parsed. Valid values are 'true' and 'false'.");
-                }
-            }
+            _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.TraceStateEnabled, _traceStateEnabled);
 
             if (!Properties.ContainsKey(ApacheParameters.QueryTimeoutSeconds))
             {
@@ -449,38 +330,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                 _identityFederationClientId = identityFederationClientId;
             }
 
-            if (Properties.TryGetValue(DatabricksParameters.FetchHeartbeatInterval, out string? fetchHeartbeatIntervalStr))
+            if (Properties.ContainsKey(DatabricksParameters.FetchHeartbeatInterval))
             {
-                if (!int.TryParse(fetchHeartbeatIntervalStr, out int fetchHeartbeatIntervalValue))
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.FetchHeartbeatInterval}' value '{fetchHeartbeatIntervalStr}' could not be parsed. Valid values are positive integers.");
-                }
-
-                if (fetchHeartbeatIntervalValue <= 0)
-                {
-                    throw new ArgumentOutOfRangeException(
-                        nameof(Properties),
-                        fetchHeartbeatIntervalValue,
-                        $"Parameter '{DatabricksParameters.FetchHeartbeatInterval}' value must be a positive integer.");
-                }
-                _fetchHeartbeatIntervalSeconds = fetchHeartbeatIntervalValue;
+                _fetchHeartbeatIntervalSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(Properties, DatabricksParameters.FetchHeartbeatInterval, _fetchHeartbeatIntervalSeconds);
             }
 
-            if (Properties.TryGetValue(DatabricksParameters.OperationStatusRequestTimeout, out string? operationStatusRequestTimeoutStr))
+            if (Properties.ContainsKey(DatabricksParameters.OperationStatusRequestTimeout))
             {
-                if (!int.TryParse(operationStatusRequestTimeoutStr, out int operationStatusRequestTimeoutValue))
-                {
-                    throw new ArgumentException($"Parameter '{DatabricksParameters.OperationStatusRequestTimeout}' value '{operationStatusRequestTimeoutStr}' could not be parsed. Valid values are positive integers.");
-                }
-
-                if (operationStatusRequestTimeoutValue <= 0)
-                {
-                    throw new ArgumentOutOfRangeException(
-                        nameof(Properties),
-                        operationStatusRequestTimeoutValue,
-                        $"Parameter '{DatabricksParameters.OperationStatusRequestTimeout}' value must be a positive integer.");
-                }
-                _operationStatusRequestTimeoutSeconds = operationStatusRequestTimeoutValue;
+                _operationStatusRequestTimeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(Properties, DatabricksParameters.OperationStatusRequestTimeout, _operationStatusRequestTimeoutSeconds);
             }
         }
 
@@ -599,114 +456,34 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             HttpMessageHandler baseHandler = base.CreateHttpHandler();
             HttpMessageHandler baseAuthHandler = HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator);
 
-            // IMPORTANT: Handler Order Matters!
-            //
-            // HTTP delegating handlers form a chain where execution flows from outermost to innermost
-            // on the request, and then innermost to outermost on the response.
-            //
-            // Request flow (outer → inner):  Handler1 → Handler2 → Handler3 → Network
-            // Response flow (inner → outer): Network → Handler3 → Handler2 → Handler1
-            //
-            // Current chain order (outermost to innermost):
-            // 1. OAuth handlers (OAuthDelegatingHandler, etc.) - only on baseHandler for API requests
-            // 2. ThriftErrorMessageHandler - extracts x-thriftserver-error-message and throws descriptive exceptions
-            // 3. RetryHttpHandler - retries 408, 429, 502, 503, 504 with Retry-After support
-            // 4. TracingDelegatingHandler - propagates W3C trace context
-            // 5. Base HTTP handler - actual network communication
-            //
-            // Why this order:
-            // - TracingDelegatingHandler must be innermost (closest to network) to capture full request timing
-            // - RetryHttpHandler must be INSIDE ThriftErrorMessageHandler so it can retry 503 responses
-            //   (e.g., during cluster auto-start) before ThriftErrorMessageHandler throws an exception
-            // - ThriftErrorMessageHandler must be OUTSIDE RetryHttpHandler so it only processes final
-            //   error responses after all retry attempts are exhausted
-            // - OAuth handlers are outermost since they modify request headers and don't need retry logic
-            //
-            // DO NOT change this order without understanding the implications!
-
-            // Add tracing handler to propagate W3C trace context if enabled (INNERMOST - closest to network)
-            if (_tracePropagationEnabled)
+            var config = new HttpHandlerFactory.HandlerConfig
             {
-                baseHandler = new TracingDelegatingHandler(baseHandler, this, _traceParentHeaderName, _traceStateEnabled);
-                baseAuthHandler = new TracingDelegatingHandler(baseAuthHandler, this, _traceParentHeaderName, _traceStateEnabled);
-            }
+                BaseHandler = baseHandler,
+                BaseAuthHandler = baseAuthHandler,
+                Properties = Properties,
+                Host = GetHost(),
+                ActivityTracer = this,
+                TracePropagationEnabled = _tracePropagationEnabled,
+                TraceParentHeaderName = _traceParentHeaderName,
+                TraceStateEnabled = _traceStateEnabled,
+                IdentityFederationClientId = _identityFederationClientId,
+                TemporarilyUnavailableRetry = TemporarilyUnavailableRetry,
+                TemporarilyUnavailableRetryTimeout = TemporarilyUnavailableRetryTimeout,
+                RateLimitRetry = RateLimitRetry,
+                RateLimitRetryTimeout = RateLimitRetryTimeout,
+                TimeoutMinutes = 1,
+                AddThriftErrorHandler = true
+            };
 
-            if (TemporarilyUnavailableRetry || RateLimitRetry)
-            {
-                // Add retry handler for 408, 429, 502, 503, 504 responses with Retry-After support
-                // This must be INSIDE ThriftErrorMessageHandler so retries happen before exceptions are thrown
-                baseHandler = new RetryHttpHandler(baseHandler, this, TemporarilyUnavailableRetryTimeout, RateLimitRetryTimeout, TemporarilyUnavailableRetry, RateLimitRetry);
-                baseAuthHandler = new RetryHttpHandler(baseAuthHandler, this, TemporarilyUnavailableRetryTimeout, RateLimitRetryTimeout, TemporarilyUnavailableRetry, RateLimitRetry);
-            }
+            var result = HttpHandlerFactory.CreateHandlers(config);
 
-            // Add Thrift error message handler AFTER retry handler (OUTSIDE in the chain)
-            // This ensures retryable status codes (408, 429, 502, 503, 504) are retried by RetryHttpHandler
-            // before ThriftErrorMessageHandler throws exceptions with Thrift error messages
-            baseHandler = new ThriftErrorMessageHandler(baseHandler);
-            baseAuthHandler = new ThriftErrorMessageHandler(baseAuthHandler);
-
-            if (Properties.TryGetValue(SparkParameters.AuthType, out string? authType) &&
-                SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue) &&
-                authTypeValue == SparkAuthType.OAuth)
+            if (result.AuthHttpClient != null)
             {
                 Debug.Assert(_authHttpClient == null, "Auth HttpClient should not be initialized yet.");
-                _authHttpClient = new HttpClient(baseAuthHandler);
-
-                string host = GetHost();
-                ITokenExchangeClient tokenExchangeClient = new TokenExchangeClient(_authHttpClient, host);
-
-                // Mandatory token exchange should be the inner handler so that it happens
-                // AFTER the OAuth handlers (e.g. after M2M sets the access token)
-                baseHandler = new MandatoryTokenExchangeDelegatingHandler(
-                    baseHandler,
-                    tokenExchangeClient,
-                    _identityFederationClientId);
-
-                // Add OAuth client credentials handler if OAuth M2M authentication is being used
-                if (Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantTypeStr) &&
-                    DatabricksOAuthGrantTypeParser.TryParse(grantTypeStr, out DatabricksOAuthGrantType grantType) &&
-                    grantType == DatabricksOAuthGrantType.ClientCredentials)
-                {
-                    Properties.TryGetValue(DatabricksParameters.OAuthClientId, out string? clientId);
-                    Properties.TryGetValue(DatabricksParameters.OAuthClientSecret, out string? clientSecret);
-                    Properties.TryGetValue(DatabricksParameters.OAuthScope, out string? scope);
-
-                    var tokenProvider = new OAuthClientCredentialsProvider(
-                        _authHttpClient,
-                        clientId!,
-                        clientSecret!,
-                        host!,
-                        scope: scope ?? "sql",
-                        timeoutMinutes: 1
-                    );
-
-                    baseHandler = new OAuthDelegatingHandler(baseHandler, tokenProvider);
-                }
-                // Add token renewal handler for OAuth access token
-                else if (Properties.TryGetValue(DatabricksParameters.TokenRenewLimit, out string? tokenRenewLimitStr) &&
-                    int.TryParse(tokenRenewLimitStr, out int tokenRenewLimit) &&
-                    tokenRenewLimit > 0 &&
-                    Properties.TryGetValue(SparkParameters.AccessToken, out string? accessToken))
-                {
-                    if (string.IsNullOrEmpty(accessToken))
-                    {
-                        throw new ArgumentException("Access token is required for OAuth authentication with token renewal.");
-                    }
-
-                    // Check if token is a JWT token by trying to decode it
-                    if (JwtTokenDecoder.TryGetExpirationTime(accessToken, out DateTime expiryTime))
-                    {
-                        baseHandler = new TokenRefreshDelegatingHandler(
-                            baseHandler,
-                            tokenExchangeClient,
-                            accessToken,
-                            expiryTime,
-                            tokenRenewLimit);
-                    }
-                }
+                _authHttpClient = result.AuthHttpClient;
             }
 
-            return baseHandler;
+            return result.Handler;
         }
 
         protected override bool GetObjectsPatternsRequireLowerCase => true;
@@ -994,17 +771,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
         protected override AuthenticationHeaderValue? GetAuthenticationHeaderValue(SparkAuthType authType)
         {
-            if (authType == SparkAuthType.OAuth)
-            {
-                Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantTypeStr);
-                if (DatabricksOAuthGrantTypeParser.TryParse(grantTypeStr, out DatabricksOAuthGrantType grantType) &&
-                    grantType == DatabricksOAuthGrantType.ClientCredentials)
-                {
-                    // Return null for client credentials flow since OAuth handler will handle authentication
-                    return null;
-                }
-            }
-            return base.GetAuthenticationHeaderValue(authType);
+            // All authentication is handled by delegating handlers in HttpHandlerFactory:
+            // - Token authentication -> StaticBearerTokenHandler
+            // - OAuth authentication -> OAuthDelegatingHandler / TokenRefreshDelegatingHandler / StaticBearerTokenHandler
+            // Return null to let handlers manage authentication rather than setting default headers
+            return null;
         }
 
         protected override void ValidateOAuthParameters()

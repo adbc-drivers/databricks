@@ -156,14 +156,21 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
             return await _activeReader.ReadNextRecordBatchAsync(cancellationToken);
         }
 
-                /// <summary>
-        /// Creates a CloudFetchReader instance. Virtual to allow testing.
+        /// <summary>
+        /// Creates a CloudFetchReader instance using the factory.
+        /// Virtual to allow testing.
         /// </summary>
         /// <param name="initialResults">The initial fetch results.</param>
         /// <returns>A new CloudFetchReader instance.</returns>
         protected virtual BaseDatabricksReader CreateCloudFetchReader(TFetchResultsResp initialResults)
         {
-            return new CloudFetchReader(_statement, _schema, _response, initialResults, _isLz4Compressed, _httpClient);
+            return CloudFetchReaderFactory.CreateThriftReader(
+                _statement,
+                _schema,
+                _response,
+                initialResults,
+                _httpClient,
+                _isLz4Compressed);
         }
 
         /// <summary>

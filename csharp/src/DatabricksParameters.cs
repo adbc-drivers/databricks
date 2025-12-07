@@ -279,6 +279,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
         // Statement Execution API configuration parameters
 
         /// <summary>
+        /// The warehouse ID to use for query execution.
+        /// Required when using Statement Execution REST API (Protocol = "rest").
+        /// Optional for Thrift protocol.
+        /// </summary>
+        public const string WarehouseId = "adbc.databricks.warehouse_id";
+
+        /// <summary>
         /// The protocol to use for statement execution.
         /// Supported values:
         /// - "thrift": Use Thrift/HiveServer2 protocol (default)

@@ -35,15 +35,21 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 {
     internal sealed class DatabricksReader : BaseDatabricksReader
     {
+        private readonly IHiveServer2Statement _statement;
+
         List<TSparkArrowBatch>? batches;
         int index;
         IArrowReader? reader;
 
+        protected override ITracingStatement Statement => _statement;
+
         public DatabricksReader(IHiveServer2Statement statement, Schema schema, IResponse response, TFetchResultsResp? initialResults, bool isLz4Compressed)
             : base(statement, schema, response, isLz4Compressed)
         {
+            _statement = statement;
+
             // If we have direct results, initialize the batches from them
-            if (statement.TryGetDirectResults(this.response, out TSparkDirectResults? directResults))
+            if (statement.TryGetDirectResults(this.response!, out TSparkDirectResults? directResults))
             {
                 this.batches = directResults!.ResultSet.Results.ArrowBatches;
                 this.hasNoMoreRows = !directResults.ResultSet.HasMoreRows;
@@ -91,19 +97,19 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 
                     // Fetch more results from server
                     activity?.AddEvent("databricks_reader.fetch_results_start", [
-                        new("batch_size", this.statement.BatchSize)
+                        new("batch_size", _statement.BatchSize)
                     ]);
 
                     // TODO: use an expiring cancellationtoken
-                    TFetchResultsReq request = new TFetchResultsReq(this.response.OperationHandle!, TFetchOrientation.FETCH_NEXT, this.statement.BatchSize);
+                    TFetchResultsReq request = new TFetchResultsReq(this.response!.OperationHandle!, TFetchOrientation.FETCH_NEXT, _statement.BatchSize);
 
                     // Set MaxBytes from DatabricksStatement
-                    if (this.statement is DatabricksStatement databricksStatement)
+                    if (_statement is DatabricksStatement databricksStatement)
                     {
                         request.MaxBytes = databricksStatement.MaxBytesPerFetchRequest;
                     }
 
-                    TFetchResultsResp response = await this.statement.Connection.Client!.FetchResults(request, cancellationToken);
+                    TFetchResultsResp response = await _statement.Connection.Client!.FetchResults(request, cancellationToken);
 
                     // Make sure we get the arrowBatches
                     this.batches = response.Results.ArrowBatches;
@@ -153,7 +159,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                         ]);
 
                         // Pass the connection's buffer pool for efficient LZ4 decompression
-                        var connection = (DatabricksConnection)this.statement.Connection;
+                        var connection = (DatabricksConnection)_statement.Connection;
                         dataToUse = Lz4Utilities.DecompressLz4(batch.Batch, connection.Lz4BufferPool);
 
                         activity?.AddEvent("databricks_reader.decompress_completed", [
@@ -189,6 +195,39 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
                 }
                 this.index++;
             }, activityName: nameof(DatabricksReader) + "." + nameof(ProcessFetchedBatches));
+        }
+
+        private bool _isClosed;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _ = CloseOperationAsync().Result;
+            }
+            base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Closes the Thrift operation.
+        /// </summary>
+        /// <returns>Returns true if the close operation completes successfully, false otherwise.</returns>
+        /// <exception cref="HiveServer2Exception" />
+        private async Task<bool> CloseOperationAsync()
+        {
+            try
+            {
+                if (!_isClosed && this.response != null)
+                {
+                    _ = await HiveServer2Reader.CloseOperationAsync(_statement, this.response);
+                    return true;
+                }
+                return false;
+            }
+            finally
+            {
+                _isClosed = true;
+            }
         }
 
         sealed class SingleBatch : IArrowReader
