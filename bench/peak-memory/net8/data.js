@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765219527901,
+  "lastUpdate": 1765220410414,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Peak Memory (.NET 8.0)": [
@@ -117,6 +117,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 493.99,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "42afdc11da6b0b9b9bb7f0f764fb82229dc49923",
+          "message": "fix(ci): move benchmark index to bench/ subdirectory\n\nThe root URL is used for the repository README. Move the benchmark\nindex page to bench/index.html instead.\n\nEntry URL: https://adbc-drivers.github.io/databricks/bench/\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-08T10:34:12-08:00",
+          "tree_id": "e2baabd1a3b0abbc9e3ff0cc3af63060e0ba143e",
+          "url": "https://github.com/adbc-drivers/databricks/commit/42afdc11da6b0b9b9bb7f0f764fb82229dc49923"
+        },
+        "date": 1765220409571,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 476.89,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 357.54,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 474.48,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 424.66,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 471.64,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 426.42,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 519.46,
             "unit": "MB"
           }
         ]
