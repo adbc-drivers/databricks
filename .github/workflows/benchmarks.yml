@@ -394,12 +394,32 @@ jobs:
             echo "| Query | Mean (ms) | Baseline | Diff | Rows | Columns |"
             echo "|-------|-----------|----------|------|------|---------|"
 
-            # Parse current results - Parameters is a string like "ReadDelayMs=5&benchmarkQuery=catalog_sales"
-            jq -r '.Benchmarks[] | "\(.Parameters)|\(.Statistics.Mean / 1000000)"' "$CURRENT" | while IFS='|' read -r params mean; do
-              # Extract query name from parameters string
-              query=$(echo "$params" | sed -n 's/.*benchmarkQuery=\([^&]*\).*/\1/p')
+            # Parse current results - handle both string and object Parameters
+            jq -r '.Benchmarks[] |
+              if (.Parameters | type) == "string" then
+                # String format: "ReadDelayMs=5&benchmarkQuery=catalog_sales"
+                # Extract from Parameters, handling truncation by BenchmarkDotNet
+                (.Parameters | split("&") | map(select(startswith("benchmarkQuery=")) | split("=")[1]) | .[0] // "") as $param_query |
+                if ($param_query | contains("(...)")) then
+                  # Parameters truncated - extract from FullName instead
+                  (.FullName | match("benchmarkQuery: ([^,)]+)") | .captures[0].string)
+                else
+                  $param_query
+                end
+              elif (.Parameters | type) == "object" then
+                # Object format: {"benchmarkQuery": {"name": "..."}} or {"benchmarkQuery": "name"}
+                if (.Parameters.benchmarkQuery | type) == "object" then
+                  .Parameters.benchmarkQuery.name
+                else
+                  .Parameters.benchmarkQuery
+                end
+              else
+                ""
+              end as $query |
+              "\($query)|\(.Statistics.Mean / 1000000)"
+            ' "$CURRENT" | while IFS='|' read -r query mean; do
 
-              if [ -z "$query" ]; then
+              if [ -z "$query" ] || [ "$query" = "null" ]; then
                 continue
               fi
 
@@ -416,7 +436,22 @@ jobs:
 
               # Try to find baseline
               if [ -f "$BASELINE" ]; then
-                baseline_mean=$(jq -r --arg q "$query" '.Benchmarks[] | select(.Parameters | contains("benchmarkQuery=" + $q)) | .Statistics.Mean / 1000000' "$BASELINE" 2>/dev/null | head -1)
+                baseline_mean=$(jq -r --arg q "$query" '.Benchmarks[] |
+                  select(
+                    if (.Parameters | type) == "string" then
+                      # Handle truncated Parameters by checking FullName
+                      if (.Parameters | contains("(...)")) then
+                        (.FullName | contains("benchmarkQuery: " + $q))
+                      else
+                        (.Parameters | contains("benchmarkQuery=" + $q))
+                      end
+                    elif (.Parameters | type) == "object" then
+                      ((.Parameters.benchmarkQuery.name // .Parameters.benchmarkQuery) == $q)
+                    else
+                      false
+                    end
+                  ) |
+                  .Statistics.Mean / 1000000' "$BASELINE" 2>/dev/null | head -1)
                 if [ -n "$baseline_mean" ] && [ "$baseline_mean" != "null" ]; then
                   baseline_formatted=$(printf "%.2f" "$baseline_mean")
                   # Calculate percentage difference

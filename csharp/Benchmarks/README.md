@@ -119,7 +119,7 @@ Benchmarks run automatically via GitHub Actions on every commit to the `main` br
 
 1. **GitHub Actions**: Go to **Actions → Performance Benchmarks** to see run history
 2. **Artifacts**: Download detailed HTML/JSON/CSV reports from each run (90-day retention)
-3. **Trend Charts**: View performance trends at `https://<org>.github.io/<repo>/bench/net8/` (once GitHub Pages is enabled)
+3. **Trend Charts**: View performance trends at https://adbc-drivers.github.io/databricks/bench/
 
 ### Manual Trigger
 
@@ -231,7 +231,7 @@ The workflow uses [`benchmark-action/github-action-benchmark`](https://github.co
 **First run:**
 - The first benchmark run will automatically create the `gh-pages` branch
 - Subsequent runs will push benchmark data to this branch
-- GitHub Pages will be available at: `https://<organization>.github.io/<repository>/bench/net8/`
+- GitHub Pages will be available at: https://adbc-drivers.github.io/databricks/bench/
 
 ---
 

@@ -29,26 +29,26 @@ At this time user documentation is not yet available.
 
 ## Benchmarking
 
-The C# driver includes comprehensive benchmarks for performance testing:
+The C# driver includes a comprehensive benchmark suite for CloudFetch performance testing using 7 TPC-DS queries that cover different data characteristics (size, width, data types).
 
+**View Results:**
+- **GitHub Pages Dashboard**: https://adbc-drivers.github.io/databricks/bench/
+- Interactive charts tracking Mean Execution Time, Peak Memory, Allocated Memory, and Gen2 Collections
+- Historical trends across commits for .NET 8.0 and .NET Framework 4.7.2
+
+**Running Benchmarks:**
+
+Locally:
 ```bash
-# Run CloudFetch E2E benchmarks with .NET 8.0
 cd csharp/Benchmarks
-dotnet run -c Release -f net8.0 -- --filter "*CloudFetchRealE2E*"
-
-# Run with .NET Framework 4.7.2 (Windows only)
-dotnet run -c Release -f net472 -- --filter "*CloudFetchRealE2E*"
+dotnet run -c Release -f net8.0
 ```
 
-**Prerequisites:**
-- Set `DATABRICKS_TEST_CONFIG_FILE` environment variable pointing to a JSON config file
-- Config file should contain: `{"uri": "...", "token": "...", "query": "..."}`
+On Pull Requests:
+- Add the `benchmark` label to your PR to run the full suite
+- Results automatically posted as comparison comments
 
-**Benchmark Metrics:**
-- Peak Memory (MB) - Peak private memory usage
-- Total Rows/Batches - Actual data processed
-- GC Time % - Precise GC overhead (.NET 6+) or estimated (older versions)
-- Standard BenchmarkDotNet metrics (Gen0/1/2 collections, allocated memory, execution time)
+For detailed documentation, see [csharp/Benchmarks/README.md](csharp/Benchmarks/README.md) and [csharp/Benchmarks/benchmark-queries.md](csharp/Benchmarks/benchmark-queries.md).
 
 ## Building
 

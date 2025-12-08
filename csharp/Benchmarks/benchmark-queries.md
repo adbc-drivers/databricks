@@ -182,9 +182,31 @@ gh workflow run benchmarks.yml --field queries="inventory,catalog_sales"
 - **Both platforms**: ~12-16 minutes total
 - Single build + 7 queries (vs previous 15 rebuilds + 15 queries)
 
-## Results Format
+## Viewing Results
 
-Benchmark results show:
+### GitHub Pages Dashboard
+Benchmark results are automatically published to GitHub Pages for historical trend analysis:
+- **URL**: https://adbc-drivers.github.io/databricks/bench/
+- **Updated**: Automatically on every commit to main
+
+The dashboard provides interactive charts for four key metrics:
+
+1. **Mean Execution Time (ms)**: Average query execution time including CloudFetch downloads and decompression
+2. **Peak Memory (MB)**: Maximum working set memory during execution (lower is better)
+3. **Allocated Memory (MB)**: Total managed memory allocated during execution
+4. **Gen2 Collections**: Number of full garbage collections (lower indicates less memory pressure)
+
+Each metric page includes:
+- Dropdown to select which query to visualize (all 7 queries available)
+- Interactive charts showing performance trends over time
+- Separate views for .NET 8.0 and .NET Framework 4.7.2
+- Hover tooltips with exact values and commit information
+- Comparison with baseline (previous run) when available
+
+### Console Output and Artifacts
+Benchmark results are also available in GitHub Actions console output and uploaded as artifacts (retained for 90 days).
+
+Console results show:
 - **Query Name**: Clear identification of each query
 - **Columns**: Number of columns in result
 - **Total Rows**: Actual row count processed
@@ -199,4 +221,3 @@ Benchmark results show:
 - Requires access to `main.tpcds_sf1_delta` catalog in Databricks
 - CloudFetch chunk size: typically 100MB compressed
 - Benchmark includes 5ms read delay per 10K rows to simulate Power BI consumption
-- Results are uploaded as artifacts and retained for 90 days
