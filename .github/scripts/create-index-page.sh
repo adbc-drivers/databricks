@@ -1,7 +1,8 @@
 #!/bin/bash
 # Create an index page for benchmark results
 
-cat > bench-index.html << 'EOF'
+mkdir -p bench
+cat > bench/index.html << 'EOF'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -123,8 +124,8 @@ cat > bench-index.html << 'EOF'
             <div class="metric-title">Mean Execution Time</div>
             <div class="metric-description">Average query execution time including CloudFetch downloads and decompression</div>
             <div class="metric-links">
-                <a href="bench/mean-time/net8/" class="metric-link net8-link">.NET 8.0</a>
-                <a href="bench/mean-time/net472/" class="metric-link net472-link">.NET 4.7.2</a>
+                <a href="./mean-time/net8/" class="metric-link net8-link">.NET 8.0</a>
+                <a href="./mean-time/net472/" class="metric-link net472-link">.NET 4.7.2</a>
             </div>
         </div>
 
@@ -133,8 +134,8 @@ cat > bench-index.html << 'EOF'
             <div class="metric-title">Peak Memory</div>
             <div class="metric-description">Maximum working set memory during execution (lower is better)</div>
             <div class="metric-links">
-                <a href="bench/peak-memory/net8/" class="metric-link net8-link">.NET 8.0</a>
-                <a href="bench/peak-memory/net472/" class="metric-link net472-link">.NET 4.7.2</a>
+                <a href="./peak-memory/net8/" class="metric-link net8-link">.NET 8.0</a>
+                <a href="./peak-memory/net472/" class="metric-link net472-link">.NET 4.7.2</a>
             </div>
         </div>
 
@@ -143,8 +144,8 @@ cat > bench-index.html << 'EOF'
             <div class="metric-title">Allocated Memory</div>
             <div class="metric-description">Total managed memory allocated during execution</div>
             <div class="metric-links">
-                <a href="bench/allocated-memory/net8/" class="metric-link net8-link">.NET 8.0</a>
-                <a href="bench/allocated-memory/net472/" class="metric-link net472-link">.NET 4.7.2</a>
+                <a href="./allocated-memory/net8/" class="metric-link net8-link">.NET 8.0</a>
+                <a href="./allocated-memory/net472/" class="metric-link net472-link">.NET 4.7.2</a>
             </div>
         </div>
 
@@ -153,8 +154,8 @@ cat > bench-index.html << 'EOF'
             <div class="metric-title">Gen2 Collections</div>
             <div class="metric-description">Number of full garbage collections (lower indicates less memory pressure)</div>
             <div class="metric-links">
-                <a href="bench/gen2-collections/net8/" class="metric-link net8-link">.NET 8.0</a>
-                <a href="bench/gen2-collections/net472/" class="metric-link net472-link">.NET 4.7.2</a>
+                <a href="./gen2-collections/net8/" class="metric-link net8-link">.NET 8.0</a>
+                <a href="./gen2-collections/net472/" class="metric-link net472-link">.NET 4.7.2</a>
             </div>
         </div>
     </div>
@@ -190,4 +191,4 @@ cat > bench-index.html << 'EOF'
 </html>
 EOF
 
-echo "Index page created: bench-index.html"
+echo "Index page created: bench/index.html"

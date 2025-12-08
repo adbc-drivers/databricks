@@ -616,8 +616,7 @@ jobs:
           # Checkout gh-pages and add index
           git fetch origin gh-pages:gh-pages
           git checkout gh-pages
-          mv bench-index.html index.html
-          git add index.html
+          git add bench/index.html
           git commit -m "Update benchmark index page" || echo "No changes to index"
           git push origin gh-pages
           git checkout -
