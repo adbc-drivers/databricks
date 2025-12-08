@@ -121,6 +121,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                 // Sanitize sensitive properties - only mask actual credentials/tokens, not configuration
                 bool isSensitive = key.IndexOf("password", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                    key.IndexOf("secret", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                   key.IndexOf("token", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                    key.Equals(AdbcOptions.Password, StringComparison.OrdinalIgnoreCase) ||
                                    key.Equals(SparkParameters.Token, StringComparison.OrdinalIgnoreCase) ||
                                    key.Equals(DatabricksParameters.OAuthClientSecret, StringComparison.OrdinalIgnoreCase);
@@ -793,73 +794,75 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
             await base.HandleOpenSessionResponse(session, activity);
 
-            if (session != null)
-            {
-                var version = session.ServerProtocolVersion;
-
-                // Log server protocol version
-                activity?.SetTag("connection.server_protocol_version", version.ToString());
-
-                // Validate it's a Databricks server
-                if (!FeatureVersionNegotiator.IsDatabricksProtocolVersion(version))
-                {
-                    activity?.SetTag("error.type", "InvalidServerProtocol");
-                    activity?.SetTag("error.message", "Non-Databricks server detected");
-                    throw new DatabricksException("Attempted to use databricks driver with a non-databricks server");
-                }
-
-                // Log protocol version capabilities (what the server supports)
-                bool protocolSupportsPKFK = FeatureVersionNegotiator.SupportsPKFK(version);
-                bool protocolSupportsDescTableExtended = FeatureVersionNegotiator.SupportsDESCTableExtended(version);
-
-                activity?.SetTag("connection.protocol.supports_pk_fk", protocolSupportsPKFK);
-                activity?.SetTag("connection.protocol.supports_desc_table_extended", protocolSupportsDescTableExtended);
-
-                // Apply protocol constraints to user settings
-                bool pkfkBefore = _enablePKFK;
-                _enablePKFK = _enablePKFK && protocolSupportsPKFK;
-
-                if (pkfkBefore && !_enablePKFK)
-                {
-                    activity?.SetTag("connection.feature_downgrade.pk_fk", true);
-                    activity?.SetTag("connection.feature_downgrade.pk_fk.reason", "Protocol version does not support PK/FK");
-                }
-
-                // Handle multiple catalog support from server response
-                _enableMultipleCatalogSupport = session.__isset.canUseMultipleCatalogs ? session.CanUseMultipleCatalogs : false;
-
-                // Log final feature flags as tags
-                activity?.SetTag("connection.feature.enable_pk_fk", _enablePKFK);
-                activity?.SetTag("connection.feature.enable_multiple_catalog_support", _enableMultipleCatalogSupport);
-                activity?.SetTag("connection.feature.enable_direct_results", _enableDirectResults);
-                activity?.SetTag("connection.feature.use_cloud_fetch", _useCloudFetch);
-                activity?.SetTag("connection.feature.use_desc_table_extended", _useDescTableExtended);
-                activity?.SetTag("connection.feature.enable_run_async_in_thrift_op", _runAsyncInThrift);
-
-                // Handle default namespace
-                if (session.__isset.initialNamespace)
-                {
-                    _defaultNamespace = session.InitialNamespace;
-                    activity?.AddEvent("connection.namespace.set_from_server", [
-                        new("catalog", _defaultNamespace.CatalogName ?? "(none)"),
-                        new("schema", _defaultNamespace.SchemaName ?? "(none)")
-                    ]);
-                }
-                else if (_defaultNamespace != null && !string.IsNullOrEmpty(_defaultNamespace.SchemaName))
-                {
-                    // catalog in namespace is introduced when SET CATALOG is introduced, so we don't need to fallback
-                    // server version is too old. Explicitly set the schema using queries
-                    activity?.AddEvent("connection.namespace.fallback_to_use_schema", [
-                        new("schema_name", _defaultNamespace.SchemaName),
-                        new("reason", "Server does not support initialNamespace in OpenSessionResp")
-                    ]);
-                    await SetSchema(_defaultNamespace.SchemaName);
-                }
-
-            }
-            else
+            if (session == null)
             {
                 activity?.SetTag("error.type", "NullSessionResponse");
+                return;
+            }
+
+            var version = session.ServerProtocolVersion;
+
+            // Log server protocol version
+            activity?.SetTag("connection.server_protocol_version", version.ToString());
+
+            // Validate it's a Databricks server
+            if (!FeatureVersionNegotiator.IsDatabricksProtocolVersion(version))
+            {
+                var exception = new DatabricksException("Attempted to use databricks driver with a non-databricks server");
+                activity?.AddEvent(new ActivityEvent("exception", tags: new ActivityTagsCollection
+                {
+                    { "exception.type", "InvalidServerProtocol" },
+                    { "exception.message", exception.Message }
+                }));
+                throw exception;
+            }
+
+            // Log protocol version capabilities (what the server supports)
+            bool protocolSupportsPKFK = FeatureVersionNegotiator.SupportsPKFK(version);
+            bool protocolSupportsDescTableExtended = FeatureVersionNegotiator.SupportsDESCTableExtended(version);
+
+            activity?.SetTag("connection.protocol.supports_pk_fk", protocolSupportsPKFK);
+            activity?.SetTag("connection.protocol.supports_desc_table_extended", protocolSupportsDescTableExtended);
+
+            // Apply protocol constraints to user settings
+            bool pkfkBefore = _enablePKFK;
+            _enablePKFK = _enablePKFK && protocolSupportsPKFK;
+
+            if (pkfkBefore && !_enablePKFK)
+            {
+                activity?.SetTag("connection.feature_downgrade.pk_fk", true);
+                activity?.SetTag("connection.feature_downgrade.pk_fk.reason", "Protocol version does not support PK/FK");
+            }
+
+            // Handle multiple catalog support from server response
+            _enableMultipleCatalogSupport = session.__isset.canUseMultipleCatalogs ? session.CanUseMultipleCatalogs : false;
+
+            // Log final feature flags as tags
+            activity?.SetTag("connection.feature.enable_pk_fk", _enablePKFK);
+            activity?.SetTag("connection.feature.enable_multiple_catalog_support", _enableMultipleCatalogSupport);
+            activity?.SetTag("connection.feature.enable_direct_results", _enableDirectResults);
+            activity?.SetTag("connection.feature.use_cloud_fetch", _useCloudFetch);
+            activity?.SetTag("connection.feature.use_desc_table_extended", _useDescTableExtended);
+            activity?.SetTag("connection.feature.enable_run_async_in_thrift_op", _runAsyncInThrift);
+
+            // Handle default namespace
+            if (session.__isset.initialNamespace)
+            {
+                _defaultNamespace = session.InitialNamespace;
+                activity?.AddEvent("connection.namespace.set_from_server", [
+                    new("catalog", _defaultNamespace.CatalogName ?? "(none)"),
+                    new("schema", _defaultNamespace.SchemaName ?? "(none)")
+                ]);
+            }
+            else if (_defaultNamespace != null && !string.IsNullOrEmpty(_defaultNamespace.SchemaName))
+            {
+                // catalog in namespace is introduced when SET CATALOG is introduced, so we don't need to fallback
+                // server version is too old. Explicitly set the schema using queries
+                activity?.AddEvent("connection.namespace.fallback_to_use_schema", [
+                    new("schema_name", _defaultNamespace.SchemaName),
+                    new("reason", "Server does not support initialNamespace in OpenSessionResp")
+                ]);
+                await SetSchema(_defaultNamespace.SchemaName);
             }
         }
 
