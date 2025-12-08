@@ -850,15 +850,12 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
         private Mock<IDownloadResult> CreateMockDownloadResult(long size, string url)
         {
-            var link = new TSparkArrowResultLink
-            {
-                FileLink = url,
-                BytesNum = size,
-                ExpiryTime = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds()
-            };
+            var expirationTime = DateTime.UtcNow.AddHours(1);
 
             var mock = new Mock<IDownloadResult>();
-            mock.Setup(r => r.Link).Returns(link);
+            mock.Setup(r => r.FileUrl).Returns(url);
+            mock.Setup(r => r.ByteCount).Returns(size);
+            mock.Setup(r => r.ExpirationTime).Returns(expirationTime);
             mock.Setup(r => r.Size).Returns(size);
             mock.Setup(r => r.RefreshAttempts).Returns(0);
             mock.Setup(r => r.IsExpiredOrExpiringSoon(It.IsAny<int>())).Returns(false);
