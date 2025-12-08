@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,6 +31,7 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Databricks;
 using Apache.Arrow.Adbc.Drivers.Databricks.Reader;
+using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Types;
 using Apache.Hive.Service.Rpc.Thrift;
 using Moq;
@@ -90,6 +92,11 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
         {
             var mockStatement = new Mock<IHiveServer2Statement>();
             mockStatement.Setup(s => s.QueryTimeoutSeconds).Returns(10);
+
+            // Set up ActivityTrace for tracing infrastructure
+            var activityTrace = new ActivityTrace("Apache.Arrow.Adbc.Tests", "1.0.0");
+            mockStatement.As<IActivityTracer>().Setup(t => t.Trace).Returns(activityTrace);
+            mockStatement.As<IActivityTracer>().Setup(t => t.TraceParent).Returns((string?)null);
 
             if (mockClient != null)
             {

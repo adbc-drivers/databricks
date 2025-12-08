@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Tracing;

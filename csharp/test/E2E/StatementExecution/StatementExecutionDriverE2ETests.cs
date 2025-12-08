@@ -39,16 +39,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
 
-            // REST API currently only supports direct token authentication (PAT or OAuth access token).
-            // OAuth M2M (client_credentials) flow is not yet supported (PECO-2790).
-            // Skip tests if OAuth is configured but no direct token is available.
-            bool hasDirectToken = !string.IsNullOrEmpty(TestConfiguration.Token) ||
-                                  !string.IsNullOrEmpty(TestConfiguration.AccessToken);
-            bool hasOAuthM2M = !string.IsNullOrEmpty(TestConfiguration.OAuthGrantType) &&
-                               TestConfiguration.OAuthGrantType.Equals("client_credentials", StringComparison.OrdinalIgnoreCase);
-
-            Skip.If(!hasDirectToken && hasOAuthM2M,
-                "REST API does not yet support OAuth M2M (client_credentials). Use a direct token or wait for PECO-2790.");
+            // REST API supports both direct token authentication (PAT or OAuth access token)
+            // and OAuth M2M (client_credentials) flow (implemented in PECO-2857).
         }
 
         private AdbcConnection CreateRestConnection()

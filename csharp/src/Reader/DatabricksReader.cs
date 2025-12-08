@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
@@ -90,8 +91,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 
                     if (this.hasNoMoreRows)
                     {
+                        activity?.AddEvent("databricks_reader.end_of_results");
                         return null;
                     }
+
+                    // Fetch more results from server
+                    activity?.AddEvent("databricks_reader.fetch_results_start", [
+                        new("batch_size", _statement.BatchSize)
+                    ]);
 
                     // TODO: use an expiring cancellationtoken
                     TFetchResultsReq request = new TFetchResultsReq(this.response!.OperationHandle!, TFetchOrientation.FETCH_NEXT, _statement.BatchSize);
@@ -106,6 +113,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 
                     // Make sure we get the arrowBatches
                     this.batches = response.Results.ArrowBatches;
+                    activity?.AddEvent("databricks_reader.fetch_results_completed", [
+                        new("batch_count", this.batches.Count),
+                        new("has_more_rows", response.HasMoreRows)
+                    ]);
+
                     for (int i = 0; i < this.batches.Count; i++)
                     {
                         activity?.AddTag(SemanticConventions.Db.Response.ReturnedRows, this.batches[i].RowCount);
@@ -118,40 +130,71 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 
         private void ProcessFetchedBatches()
         {
-            var batch = this.batches![this.index];
-
-            // Ensure batch data exists
-            if (batch.Batch == null || batch.Batch.Length == 0)
+            this.TraceActivity(activity =>
             {
-                this.index++;
-                return;
-            }
+                var batch = this.batches![this.index];
 
-            try
-            {
-                ReadOnlyMemory<byte> dataToUse = new ReadOnlyMemory<byte>(batch.Batch);
-
-                // If LZ4 compression is enabled, decompress the data
-                if (isLz4Compressed)
+                // Ensure batch data exists
+                if (batch.Batch == null || batch.Batch.Length == 0)
                 {
-                    // Pass the connection's buffer pool for efficient LZ4 decompression
-                    var connection = (DatabricksConnection)this._statement.Connection;
-                    dataToUse = Lz4Utilities.DecompressLz4(batch.Batch, connection.Lz4BufferPool);
+                    activity?.AddEvent("databricks_reader.skip_empty_batch", [
+                        new("batch_index", this.index)
+                    ]);
+                    this.index++;
+                    return;
                 }
 
-                this.reader = new SingleBatch(ArrowSerializationHelpers.DeserializeRecordBatch(this.schema, dataToUse));
-            }
-            catch (Exception ex)
-            {
-                // Create concise error message based on exception type
-                string errorMessage = ex switch
+                try
                 {
-                    _ when ex.GetType().Name.Contains("LZ4") => $"Batch {this.index}: LZ4 decompression failed - Data may be corrupted",
-                    _ => $"Batch {this.index}: Processing failed - {ex.Message}" // Default case for any other exception
-                };
-                throw new AdbcException(errorMessage, ex);
-            }
-            this.index++;
+                    ReadOnlyMemory<byte> dataToUse = new ReadOnlyMemory<byte>(batch.Batch);
+                    int originalSize = batch.Batch.Length;
+
+                    // If LZ4 compression is enabled, decompress the data
+                    if (isLz4Compressed)
+                    {
+                        activity?.AddEvent("databricks_reader.decompress_start", [
+                            new("batch_index", this.index),
+                            new("compressed_size_bytes", originalSize),
+                            new("row_count", batch.RowCount)
+                        ]);
+
+                        // Pass the connection's buffer pool for efficient LZ4 decompression
+                        var connection = (DatabricksConnection)_statement.Connection;
+                        dataToUse = Lz4Utilities.DecompressLz4(batch.Batch, connection.Lz4BufferPool);
+
+                        activity?.AddEvent("databricks_reader.decompress_completed", [
+                            new("batch_index", this.index),
+                            new("decompressed_size_bytes", dataToUse.Length),
+                            new("compression_ratio", (double)originalSize / dataToUse.Length)
+                        ]);
+                    }
+
+                    activity?.AddEvent("databricks_reader.deserialize_batch", [
+                        new("batch_index", this.index),
+                        new("data_size_bytes", dataToUse.Length),
+                        new("row_count", batch.RowCount)
+                    ]);
+
+                    this.reader = new SingleBatch(ArrowSerializationHelpers.DeserializeRecordBatch(this.schema, dataToUse));
+                }
+                catch (Exception ex)
+                {
+                    // Create concise error message based on exception type
+                    string errorMessage = ex switch
+                    {
+                        _ when ex.GetType().Name.Contains("LZ4") => $"Batch {this.index}: LZ4 decompression failed - Data may be corrupted",
+                        _ => $"Batch {this.index}: Processing failed - {ex.Message}" // Default case for any other exception
+                    };
+
+                    activity?.AddException(ex, [
+                        new("batch_index", this.index),
+                        new("is_lz4_compressed", isLz4Compressed)
+                    ]);
+
+                    throw new AdbcException(errorMessage, ex);
+                }
+                this.index++;
+            }, activityName: nameof(DatabricksReader) + "." + nameof(ProcessFetchedBatches));
         }
 
         private bool _isClosed;
