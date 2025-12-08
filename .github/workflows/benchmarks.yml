@@ -607,3 +607,17 @@ jobs:
           benchmark-data-dir-path: bench/gen2-collections/net472
           alert-threshold: '150%'
           fail-on-alert: false
+
+      - name: Create and publish index page
+        run: |
+          # Generate index page
+          bash .github/scripts/create-index-page.sh
+
+          # Checkout gh-pages and add index
+          git fetch origin gh-pages:gh-pages
+          git checkout gh-pages
+          mv bench-index.html index.html
+          git add index.html
+          git commit -m "Update benchmark index page" || echo "No changes to index"
+          git push origin gh-pages
+          git checkout -
