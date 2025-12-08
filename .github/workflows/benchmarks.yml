@@ -398,7 +398,14 @@ jobs:
             jq -r '.Benchmarks[] |
               if (.Parameters | type) == "string" then
                 # String format: "ReadDelayMs=5&benchmarkQuery=catalog_sales"
-                (.Parameters | split("&") | map(select(startswith("benchmarkQuery=")) | split("=")[1]) | .[0] // "")
+                # Extract from Parameters, handling truncation by BenchmarkDotNet
+                (.Parameters | split("&") | map(select(startswith("benchmarkQuery=")) | split("=")[1]) | .[0] // "") as $param_query |
+                if ($param_query | contains("(...)")) then
+                  # Parameters truncated - extract from FullName instead
+                  (.FullName | match("benchmarkQuery: ([^,)]+)") | .captures[0].string)
+                else
+                  $param_query
+                end
               elif (.Parameters | type) == "object" then
                 # Object format: {"benchmarkQuery": {"name": "..."}} or {"benchmarkQuery": "name"}
                 if (.Parameters.benchmarkQuery | type) == "object" then
@@ -432,7 +439,12 @@ jobs:
                 baseline_mean=$(jq -r --arg q "$query" '.Benchmarks[] |
                   select(
                     if (.Parameters | type) == "string" then
-                      (.Parameters | contains("benchmarkQuery=" + $q))
+                      # Handle truncated Parameters by checking FullName
+                      if (.Parameters | contains("(...)")) then
+                        (.FullName | contains("benchmarkQuery: " + $q))
+                      else
+                        (.Parameters | contains("benchmarkQuery=" + $q))
+                      end
                     elif (.Parameters | type) == "object" then
                       ((.Parameters.benchmarkQuery.name // .Parameters.benchmarkQuery) == $q)
                     else
