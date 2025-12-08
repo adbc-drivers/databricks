@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765218198643,
+  "lastUpdate": 1765219527901,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Peak Memory (.NET 8.0)": [
@@ -58,6 +58,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 511.08,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "761efc3c00d7592e20e1b5d9e9ab313097c45c7b",
+          "message": "feat(ci): add benchmark index page for easy navigation\n\nCreate a landing page at the root of gh-pages with cards linking to\nall benchmark metrics. Provides better UX than remembering 8 URLs.\n\nIndex page features:\n- Visual cards for each metric with icons\n- Links to both .NET 8.0 and .NET Framework 4.7.2 versions\n- List of all benchmark queries with dimensions\n- Usage instructions\n\nEntry URL: https://adbc-drivers.github.io/databricks/\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-08T10:31:16-08:00",
+          "tree_id": "063baff7b1781a58cca84d6689d1d3e0f9fb5883",
+          "url": "https://github.com/adbc-drivers/databricks/commit/761efc3c00d7592e20e1b5d9e9ab313097c45c7b"
+        },
+        "date": 1765219527460,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 473.48,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 358.27,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 465.28,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 455.59,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 495.8,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 430.04,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 493.99,
             "unit": "MB"
           }
         ]
