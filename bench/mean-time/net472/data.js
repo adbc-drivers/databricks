@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765220415539,
+  "lastUpdate": 1765229223211,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Mean Execution Time (.NET Framework 4.7.2)": [
@@ -176,6 +176,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 20325.98,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "517ac8f0e504e5329fcf05a72e7b0ef26cc9c3d7",
+          "message": "feat(ci): add GitHub Pages publishing for benchmark trend tracking (#65)\n\n## Summary\n\nAdds automatic GitHub Pages publishing for benchmark results with\nhistorical trend tracking across multiple performance metrics.\n\n## Changes\n\n- Added benchmark processing and publishing to `benchmarks.yml`\n- Created `process-benchmarks.py` to extract metrics from\nBenchmarkDotNet output\n- Created `organize-by-metric.py` to group results by metric type\n- Created `create-index-page.sh` to generate navigation landing page\n- Publishes on push to `main` with 150% alert threshold\n\n## Published Pages\n\n**Entry URL**: https://adbc-drivers.github.io/databricks/bench/\n\n**4 Metrics tracked** (each with .NET 8.0 and .NET 4.7.2 dashboards):\n- ⚡ Mean Execution Time (ms)\n- 💾 Peak Memory (MB) - extracted from CSV\n- 📦 Allocated Memory (MB)\n- 🗑️ Gen2 Collections\n\nEach metric page shows all 7 benchmark queries in a dropdown for easy\ncomparison.\n\n## Features\n\n- Separate pages per metric type for cleaner visualization\n- Automatic inclusion of new queries from `benchmark-queries.json`\n- Interactive charts with historical trends\n- Regression alerts when metrics increase >150%\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-08T13:14:06-08:00",
+          "tree_id": "c3985efcda588f0de6023db6a9ac554f1329410e",
+          "url": "https://github.com/adbc-drivers/databricks/commit/517ac8f0e504e5329fcf05a72e7b0ef26cc9c3d7"
+        },
+        "date": 1765229222702,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 5445.68,
+            "unit": "ms"
+          },
+          {
+            "name": "customer",
+            "value": 732.25,
+            "unit": "ms"
+          },
+          {
+            "name": "inventory",
+            "value": 45221.9,
+            "unit": "ms"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 14083.26,
+            "unit": "ms"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 12681.36,
+            "unit": "ms"
+          },
+          {
+            "name": "web_sales",
+            "value": 3305.83,
+            "unit": "ms"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 15412.82,
             "unit": "ms"
           }
         ]
