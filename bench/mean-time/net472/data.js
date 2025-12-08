@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765219531016,
+  "lastUpdate": 1765220415539,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Mean Execution Time (.NET Framework 4.7.2)": [
@@ -117,6 +117,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 18984.44,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "42afdc11da6b0b9b9bb7f0f764fb82229dc49923",
+          "message": "fix(ci): move benchmark index to bench/ subdirectory\n\nThe root URL is used for the repository README. Move the benchmark\nindex page to bench/index.html instead.\n\nEntry URL: https://adbc-drivers.github.io/databricks/bench/\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-08T10:34:12-08:00",
+          "tree_id": "e2baabd1a3b0abbc9e3ff0cc3af63060e0ba143e",
+          "url": "https://github.com/adbc-drivers/databricks/commit/42afdc11da6b0b9b9bb7f0f764fb82229dc49923"
+        },
+        "date": 1765220414670,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 6281.58,
+            "unit": "ms"
+          },
+          {
+            "name": "customer",
+            "value": 1845.15,
+            "unit": "ms"
+          },
+          {
+            "name": "inventory",
+            "value": 46310.77,
+            "unit": "ms"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 14859.53,
+            "unit": "ms"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 14134.86,
+            "unit": "ms"
+          },
+          {
+            "name": "web_sales",
+            "value": 4599.72,
+            "unit": "ms"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 20325.98,
             "unit": "ms"
           }
         ]
