@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Tracing;
@@ -30,67 +31,46 @@ using Apache.Hive.Service.Rpc.Thrift;
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
 {
     /// <summary>
-    /// Base class for Databricks readers that handles common functionality of DatabricksReader and CloudFetchReader
+    /// Base class for Databricks readers that handles common functionality of DatabricksReader and CloudFetchReader.
+    /// Protocol-agnostic - works with both Thrift and REST implementations.
     /// </summary>
     internal abstract class BaseDatabricksReader : TracingReader
     {
-        protected IHiveServer2Statement statement;
         protected readonly Schema schema;
-        protected readonly IResponse response;
+        protected readonly IResponse? response;  // Nullable for protocol-agnostic usage
         protected readonly bool isLz4Compressed;
         protected bool hasNoMoreRows = false;
         private bool isDisposed;
-        private bool isClosed;
 
-        protected BaseDatabricksReader(IHiveServer2Statement statement, Schema schema, IResponse response, bool isLz4Compressed)
+        /// <summary>
+        /// Gets the statement for this reader. Subclasses can decide how to provide it.
+        /// Used for Thrift operations in DatabricksReader. Not used in CloudFetchReader.
+        /// </summary>
+        protected abstract ITracingStatement Statement { get; }
+
+        /// <summary>
+        /// Protocol-agnostic constructor.
+        /// </summary>
+        /// <param name="statement">The tracing statement (both Thrift and REST implement ITracingStatement).</param>
+        /// <param name="schema">The Arrow schema.</param>
+        /// <param name="response">The query response (nullable for REST API).</param>
+        /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>
+        protected BaseDatabricksReader(ITracingStatement statement, Schema schema, IResponse? response, bool isLz4Compressed)
             : base(statement)
         {
             this.schema = schema;
             this.response = response;
             this.isLz4Compressed = isLz4Compressed;
-            this.statement = statement;
         }
 
         public override Schema Schema { get { return schema; } }
 
         protected override void Dispose(bool disposing)
         {
-            try
-            {
-                if (!isDisposed)
-                {
-                    if (disposing)
-                    {
-                        _ = CloseOperationAsync().Result;
-                    }
-                }
-            }
-            finally
+            if (!isDisposed)
             {
                 base.Dispose(disposing);
                 isDisposed = true;
-            }
-        }
-
-        /// <summary>
-        /// Closes the current operation.
-        /// </summary>
-        /// <returns>Returns true if the close operation completes successfully, false otherwise.</returns>
-        /// <exception cref="HiveServer2Exception" />
-        public async Task<bool> CloseOperationAsync()
-        {
-            try
-            {
-                if (!isClosed)
-                {
-                    _ = await HiveServer2Reader.CloseOperationAsync(this.statement, this.response);
-                    return true;
-                }
-                return false;
-            }
-            finally
-            {
-                isClosed = true;
             }
         }
 

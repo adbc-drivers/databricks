@@ -25,6 +25,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Apache.Arrow.Adbc.Drivers.Apache;
+using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks
 {
@@ -34,6 +35,22 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
     public class DatabricksDatabase : AdbcDatabase
     {
         readonly IReadOnlyDictionary<string, string> properties;
+
+        /// <summary>
+        /// RecyclableMemoryStreamManager for LZ4 decompression output streams.
+        /// Shared across all connections from this database to enable memory pooling.
+        /// This manager is instance-based to allow cleanup when the database is disposed.
+        /// </summary>
+        internal readonly Microsoft.IO.RecyclableMemoryStreamManager RecyclableMemoryStreamManager =
+            new Microsoft.IO.RecyclableMemoryStreamManager();
+
+        /// <summary>
+        /// LZ4 buffer pool for decompression shared across all connections from this database.
+        /// Sized for 4MB buffers (Databricks maxBlockSize) with capacity for 10 buffers.
+        /// This pool is instance-based to allow cleanup when the database is disposed.
+        /// </summary>
+        internal readonly System.Buffers.ArrayPool<byte> Lz4BufferPool =
+            System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
 
         public DatabricksDatabase(IReadOnlyDictionary<string, string> properties)
         {
@@ -49,9 +66,51 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                     : options
                         .Concat(properties.Where(x => !options.Keys.Contains(x.Key, StringComparer.OrdinalIgnoreCase)))
                         .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-                DatabricksConnection connection = new DatabricksConnection(mergedProperties);
-                connection.OpenAsync().Wait();
-                connection.ApplyServerSidePropertiesAsync().Wait();
+
+                // Check protocol selection
+                string protocol = "thrift"; // default
+                if (mergedProperties.TryGetValue(DatabricksParameters.Protocol, out var protocolValue))
+                {
+                    protocol = protocolValue.ToLowerInvariant();
+                }
+
+                AdbcConnection connection;
+
+                if (protocol == "rest")
+                {
+                    // Use Statement Execution REST API
+                    // The connection creates its own HTTP client with proper handler chain
+                    // including TracingDelegatingHandler, RetryHttpHandler, and OAuth authentication
+                    // handlers (OAuthDelegatingHandler, TokenRefreshDelegatingHandler,
+                    // MandatoryTokenExchangeDelegatingHandler) when OAuth auth is configured
+                    connection = new StatementExecutionConnection(
+                        mergedProperties,
+                        this.RecyclableMemoryStreamManager,
+                        this.Lz4BufferPool);
+
+                    // Open the connection to create session if needed
+                    var statementConnection = (StatementExecutionConnection)connection;
+                    statementConnection.OpenAsync().Wait();
+                }
+                else if (protocol == "thrift")
+                {
+                    // Use traditional Thrift/HiveServer2 protocol
+                    connection = new DatabricksConnection(
+                        mergedProperties,
+                        this.RecyclableMemoryStreamManager,
+                        this.Lz4BufferPool);
+
+                    var databricksConnection = (DatabricksConnection)connection;
+                    databricksConnection.OpenAsync().Wait();
+                    databricksConnection.ApplyServerSidePropertiesAsync().Wait();
+                }
+                else
+                {
+                    throw new ArgumentException(
+                        $"Unsupported protocol: '{protocol}'. Supported values are 'thrift' and 'rest'.",
+                        nameof(mergedProperties));
+                }
+
                 return connection;
             }
             catch (AggregateException ae)

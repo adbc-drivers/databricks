@@ -1182,7 +1182,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
 
             // Get real PK metadata schema
             statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            statement.SetOption(ApacheParameters.CatalogName, "powerbi");
+            statement.SetOption(ApacheParameters.CatalogName, TestConfiguration.Metadata.Catalog);
             statement.SetOption(ApacheParameters.SchemaName, TestConfiguration.Metadata.Schema);
             statement.SetOption(ApacheParameters.TableName, TestConfiguration.Metadata.Table);
             statement.SqlQuery = "GetPrimaryKeys";

@@ -279,3 +279,4 @@ obj/
 # BenchmarkDotNet artifacts
 BenchmarkDotNet.Artifacts/
 cloudfetch_benchmark_metrics.json
+.claude/settings.local.json

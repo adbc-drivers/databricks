@@ -22,14 +22,16 @@
 */
 
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Tracing;
+using Microsoft.IO;
 
 namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
@@ -38,7 +40,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
     /// </summary>
     internal sealed class CloudFetchDownloader : ICloudFetchDownloader, IActivityTracer
     {
-        private readonly ITracingStatement _statement;
+        private readonly ITracingStatement? _statement;
         private readonly BlockingCollection<IDownloadResult> _downloadQueue;
         private readonly BlockingCollection<IDownloadResult> _resultQueue;
         private readonly ICloudFetchMemoryBufferManager _memoryManager;
@@ -51,6 +53,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         private readonly int _maxUrlRefreshAttempts;
         private readonly int _urlExpirationBufferSeconds;
         private readonly SemaphoreSlim _downloadSemaphore;
+        private readonly Lazy<ActivityTrace> _fallbackTrace;
+        private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
+        private readonly ArrayPool<byte>? _lz4BufferPool;
         private Task? _downloadTask;
         private CancellationTokenSource? _cancellationTokenSource;
         private bool _isCompleted;
@@ -60,20 +65,59 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class.
         /// </summary>
-        /// <param name="statement">The tracing statement for Activity context.</param>
+        /// <param name="statement">The tracing statement for Activity context and connection access (nullable for protocol-agnostic usage).</param>
         /// <param name="downloadQueue">The queue of downloads to process.</param>
         /// <param name="resultQueue">The queue to add completed downloads to.</param>
         /// <param name="memoryManager">The memory buffer manager.</param>
         /// <param name="httpClient">The HTTP client to use for downloads.</param>
         /// <param name="resultFetcher">The result fetcher that manages URLs.</param>
-        /// <param name="maxParallelDownloads">The maximum number of parallel downloads.</param>
-        /// <param name="isLz4Compressed">Whether the results are LZ4 compressed.</param>
-        /// <param name="maxRetries">The maximum number of retry attempts.</param>
-        /// <param name="retryDelayMs">The delay between retry attempts in milliseconds.</param>
-        /// <param name="maxUrlRefreshAttempts">The maximum number of URL refresh attempts.</param>
-        /// <param name="urlExpirationBufferSeconds">Buffer time in seconds before URL expiration to trigger refresh.</param>
+        /// <param name="config">The CloudFetch configuration.</param>
         public CloudFetchDownloader(
-            ITracingStatement statement,
+            ITracingStatement? statement,
+            BlockingCollection<IDownloadResult> downloadQueue,
+            BlockingCollection<IDownloadResult> resultQueue,
+            ICloudFetchMemoryBufferManager memoryManager,
+            HttpClient httpClient,
+            ICloudFetchResultFetcher resultFetcher,
+            CloudFetchConfiguration config)
+        {
+            _statement = statement;
+            _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
+            _resultQueue = resultQueue ?? throw new ArgumentNullException(nameof(resultQueue));
+            _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            _resultFetcher = resultFetcher ?? throw new ArgumentNullException(nameof(resultFetcher));
+
+            if (config == null) throw new ArgumentNullException(nameof(config));
+
+            _maxParallelDownloads = config.ParallelDownloads;
+            _isLz4Compressed = config.IsLz4Compressed;
+            _maxRetries = config.MaxRetries;
+            _retryDelayMs = config.RetryDelayMs;
+            _maxUrlRefreshAttempts = config.MaxUrlRefreshAttempts;
+            _urlExpirationBufferSeconds = config.UrlExpirationBufferSeconds;
+            _memoryStreamManager = config.MemoryStreamManager;
+            _lz4BufferPool = config.Lz4BufferPool;
+            _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
+            _fallbackTrace = new Lazy<ActivityTrace>(() => new ActivityTrace("CloudFetchDownloader", "1.0.0"));
+            _isCompleted = false;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class for testing.
+        /// </summary>
+        /// <param name="statement">The tracing statement for Activity context (nullable for testing).</param>
+        /// <param name="downloadQueue">The queue of downloads to process.</param>
+        /// <param name="resultQueue">The queue to add completed downloads to.</param>
+        /// <param name="memoryManager">The memory buffer manager.</param>
+        /// <param name="httpClient">The HTTP client to use for downloads.</param>
+        /// <param name="resultFetcher">The result fetcher that manages URLs.</param>
+        /// <param name="maxParallelDownloads">Maximum parallel downloads.</param>
+        /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>
+        /// <param name="maxRetries">Maximum retry attempts (optional, default 3).</param>
+        /// <param name="retryDelayMs">Delay between retries in ms (optional, default 1000).</param>
+        internal CloudFetchDownloader(
+            ITracingStatement? statement,
             BlockingCollection<IDownloadResult> downloadQueue,
             BlockingCollection<IDownloadResult> resultQueue,
             ICloudFetchMemoryBufferManager memoryManager,
@@ -82,23 +126,25 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             int maxParallelDownloads,
             bool isLz4Compressed,
             int maxRetries = 3,
-            int retryDelayMs = 500,
-            int maxUrlRefreshAttempts = 3,
-            int urlExpirationBufferSeconds = 60)
+            int retryDelayMs = 1000)
         {
-            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
+            _statement = statement;
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
             _resultQueue = resultQueue ?? throw new ArgumentNullException(nameof(resultQueue));
             _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _resultFetcher = resultFetcher ?? throw new ArgumentNullException(nameof(resultFetcher));
-            _maxParallelDownloads = maxParallelDownloads > 0 ? maxParallelDownloads : throw new ArgumentOutOfRangeException(nameof(maxParallelDownloads));
+
+            _maxParallelDownloads = maxParallelDownloads;
             _isLz4Compressed = isLz4Compressed;
-            _maxRetries = maxRetries > 0 ? maxRetries : throw new ArgumentOutOfRangeException(nameof(maxRetries));
-            _retryDelayMs = retryDelayMs > 0 ? retryDelayMs : throw new ArgumentOutOfRangeException(nameof(retryDelayMs));
-            _maxUrlRefreshAttempts = maxUrlRefreshAttempts > 0 ? maxUrlRefreshAttempts : throw new ArgumentOutOfRangeException(nameof(maxUrlRefreshAttempts));
-            _urlExpirationBufferSeconds = urlExpirationBufferSeconds > 0 ? urlExpirationBufferSeconds : throw new ArgumentOutOfRangeException(nameof(urlExpirationBufferSeconds));
+            _maxRetries = maxRetries;
+            _retryDelayMs = retryDelayMs;
+            _maxUrlRefreshAttempts = CloudFetchConfiguration.DefaultMaxUrlRefreshAttempts;
+            _urlExpirationBufferSeconds = CloudFetchConfiguration.DefaultUrlExpirationBufferSeconds;
+            _memoryStreamManager = null;
+            _lz4BufferPool = null;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
+            _fallbackTrace = new Lazy<ActivityTrace>(() => new ActivityTrace("CloudFetchDownloader", "1.0.0"));
             _isCompleted = false;
         }
 
@@ -146,7 +192,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error stopping downloader: {ex.Message}");
+                Activity.Current?.AddEvent("cloudfetch.downloader_stop_error", [
+                    new("error_message", ex.Message),
+                    new("error_type", ex.GetType().Name)
+                ]);
             }
             finally
             {
@@ -265,14 +314,15 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Check if the URL is expired or about to expire
                         if (downloadResult.IsExpiredOrExpiringSoon(_urlExpirationBufferSeconds))
                         {
-                            // Get a refreshed URL before starting the download
-                            var refreshedLink = await _resultFetcher.GetUrlAsync(downloadResult.Link.StartRowOffset, cancellationToken);
-                            if (refreshedLink != null)
+                            // Get refreshed URLs starting from this offset
+                            var refreshedResults = await _resultFetcher.RefreshUrlsAsync(downloadResult.StartRowOffset, cancellationToken);
+                            var refreshedResult = refreshedResults.FirstOrDefault(r => r.StartRowOffset == downloadResult.StartRowOffset);
+                            if (refreshedResult != null)
                             {
-                                // Update the download result with the refreshed link
-                                downloadResult.UpdateWithRefreshedLink(refreshedLink);
+                                // Update the download result with the refreshed URL
+                                downloadResult.UpdateWithRefreshedUrl(refreshedResult.FileUrl, refreshedResult.ExpirationTime, refreshedResult.HttpHeaders);
                                 activity?.AddEvent("cloudfetch.url_refreshed_before_download", [
-                                    new("offset", refreshedLink.StartRowOffset)
+                                    new("offset", refreshedResult.StartRowOffset)
                                 ]);
                             }
                         }
@@ -298,10 +348,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                                 if (t.IsFaulted)
                                 {
                                     Exception ex = t.Exception?.InnerException ?? new Exception("Unknown error");
-                                    string sanitizedUrl = SanitizeUrl(downloadResult.Link.FileLink);
+                                    string sanitizedUrl = SanitizeUrl(downloadResult.FileUrl);
                                     activity?.AddException(ex, [
                                         new("error.context", "cloudfetch.download_failed"),
-                                        new("offset", downloadResult.Link.StartRowOffset),
+                                        new("offset", downloadResult.StartRowOffset),
                                         new("sanitized_url", sanitizedUrl)
                                     ]);
 
@@ -372,15 +422,15 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         {
             await this.TraceActivityAsync(async activity =>
             {
-                string url = downloadResult.Link.FileLink;
-                string sanitizedUrl = SanitizeUrl(downloadResult.Link.FileLink);
+                string url = downloadResult.FileUrl;
+                string sanitizedUrl = SanitizeUrl(downloadResult.FileUrl);
                 byte[]? fileData = null;
 
                 // Use the size directly from the download result
                 long size = downloadResult.Size;
 
                 // Add tags to the Activity for filtering/searching
-                activity?.SetTag("cloudfetch.offset", downloadResult.Link.StartRowOffset);
+                activity?.SetTag("cloudfetch.offset", downloadResult.StartRowOffset);
                 activity?.SetTag("cloudfetch.sanitized_url", sanitizedUrl);
                 activity?.SetTag("cloudfetch.expected_size_bytes", size);
 
@@ -389,7 +439,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
                 // Log download start
                 activity?.AddEvent("cloudfetch.download_start", [
-                new("offset", downloadResult.Link.StartRowOffset),
+                new("offset", downloadResult.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("expected_size_bytes", size),
                     new("expected_size_kb", size / 1024.0)
@@ -400,9 +450,21 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 {
                     try
                     {
+                        // Create HTTP request with optional custom headers
+                        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+
+                        // Add custom headers if provided
+                        if (downloadResult.HttpHeaders != null)
+                        {
+                            foreach (var header in downloadResult.HttpHeaders)
+                            {
+                                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                            }
+                        }
+
                         // Download the file directly
-                        using HttpResponseMessage response = await _httpClient.GetAsync(
-                            url,
+                        using HttpResponseMessage response = await _httpClient.SendAsync(
+                            request,
                             HttpCompletionOption.ResponseHeadersRead,
                             cancellationToken).ConfigureAwait(false);
 
@@ -417,16 +479,17 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                             }
 
                             // Try to refresh the URL
-                            var refreshedLink = await _resultFetcher.GetUrlAsync(downloadResult.Link.StartRowOffset, cancellationToken);
-                            if (refreshedLink != null)
+                            var refreshedResults = await _resultFetcher.RefreshUrlsAsync(downloadResult.StartRowOffset, cancellationToken);
+                            var refreshedResult = refreshedResults.FirstOrDefault(r => r.StartRowOffset == downloadResult.StartRowOffset);
+                            if (refreshedResult != null)
                             {
-                                // Update the download result with the refreshed link
-                                downloadResult.UpdateWithRefreshedLink(refreshedLink);
-                                url = refreshedLink.FileLink;
+                                // Update the download result with the refreshed URL
+                                downloadResult.UpdateWithRefreshedUrl(refreshedResult.FileUrl, refreshedResult.ExpirationTime, refreshedResult.HttpHeaders);
+                                url = refreshedResult.FileUrl;
                                 sanitizedUrl = SanitizeUrl(url);
 
                                 activity?.AddEvent("cloudfetch.url_refreshed_after_auth_error", [
-                                    new("offset", refreshedLink.StartRowOffset),
+                                    new("offset", refreshedResult.StartRowOffset),
                                     new("sanitized_url", sanitizedUrl)
                                 ]);
 
@@ -447,7 +510,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         if (contentLength.HasValue && contentLength.Value > 0)
                         {
                             activity?.AddEvent("cloudfetch.content_length", [
-                                new("offset", downloadResult.Link.StartRowOffset),
+                                new("offset", downloadResult.StartRowOffset),
                                 new("sanitized_url", sanitizedUrl),
                                 new("content_length_bytes", contentLength.Value),
                                 new("content_length_mb", contentLength.Value / 1024.0 / 1024.0)
@@ -463,7 +526,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Log the error and retry
                         activity?.AddException(ex, [
                             new("error.context", "cloudfetch.download_retry"),
-                            new("offset", downloadResult.Link.StartRowOffset),
+                            new("offset", downloadResult.StartRowOffset),
                             new("sanitized_url", SanitizeUrl(url)),
                             new("attempt", retry + 1),
                             new("max_retries", _maxRetries)
@@ -477,7 +540,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 {
                     stopwatch.Stop();
                     activity?.AddEvent("cloudfetch.download_failed_all_retries", [
-                        new("offset", downloadResult.Link.StartRowOffset),
+                        new("offset", downloadResult.StartRowOffset),
                         new("sanitized_url", sanitizedUrl),
                         new("max_retries", _maxRetries),
                         new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
@@ -489,7 +552,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 }
 
                 // Process the downloaded file data
-                MemoryStream dataStream;
+                Stream dataStream;
                 long actualSize = fileData.Length;
 
                 // If the data is LZ4 compressed, decompress it
@@ -499,21 +562,25 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                     {
                         var decompressStopwatch = Stopwatch.StartNew();
 
-                        // Use shared Lz4Utilities for decompression (consolidates logic with non-CloudFetch path)
-                        var (buffer, length) = await Lz4Utilities.DecompressLz4Async(
+                        // Use shared Lz4Utilities for decompression with both RecyclableMemoryStream and ArrayPool
+                        // The returned stream must be disposed by Arrow after reading
+                        // Protocol-agnostic: use resources from config (populated by caller from connection)
+                        // Falls back to creating new instances if not provided (less efficient but works)
+                        var memoryStreamManager = _memoryStreamManager ?? new RecyclableMemoryStreamManager();
+                        var lz4BufferPool = _lz4BufferPool ?? ArrayPool<byte>.Shared;
+                        dataStream = await Lz4Utilities.DecompressLz4Async(
                             fileData,
+                            memoryStreamManager,
+                            lz4BufferPool,
                             cancellationToken).ConfigureAwait(false);
 
-                        // Create the dataStream from the decompressed buffer
-                        dataStream = new MemoryStream(buffer, 0, length, writable: false, publiclyVisible: true);
-                        dataStream.Position = 0;
                         decompressStopwatch.Stop();
 
                         // Calculate throughput metrics
                         double compressionRatio = (double)dataStream.Length / actualSize;
 
                         activity?.AddEvent("cloudfetch.decompression_complete", [
-                            new("offset", downloadResult.Link.StartRowOffset),
+                            new("offset", downloadResult.StartRowOffset),
                             new("sanitized_url", sanitizedUrl),
                             new("decompression_time_ms", decompressStopwatch.ElapsedMilliseconds),
                             new("compressed_size_bytes", actualSize),
@@ -530,7 +597,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         stopwatch.Stop();
                         activity?.AddException(ex, [
                             new("error.context", "cloudfetch.decompression"),
-                            new("offset", downloadResult.Link.StartRowOffset),
+                            new("offset", downloadResult.StartRowOffset),
                             new("sanitized_url", sanitizedUrl),
                             new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
                         ]);
@@ -549,7 +616,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 stopwatch.Stop();
                 double throughputMBps = (actualSize / 1024.0 / 1024.0) / (stopwatch.ElapsedMilliseconds / 1000.0);
                 activity?.AddEvent("cloudfetch.download_complete", [
-                    new("offset", downloadResult.Link.StartRowOffset),
+                    new("offset", downloadResult.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("actual_size_bytes", actualSize),
                     new("actual_size_kb", actualSize / 1024.0),
@@ -605,13 +672,17 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             }
         }
 
-        // IActivityTracer implementation - delegates to statement
-        ActivityTrace IActivityTracer.Trace => _statement.Trace;
+        // IActivityTracer implementation - delegates to statement (or returns lazy-initialized fallback if null)
+        // TODO(PECO-2838): Verify ActivityTrace propagation works correctly for Statement Execution API (REST).
+        // The fallback trace is used when statement is null (shouldn't happen in practice).
+        // For REST API, we need to ensure the StatementExecutionStatement implements ITracingStatement
+        // and properly propagates trace context through the CloudFetch pipeline.
+        ActivityTrace IActivityTracer.Trace => _statement?.Trace ?? _fallbackTrace.Value;
 
-        string? IActivityTracer.TraceParent => _statement.TraceParent;
+        string? IActivityTracer.TraceParent => _statement?.TraceParent;
 
-        public string AssemblyVersion => _statement.AssemblyVersion;
+        public string AssemblyVersion => _statement?.AssemblyVersion ?? string.Empty;
 
-        public string AssemblyName => _statement.AssemblyName;
+        public string AssemblyName => _statement?.AssemblyName ?? string.Empty;
     }
 }

@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -38,22 +39,88 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         private Stream? _dataStream;
         private bool _isDisposed;
         private long _size;
+        private string _fileUrl;
+        private DateTime _expirationTime;
+        private IReadOnlyDictionary<string, string>? _httpHeaders;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DownloadResult"/> class.
         /// </summary>
-        /// <param name="link">The link information for this result.</param>
+        /// <param name="chunkIndex">The chunk index for this download result.</param>
+        /// <param name="fileUrl">The URL for downloading the file.</param>
+        /// <param name="startRowOffset">The starting row offset for this result chunk.</param>
+        /// <param name="rowCount">The number of rows in this result chunk.</param>
+        /// <param name="byteCount">The size in bytes of this result chunk.</param>
+        /// <param name="expirationTime">The expiration time of the URL in UTC.</param>
         /// <param name="memoryManager">The memory buffer manager.</param>
-        public DownloadResult(TSparkArrowResultLink link, ICloudFetchMemoryBufferManager memoryManager)
+        /// <param name="httpHeaders">Optional HTTP headers for downloading the file.</param>
+        public DownloadResult(
+            long chunkIndex,
+            string fileUrl,
+            long startRowOffset,
+            long rowCount,
+            long byteCount,
+            DateTime expirationTime,
+            ICloudFetchMemoryBufferManager memoryManager,
+            IReadOnlyDictionary<string, string>? httpHeaders = null)
         {
-            Link = link ?? throw new ArgumentNullException(nameof(link));
+            ChunkIndex = chunkIndex;
+            _fileUrl = fileUrl ?? throw new ArgumentNullException(nameof(fileUrl));
+            StartRowOffset = startRowOffset;
+            RowCount = rowCount;
+            ByteCount = byteCount;
+            _expirationTime = expirationTime;
             _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
+            _httpHeaders = httpHeaders;
             _downloadCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _size = link.BytesNum;
+            _size = byteCount;
+        }
+
+        /// <summary>
+        /// Creates a DownloadResult from a Thrift link for backward compatibility.
+        /// </summary>
+        /// <param name="chunkIndex">The chunk index for this download result.</param>
+        /// <param name="link">The Thrift link information.</param>
+        /// <param name="memoryManager">The memory buffer manager.</param>
+        /// <returns>A new DownloadResult instance.</returns>
+        public static DownloadResult FromThriftLink(long chunkIndex, TSparkArrowResultLink link, ICloudFetchMemoryBufferManager memoryManager)
+        {
+            if (link == null) throw new ArgumentNullException(nameof(link));
+            if (memoryManager == null) throw new ArgumentNullException(nameof(memoryManager));
+
+            var expirationTime = DateTimeOffset.FromUnixTimeMilliseconds(link.ExpiryTime).UtcDateTime;
+
+            return new DownloadResult(
+                chunkIndex: chunkIndex,
+                fileUrl: link.FileLink,
+                startRowOffset: link.StartRowOffset,
+                rowCount: link.RowCount,
+                byteCount: link.BytesNum,
+                expirationTime: expirationTime,
+                memoryManager: memoryManager,
+                httpHeaders: null);
         }
 
         /// <inheritdoc />
-        public TSparkArrowResultLink Link { get; private set; }
+        public long ChunkIndex { get; }
+
+        /// <inheritdoc />
+        public string FileUrl => _fileUrl;
+
+        /// <inheritdoc />
+        public long StartRowOffset { get; }
+
+        /// <inheritdoc />
+        public long RowCount { get; }
+
+        /// <inheritdoc />
+        public long ByteCount { get; }
+
+        /// <inheritdoc />
+        public DateTime ExpirationTime => _expirationTime;
+
+        /// <inheritdoc />
+        public IReadOnlyDictionary<string, string>? HttpHeaders => _httpHeaders;
 
         /// <inheritdoc />
         public Stream DataStream
@@ -90,21 +157,22 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <returns>True if the URL is expired or about to expire, false otherwise.</returns>
         public bool IsExpiredOrExpiringSoon(int expirationBufferSeconds = 60)
         {
-            // Convert expiry time to DateTime
-            var expiryTime = DateTimeOffset.FromUnixTimeMilliseconds(Link.ExpiryTime).UtcDateTime;
-
             // Check if the URL is already expired or will expire soon
-            return DateTime.UtcNow.AddSeconds(expirationBufferSeconds) >= expiryTime;
+            return DateTime.UtcNow.AddSeconds(expirationBufferSeconds) >= _expirationTime;
         }
 
         /// <summary>
-        /// Updates this download result with a refreshed link.
+        /// Updates this download result with a refreshed URL and expiration time.
         /// </summary>
-        /// <param name="refreshedLink">The refreshed link information.</param>
-        public void UpdateWithRefreshedLink(TSparkArrowResultLink refreshedLink)
+        /// <param name="fileUrl">The refreshed file URL.</param>
+        /// <param name="expirationTime">The new expiration time.</param>
+        /// <param name="httpHeaders">Optional HTTP headers for the refreshed URL.</param>
+        public void UpdateWithRefreshedUrl(string fileUrl, DateTime expirationTime, IReadOnlyDictionary<string, string>? httpHeaders = null)
         {
             ThrowIfDisposed();
-            Link = refreshedLink ?? throw new ArgumentNullException(nameof(refreshedLink));
+            _fileUrl = fileUrl ?? throw new ArgumentNullException(nameof(fileUrl));
+            _expirationTime = expirationTime;
+            _httpHeaders = httpHeaders;
             RefreshAttempts++;
         }
 

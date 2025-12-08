@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
@@ -75,7 +76,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
         #region URL Management Tests
 
         [Fact]
-        public async Task GetUrlAsync_FetchesNewUrl_WhenNotCached()
+        public async Task RefreshUrlsAsync_FetchesUrls()
         {
             // Arrange
             long offset = 0;
@@ -83,17 +84,19 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             SetupMockClientFetchResults(new List<TSparkArrowResultLink> { resultLink }, true);
 
             // Act
-            var result = await _resultFetcher.GetUrlAsync(offset, CancellationToken.None);
+            var results = await _resultFetcher.RefreshUrlsAsync(offset, CancellationToken.None);
 
             // Assert
-            Assert.NotNull(result);
-            Assert.Equal(offset, result.StartRowOffset);
-            Assert.Equal("http://test.com/file1", result.FileLink);
+            Assert.NotNull(results);
+            var resultList = results.ToList();
+            Assert.Single(resultList);
+            Assert.Equal(offset, resultList[0].StartRowOffset);
+            Assert.Equal("http://test.com/file1", resultList[0].FileUrl);
             _mockClient.Verify(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Fact]
-        public async Task GetUrlRangeAsync_FetchesMultipleUrls()
+        public async Task RefreshUrlsAsync_FetchesMultipleUrls()
         {
             // Arrange
             var resultLinks = new List<TSparkArrowResultLink>
@@ -103,95 +106,18 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                 CreateTestResultLink(200, 100, "http://test.com/file3", 3600)
             };
 
-            // Set hasMoreRows to false so the fetcher doesn't keep trying to fetch more results
             SetupMockClientFetchResults(resultLinks, false);
 
             // Act
-            await _resultFetcher.StartAsync(CancellationToken.None);
-
-            // Wait for the fetcher to process the links and complete
-            await Task.Delay(200);
-
-            // Get all cached URLs
-            var cachedUrls = _resultFetcher.GetAllCachedUrls();
+            var results = await _resultFetcher.RefreshUrlsAsync(0, CancellationToken.None);
 
             // Assert
-            Assert.Equal(3, cachedUrls.Count);
-            Assert.Equal("http://test.com/file1", cachedUrls[0].FileLink);
-            Assert.Equal("http://test.com/file2", cachedUrls[100].FileLink);
-            Assert.Equal("http://test.com/file3", cachedUrls[200].FileLink);
+            var resultList = results.ToList();
+            Assert.Equal(3, resultList.Count);
+            Assert.Equal("http://test.com/file1", resultList[0].FileUrl);
+            Assert.Equal("http://test.com/file2", resultList[1].FileUrl);
+            Assert.Equal("http://test.com/file3", resultList[2].FileUrl);
             _mockClient.Verify(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()), Times.Once);
-
-            // Verify the fetcher completed
-            Assert.True(_resultFetcher.IsCompleted);
-            Assert.False(_resultFetcher.HasMoreResults);
-
-            // No need to stop explicitly as it should have completed naturally,
-            // but it's good practice to clean up
-            await _resultFetcher.StopAsync();
-        }
-
-        [Fact]
-        public async Task ClearCache_RemovesAllCachedUrls()
-        {
-            // Arrange
-            var resultLinks = new List<TSparkArrowResultLink>
-            {
-                CreateTestResultLink(0, 100, "http://test.com/file1", 3600),
-                CreateTestResultLink(100, 100, "http://test.com/file2", 3600)
-            };
-
-            // Set hasMoreRows to false so the fetcher doesn't keep trying to fetch more results
-            SetupMockClientFetchResults(resultLinks, false);
-
-            // Cache the URLs
-            await _resultFetcher.StartAsync(CancellationToken.None);
-
-            // Wait for the fetcher to process the links and complete
-            await Task.Delay(200);
-
-            // Act
-            _resultFetcher.ClearCache();
-            var cachedUrls = _resultFetcher.GetAllCachedUrls();
-
-            // Assert
-            Assert.Empty(cachedUrls);
-
-            // Verify the fetcher completed
-            Assert.True(_resultFetcher.IsCompleted);
-            Assert.False(_resultFetcher.HasMoreResults);
-
-            // Cleanup
-            await _resultFetcher.StopAsync();
-        }
-
-        [Fact]
-        public async Task GetUrlAsync_RefreshesExpiredUrl()
-        {
-            // Arrange
-            long offset = 0;
-            // Create a URL that will expire soon
-            var expiredLink = CreateTestResultLink(offset, 100, "http://test.com/expired", 30);
-            var refreshedLink = CreateTestResultLink(offset, 100, "http://test.com/refreshed", 3600);
-
-            // First return the expired link, then the refreshed one
-            _mockClient.SetupSequence(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(CreateFetchResultsResponse(new List<TSparkArrowResultLink> { expiredLink }, true))
-                .ReturnsAsync(CreateFetchResultsResponse(new List<TSparkArrowResultLink> { refreshedLink }, true));
-
-            // First fetch to cache the soon-to-expire URL
-            await _resultFetcher.GetUrlAsync(offset, CancellationToken.None);
-
-            // Advance time so the URL is now expired
-            _mockClock.AdvanceTime(TimeSpan.FromSeconds(40));
-
-            // Act - This should refresh the URL
-            var result = await _resultFetcher.GetUrlAsync(offset, CancellationToken.None);
-
-            // Assert
-            Assert.NotNull(result);
-            Assert.Equal("http://test.com/refreshed", result.FileLink);
-            _mockClient.Verify(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
         }
 
         #endregion
@@ -253,9 +179,9 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             // Verify each download result has the correct link
             for (int i = 0; i < resultLinks.Count; i++)
             {
-                Assert.Equal(resultLinks[i].FileLink, downloadResults[i].Link.FileLink);
-                Assert.Equal(resultLinks[i].StartRowOffset, downloadResults[i].Link.StartRowOffset);
-                Assert.Equal(resultLinks[i].RowCount, downloadResults[i].Link.RowCount);
+                Assert.Equal(resultLinks[i].FileLink, downloadResults[i].FileUrl);
+                Assert.Equal(resultLinks[i].StartRowOffset, downloadResults[i].StartRowOffset);
+                Assert.Equal(resultLinks[i].RowCount, downloadResults[i].RowCount);
             }
 
             // Verify the fetcher state
@@ -527,9 +453,9 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             // Verify each download result has the correct link
             for (int i = 0; i < initialResultLinks.Count; i++)
             {
-                Assert.Equal(initialResultLinks[i].FileLink, downloadResults[i].Link.FileLink);
-                Assert.Equal(initialResultLinks[i].StartRowOffset, downloadResults[i].Link.StartRowOffset);
-                Assert.Equal(initialResultLinks[i].RowCount, downloadResults[i].Link.RowCount);
+                Assert.Equal(initialResultLinks[i].FileLink, downloadResults[i].FileUrl);
+                Assert.Equal(initialResultLinks[i].StartRowOffset, downloadResults[i].StartRowOffset);
+                Assert.Equal(initialResultLinks[i].RowCount, downloadResults[i].RowCount);
             }
 
             // Verify the fetcher completed
@@ -703,9 +629,9 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
     }
 
     /// <summary>
-    /// Extension of CloudFetchResultFetcher that uses a mock clock for testing.
+    /// Extension of ThriftResultFetcher that uses a mock clock for testing.
     /// </summary>
-    internal class CloudFetchResultFetcherWithMockClock : CloudFetchResultFetcher
+    internal class CloudFetchResultFetcherWithMockClock : ThriftResultFetcher
     {
         public CloudFetchResultFetcherWithMockClock(
             IHiveServer2Statement statement,
@@ -715,7 +641,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             long batchSize,
             IClock clock,
             int expirationBufferSeconds = 60)
-            : base(statement, response, null, memoryManager, downloadQueue, batchSize, expirationBufferSeconds, clock)
+            : base(statement, response, null, batchSize, memoryManager, downloadQueue, expirationBufferSeconds, clock)
         {
         }
 
@@ -728,7 +654,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             long batchSize,
             IClock clock,
             int expirationBufferSeconds = 60)
-            : base(statement, response, initialResults, memoryManager, downloadQueue, batchSize, expirationBufferSeconds, clock)
+            : base(statement, response, initialResults, batchSize, memoryManager, downloadQueue, expirationBufferSeconds, clock)
         {
         }
     }

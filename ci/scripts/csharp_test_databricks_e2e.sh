@@ -19,10 +19,10 @@
 
 set -ex
 
-# Run Databricks driver E2E tests
+# Run all tests (both E2E and Unit tests)
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-# Skipped E2E tests that are failing currently
-dotnet test --filter "FullyQualifiedName~CloudFetchE2ETest|FullyQualifiedName~ComplexTypesValueTests|FullyQualifiedName~DatabricksConnectionTest|FullyQualifiedName~NumericValueTests|FullyQualifiedName~ServerSidePropertyE2ETest|FullyQualifiedName~StringValueTests" --verbosity minimal
+# Run all tests in the Databricks test project
+dotnet test --verbosity normal
 popd
