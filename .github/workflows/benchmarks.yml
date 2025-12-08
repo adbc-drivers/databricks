@@ -487,32 +487,123 @@ jobs:
           name: benchmark-results-net472
           path: results-net472
 
-      - name: Publish .NET 8.0 results to GitHub Pages
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: CloudFetch Benchmark Suite
-          tool: 'benchmarkdotnet'
-          output-file-path: results-net8/Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
-          gh-pages-branch: gh-pages
-          benchmark-data-dir-path: bench/net8
-          alert-threshold: '150%'
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: '@eric-wang-1990'
+      - name: Process benchmark results
+        run: |
+          # Process individual queries
+          python3 .github/scripts/process-benchmarks.py \
+            results-net8/Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json \
+            results-net8/Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-report.csv \
+            processed-net8
 
-      - name: Publish .NET Framework 4.7.2 results to GitHub Pages
+          python3 .github/scripts/process-benchmarks.py \
+            results-net472/Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json \
+            results-net472/Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-report.csv \
+            processed-net472
+
+          # Organize by metric type
+          python3 .github/scripts/organize-by-metric.py processed-net8 by-metric-net8
+          python3 .github/scripts/organize-by-metric.py processed-net472 by-metric-net472
+
+      - name: Publish Mean Execution Time (.NET 8.0)
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: CloudFetch Benchmark Suite (.NET Framework)
-          tool: 'benchmarkdotnet'
-          output-file-path: results-net472/Apache.Arrow.Adbc.Benchmarks.CloudFetchRealE2EBenchmark-report-full-compressed.json
+          name: 'Mean Execution Time (.NET 8.0)'
+          tool: 'customSmallerIsBetter'
+          output-file-path: by-metric-net8/mean-execution-time.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           gh-pages-branch: gh-pages
-          benchmark-data-dir-path: bench/net472
+          benchmark-data-dir-path: bench/mean-time/net8
           alert-threshold: '150%'
-          comment-on-alert: true
           fail-on-alert: false
-          alert-comment-cc-users: '@eric-wang-1990'
+
+      - name: Publish Peak Memory (.NET 8.0)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Peak Memory (.NET 8.0)'
+          tool: 'customSmallerIsBetter'
+          output-file-path: by-metric-net8/peak-memory.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/peak-memory/net8
+          alert-threshold: '150%'
+          fail-on-alert: false
+
+      - name: Publish Allocated Memory (.NET 8.0)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Allocated Memory (.NET 8.0)'
+          tool: 'customSmallerIsBetter'
+          output-file-path: by-metric-net8/allocated-memory.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/allocated-memory/net8
+          alert-threshold: '150%'
+          fail-on-alert: false
+
+      - name: Publish Gen2 Collections (.NET 8.0)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Gen2 Collections (.NET 8.0)'
+          tool: 'customSmallerIsBetter'
+          output-file-path: by-metric-net8/gen2-collections.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/gen2-collections/net8
+          alert-threshold: '150%'
+          fail-on-alert: false
+
+      - name: Publish Mean Execution Time (.NET Framework 4.7.2)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Mean Execution Time (.NET Framework 4.7.2)'
+          tool: 'customSmallerIsBetter'
+          output-file-path: by-metric-net472/mean-execution-time.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/mean-time/net472
+          alert-threshold: '150%'
+          fail-on-alert: false
+
+      - name: Publish Peak Memory (.NET Framework 4.7.2)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Peak Memory (.NET Framework 4.7.2)'
+          tool: 'customSmallerIsBetter'
+          output-file-path: by-metric-net472/peak-memory.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/peak-memory/net472
+          alert-threshold: '150%'
+          fail-on-alert: false
+
+      - name: Publish Allocated Memory (.NET Framework 4.7.2)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Allocated Memory (.NET Framework 4.7.2)'
+          tool: 'customSmallerIsBetter'
+          output-file-path: by-metric-net472/allocated-memory.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/allocated-memory/net472
+          alert-threshold: '150%'
+          fail-on-alert: false
+
+      - name: Publish Gen2 Collections (.NET Framework 4.7.2)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Gen2 Collections (.NET Framework 4.7.2)'
+          tool: 'customSmallerIsBetter'
+          output-file-path: by-metric-net472/gen2-collections.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/gen2-collections/net472
+          alert-threshold: '150%'
+          fail-on-alert: false
