@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765229222006,
+  "lastUpdate": 1765237708018,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Gen2 Collections (.NET 8.0)": [
@@ -235,6 +235,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 70,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "97015f6f6a4c70c2bc812aff52b84ef91902e5b6",
+          "message": "feat(csharp): add comprehensive connection logging to Databricks driver (#36)\n\nPort connection logging improvements from apache/arrow-adbc PR #3577 to\nenhance observability and debugging during connection establishment.\n\nChanges:\n- Add LogConnectionProperties method with sensitive value sanitization\n- Enhanced CreateSessionRequest with detailed driver and configuration\nlogging\n- Comprehensive HandleOpenSessionResponse logging including:\n  - Server protocol version and capabilities\n  - Feature support detection (PK/FK, DESC table extended)\n  - Feature downgrade notifications when protocol constraints apply\n  - Final feature flag states for debugging\n  - Namespace handling with detailed event logging\n  - Error conditions with appropriate error tags\n\nThe logging follows commercial ODBC driver patterns (like Simba)\nproviding comprehensive visibility into the Databricks connection\nestablishment process. All sensitive credentials are properly sanitized\nbefore logging.\n\n🤖 Generated with [Claude Code](https://claude.ai/code)\n\n## What's Changed\n\nPlease fill in a description of the changes here.\n\n**This contains breaking changes.** <!-- Remove this line if there are\nno breaking changes. -->\n\nCloses #NNN.\n\n---------\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-08T15:35:11-08:00",
+          "tree_id": "5e3bc59d0271f17b0fcfeb282724b070d2954827",
+          "url": "https://github.com/adbc-drivers/databricks/commit/97015f6f6a4c70c2bc812aff52b84ef91902e5b6"
+        },
+        "date": 1765237707169,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 52,
+            "unit": "collections"
+          },
+          {
+            "name": "customer",
+            "value": 3,
+            "unit": "collections"
+          },
+          {
+            "name": "inventory",
+            "value": 18,
+            "unit": "collections"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 49,
+            "unit": "collections"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 53,
+            "unit": "collections"
+          },
+          {
+            "name": "web_sales",
+            "value": 33,
+            "unit": "collections"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 68,
             "unit": "collections"
           }
         ]
