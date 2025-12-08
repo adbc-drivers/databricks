@@ -809,11 +809,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             if (!FeatureVersionNegotiator.IsDatabricksProtocolVersion(version))
             {
                 var exception = new DatabricksException("Attempted to use databricks driver with a non-databricks server");
-                activity?.AddEvent(new ActivityEvent("exception", tags: new ActivityTagsCollection
-                {
-                    { "exception.type", "InvalidServerProtocol" },
-                    { "exception.message", exception.Message }
-                }));
+                activity?.AddException(exception, [
+                    new("error.type", "InvalidServerProtocol")
+                ]);
                 throw exception;
             }
 
