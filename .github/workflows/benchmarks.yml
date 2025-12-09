@@ -46,6 +46,7 @@ concurrency:
 permissions:
   contents: write       # Required to push benchmark results to gh-pages branch
   pull-requests: write  # Required to post comparison comments on PRs
+  actions: read         # Required to download baseline artifacts from main branch runs
 
 jobs:
   setup:
