@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765241743957,
+  "lastUpdate": 1765243955565,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Allocated Memory (.NET 8.0)": [
@@ -471,6 +471,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 1169.97,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "597b78ad90894a6f9f4df912b56884ac7632098d",
+          "message": "fix(ci): fix jq syntax error in benchmark comparison\n\n- Wrap conditional expression in parentheses for proper 'as' binding\n- Fixes 'unexpected as' syntax error in GitHub Actions",
+          "timestamp": "2025-12-08T17:19:01-08:00",
+          "tree_id": "efc7aba3fb0b29596ee06672dfd647624dd35f5c",
+          "url": "https://github.com/adbc-drivers/databricks/commit/597b78ad90894a6f9f4df912b56884ac7632098d"
+        },
+        "date": 1765243955097,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 290.86,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 37.1,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 210.96,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 109.22,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 338.85,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 156.09,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 1168.28,
             "unit": "MB"
           }
         ]
