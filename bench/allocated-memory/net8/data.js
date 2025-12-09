@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765237706264,
+  "lastUpdate": 1765238489545,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Allocated Memory (.NET 8.0)": [
@@ -294,6 +294,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 1177.07,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0d495af807c85ba33feb0bc2ccd42d73aa79f1a4",
+          "message": "fix(ci): improve benchmark results display and documentation (#66)\n\n## Summary\n\nThis PR fixes benchmark results display issues and adds comprehensive\ndocumentation for the benchmark suite and GitHub Pages dashboard.\n\n### Changes\n\n#### Benchmark Workflow Fixes\n- **Fix parameter extraction**: Handle both string and object formats\nfrom BenchmarkDotNet\n  - String format: `\"benchmarkQuery=catalog_sales&ReadDelayMs=5\"`\n- Object format: `{\"benchmarkQuery\": {\"name\": \"catalog_sales\", ...},\n\"ReadDelayMs\": 5}`\n- **Fix baseline matching**: Ensure baseline comparisons work with both\nparameter formats\n- Resolves missing rows/columns data and baseline values in benchmark\nresults\n\n#### Documentation Updates\n- **benchmark-queries.md**: Add comprehensive \"Viewing Results\" section\n  - GitHub Pages dashboard overview with URL\n- Describe all 4 key metrics (Mean Execution Time, Peak Memory,\nAllocated Memory, Gen2 Collections)\n  - Explain console output vs historical trend visualization\n  \n- **Main README.md**: Modernize Benchmarking section\n  - Reference 7-query benchmark suite\n  - Add GitHub Pages dashboard link\n  - Mention PR label-based benchmarking\n  - Reference detailed documentation files\n  \n- **csharp/Benchmarks/README.md**: Update placeholder URLs\n  - Replace generic `<org>/<repo>` URLs with actual GitHub Pages URL\n  - https://adbc-drivers.github.io/databricks/bench/\n\n### Testing\n- [x] Benchmark workflow parameter extraction tested with actual\nBenchmarkDotNet output\n- [x] Documentation reviewed for accuracy\n\n### Related Issues\nFixes benchmark results display showing missing baseline and\nrows/columns information.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+          "timestamp": "2025-12-08T15:43:07-08:00",
+          "tree_id": "3bc51a82d97ad6ba23a97c92690027c26efb1a46",
+          "url": "https://github.com/adbc-drivers/databricks/commit/0d495af807c85ba33feb0bc2ccd42d73aa79f1a4"
+        },
+        "date": 1765238489159,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 296.28,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 41.11,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 215.24,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 126.39,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 341.37,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 164.95,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 1162.8,
             "unit": "MB"
           }
         ]
