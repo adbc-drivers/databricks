@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765238492546,
+  "lastUpdate": 1765240960611,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Peak Memory (.NET Framework 4.7.2)": [
@@ -353,6 +353,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 388.79,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "ebb795dd43b7a194d5bf04bcfb6f0f54c6e6984c",
+          "message": "fix(ci): add actions:read permission for baseline artifact downloads\n\n- Fixes HTTP 403 error when downloading artifacts from main branch runs\n- Required for PR comparison to access baseline benchmark results",
+          "timestamp": "2025-12-08T16:29:14-08:00",
+          "tree_id": "23a9cd3ea2506c1c8a980ce59df3ce0ec981074c",
+          "url": "https://github.com/adbc-drivers/databricks/commit/ebb795dd43b7a194d5bf04bcfb6f0f54c6e6984c"
+        },
+        "date": 1765240960155,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 309.2,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 152.18,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 269.82,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 212.06,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 300.79,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 278.42,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 384.49,
             "unit": "MB"
           }
         ]
