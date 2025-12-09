@@ -24,8 +24,10 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net.Http;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
+using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
 using Microsoft.IO;
@@ -118,7 +120,99 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             return new CloudFetchReader(statement, schema, response, downloadManager);
         }
 
-        // Future: CreateRestReader method will be added for REST API protocol support
-        // public static CloudFetchReader CreateRestReader(...)
+        /// <summary>
+        /// Creates a CloudFetch reader for the Statement Execution REST API protocol.
+        /// </summary>
+        /// <param name="client">The Statement Execution API client.</param>
+        /// <param name="statementId">The statement ID.</param>
+        /// <param name="schema">The Arrow schema.</param>
+        /// <param name="manifest">The result manifest containing chunk metadata.</param>
+        /// <param name="initialExternalLinks">External links for chunk 0 from the initial response (avoids extra API call).</param>
+        /// <param name="httpClient">The HTTP client for downloads.</param>
+        /// <param name="properties">Connection properties for configuration.</param>
+        /// <param name="memoryStreamManager">The recyclable memory stream manager.</param>
+        /// <param name="lz4BufferPool">The LZ4 buffer pool for decompression.</param>
+        /// <param name="statement">The statement for tracing support (StatementExecutionStatement implements ITracingStatement).</param>
+        /// <returns>A CloudFetchReader configured for Statement Execution API protocol.</returns>
+        public static CloudFetchReader CreateStatementExecutionReader(
+            IStatementExecutionClient client,
+            string statementId,
+            Schema schema,
+            ResultManifest manifest,
+            List<ExternalLink>? initialExternalLinks,
+            HttpClient httpClient,
+            IReadOnlyDictionary<string, string> properties,
+            RecyclableMemoryStreamManager memoryStreamManager,
+            ArrayPool<byte> lz4BufferPool,
+            ITracingStatement statement)
+        {
+            if (client == null) throw new ArgumentNullException(nameof(client));
+            if (string.IsNullOrEmpty(statementId)) throw new ArgumentNullException(nameof(statementId));
+            if (schema == null) throw new ArgumentNullException(nameof(schema));
+            if (manifest == null) throw new ArgumentNullException(nameof(manifest));
+            if (httpClient == null) throw new ArgumentNullException(nameof(httpClient));
+            if (properties == null) throw new ArgumentNullException(nameof(properties));
+            if (memoryStreamManager == null) throw new ArgumentNullException(nameof(memoryStreamManager));
+            if (lz4BufferPool == null) throw new ArgumentNullException(nameof(lz4BufferPool));
+            if (statement == null) throw new ArgumentNullException(nameof(statement));
+
+            // Determine if LZ4 compression is enabled
+            bool isLz4Compressed = properties.TryGetValue(DatabricksParameters.CanDecompressLz4, out var canDecompress) &&
+                                   canDecompress.Equals("true", StringComparison.OrdinalIgnoreCase);
+
+            // Build configuration from connection properties
+            var config = CloudFetchConfiguration.FromProperties(properties, schema, isLz4Compressed);
+
+            // Populate LZ4 resources
+            config.MemoryStreamManager = memoryStreamManager;
+            config.Lz4BufferPool = lz4BufferPool;
+
+            // Create shared resources
+            var memoryManager = new CloudFetchMemoryBufferManager(config.MemoryBufferSizeMB);
+            var downloadQueue = new BlockingCollection<IDownloadResult>(
+                new ConcurrentQueue<IDownloadResult>(),
+                config.PrefetchCount * 2);
+            var resultQueue = new BlockingCollection<IDownloadResult>(
+                new ConcurrentQueue<IDownloadResult>(),
+                config.PrefetchCount * 2);
+
+            // Create the result fetcher for Statement Execution API
+            var resultFetcher = new StatementExecutionResultFetcher(
+                client,
+                statementId,
+                manifest,
+                initialExternalLinks,
+                memoryManager,
+                downloadQueue);
+
+            // Create the downloader - statement implements IActivityTracer via ITracingStatement
+            var downloader = new CloudFetchDownloader(
+                statement,
+                downloadQueue,
+                resultQueue,
+                memoryManager,
+                httpClient,
+                resultFetcher,
+                config);
+
+            // Create the download manager
+            var downloadManager = new CloudFetchDownloadManager(
+                resultFetcher,
+                downloader,
+                memoryManager,
+                downloadQueue,
+                resultQueue,
+                httpClient,
+                config);
+
+            // Start the download manager
+            downloadManager.StartAsync().Wait();
+
+            // Create and return the reader
+            // Note: response is null for Statement Execution API because CloudFetchReader doesn't use it.
+            // The IResponse parameter exists for compatibility with the Thrift path (DatabricksReader),
+            // which uses it for direct results and operation handle management.
+            return new CloudFetchReader(statement, schema, response: null, downloadManager);
+        }
     }
 }
