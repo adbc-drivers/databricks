@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765238491567,
+  "lastUpdate": 1765240959481,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Mean Execution Time (.NET Framework 4.7.2)": [
@@ -353,6 +353,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 14641.47,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "e.wang@databricks.com",
+            "name": "Eric Wang",
+            "username": "eric-wang-1990"
+          },
+          "distinct": true,
+          "id": "ebb795dd43b7a194d5bf04bcfb6f0f54c6e6984c",
+          "message": "fix(ci): add actions:read permission for baseline artifact downloads\n\n- Fixes HTTP 403 error when downloading artifacts from main branch runs\n- Required for PR comparison to access baseline benchmark results",
+          "timestamp": "2025-12-08T16:29:14-08:00",
+          "tree_id": "23a9cd3ea2506c1c8a980ce59df3ce0ec981074c",
+          "url": "https://github.com/adbc-drivers/databricks/commit/ebb795dd43b7a194d5bf04bcfb6f0f54c6e6984c"
+        },
+        "date": 1765240959027,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 4670.69,
+            "unit": "ms"
+          },
+          {
+            "name": "customer",
+            "value": 932.65,
+            "unit": "ms"
+          },
+          {
+            "name": "inventory",
+            "value": 45412.11,
+            "unit": "ms"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 14077.1,
+            "unit": "ms"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 12933.96,
+            "unit": "ms"
+          },
+          {
+            "name": "web_sales",
+            "value": 3600.44,
+            "unit": "ms"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 25811.68,
             "unit": "ms"
           }
         ]
