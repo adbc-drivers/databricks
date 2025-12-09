@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765240959481,
+  "lastUpdate": 1765241745767,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Mean Execution Time (.NET Framework 4.7.2)": [
@@ -412,6 +412,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 25811.68,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "111902719+jadewang-db@users.noreply.github.com",
+            "name": "Jade Wang",
+            "username": "jadewang-db"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b92a91609d6ddfc2f1581a5a233c04be398d2d32",
+          "message": "feat(csharp): add CloudFetch support for Statement Execution API (#64)\n\n## 🥞 Stacked PR\nUse this\n[link](https://github.com/adbc-drivers/databricks/pull/64/files) to\nreview incremental changes.\n-\n[**stack/PECO-2790-result-fetcher**](https://github.com/adbc-drivers/databricks/pull/64)\n[[Files\nchanged](https://github.com/adbc-drivers/databricks/pull/64/files)]\n\n---------\n## Summary\n\nAdds CloudFetch support for the Statement Execution REST API, enabling\nhigh-performance result\n  retrieval via pre-signed cloud storage URLs.\n\n  ### Changes\n\n- **StatementExecutionResultFetcher**: New CloudFetch result fetcher\nthat supports:\n    - Manifest-based fetching (all external links available upfront)\n- Incremental chunk fetching (links fetched per-chunk via\n`GetResultChunkAsync`)\n    - URL refresh for expired pre-signed URLs\n- **CloudFetchReaderFactory**: Extended with\n`CreateStatementExecutionReader()` factory method and\nadapter classes (`StatementExecutionStatementAdapter`,\n`StatementExecutionResponseAdapter`)\n- **StatementExecutionStatement**: Added `CreateCloudFetchReader()` for\nexternal link results with\n  Arrow schema extraction from manifest\n- **Tracing**: Added detailed activity events throughout the CloudFetch\npipeline for debugging\n- **Bug fix**: Removed `HttpClient.Timeout` assignment in\n`CloudFetchDownloadManager` that could\n  throw after requests started\n\n  ## Test Plan\n\n  - [x] Unit tests: `StatementExecutionResultFetcherTests` (14 tests)\n  - [x] E2E tests: `StatementExecutionResultFetcherTest` (10 tests)\n- [x] Extended `CloudFetchE2ETest` with Statement Execution API\nscenarios\n\nCo-authored-by: Jade Wang <jade.wang+data@databricks.com>\nCo-authored-by: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-08T16:34:17-08:00",
+          "tree_id": "506b2057697095e6117a05d968826da64fad049f",
+          "url": "https://github.com/adbc-drivers/databricks/commit/b92a91609d6ddfc2f1581a5a233c04be398d2d32"
+        },
+        "date": 1765241745460,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 4543.74,
+            "unit": "ms"
+          },
+          {
+            "name": "customer",
+            "value": 901.51,
+            "unit": "ms"
+          },
+          {
+            "name": "inventory",
+            "value": 45281.95,
+            "unit": "ms"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 14337.8,
+            "unit": "ms"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 12912.05,
+            "unit": "ms"
+          },
+          {
+            "name": "web_sales",
+            "value": 3504.91,
+            "unit": "ms"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 15288.55,
             "unit": "ms"
           }
         ]
