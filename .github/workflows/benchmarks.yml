@@ -396,27 +396,26 @@ jobs:
             echo "|-------|-----------|----------|------|------|---------|"
 
             # Parse current results - handle both string and object Parameters
-            jq -r '.Benchmarks[] |
-              if (.Parameters | type) == "string" then
-                # String format: "ReadDelayMs=5&benchmarkQuery=catalog_sales"
-                # Extract from Parameters, handling truncation by BenchmarkDotNet
-                (.Parameters | split("&") | map(select(startswith("benchmarkQuery=")) | split("=")[1]) | .[0] // "") as $param_query |
-                if ($param_query | contains("(...)")) then
-                  # Parameters truncated - extract from FullName instead
-                  (.FullName | match("benchmarkQuery: ([^,)]+)") | .captures[0].string)
+            jq -r '
+              .Benchmarks[] |
+              (
+                if (.Parameters | type) == "string" then
+                  (.Parameters | split("&") | map(select(startswith("benchmarkQuery=")) | split("=")[1]) | .[0] // "") as $param_query |
+                  if ($param_query | contains("(...)")) then
+                    (.FullName | match("benchmarkQuery: ([^,)]+)") | .captures[0].string)
+                  else
+                    $param_query
+                  end
+                elif (.Parameters | type) == "object" then
+                  if (.Parameters.benchmarkQuery | type) == "object" then
+                    .Parameters.benchmarkQuery.name
+                  else
+                    .Parameters.benchmarkQuery
+                  end
                 else
-                  $param_query
+                  ""
                 end
-              elif (.Parameters | type) == "object" then
-                # Object format: {"benchmarkQuery": {"name": "..."}} or {"benchmarkQuery": "name"}
-                if (.Parameters.benchmarkQuery | type) == "object" then
-                  .Parameters.benchmarkQuery.name
-                else
-                  .Parameters.benchmarkQuery
-                end
-              else
-                ""
-              end as $query |
+              ) as $query |
               "\($query)|\(.Statistics.Mean / 1000000)"
             ' "$CURRENT" | while IFS='|' read -r query mean; do
 
