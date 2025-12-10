@@ -66,9 +66,12 @@ while (reader.ReadNextRecordBatch())
 The driver supports three flexible configuration approaches:
 
 #### 1. Direct Property Configuration
-Pass properties directly when creating connections:
+Pass properties directly when creating connections.
+
+You can use either a full URI or separate host/path parameters:
 
 ```csharp
+// Option 1: Using full URI
 var config = new Dictionary<string, string>
 {
     ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
@@ -77,14 +80,46 @@ var config = new Dictionary<string, string>
     ["adbc.databricks.oauth.client_id"] = "your-client-id",
     ["adbc.databricks.oauth.client_secret"] = "your-client-secret"
 };
+
+// Option 2: Using separate host and path (from Spark driver)
+var config = new Dictionary<string, string>
+{
+    ["adbc.spark.type"] = "http",
+    ["adbc.spark.host"] = "workspace.databricks.com",
+    ["adbc.spark.port"] = "443",
+    ["adbc.spark.path"] = "/sql/1.0/warehouses/...",
+    ["adbc.spark.auth_type"] = "oauth",
+    ["adbc.databricks.oauth.grant_type"] = "client_credentials",
+    ["adbc.databricks.oauth.client_id"] = "your-client-id",
+    ["adbc.databricks.oauth.client_secret"] = "your-client-secret"
+};
 ```
 
 #### 2. Environment Variable Configuration
-Create a JSON configuration file (all values must be strings):
+Create a JSON configuration file (all values must be strings).
+
+You can use either a full URI or separate host/path parameters:
 
 ```json
 {
   "uri": "https://workspace.databricks.com/sql/1.0/warehouses/...",
+  "adbc.spark.auth_type": "oauth",
+  "adbc.databricks.oauth.grant_type": "client_credentials",
+  "adbc.databricks.oauth.client_id": "your-client-id",
+  "adbc.databricks.oauth.client_secret": "your-client-secret",
+  "adbc.connection.catalog": "main",
+  "adbc.connection.db_schema": "default"
+}
+```
+
+Or using separate host and path (from Spark driver):
+
+```json
+{
+  "adbc.spark.type": "http",
+  "adbc.spark.host": "workspace.databricks.com",
+  "adbc.spark.port": "443",
+  "adbc.spark.path": "/sql/1.0/warehouses/...",
   "adbc.spark.auth_type": "oauth",
   "adbc.databricks.oauth.grant_type": "client_credentials",
   "adbc.databricks.oauth.client_id": "your-client-id",
@@ -129,6 +164,8 @@ var config = new Dictionary<string, string>
     ["adbc.databricks.oauth.scope"] = "sql"  // Optional, defaults to "sql"
 };
 ```
+
+**Note:** OAuth U2M (User-to-Machine) authentication support is planned for a future release.
 
 **Authentication Properties:**
 
@@ -221,6 +258,31 @@ var config = new Dictionary<string, string>
 | `adbc.http_options.tls.allow_hostname_mismatch` | Allow hostname mismatches | `false` |
 | `adbc.http_options.tls.trusted_certificate_path` | Custom CA certificate path | |
 
+#### Using mitmproxy for Debugging
+
+For debugging HTTP/HTTPS traffic, you can use [mitmproxy](https://mitmproxy.org/) with custom certificate configuration:
+
+```csharp
+var config = new Dictionary<string, string>
+{
+    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
+    ["adbc.spark.auth_type"] = "oauth",
+    ["adbc.databricks.oauth.grant_type"] = "access_token",
+    ["adbc.spark.oauth.access_token"] = "your-token",
+
+    // Configure to trust mitmproxy's certificate
+    ["adbc.http_options.tls.trusted_certificate_path"] = "/path/to/mitmproxy-ca-cert.pem",
+    // Or disable certificate validation (not recommended for production)
+    ["adbc.http_options.tls.disable_server_certificate_validation"] = "true"
+};
+```
+
+**Steps:**
+1. Install and start mitmproxy: `mitmproxy -p 8080`
+2. Export mitmproxy's CA certificate from `~/.mitmproxy/mitmproxy-ca-cert.pem`
+3. Configure your system to route traffic through the proxy (e.g., set HTTP_PROXY environment variable)
+4. Use `trusted_certificate_path` to trust mitmproxy's certificate, or disable validation for testing
+
 ### Data Type Support
 
 The driver automatically converts Databricks/Spark types to Apache Arrow types:
@@ -249,15 +311,26 @@ The driver automatically converts Databricks/Spark types to Apache Arrow types:
 
 ### Server-Side Properties
 
-Properties prefixed with `adbc.databricks.ssp_` are passed to the Databricks server via SET queries.
+Properties prefixed with `adbc.databricks.ssp_` are passed to the Databricks server as session configuration.
+
+The behavior is controlled by `adbc.databricks.apply_ssp_with_queries`:
+
+- **`false` (default)**: Server-side properties are applied in the Thrift configuration when the session is opened
+- **`true`**: Server-side properties are applied using SET queries during execution
 
 **Example:**
 ```csharp
 var config = new Dictionary<string, string>
 {
-    ["adbc.databricks.ssp_use_cached_result"] = "true"
+    ["adbc.databricks.ssp_use_cached_result"] = "true",
+    ["adbc.databricks.apply_ssp_with_queries"] = "false"  // Apply during session open (default)
 };
-// Results in: SET use_cached_result=true
+
+// With apply_ssp_with_queries = false:
+// Properties are included in the Thrift session configuration
+
+// With apply_ssp_with_queries = true:
+// Results in: SET use_cached_result=true (executed as a query)
 ```
 
 ### Tracing and Observability
@@ -300,26 +373,13 @@ Default: 999 files maximum, 1024 KB each.
 
 ## Benchmarking
 
-The C# driver includes a comprehensive benchmark suite for CloudFetch performance testing using 7 TPC-DS queries that cover different data characteristics (size, width, data types).
+The C# driver includes a comprehensive benchmark suite for CloudFetch performance testing. For complete documentation including:
+- How to run benchmarks locally and in CI
+- Benchmark query details and characteristics
+- Viewing results on GitHub Pages
+- Understanding benchmark metrics and comparisons
 
-**View Results:**
-- **GitHub Pages Dashboard**: https://adbc-drivers.github.io/databricks/bench/
-- Interactive charts tracking Mean Execution Time, Peak Memory, Allocated Memory, and Gen2 Collections
-- Historical trends across commits for .NET 8.0 and .NET Framework 4.7.2
-
-**Running Benchmarks:**
-
-Locally:
-```bash
-cd csharp/Benchmarks
-dotnet run -c Release -f net8.0
-```
-
-On Pull Requests:
-- Add the `benchmark` label to your PR to run the full suite
-- Results automatically posted as comparison comments
-
-For detailed documentation, see [csharp/Benchmarks/README.md](csharp/Benchmarks/README.md) and [csharp/Benchmarks/benchmark-queries.md](csharp/Benchmarks/benchmark-queries.md).
+See the [Benchmark Documentation](csharp/Benchmarks/README.md).
 
 ## Building
 
