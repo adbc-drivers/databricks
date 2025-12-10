@@ -393,9 +393,8 @@ jobs:
             # Extract all metrics for each query across all runs
             # Create temporary files to store all values
             TEMP_MEAN=$(mktemp)
-            TEMP_MEMORY=$(mktemp)
-            TEMP_GEN0=$(mktemp)
-            TEMP_GEN1=$(mktemp)
+            TEMP_PEAK_MEMORY=$(mktemp)
+            TEMP_ALLOC_MEMORY=$(mktemp)
             TEMP_GEN2=$(mktemp)
 
             for FILE in $RESULT_FILES; do
@@ -418,12 +417,11 @@ jobs:
                     ""
                   end
                 ) as $query |
-                "\($query)|\(.Statistics.Mean)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen0Collections // 0)|\(.Memory.Gen1Collections // 0)|\(.Memory.Gen2Collections // 0)"
-              ' "$FILE" | while IFS='|' read -r query mean mem gen0 gen1 gen2; do
+                "\($query)|\(.Statistics.Mean)|\(.Memory.TotalBytesAllocated // .Memory.BytesAllocatedPerOperation // 0)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen2Collections // 0)"
+              ' "$FILE" | while IFS='|' read -r query mean peak_mem alloc_mem gen2; do
                 echo "$query|$mean" >> "$TEMP_MEAN"
-                echo "$query|$mem" >> "$TEMP_MEMORY"
-                echo "$query|$gen0" >> "$TEMP_GEN0"
-                echo "$query|$gen1" >> "$TEMP_GEN1"
+                echo "$query|$peak_mem" >> "$TEMP_PEAK_MEMORY"
+                echo "$query|$alloc_mem" >> "$TEMP_ALLOC_MEMORY"
                 echo "$query|$gen2" >> "$TEMP_GEN2"
               done
             done
@@ -469,9 +467,8 @@ jobs:
 
               # Get all values for this query and calculate medians
               MEAN_VALUES=$(grep "^$QUERY|" "$TEMP_MEAN" | cut -d'|' -f2 | sort -n)
-              MEMORY_VALUES=$(grep "^$QUERY|" "$TEMP_MEMORY" | cut -d'|' -f2 | sort -n)
-              GEN0_VALUES=$(grep "^$QUERY|" "$TEMP_GEN0" | cut -d'|' -f2 | sort -n)
-              GEN1_VALUES=$(grep "^$QUERY|" "$TEMP_GEN1" | cut -d'|' -f2 | sort -n)
+              PEAK_MEMORY_VALUES=$(grep "^$QUERY|" "$TEMP_PEAK_MEMORY" | cut -d'|' -f2 | sort -n)
+              ALLOC_MEMORY_VALUES=$(grep "^$QUERY|" "$TEMP_ALLOC_MEMORY" | cut -d'|' -f2 | sort -n)
               GEN2_VALUES=$(grep "^$QUERY|" "$TEMP_GEN2" | cut -d'|' -f2 | sort -n)
 
               COUNT=$(echo "$MEAN_VALUES" | wc -l)
@@ -480,19 +477,17 @@ jobs:
               fi
 
               MEDIAN_MEAN=$(calculate_median "$MEAN_VALUES")
-              MEDIAN_MEMORY=$(calculate_median "$MEMORY_VALUES")
-              MEDIAN_GEN0=$(calculate_median "$GEN0_VALUES")
-              MEDIAN_GEN1=$(calculate_median "$GEN1_VALUES")
+              MEDIAN_PEAK_MEMORY=$(calculate_median "$PEAK_MEMORY_VALUES")
+              MEDIAN_ALLOC_MEMORY=$(calculate_median "$ALLOC_MEMORY_VALUES")
               MEDIAN_GEN2=$(calculate_median "$GEN2_VALUES")
 
-              echo "  $QUERY: mean=$MEDIAN_MEAN, mem=$MEDIAN_MEMORY, gen0=$MEDIAN_GEN0, gen1=$MEDIAN_GEN1, gen2=$MEDIAN_GEN2 (from $COUNT samples)"
+              echo "  $QUERY: mean=$MEDIAN_MEAN, peak_mem=$MEDIAN_PEAK_MEMORY, alloc_mem=$MEDIAN_ALLOC_MEMORY, gen2=$MEDIAN_GEN2 (from $COUNT samples)"
 
               # Update the JSON file with median values
               jq --arg query "$QUERY" \
                  --argjson median_mean "$MEDIAN_MEAN" \
-                 --argjson median_memory "$MEDIAN_MEMORY" \
-                 --argjson median_gen0 "$MEDIAN_GEN0" \
-                 --argjson median_gen1 "$MEDIAN_GEN1" \
+                 --argjson median_peak_memory "$MEDIAN_PEAK_MEMORY" \
+                 --argjson median_alloc_memory "$MEDIAN_ALLOC_MEMORY" \
                  --argjson median_gen2 "$MEDIAN_GEN2" '
                 .Benchmarks |= map(
                   if (
@@ -500,9 +495,8 @@ jobs:
                     ((.Parameters | type) == "object" and ((.Parameters.benchmarkQuery.name // .Parameters.benchmarkQuery) == $query))
                   ) then
                     .Statistics.Mean = $median_mean |
-                    .Memory.BytesAllocatedPerOperation = $median_memory |
-                    .Memory.Gen0Collections = $median_gen0 |
-                    .Memory.Gen1Collections = $median_gen1 |
+                    .Memory.TotalBytesAllocated = $median_peak_memory |
+                    .Memory.BytesAllocatedPerOperation = $median_alloc_memory |
                     .Memory.Gen2Collections = $median_gen2
                   else
                     .
@@ -511,7 +505,7 @@ jobs:
               ' "$MEDIAN_FILE" > "$MEDIAN_FILE.tmp" && mv "$MEDIAN_FILE.tmp" "$MEDIAN_FILE"
             done
 
-            rm -f "$TEMP_MEAN" "$TEMP_MEMORY" "$TEMP_GEN0" "$TEMP_GEN1" "$TEMP_GEN2"
+            rm -f "$TEMP_MEAN" "$TEMP_PEAK_MEMORY" "$TEMP_ALLOC_MEMORY" "$TEMP_GEN2"
             echo "  Median baseline saved to $MEDIAN_FILE"
           }
 
@@ -546,8 +540,8 @@ jobs:
               return
             fi
 
-            echo "| Query | Mean (ms) | Baseline | Diff | Memory (MB) | Baseline | Diff | Gen0 | Gen1 | Gen2 | Rows | Cols |"
-            echo "|-------|-----------|----------|------|-------------|----------|------|------|------|------|------|------|"
+            echo "| Query | Mean (ms) | Peak Memory (MB) | Allocated Memory (MB) | Gen2 | Rows | Cols |"
+            echo "|-------|-----------|------------------|----------------------|------|------|------|"
 
             # Parse current results - handle both string and object Parameters
             jq -r '
@@ -570,8 +564,8 @@ jobs:
                   ""
                 end
               ) as $query |
-              "\($query)|\(.Statistics.Mean / 1000000)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen0Collections // 0)|\(.Memory.Gen1Collections // 0)|\(.Memory.Gen2Collections // 0)"
-            ' "$CURRENT" | while IFS='|' read -r query mean memory gen0 gen1 gen2; do
+              "\($query)|\(.Statistics.Mean / 1000000)|\(.Memory.TotalBytesAllocated // .Memory.BytesAllocatedPerOperation // 0)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen2Collections // 0)"
+            ' "$CURRENT" | while IFS='|' read -r query mean peak_memory alloc_memory gen2; do
 
               if [ -z "$query" ] || [ "$query" = "null" ]; then
                 continue
@@ -587,8 +581,10 @@ jobs:
 
               # Format current values
               mean_formatted=$(printf "%.2f" "$mean")
-              memory_mb=$(echo "scale=2; $memory / 1048576" | bc)
-              memory_formatted=$(printf "%.2f" "$memory_mb")
+              peak_memory_mb=$(echo "scale=2; $peak_memory / 1048576" | bc)
+              peak_memory_formatted=$(printf "%.2f" "$peak_memory_mb")
+              alloc_memory_mb=$(echo "scale=2; $alloc_memory / 1048576" | bc)
+              alloc_memory_formatted=$(printf "%.2f" "$alloc_memory_mb")
 
               # Try to find baseline
               if [ -f "$BASELINE" ]; then
@@ -608,48 +604,64 @@ jobs:
                       false
                     end
                   ) |
-                  "\(.Statistics.Mean / 1000000)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen0Collections // 0)|\(.Memory.Gen1Collections // 0)|\(.Memory.Gen2Collections // 0)"' "$BASELINE" 2>/dev/null | head -1)
+                  "\(.Statistics.Mean / 1000000)|\(.Memory.TotalBytesAllocated // .Memory.BytesAllocatedPerOperation // 0)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen2Collections // 0)"' "$BASELINE" 2>/dev/null | head -1)
 
                 if [ -n "$baseline_data" ] && [ "$baseline_data" != "null" ]; then
                   baseline_mean=$(echo "$baseline_data" | cut -d'|' -f1)
-                  baseline_memory=$(echo "$baseline_data" | cut -d'|' -f2)
-                  baseline_gen0=$(echo "$baseline_data" | cut -d'|' -f3)
-                  baseline_gen1=$(echo "$baseline_data" | cut -d'|' -f4)
-                  baseline_gen2=$(echo "$baseline_data" | cut -d'|' -f5)
+                  baseline_peak_memory=$(echo "$baseline_data" | cut -d'|' -f2)
+                  baseline_alloc_memory=$(echo "$baseline_data" | cut -d'|' -f3)
+                  baseline_gen2=$(echo "$baseline_data" | cut -d'|' -f4)
 
                   # Format baseline values
                   baseline_mean_formatted=$(printf "%.2f" "$baseline_mean")
-                  baseline_memory_mb=$(echo "scale=2; $baseline_memory / 1048576" | bc)
-                  baseline_memory_formatted=$(printf "%.2f" "$baseline_memory_mb")
+                  baseline_peak_memory_mb=$(echo "scale=2; $baseline_peak_memory / 1048576" | bc)
+                  baseline_peak_memory_formatted=$(printf "%.2f" "$baseline_peak_memory_mb")
+                  baseline_alloc_memory_mb=$(echo "scale=2; $baseline_alloc_memory / 1048576" | bc)
+                  baseline_alloc_memory_formatted=$(printf "%.2f" "$baseline_alloc_memory_mb")
 
-                  # Calculate percentage differences
-                  time_diff=$(echo "scale=1; (($mean - $baseline_mean) / $baseline_mean) * 100" | bc)
-                  memory_diff=$(echo "scale=1; (($memory - $baseline_memory) / $baseline_memory) * 100" | bc 2>/dev/null || echo "0")
+                  # Calculate percentage differences with proper decimal handling
+                  time_diff=$(awk -v curr="$mean" -v base="$baseline_mean" 'BEGIN {printf "%.1f", ((curr - base) / base) * 100}')
+                  peak_memory_diff=$(awk -v curr="$peak_memory" -v base="$baseline_peak_memory" 'BEGIN {if (base != 0) printf "%.1f", ((curr - base) / base) * 100; else print "0"}')
+                  alloc_memory_diff=$(awk -v curr="$alloc_memory" -v base="$baseline_alloc_memory" 'BEGIN {if (base != 0) printf "%.1f", ((curr - base) / base) * 100; else print "0"}')
 
                   # Format time diff
-                  if (( $(echo "$time_diff > 0.5" | bc -l) )); then
+                  if (( $(awk -v d="$time_diff" 'BEGIN {print (d > 0.5)}') )); then
                     time_diff_formatted="🔴 +${time_diff}%"
-                  elif (( $(echo "$time_diff < -0.5" | bc -l) )); then
+                  elif (( $(awk -v d="$time_diff" 'BEGIN {print (d < -0.5)}') )); then
                     time_diff_formatted="🟢 ${time_diff}%"
                   else
                     time_diff_formatted="⚪ ~0%"
                   fi
 
-                  # Format memory diff
-                  if (( $(echo "$memory_diff > 0.5" | bc -l) )); then
-                    memory_diff_formatted="🔴 +${memory_diff}%"
-                  elif (( $(echo "$memory_diff < -0.5" | bc -l) )); then
-                    memory_diff_formatted="🟢 ${memory_diff}%"
+                  # Format peak memory diff
+                  if (( $(awk -v d="$peak_memory_diff" 'BEGIN {print (d > 0.5)}') )); then
+                    peak_memory_diff_formatted="🔴 +${peak_memory_diff}%"
+                  elif (( $(awk -v d="$peak_memory_diff" 'BEGIN {print (d < -0.5)}') )); then
+                    peak_memory_diff_formatted="🟢 ${peak_memory_diff}%"
                   else
-                    memory_diff_formatted="⚪ ~0%"
+                    peak_memory_diff_formatted="⚪ ~0%"
                   fi
 
-                  echo "| $query | $mean_formatted | $baseline_mean_formatted | $time_diff_formatted | $memory_formatted | $baseline_memory_formatted | $memory_diff_formatted | $gen0 | $gen1 | $gen2 | $rows | $cols |"
+                  # Format allocated memory diff
+                  if (( $(awk -v d="$alloc_memory_diff" 'BEGIN {print (d > 0.5)}') )); then
+                    alloc_memory_diff_formatted="🔴 +${alloc_memory_diff}%"
+                  elif (( $(awk -v d="$alloc_memory_diff" 'BEGIN {print (d < -0.5)}') )); then
+                    alloc_memory_diff_formatted="🟢 ${alloc_memory_diff}%"
+                  else
+                    alloc_memory_diff_formatted="⚪ ~0%"
+                  fi
+
+                  # Format with baseline in parentheses
+                  mean_with_baseline="${mean_formatted} (${baseline_mean_formatted}) ${time_diff_formatted}"
+                  peak_memory_with_baseline="${peak_memory_formatted} (${baseline_peak_memory_formatted}) ${peak_memory_diff_formatted}"
+                  alloc_memory_with_baseline="${alloc_memory_formatted} (${baseline_alloc_memory_formatted}) ${alloc_memory_diff_formatted}"
+
+                  echo "| $query | $mean_with_baseline | $peak_memory_with_baseline | $alloc_memory_with_baseline | $gen2 | $rows | $cols |"
                 else
-                  echo "| $query | $mean_formatted | - | - | $memory_formatted | - | - | $gen0 | $gen1 | $gen2 | $rows | $cols |"
+                  echo "| $query | $mean_formatted | $peak_memory_formatted | $alloc_memory_formatted | $gen2 | $rows | $cols |"
                 fi
               else
-                echo "| $query | $mean_formatted | - | - | $memory_formatted | - | - | $gen0 | $gen1 | $gen2 | $rows | $cols |"
+                echo "| $query | $mean_formatted | $peak_memory_formatted | $alloc_memory_formatted | $gen2 | $rows | $cols |"
               fi
             done
           }
@@ -675,12 +687,16 @@ jobs:
           cat >> comment.md << 'EOF'
 
           ---
-          *🟢 Improvement | 🔴 Regression | ⚪ No change | Baseline: median of last 10 successful runs on main*
+          *🟢 Improvement | 🔴 Regression | ⚪ No change*
+
+          **Format:** `current_value (baseline) diff%`
+          - **Baseline**: Median of last 10 successful runs on main
 
           **Metrics:**
           - **Mean**: Execution time in milliseconds
-          - **Memory**: Allocated memory per operation in MB
-          - **Gen0/1/2**: Number of garbage collections per generation
+          - **Peak Memory**: Total bytes allocated during operation in MB
+          - **Allocated Memory**: Bytes allocated per operation in MB
+          - **Gen2**: Number of Gen2 garbage collections
           EOF
 
           # Post comment to PR
