@@ -427,26 +427,108 @@ The driver includes a comprehensive test suite using xUnit framework.
 
 #### Prerequisites
 
-Before running tests, you need to configure your Databricks connection:
+Before running tests, you need to create a test configuration file.
 
-1. Create a JSON configuration file with your Databricks credentials:
-   ```json
-   {
-     "uri": "https://your-workspace.cloud.databricks.com/sql/1.0/warehouses/your-warehouse-id",
-     "adbc.spark.auth_type": "oauth",
-     "adbc.databricks.oauth.grant_type": "access_token",
-     "adbc.spark.oauth.access_token": "your-personal-access-token"
-   }
-   ```
+#### Step 1: Create Test Configuration File
 
-2. Set the environment variable pointing to your config file:
-   ```bash
-   # On Windows (PowerShell)
-   $env:DATABRICKS_CONFIG_FILE="C:\path\to\config.json"
+Create a JSON file with your Databricks connection details. All values must be strings.
 
-   # On macOS/Linux
-   export DATABRICKS_CONFIG_FILE="/path/to/config.json"
-   ```
+**Option A: Using Personal Access Token (Recommended for local testing)**
+
+Create `databricks-test-config.json`:
+```json
+{
+  "uri": "https://your-workspace.cloud.databricks.com/sql/1.0/warehouses/your-warehouse-id",
+  "adbc.spark.auth_type": "oauth",
+  "adbc.databricks.oauth.grant_type": "access_token",
+  "adbc.spark.oauth.access_token": "dapi1234567890abcdef",
+  "adbc.connection.catalog": "main",
+  "adbc.connection.db_schema": "default"
+}
+```
+
+**Option B: Using OAuth Client Credentials (M2M)**
+
+Create `databricks-test-config.json`:
+```json
+{
+  "uri": "https://your-workspace.cloud.databricks.com/sql/1.0/warehouses/your-warehouse-id",
+  "adbc.spark.auth_type": "oauth",
+  "adbc.databricks.oauth.grant_type": "client_credentials",
+  "adbc.databricks.oauth.client_id": "your-client-id",
+  "adbc.databricks.oauth.client_secret": "your-client-secret",
+  "adbc.databricks.oauth.scope": "sql",
+  "adbc.connection.catalog": "main",
+  "adbc.connection.db_schema": "default"
+}
+```
+
+**Option C: Using Separate Host and Path (Alternative)**
+
+Create `databricks-test-config.json`:
+```json
+{
+  "adbc.spark.type": "http",
+  "adbc.spark.host": "your-workspace.cloud.databricks.com",
+  "adbc.spark.port": "443",
+  "adbc.spark.path": "/sql/1.0/warehouses/your-warehouse-id",
+  "adbc.spark.auth_type": "oauth",
+  "adbc.databricks.oauth.grant_type": "access_token",
+  "adbc.spark.oauth.access_token": "dapi1234567890abcdef",
+  "adbc.connection.catalog": "main",
+  "adbc.connection.db_schema": "default"
+}
+```
+
+**Configuration Notes:**
+- Save the file in a secure location (e.g., `~/.databricks/test-config.json`)
+- **Never commit this file to version control** - add it to `.gitignore`
+- All property values must be strings (quoted), including numbers
+- The `catalog` and `db_schema` specify which database the tests will use
+- Ensure your user/service principal has access to the specified warehouse and catalog
+
+#### Step 2: Set Environment Variable
+
+Point the `DATABRICKS_TEST_CONFIG_FILE` environment variable to your config file:
+
+**On Windows (PowerShell):**
+```powershell
+$env:DATABRICKS_TEST_CONFIG_FILE="C:\Users\YourName\.databricks\test-config.json"
+```
+
+**On Windows (Command Prompt):**
+```cmd
+set DATABRICKS_TEST_CONFIG_FILE=C:\Users\YourName\.databricks\test-config.json
+```
+
+**On macOS/Linux:**
+```bash
+export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/test-config.json"
+```
+
+**Make it Permanent (macOS/Linux):**
+
+Add to your shell profile (`~/.bashrc`, `~/.zshrc`, or `~/.bash_profile`):
+```bash
+export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/test-config.json"
+```
+
+Then reload: `source ~/.bashrc` (or `~/.zshrc`)
+
+**Verify Configuration:**
+```bash
+# Check the variable is set
+echo $DATABRICKS_TEST_CONFIG_FILE  # macOS/Linux
+echo %DATABRICKS_TEST_CONFIG_FILE%  # Windows CMD
+$env:DATABRICKS_TEST_CONFIG_FILE   # Windows PowerShell
+
+# Verify the file exists and is readable
+cat $DATABRICKS_TEST_CONFIG_FILE  # macOS/Linux
+type %DATABRICKS_TEST_CONFIG_FILE%  # Windows CMD
+Get-Content $env:DATABRICKS_TEST_CONFIG_FILE  # Windows PowerShell
+```
+
+**Note:** The test environment variable is `DATABRICKS_TEST_CONFIG_FILE`, which is different from the driver's runtime environment variable `DATABRICKS_CONFIG_FILE`. This separation allows you to use different configurations for testing vs. production use.
 
 #### Run All Tests
 
@@ -501,7 +583,7 @@ dotnet test --logger "console;verbosity=detailed"
    - Right-click on the test project → Properties
    - Navigate to Debug → General → Open debug launch profiles UI
    - Add environment variable:
-     - Name: `DATABRICKS_CONFIG_FILE`
+     - Name: `DATABRICKS_TEST_CONFIG_FILE`
      - Value: `C:\path\to\your\config.json`
 
 #### Running Tests
@@ -537,8 +619,8 @@ Tests can be skipped if prerequisites aren't met:
 [SkippableFact]
 public void TestRequiringDatabricks()
 {
-    Skip.If(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DATABRICKS_CONFIG_FILE")),
-        "DATABRICKS_CONFIG_FILE not set");
+    Skip.If(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DATABRICKS_TEST_CONFIG_FILE")),
+        "DATABRICKS_TEST_CONFIG_FILE not set");
 
     // Test implementation
 }
