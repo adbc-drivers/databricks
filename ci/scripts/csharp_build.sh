@@ -22,5 +22,5 @@ set -ex
 source_dir=${1}/csharp/src
 
 pushd ${source_dir}
-dotnet build Apache.Arrow.Adbc.Drivers.Databricks.csproj
+dotnet build AdbcDrivers.Databricks.csproj
 popd
