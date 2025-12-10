@@ -612,20 +612,6 @@ dotnet test --logger "console;verbosity=detailed"
 - **Run Failed Tests**: After a test run, right-click failed tests → Run
 - **Live Unit Testing**: Test → Live Unit Testing → Start (Enterprise edition)
 
-### Test Configuration
-
-Tests can be skipped if prerequisites aren't met:
-```csharp
-[SkippableFact]
-public void TestRequiringDatabricks()
-{
-    Skip.If(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DATABRICKS_TEST_CONFIG_FILE")),
-        "DATABRICKS_TEST_CONFIG_FILE not set");
-
-    // Test implementation
-}
-```
-
 ### Continuous Integration
 
 Tests run automatically in CI:
