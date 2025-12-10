@@ -523,6 +523,20 @@ jobs:
           NET8_BASELINE="baseline-net8/median-baseline.json"
           NET472_BASELINE="baseline-net472/median-baseline.json"
 
+          # Debug: Check if baseline files exist
+          echo "=== Baseline File Check ==="
+          echo "NET8_BASELINE=$NET8_BASELINE"
+          echo "NET472_BASELINE=$NET472_BASELINE"
+          ls -lh baseline-net8/ 2>&1 || echo "baseline-net8 directory not found"
+          ls -lh baseline-net472/ 2>&1 || echo "baseline-net472 directory not found"
+          if [ -f "$NET8_BASELINE" ]; then
+            echo "✅ NET8 baseline file exists"
+            echo "First benchmark entry:"
+            jq '.Benchmarks[0] | {Parameters, Mean: .Statistics.Mean, Memory: .Memory.BytesAllocatedPerOperation, Gen2: .Memory.Gen2Collections}' "$NET8_BASELINE" 2>&1 || echo "Failed to parse baseline"
+          else
+            echo "❌ NET8 baseline file NOT found"
+          fi
+
           # Create comment body
           cat > comment.md << 'EOF'
           ## 📊 CloudFetch Benchmark Results
