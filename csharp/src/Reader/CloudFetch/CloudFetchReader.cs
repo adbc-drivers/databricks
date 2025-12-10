@@ -37,25 +37,22 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
     /// Protocol-agnostic - works with both Thrift and REST implementations.
     /// Handles downloading and processing URL-based result sets.
     ///
-    /// Note: This reader receives an ITracingStatement for tracing support (required by TracingReader base class),
-    /// but does not use the Statement property for any CloudFetch operations. All CloudFetch logic is handled
-    /// through the downloadManager.
+    /// Note: This reader receives an ITracingStatement for tracing support.
+    /// Works with both Thrift (IHiveServer2Statement) and REST (StatementExecutionStatement) protocols.
+    /// All CloudFetch logic is handled through the downloadManager.
     /// </summary>
     internal sealed class CloudFetchReader : BaseDatabricksReader
     {
-        private readonly ITracingStatement _statement;
         private ICloudFetchDownloadManager? downloadManager;
         private ArrowStreamReader? currentReader;
         private IDownloadResult? currentDownloadResult;
 
-        protected override ITracingStatement Statement => _statement;
-
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
-        /// Protocol-agnostic constructor using dependency injection.
+        /// Protocol-agnostic constructor.
         /// Works with both Thrift (IHiveServer2Statement) and REST (StatementExecutionStatement) protocols.
         /// </summary>
-        /// <param name="statement">The tracing statement (ITracingStatement works for both protocols).</param>
+        /// <param name="statement">The tracing statement (both protocols implement ITracingStatement).</param>
         /// <param name="schema">The Arrow schema.</param>
         /// <param name="response">The query response (nullable for REST API, which doesn't use IResponse).</param>
         /// <param name="downloadManager">The download manager (already initialized and started).</param>
@@ -66,7 +63,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             ICloudFetchDownloadManager downloadManager)
             : base(statement, schema, response, isLz4Compressed: false) // isLz4Compressed handled by download manager
         {
-            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
             this.downloadManager = downloadManager ?? throw new ArgumentNullException(nameof(downloadManager));
         }
 
@@ -114,13 +110,22 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                             this.currentDownloadResult = await this.downloadManager.GetNextDownloadedFileAsync(cancellationToken);
                             if (this.currentDownloadResult == null)
                             {
+                                Activity.Current?.AddEvent("cloudfetch.reader_no_more_files");
                                 this.downloadManager.Dispose();
                                 this.downloadManager = null;
                                 // No more files
                                 return null;
                             }
 
+                            Activity.Current?.AddEvent("cloudfetch.reader_waiting_for_download", [
+                                new("chunk_index", this.currentDownloadResult.ChunkIndex)
+                            ]);
+
                             await this.currentDownloadResult.DownloadCompletedTask;
+
+                            Activity.Current?.AddEvent("cloudfetch.reader_download_ready", [
+                                new("chunk_index", this.currentDownloadResult.ChunkIndex)
+                            ]);
 
                             // Create a new reader for the downloaded file
                             try

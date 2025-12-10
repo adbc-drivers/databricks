@@ -37,10 +37,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Downloads files from URLs.
+    /// Uses dependency injection to receive IActivityTracer for tracing support.
     /// </summary>
-    internal sealed class CloudFetchDownloader : ICloudFetchDownloader, IActivityTracer
+    internal sealed class CloudFetchDownloader : ICloudFetchDownloader
     {
-        private readonly ITracingStatement? _statement;
+        private readonly IActivityTracer _activityTracer;
         private readonly BlockingCollection<IDownloadResult> _downloadQueue;
         private readonly BlockingCollection<IDownloadResult> _resultQueue;
         private readonly ICloudFetchMemoryBufferManager _memoryManager;
@@ -53,7 +54,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         private readonly int _maxUrlRefreshAttempts;
         private readonly int _urlExpirationBufferSeconds;
         private readonly SemaphoreSlim _downloadSemaphore;
-        private readonly Lazy<ActivityTrace> _fallbackTrace;
         private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
         private readonly ArrayPool<byte>? _lz4BufferPool;
         private Task? _downloadTask;
@@ -65,7 +65,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class.
         /// </summary>
-        /// <param name="statement">The tracing statement for Activity context and connection access (nullable for protocol-agnostic usage).</param>
+        /// <param name="activityTracer">The activity tracer for tracing support (dependency injection).</param>
         /// <param name="downloadQueue">The queue of downloads to process.</param>
         /// <param name="resultQueue">The queue to add completed downloads to.</param>
         /// <param name="memoryManager">The memory buffer manager.</param>
@@ -73,7 +73,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <param name="resultFetcher">The result fetcher that manages URLs.</param>
         /// <param name="config">The CloudFetch configuration.</param>
         public CloudFetchDownloader(
-            ITracingStatement? statement,
+            IActivityTracer activityTracer,
             BlockingCollection<IDownloadResult> downloadQueue,
             BlockingCollection<IDownloadResult> resultQueue,
             ICloudFetchMemoryBufferManager memoryManager,
@@ -81,7 +81,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             ICloudFetchResultFetcher resultFetcher,
             CloudFetchConfiguration config)
         {
-            _statement = statement;
+            _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
             _resultQueue = resultQueue ?? throw new ArgumentNullException(nameof(resultQueue));
             _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
@@ -99,14 +99,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             _memoryStreamManager = config.MemoryStreamManager;
             _lz4BufferPool = config.Lz4BufferPool;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
-            _fallbackTrace = new Lazy<ActivityTrace>(() => new ActivityTrace("CloudFetchDownloader", "1.0.0"));
             _isCompleted = false;
         }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class for testing.
         /// </summary>
-        /// <param name="statement">The tracing statement for Activity context (nullable for testing).</param>
+        /// <param name="activityTracer">The activity tracer for tracing support (dependency injection).</param>
         /// <param name="downloadQueue">The queue of downloads to process.</param>
         /// <param name="resultQueue">The queue to add completed downloads to.</param>
         /// <param name="memoryManager">The memory buffer manager.</param>
@@ -117,7 +116,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
         /// <param name="maxRetries">Maximum retry attempts (optional, default 3).</param>
         /// <param name="retryDelayMs">Delay between retries in ms (optional, default 1000).</param>
         internal CloudFetchDownloader(
-            ITracingStatement? statement,
+            IActivityTracer activityTracer,
             BlockingCollection<IDownloadResult> downloadQueue,
             BlockingCollection<IDownloadResult> resultQueue,
             ICloudFetchMemoryBufferManager memoryManager,
@@ -128,7 +127,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             int maxRetries = 3,
             int retryDelayMs = 1000)
         {
-            _statement = statement;
+            _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
             _resultQueue = resultQueue ?? throw new ArgumentNullException(nameof(resultQueue));
             _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
@@ -144,7 +143,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
             _memoryStreamManager = null;
             _lz4BufferPool = null;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
-            _fallbackTrace = new Lazy<ActivityTrace>(() => new ActivityTrace("CloudFetchDownloader", "1.0.0"));
             _isCompleted = false;
         }
 
@@ -219,6 +217,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 // Try to take the next result from the queue
                 IDownloadResult result = await Task.Run(() => _resultQueue.Take(cancellationToken), cancellationToken);
 
+                Activity.Current?.AddEvent("cloudfetch.result_dequeued", [
+                    new("chunk_index", result?.ChunkIndex ?? -1),
+                    new("is_end_guard", result == EndOfResultsGuard.Instance)
+                ]);
+
                 // Check if this is the end of results guard
                 if (result == EndOfResultsGuard.Instance)
                 {
@@ -254,7 +257,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
         private async Task DownloadFilesAsync(CancellationToken cancellationToken)
         {
-            await this.TraceActivityAsync(async activity =>
+            await _activityTracer.TraceActivityAsync(async activity =>
             {
                 await Task.Yield();
 
@@ -271,11 +274,21 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                     var downloadTaskCompletionSource = new TaskCompletionSource<bool>();
 
                     // Process items from the download queue until it's completed
+                    activity?.AddEvent("cloudfetch.download_loop_start", [
+                        new("download_queue_count", _downloadQueue.Count)
+                    ]);
+
                     foreach (var downloadResult in _downloadQueue.GetConsumingEnumerable(cancellationToken))
                     {
+                        activity?.AddEvent("cloudfetch.download_item_dequeued", [
+                            new("chunk_index", downloadResult?.ChunkIndex ?? -1),
+                            new("is_end_guard", downloadResult == EndOfResultsGuard.Instance)
+                        ]);
+
                         // Check if there's an error before processing more downloads
                         if (HasError)
                         {
+                            activity?.AddEvent("cloudfetch.download_loop_error_break");
                             // Add the failed download result to the queue to signal the error
                             // This will be caught by GetNextDownloadedFileAsync
                             break;
@@ -284,6 +297,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Check if this is the end of results guard
                         if (downloadResult == EndOfResultsGuard.Instance)
                         {
+                            activity?.AddEvent("cloudfetch.end_of_results_guard_received");
                             // Wait for all active downloads to complete
                             if (downloadTasks.Count > 0)
                             {
@@ -314,6 +328,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Check if the URL is expired or about to expire
                         if (downloadResult.IsExpiredOrExpiringSoon(_urlExpirationBufferSeconds))
                         {
+                            activity?.AddEvent("cloudfetch.url_expired_refreshing", [
+                                new("chunk_index", downloadResult.ChunkIndex),
+                                new("start_row_offset", downloadResult.StartRowOffset)
+                            ]);
                             // Get refreshed URLs starting from this offset
                             var refreshedResults = await _resultFetcher.RefreshUrlsAsync(downloadResult.StartRowOffset, cancellationToken);
                             var refreshedResult = refreshedResults.FirstOrDefault(r => r.StartRowOffset == downloadResult.StartRowOffset);
@@ -333,6 +351,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Acquire memory for this download (FIFO - acquired in sequential loop)
                         long size = downloadResult.Size;
                         await _memoryManager.AcquireMemoryAsync(size, cancellationToken).ConfigureAwait(false);
+                        
+                        activity?.AddEvent("cloudfetch.download_slot_acquired", [
+                            new("chunk_index", downloadResult.ChunkIndex)
+                        ]);
 
                         // Start the download task
                         Task downloadTask = DownloadFileAsync(downloadResult, cancellationToken)
@@ -378,6 +400,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Add the result to the result queue add the result here to assure the download sequence.
                         _resultQueue.Add(downloadResult, cancellationToken);
 
+                        activity?.AddEvent("cloudfetch.result_enqueued", [
+                            new("chunk_index", downloadResult.ChunkIndex),
+                            new("result_queue_count", _resultQueue.Count)
+                        ]);
+
                         // If there's an error, stop processing more downloads
                         if (HasError)
                         {
@@ -420,7 +447,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
         private async Task DownloadFileAsync(IDownloadResult downloadResult, CancellationToken cancellationToken)
         {
-            await this.TraceActivityAsync(async activity =>
+            await _activityTracer.TraceActivityAsync(async activity =>
             {
                 string url = downloadResult.FileUrl;
                 string sanitizedUrl = SanitizeUrl(downloadResult.FileUrl);
@@ -671,18 +698,5 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                 return "cloud-storage-url";
             }
         }
-
-        // IActivityTracer implementation - delegates to statement (or returns lazy-initialized fallback if null)
-        // TODO(PECO-2838): Verify ActivityTrace propagation works correctly for Statement Execution API (REST).
-        // The fallback trace is used when statement is null (shouldn't happen in practice).
-        // For REST API, we need to ensure the StatementExecutionStatement implements ITracingStatement
-        // and properly propagates trace context through the CloudFetch pipeline.
-        ActivityTrace IActivityTracer.Trace => _statement?.Trace ?? _fallbackTrace.Value;
-
-        string? IActivityTracer.TraceParent => _statement?.TraceParent;
-
-        public string AssemblyVersion => _statement?.AssemblyVersion ?? string.Empty;
-
-        public string AssemblyName => _statement?.AssemblyName ?? string.Empty;
     }
 }

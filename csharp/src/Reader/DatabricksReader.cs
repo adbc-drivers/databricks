@@ -41,10 +41,8 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
         int index;
         IArrowReader? reader;
 
-        protected override ITracingStatement Statement => _statement;
-
         public DatabricksReader(IHiveServer2Statement statement, Schema schema, IResponse response, TFetchResultsResp? initialResults, bool isLz4Compressed)
-            : base(statement, schema, response, isLz4Compressed)
+            : base(statement, schema, response, isLz4Compressed) // IHiveServer2Statement implements IActivityTracer
         {
             _statement = statement;
 

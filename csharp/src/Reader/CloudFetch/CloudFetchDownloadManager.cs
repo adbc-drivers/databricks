@@ -75,8 +75,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 
             if (config == null) throw new ArgumentNullException(nameof(config));
 
-            // Set HTTP client timeout
-            _httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);
+            // Note: Don't set _httpClient.Timeout here - it should already be configured
+            // when the HttpClient was created, and modifying it after requests have started
+            // throws InvalidOperationException.
         }
 
         /// <inheritdoc />

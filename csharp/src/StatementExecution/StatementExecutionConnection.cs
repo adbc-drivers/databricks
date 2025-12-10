@@ -31,14 +31,16 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
     /// <summary>
     /// Connection implementation using the Databricks Statement Execution REST API.
     /// Manages session lifecycle and creates statements for query execution.
+    /// Extends TracingConnection for consistent tracing support with Thrift protocol.
     /// </summary>
-    internal class StatementExecutionConnection : AdbcConnection, IActivityTracer
+    internal class StatementExecutionConnection : TracingConnection
     {
         private readonly IStatementExecutionClient _client;
         private readonly string _warehouseId;
         private readonly string? _catalog;
         private readonly string? _schema;
         private readonly HttpClient _httpClient;
+        private readonly HttpClient _cloudFetchHttpClient; // Separate HttpClient without auth headers for CloudFetch downloads
         private readonly IReadOnlyDictionary<string, string> _properties;
         private readonly bool _ownsHttpClient;
 
@@ -57,9 +59,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
         private readonly System.Buffers.ArrayPool<byte> _lz4BufferPool;
 
-        // Tracing support
-        private readonly Lazy<ActivityTrace> _activityTrace;
-        private readonly string? _traceParent;
+        // Tracing propagation configuration
         private readonly bool _tracePropagationEnabled;
         private readonly string _traceParentHeaderName;
         private readonly bool _traceStateEnabled;
@@ -67,11 +67,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         // Authentication support
         private HttpClient? _authHttpClient;
         private readonly string? _identityFederationClientId;
-
-        // Default retry configuration
-        private const int DefaultTemporarilyUnavailableRetryTimeout = 900; // 15 minutes
-        private const int DefaultRateLimitRetryTimeout = 120; // 2 minutes
-        private const int DefaultCloudFetchTimeoutMinutes = 5;
 
         /// <summary>
         /// Creates a new Statement Execution connection with internally managed HTTP client.
@@ -111,6 +106,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             Microsoft.IO.RecyclableMemoryStreamManager? memoryStreamManager,
             System.Buffers.ArrayPool<byte>? lz4BufferPool,
             bool ownsHttpClient)
+            : base(properties) // Initialize TracingConnection base class
         {
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
             _ownsHttpClient = ownsHttpClient;
@@ -200,16 +196,11 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             _lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
 
-            // Tracing configuration
-            // Note: _traceParent is used by IActivityTracer.TraceParent property for W3C trace context propagation
-            // It can be set via the traceparent property if needed for distributed tracing correlation
-            properties.TryGetValue("traceparent", out _traceParent);
+            // Tracing propagation configuration
+            // Base class (TracingConnection) already handles ActivityTrace initialization
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
             _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
             _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
-            _activityTrace = new Lazy<ActivityTrace>(() => new ActivityTrace(
-                activitySourceName: "Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution",
-                activitySourceVersion: AssemblyVersion));
 
             // Authentication configuration
             if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
@@ -226,6 +217,15 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             {
                 _httpClient = CreateHttpClient(properties);
             }
+
+            // Create a separate HTTP client for CloudFetch downloads (without auth headers)
+            // This is needed because CloudFetch uses pre-signed URLs from cloud storage (S3, Azure Blob, etc.)
+            // and those services reject requests with multiple authentication methods
+            int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
+            _cloudFetchHttpClient = new HttpClient()
+            {
+                Timeout = TimeSpan.FromMinutes(timeoutMinutes)
+            };
 
             // Create REST API client
             _client = new StatementExecutionClient(_httpClient, baseUrl);
@@ -245,9 +245,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
             // Retry configuration
             bool temporarilyUnavailableRetry = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TemporarilyUnavailableRetry, true);
             bool rateLimitRetry = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.RateLimitRetry, true);
-            int temporarilyUnavailableRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.TemporarilyUnavailableRetryTimeout, DefaultTemporarilyUnavailableRetryTimeout);
-            int rateLimitRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.RateLimitRetryTimeout, DefaultRateLimitRetryTimeout);
-            int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DefaultCloudFetchTimeoutMinutes);
+            int temporarilyUnavailableRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.TemporarilyUnavailableRetryTimeout, DatabricksConstants.DefaultTemporarilyUnavailableRetryTimeout);
+            int rateLimitRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.RateLimitRetryTimeout, DatabricksConstants.DefaultRateLimitRetryTimeout);
+            int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
 
             var config = new HttpHandlerFactory.HandlerConfig
             {
@@ -382,7 +382,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 _pollingIntervalMs,
                 _properties,
                 _recyclableMemoryStreamManager,
-                _lz4BufferPool);
+                _lz4BufferPool,
+                _cloudFetchHttpClient,
+                this); // Pass connection as TracingConnection for tracing support
         }
 
         /// <summary>
@@ -417,9 +419,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
         /// </summary>
         public override void Dispose()
         {
-            using var activity = Trace.ActivitySource.StartActivity("StatementExecutionConnection.Dispose");
-            activity?.SetTag("session_id", _sessionId);
-            activity?.SetTag("warehouse_id", _warehouseId);
+            this.TraceActivity(activity =>
+            {
+                activity?.SetTag("session_id", _sessionId);
+                activity?.SetTag("warehouse_id", _warehouseId);
 
             if (_sessionId != null)
             {
@@ -448,26 +451,18 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 _httpClient.Dispose();
             }
 
+            // Dispose the CloudFetch HTTP client (we always own it)
+            _cloudFetchHttpClient.Dispose();
+
             // Dispose the auth HTTP client if it was created
             _authHttpClient?.Dispose();
 
             _sessionLock.Dispose();
+            });
         }
 
-        #region IActivityTracer Implementation
-
-        /// <inheritdoc/>
-        public ActivityTrace Trace => _activityTrace.Value;
-
-        /// <inheritdoc/>
-        public string? TraceParent => _traceParent;
-
-        /// <inheritdoc/>
-        public string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
-
-        /// <inheritdoc/>
-        public string AssemblyName => "Apache.Arrow.Adbc.Drivers.Databricks";
-
-        #endregion
+        // TracingConnection provides IActivityTracer implementation
+        public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
+        public override string AssemblyName => "Apache.Arrow.Adbc.Drivers.Databricks";
     }
 }
