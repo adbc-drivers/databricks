@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765243956659,
+  "lastUpdate": 1765353530413,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Gen2 Collections (.NET 8.0)": [
@@ -530,6 +530,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 85,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "77c5d1da686d4e9e75b962e351d2d0ec5ded25e5",
+          "message": "fix(csharp): implement FIFO memory acquisition to prevent starvation in CloudFetch (#56)\n\nThis is cherry pick of this PR:\nhttps://github.com/apache/arrow-adbc/pull/3756\n\nFixes memory starvation issue in CloudFetch download pipeline where\nnewer downloads could win memory allocation over older waiting\ndownloads, causing indefinite delays.\n\n## Problem\nThe CloudFetch downloader was acquiring memory inside parallel download\ntasks with a polling-based wait (10ms intervals). This non-FIFO behavior\ncaused memory starvation:\n\n1. Multiple download tasks acquire semaphore slots and start polling for\nmemory\n2. All tasks wake up simultaneously every 10ms to check memory\navailability\n3. When memory becomes available, any waiting task could acquire it\n(non-deterministic)\n4. Newer downloads (e.g., file 5, 7, 8) could repeatedly win the race\nover older downloads (e.g., file 4)\n5. File 4 never gets memory despite waiting the longest → **indefinite\nstarvation**\n\nExample scenario with 200MB memory, 50MB files, 3 parallel downloads:\n- Files 1, 2, 3 download (150MB used)\n- File 1 completes and releases 50MB\n- Files 4, 5, 6 are all waiting for memory\n- File 5 wins the race and acquires the 50MB\n- File 2 completes, file 7 wins the race\n- File 3 completes, file 8 wins the race\n- File 4 never gets memory because files 5, 7, 8 keep winning\n\n## Solution\nMove memory acquisition from inside parallel download tasks to the main\nsequential loop. This ensures FIFO ordering:\n\n1. Main loop acquires memory sequentially for each download\n2. Only after memory is acquired does the download task start\n3. Downloads are guaranteed to get memory in the order they were queued\n4. No starvation possible\n\nAdditionally, increased default memory buffer from 100MB to 200MB to\nallow more parallel downloads without hitting memory limits.\n\n## Changes\n- **CloudFetchDownloader.cs**: \n- Moved `AcquireMemoryAsync` from inside `DownloadFileAsync` to main\nloop (line 278-280)\n  - Ensures FIFO ordering before spawning download tasks\n- **CloudFetchDownloadManager.cs**: \n  - Increased `DefaultMemoryBufferSizeMB` from 100 to 200\n  - Better performance for large result sets\n\n## Testing\n- Manually verified on fast VM with Power BI Desktop\n- Existing CloudFetchDownloader tests still pass\n- FIFO ordering prevents the starvation scenario\n\n## TODO\nThe memory buffer design have a flaw that it only captures the\ncompressed size, but does not cover decompressed size. There are a\ncouple of options we can take but I wanna land this first since this one\nactually can get blocked for customer.\n\n---------\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-12-09T23:46:03-08:00",
+          "tree_id": "47fd53c34e9ec9db672ad2f19597faa8b2a55475",
+          "url": "https://github.com/adbc-drivers/databricks/commit/77c5d1da686d4e9e75b962e351d2d0ec5ded25e5"
+        },
+        "date": 1765353529508,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 69,
+            "unit": "collections"
+          },
+          {
+            "name": "customer",
+            "value": 2,
+            "unit": "collections"
+          },
+          {
+            "name": "inventory",
+            "value": 17,
+            "unit": "collections"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 77,
+            "unit": "collections"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 47,
+            "unit": "collections"
+          },
+          {
+            "name": "web_sales",
+            "value": 42,
+            "unit": "collections"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 77,
             "unit": "collections"
           }
         ]
