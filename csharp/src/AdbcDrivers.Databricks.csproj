@@ -4,7 +4,7 @@
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <LangVersion>latest</LangVersion>
     <SignAssembly>true</SignAssembly>
-    <AssemblyOriginatorKeyFile>..\arrow-adbc\csharp\ApacheArrow.snk</AssemblyOriginatorKeyFile>
+    <AssemblyOriginatorKeyFile>..\AdbcDrivers.snk</AssemblyOriginatorKeyFile>
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
