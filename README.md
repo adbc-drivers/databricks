@@ -419,6 +419,138 @@ Files rotate automatically with a pattern: `apache.arrow.adbc.drivers.databricks
 
 Default: 999 files maximum, 1024 KB each.
 
+## Testing
+
+The driver includes a comprehensive test suite using xUnit framework.
+
+### Running Tests Locally
+
+#### Prerequisites
+
+Before running tests, you need to configure your Databricks connection:
+
+1. Create a JSON configuration file with your Databricks credentials:
+   ```json
+   {
+     "uri": "https://your-workspace.cloud.databricks.com/sql/1.0/warehouses/your-warehouse-id",
+     "adbc.spark.auth_type": "oauth",
+     "adbc.databricks.oauth.grant_type": "access_token",
+     "adbc.spark.oauth.access_token": "your-personal-access-token"
+   }
+   ```
+
+2. Set the environment variable pointing to your config file:
+   ```bash
+   # On Windows (PowerShell)
+   $env:DATABRICKS_CONFIG_FILE="C:\path\to\config.json"
+
+   # On macOS/Linux
+   export DATABRICKS_CONFIG_FILE="/path/to/config.json"
+   ```
+
+#### Run All Tests
+
+From the test project directory:
+```bash
+cd csharp/test
+dotnet test
+```
+
+Run tests for a specific framework:
+```bash
+# Test on .NET 8.0
+dotnet test -f net8.0
+
+# Test on .NET Framework 4.7.2 (Windows only)
+dotnet test -f net472
+```
+
+#### Run Specific Tests
+
+Run a specific test class:
+```bash
+dotnet test --filter "FullyQualifiedName~TracingDelegatingHandlerTest"
+```
+
+Run a specific test method:
+```bash
+dotnet test --filter "FullyQualifiedName~TracingDelegatingHandlerTest.TestTracePropagation"
+```
+
+Run tests matching a pattern:
+```bash
+# Run all tests with "CloudFetch" in the name
+dotnet test --filter "FullyQualifiedName~CloudFetch"
+```
+
+#### Verbose Test Output
+
+Get detailed test output:
+```bash
+dotnet test --logger "console;verbosity=detailed"
+```
+
+### Debugging Tests in Visual Studio
+
+#### Setup
+
+1. **Open Solution**
+   - Open `csharp/Apache.Arrow.Adbc.Drivers.Databricks.sln` in Visual Studio
+
+2. **Set Environment Variable**
+   - Right-click on the test project → Properties
+   - Navigate to Debug → General → Open debug launch profiles UI
+   - Add environment variable:
+     - Name: `DATABRICKS_CONFIG_FILE`
+     - Value: `C:\path\to\your\config.json`
+
+#### Running Tests
+
+1. **Test Explorer**
+   - Open Test Explorer: Test → Test Explorer (or Ctrl+E, T)
+   - Build the solution to discover all tests
+   - Tests will appear grouped by namespace and class
+
+2. **Run/Debug Tests**
+   - **Run a test**: Right-click test → Run
+   - **Debug a test**: Right-click test → Debug
+   - **Run all tests**: Click "Run All" in Test Explorer
+   - **Run tests in a class**: Right-click class → Run
+
+3. **Set Breakpoints**
+   - Open the test file or source code
+   - Click in the left margin to set breakpoints
+   - Debug the test - execution will pause at breakpoints
+   - Use F10 (Step Over), F11 (Step Into), F5 (Continue)
+
+#### Tips
+
+- **Filter tests**: Use the search box in Test Explorer to filter by name
+- **Group by**: Use the grouping dropdown to organize by Class, Namespace, or Project
+- **Run Failed Tests**: After a test run, right-click failed tests → Run
+- **Live Unit Testing**: Test → Live Unit Testing → Start (Enterprise edition)
+
+### Test Configuration
+
+Tests can be skipped if prerequisites aren't met:
+```csharp
+[SkippableFact]
+public void TestRequiringDatabricks()
+{
+    Skip.If(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DATABRICKS_CONFIG_FILE")),
+        "DATABRICKS_CONFIG_FILE not set");
+
+    // Test implementation
+}
+```
+
+### Continuous Integration
+
+Tests run automatically in CI:
+- On every push to `main`
+- On every pull request
+- Multiple frameworks: .NET 8.0 (Linux) and .NET Framework 4.7.2 (Windows)
+
 ## Benchmarking
 
 The C# driver includes a comprehensive benchmark suite for CloudFetch performance testing. For complete documentation including:
