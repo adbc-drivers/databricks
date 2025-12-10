@@ -520,8 +520,8 @@ jobs:
           # Find the result files
           NET8_RESULTS=$(find results-net8 -name "*-report-full-compressed.json" | head -1)
           NET472_RESULTS=$(find results-net472 -name "*-report-full-compressed.json" | head -1)
-          NET8_BASELINE=$(find baseline-net8 -name "*-report-full-compressed.json" 2>/dev/null | head -1)
-          NET472_BASELINE=$(find baseline-net472 -name "*-report-full-compressed.json" 2>/dev/null | head -1)
+          NET8_BASELINE="baseline-net8/median-baseline.json"
+          NET472_BASELINE="baseline-net472/median-baseline.json"
 
           # Create comment body
           cat > comment.md << 'EOF'
