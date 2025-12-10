@@ -23,14 +23,12 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader;
 using Apache.Arrow;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Arrow.Adbc.Drivers.Databricks;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Types;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -38,7 +36,7 @@ using Moq;
 using Moq.Protected;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
+namespace AdbcDrivers.Databricks.Tests.Unit
 {
     /// <summary>
     /// Testable subclass of DatabricksCompositeReader for unit testing
@@ -184,7 +182,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
                     Results = new TRowSet()
                 },
                 ResultSetMetadata = new TGetResultSetMetadataResp
-                {},
+                { },
                 __isset = new TSparkDirectResults.Isset { resultSet = true }
             };
 
@@ -252,7 +250,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
             {
                 Results = new TRowSet
                 {
-                    ResultLinks = new List<TSparkArrowResultLink> {}
+                    ResultLinks = new List<TSparkArrowResultLink> { }
                 }
             };
 

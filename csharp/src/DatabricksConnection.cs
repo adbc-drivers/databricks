@@ -24,26 +24,26 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Auth;
+using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.Databricks.Reader;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2.Client;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
-using Apache.Arrow.Adbc.Drivers.Databricks.Http;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
 using Thrift.Protocol;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     internal class DatabricksConnection : SparkHttpConnection
     {

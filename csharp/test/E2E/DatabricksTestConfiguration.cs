@@ -24,7 +24,7 @@
 using System.Text.Json.Serialization;
 using Apache.Arrow.Adbc.Tests.Drivers.Apache.Spark;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     public class DatabricksTestConfiguration : SparkTestConfiguration
     {

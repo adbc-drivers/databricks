@@ -27,9 +27,8 @@ using System.IO;
 using K4os.Compression.LZ4.Encoders;
 using K4os.Compression.LZ4.Streams;
 using K4os.Compression.LZ4.Streams.Frames;
-using K4os.Compression.LZ4.Streams.Internal;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Custom LZ4 frame reader that uses a custom ArrayPool to support pooling of 4MB+ buffers.

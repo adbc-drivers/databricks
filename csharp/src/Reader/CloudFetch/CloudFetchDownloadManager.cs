@@ -27,7 +27,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Manages the CloudFetch download pipeline.

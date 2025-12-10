@@ -20,10 +20,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
+using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc.Tracing;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Statement Execution API-specific implementation that fetches result chunks

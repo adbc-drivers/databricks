@@ -20,10 +20,10 @@
 
 using System.Collections.Generic;
 using System.Text.Json;
-using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
+using AdbcDrivers.Databricks.StatementExecution;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
+namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
     /// <summary>
     /// Tests for Statement Execution API model serialization and deserialization.

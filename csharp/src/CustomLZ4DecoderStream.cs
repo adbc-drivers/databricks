@@ -28,7 +28,7 @@ using System.Threading.Tasks;
 using K4os.Compression.LZ4.Encoders;
 using K4os.Compression.LZ4.Streams;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Custom LZ4 decoder stream that uses CustomLZ4FrameReader for buffer pooling.

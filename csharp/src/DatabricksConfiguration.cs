@@ -26,7 +26,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Configuration class for Databricks connection properties loaded from JSON files.

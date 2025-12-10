@@ -18,10 +18,9 @@
 * limitations under the License.
 */
 
-using Apache.Arrow.Adbc.Drivers.Databricks;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
+namespace AdbcDrivers.Databricks.Tests.Unit
 {
     /// <summary>
     /// Tests for DatabricksParameters constants to ensure they follow correct naming conventions.

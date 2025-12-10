@@ -20,13 +20,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch;
-using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.StatementExecution;
 using Moq;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
 {
     public class StatementExecutionResultFetcherTests : IDisposable
     {

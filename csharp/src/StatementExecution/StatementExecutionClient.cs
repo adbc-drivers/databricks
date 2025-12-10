@@ -22,7 +22,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
+namespace AdbcDrivers.Databricks.StatementExecution
 {
     /// <summary>
     /// Interface for Statement Execution API operations.

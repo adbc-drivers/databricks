@@ -28,7 +28,7 @@ using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Hive.Service.Rpc.Thrift;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
+namespace AdbcDrivers.Databricks.Reader
 {
     /// <summary>
     /// Service that periodically polls the operation status of a Databricks warehouse query to keep it alive.

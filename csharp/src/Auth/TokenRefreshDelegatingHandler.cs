@@ -27,7 +27,7 @@ using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Auth
+namespace AdbcDrivers.Databricks.Auth
 {
     /// <summary>
     /// HTTP message handler that automatically refreshes OAuth tokens before they expire.

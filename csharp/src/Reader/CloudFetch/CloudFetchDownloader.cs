@@ -30,10 +30,11 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Microsoft.IO;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Downloads files from URLs.

@@ -21,7 +21,7 @@
 * limitations under the License.
 */
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Auth
+namespace AdbcDrivers.Databricks.Auth
 {
     /// <summary>
     /// Enum representing the OAuth grant types supported by the Databricks driver.

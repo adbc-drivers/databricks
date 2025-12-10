@@ -23,13 +23,14 @@
 
 using System;
 using System.IO;
+using Apache.Arrow;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
+using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using Apache.Hive.Service.Rpc.Thrift;
-using Apache.Arrow.Ipc;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     internal class DatabricksSchemaParser : SchemaParser
     {

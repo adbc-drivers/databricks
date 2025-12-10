@@ -24,9 +24,10 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using Apache.Arrow;
 using Microsoft.IO;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Configuration for the CloudFetch download pipeline.

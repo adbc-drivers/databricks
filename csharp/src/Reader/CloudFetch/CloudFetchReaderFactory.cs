@@ -26,13 +26,14 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net.Http;
+using AdbcDrivers.Databricks.StatementExecution;
+using Apache.Arrow;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
 using Microsoft.IO;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Factory for creating CloudFetch readers and related components.

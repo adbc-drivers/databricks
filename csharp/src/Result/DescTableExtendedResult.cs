@@ -23,12 +23,11 @@
 
 using System;
 using System.Collections.Generic;
-using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using static Apache.Arrow.Adbc.Drivers.Apache.Hive2.HiveServer2Connection;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Result
+namespace AdbcDrivers.Databricks.Result
 {
     /// <summary>
     /// The response of SQL `DESC EXTENDED TABLE <table_name> AS JSON`
@@ -171,7 +170,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Result
                         ColumnTypeId.INTEGER or ColumnTypeId.FLOAT or ColumnTypeId.DATE => 4,
                         ColumnTypeId.BIGINT or ColumnTypeId.DOUBLE or ColumnTypeId.TIMESTAMP or ColumnTypeId.TIMESTAMP_WITH_TIMEZONE => 8,
                         ColumnTypeId.CHAR => Type.Length,
-                        ColumnTypeId.VARCHAR => Type.Name.Trim().ToUpper() == "STRING" ? int.MaxValue: Type.Length,
+                        ColumnTypeId.VARCHAR => Type.Name.Trim().ToUpper() == "STRING" ? int.MaxValue : Type.Length,
                         ColumnTypeId.DECIMAL => Type.Precision ?? 0,
                         ColumnTypeId.NULL => 1,
                         _ => Type.Name.Trim().ToUpper() == "INTERVAL" ? GetIntervalSize() : 0
@@ -266,7 +265,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Result
             /// Length of characters, only for character types (CHAR, VARCHAR)
             /// </summary>
             [JsonPropertyName("length")]
-            public int? Length {get; set; }
+            public int? Length { get; set; }
 
             /// <summary>
             /// Get the full type name e.g. DECIMAL(10,2), map<string,int>
@@ -283,9 +282,9 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Result
                         "CHAR" or "VARCHAR" => $"{normalizedTypeName}({Length ?? 1})",
                         "DECIMAL" or "NUMERIC" => Precision != null ? $"{normalizedTypeName}({Precision},{Scale ?? 0})" : normalizedTypeName,
                         "ARRAY" => ElementType != null ? $"ARRAY<{ElementType.FullTypeName}>" : "ARRAY<>",
-                        "MAP" => (KeyType != null && ValueType != null) ? $"MAP<{KeyType!.FullTypeName}, {ValueType!.FullTypeName}>":"Map<>",
+                        "MAP" => (KeyType != null && ValueType != null) ? $"MAP<{KeyType!.FullTypeName}, {ValueType!.FullTypeName}>" : "Map<>",
                         "STRUCT" => BuildStructTypeName(),
-                        "INTERVAL" => (StartUnit != null && EndUnit != null) ? $"INTERVAL {StartUnit.ToUpper()} TO {EndUnit.ToUpper()}": "INTERVAL",
+                        "INTERVAL" => (StartUnit != null && EndUnit != null) ? $"INTERVAL {StartUnit.ToUpper()} TO {EndUnit.ToUpper()}" : "INTERVAL",
                         "TIMESTAMP_LTZ" => "TIMESTAMP",
                         _ => normalizedTypeName
                     };
@@ -355,7 +354,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Result
             }
 
             // Remove the outer brackets
-            var innerContent = constraintString.Substring(1, constraintString.Length-2).Trim();
+            var innerContent = constraintString.Substring(1, constraintString.Length - 2).Trim();
 
             // Parse individual constraints manually to handle backtick-quoted identifiers with special characters
             var constraints = ParseConstraintList(innerContent);

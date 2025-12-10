@@ -26,12 +26,13 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
+using Apache.Arrow;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
+namespace AdbcDrivers.Databricks.Reader
 {
     /// <summary>
     /// A composite reader for Databricks that delegates to either CloudFetchReader or DatabricksReader

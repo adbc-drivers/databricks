@@ -26,7 +26,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Auth
+namespace AdbcDrivers.Databricks.Auth
 {
     internal class OAuthDelegatingHandler : DelegatingHandler
     {
@@ -42,7 +42,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Auth
         {
             string accessToken = await _tokenProvider.GetAccessTokenAsync(cancellationToken);
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-            HttpResponseMessage response =  await base.SendAsync(request, cancellationToken);
+            HttpResponseMessage response = await base.SendAsync(request, cancellationToken);
             return response;
         }
     }

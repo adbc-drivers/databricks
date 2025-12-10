@@ -16,20 +16,15 @@
 
 using System;
 using System.Collections.Generic;
-using System.Net;
 using System.Net.Http;
 using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
+using AdbcDrivers.Databricks.StatementExecution;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Databricks;
-using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
-using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
 using Moq;
-using Moq.Protected;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
+namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
     /// <summary>
     /// Unit tests for StatementExecutionConnection OAuth and token authentication.

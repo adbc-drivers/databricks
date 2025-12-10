@@ -22,9 +22,8 @@
 */
 
 using Apache.Hive.Service.Rpc.Thrift;
-using System;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Negotiates protocol features between client and server based on protocol version.
@@ -118,10 +117,10 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
         #region Protocol Version V8 Features
 
-       /**
-        * V8 introduced the following features:
-        * - Parameterized queries support
-        */
+        /**
+         * V8 introduced the following features:
+         * - Parameterized queries support
+         */
 
         #endregion
 

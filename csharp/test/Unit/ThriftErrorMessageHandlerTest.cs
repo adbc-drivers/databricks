@@ -21,15 +21,13 @@
 * limitations under the License.
 */
 
-using System;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
+namespace AdbcDrivers.Databricks.Tests.Unit
 {
     /// <summary>
     /// Tests for the ThriftErrorMessageHandler class.

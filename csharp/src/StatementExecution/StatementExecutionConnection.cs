@@ -17,16 +17,16 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Http;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
-using Apache.Arrow.Adbc.Drivers.Databricks.Http;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
+namespace AdbcDrivers.Databricks.StatementExecution
 {
     /// <summary>
     /// Connection implementation using the Databricks Statement Execution REST API.
@@ -424,45 +424,45 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
                 activity?.SetTag("session_id", _sessionId);
                 activity?.SetTag("warehouse_id", _warehouseId);
 
-            if (_sessionId != null)
-            {
-                try
+                if (_sessionId != null)
                 {
-                    activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.start"));
-                    // Delete session synchronously during dispose
-                    _client.DeleteSessionAsync(_sessionId, _warehouseId, CancellationToken.None).GetAwaiter().GetResult();
-                    activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.success"));
+                    try
+                    {
+                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.start"));
+                        // Delete session synchronously during dispose
+                        _client.DeleteSessionAsync(_sessionId, _warehouseId, CancellationToken.None).GetAwaiter().GetResult();
+                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.success"));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Best effort - ignore errors during dispose but trace them
+                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.error",
+                            tags: new System.Diagnostics.ActivityTagsCollection { { "error", ex.Message } }));
+                    }
+                    finally
+                    {
+                        _sessionId = null;
+                    }
                 }
-                catch (Exception ex)
+
+                // Dispose the HTTP client if we own it
+                if (_ownsHttpClient)
                 {
-                    // Best effort - ignore errors during dispose but trace them
-                    activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.error",
-                        tags: new System.Diagnostics.ActivityTagsCollection { { "error", ex.Message } }));
+                    _httpClient.Dispose();
                 }
-                finally
-                {
-                    _sessionId = null;
-                }
-            }
 
-            // Dispose the HTTP client if we own it
-            if (_ownsHttpClient)
-            {
-                _httpClient.Dispose();
-            }
+                // Dispose the CloudFetch HTTP client (we always own it)
+                _cloudFetchHttpClient.Dispose();
 
-            // Dispose the CloudFetch HTTP client (we always own it)
-            _cloudFetchHttpClient.Dispose();
+                // Dispose the auth HTTP client if it was created
+                _authHttpClient?.Dispose();
 
-            // Dispose the auth HTTP client if it was created
-            _authHttpClient?.Dispose();
-
-            _sessionLock.Dispose();
+                _sessionLock.Dispose();
             });
         }
 
         // TracingConnection provides IActivityTracer implementation
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
-        public override string AssemblyName => "Apache.Arrow.Adbc.Drivers.Databricks";
+        public override string AssemblyName => "AdbcDrivers.Databricks";
     }
 }

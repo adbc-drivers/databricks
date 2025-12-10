@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\src\Apache.Arrow.Adbc.Drivers.Databricks.csproj" />
+    <ProjectReference Include="..\src\AdbcDrivers.Databricks.csproj" />
   </ItemGroup>
 
 </Project>

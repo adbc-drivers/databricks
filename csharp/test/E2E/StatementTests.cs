@@ -23,19 +23,19 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
-using Apache.Arrow.Adbc.Drivers.Databricks;
 using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
-using Apache.Arrow.Adbc.Tests.Xunit;
 using Apache.Arrow.Types;
 using Xunit;
 using Xunit.Abstractions;
-using System.Linq;
-using System.IO;
-using System.Text.Json;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     public class StatementTests : StatementTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
@@ -454,7 +454,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
         [SkippableTheory]
         [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true, new[] { "PK_IS_NULLABLE:NO" })]
         [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false, new[] { "PK_IS_NULLABLE:YES" })]
-        public async Task CanGetColumnsExtended(string tableName,string createTableSqlLocation, string resultLocation, bool useDescTableExtended, string[] ?extraPlaceholdsInResult = null)
+        public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended, string[]? extraPlaceholdsInResult = null)
         {
             var connectionParams = new Dictionary<string, string> { ["adbc.databricks.use_desc_table_extended"] = $"{useDescTableExtended}" };
 

@@ -27,16 +27,18 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Result;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Databricks.Result;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Types;
 using Apache.Hive.Service.Rpc.Thrift;
-using static Apache.Arrow.Adbc.Drivers.Databricks.Result.DescTableExtendedResult;
+using static AdbcDrivers.Databricks.Result.DescTableExtendedResult;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Databricks-specific implementation of <see cref="AdbcStatement"/>
@@ -997,13 +999,13 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
             var fkColumnKeySeqBuilder = new Int32Array.Builder();
 
             var pkColumns = new HashSet<string>(descResult.PrimaryKeys);
-            var fkColumns = new Dictionary<String, (int,ForeignKeyInfo)>();
+            var fkColumns = new Dictionary<String, (int, ForeignKeyInfo)>();
             foreach (var fkInfo in descResult.ForeignKeys)
             {
                 for (var i = 0; i < fkInfo.LocalColumns.Count; i++)
                 {
                     // The order of local key should match the order of ref key, so we need to store the index
-                    fkColumns.Add(fkInfo.LocalColumns[i],(i,fkInfo));
+                    fkColumns.Add(fkInfo.LocalColumns[i], (i, fkInfo));
                 }
             }
 
@@ -1036,7 +1038,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
                 columnSizeBuilder.Append(column.ColumnSize);
                 bufferLengthBuilder.AppendNull();
                 decimalDigitsBuilder.Append(column.DecimalDigits);
-                numPrecRadixBuilder.Append(column.IsNumber ? 10: null);
+                numPrecRadixBuilder.Append(column.IsNumber ? 10 : null);
                 nullableBuilder.Append(column.Nullable ? 1 : 0);
                 remarksBuilder.Append(column.Comment ?? "");
                 columnDefBuilder.AppendNull();
@@ -1058,14 +1060,14 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks
 
                 if (fkColumns.ContainsKey(colName))
                 {
-                    var (idx,fkInfo) = fkColumns[colName];
+                    var (idx, fkInfo) = fkColumns[colName];
                     fkColumnRefColumnBuilder.Append(fkInfo.RefColumns[idx]);
                     fkColumnRefCatalogBuilder.Append(fkInfo.RefCatalog);
                     fkColumnRefSchemaBuilder.Append(fkInfo.RefSchema);
                     fkColumnRefTableBuilder.Append(fkInfo.RefTable);
                     fkColumnLocalBuilder.Append(colName);
                     fkColumnKeyNameBuilder.Append(fkInfo.KeyName);
-                    fkColumnKeySeqBuilder.Append(1+idx); // FK_KEY_SEQ is 1-based index
+                    fkColumnKeySeqBuilder.Append(1 + idx); // FK_KEY_SEQ is 1-based index
                 }
                 else
                 {

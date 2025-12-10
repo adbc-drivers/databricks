@@ -24,11 +24,12 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks;
+using Apache.Arrow;
+using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     /// <summary>
     /// End-to-end tests for the server-side property passthrough feature in the Databricks ADBC driver.

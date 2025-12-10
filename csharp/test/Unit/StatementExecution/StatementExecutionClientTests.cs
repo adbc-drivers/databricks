@@ -21,13 +21,12 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks;
-using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
+using AdbcDrivers.Databricks.StatementExecution;
 using Moq;
 using Moq.Protected;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.StatementExecution
+namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
     public class StatementExecutionClientTests : IDisposable
     {

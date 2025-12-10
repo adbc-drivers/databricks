@@ -23,7 +23,7 @@
 
 using System;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Abstraction for time operations to enable testing with controlled time.

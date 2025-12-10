@@ -26,11 +26,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     /// <summary>
     /// End-to-end tests for the CloudFetch feature in the Databricks ADBC driver.
@@ -44,8 +46,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
         // Activity source names for Databricks drivers
         private static readonly string[] s_activitySourceNames = new[]
         {
-            "Apache.Arrow.Adbc.Drivers.Databricks",
-            "Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution"
+            "AdbcDrivers.Databricks",
+            "AdbcDrivers.Databricks.StatementExecution"
         };
 
         public CloudFetchE2ETest(ITestOutputHelper? outputHelper)

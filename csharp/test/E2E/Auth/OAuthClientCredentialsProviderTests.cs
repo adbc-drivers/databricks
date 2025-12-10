@@ -20,15 +20,16 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
 using System;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Net.Http;
+using AdbcDrivers.Databricks.Auth;
+using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Auth
+namespace AdbcDrivers.Databricks.Tests.Auth
 {
     public class OAuthClientCredentialsProviderTests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IDisposable
     {

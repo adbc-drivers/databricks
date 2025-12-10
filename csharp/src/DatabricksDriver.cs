@@ -22,8 +22,9 @@
 */
 
 using System.Collections.Generic;
+using Apache.Arrow.Adbc;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Databricks-specific implementation of <see cref="AdbcDriver"/>

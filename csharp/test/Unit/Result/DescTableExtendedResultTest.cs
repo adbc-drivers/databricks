@@ -21,15 +21,13 @@
 * limitations under the License.
 */
 
-using Apache.Arrow.Adbc.Drivers.Databricks.Result;
 using System.Linq;
 using System.Text.Json;
-
+using AdbcDrivers.Databricks.Result;
+using Xunit;
 using static Apache.Arrow.Adbc.Drivers.Apache.Hive2.HiveServer2Connection;
 
-using Xunit;
-
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Result
+namespace AdbcDrivers.Databricks.Tests.Unit.Result
 {
     public class DescTableExtendedResultTest
     {
@@ -321,7 +319,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Result
                 // No foreign key
                 Assert.Empty(result.ForeignKeys);
 
-            } else
+            }
+            else
             {
                 var nameParts = refTableName.Split('.');
                 var foreignKeynfo = result.ForeignKeys[0];
@@ -352,7 +351,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Result
         [InlineData("CHAR", ColumnTypeId.CHAR, false, 20)]
         [InlineData("VARCHAR", ColumnTypeId.VARCHAR, false, 20)]
         [InlineData("STRING", ColumnTypeId.VARCHAR, false, int.MaxValue)]
-        [InlineData("BINARY", ColumnTypeId.BINARY,false, 0)]
+        [InlineData("BINARY", ColumnTypeId.BINARY, false, 0)]
         [InlineData("DATE", ColumnTypeId.DATE, false, 4)]
         [InlineData("TIMESTAMP", ColumnTypeId.TIMESTAMP, false, 8)]
         [InlineData("TIMESTAMP_LTZ", ColumnTypeId.TIMESTAMP, false, 8)]
@@ -364,7 +363,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Result
         [InlineData("INTERVAL", ColumnTypeId.OTHER, false, 8, "DAY")]
         [InlineData("VOID", ColumnTypeId.NULL, false, 1)]
         [InlineData("VARIANT", ColumnTypeId.OTHER, false, 0)]
-        internal void TestCalculatedTypeProperties(string baseType, ColumnTypeId dataType, bool isNumber, int? columnSize, string? startUnit=null)
+        internal void TestCalculatedTypeProperties(string baseType, ColumnTypeId dataType, bool isNumber, int? columnSize, string? startUnit = null)
         {
             var json = @"
             {

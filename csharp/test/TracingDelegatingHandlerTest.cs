@@ -21,7 +21,6 @@
 * limitations under the License.
 */
 
-using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
@@ -31,7 +30,7 @@ using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Tracing;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Tests
+namespace AdbcDrivers.Databricks.Tests
 {
     /// <summary>
     /// Tests for the TracingDelegatingHandler class.

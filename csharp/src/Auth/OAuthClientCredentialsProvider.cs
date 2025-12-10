@@ -29,7 +29,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Auth
+namespace AdbcDrivers.Databricks.Auth
 {
     /// <summary>
     /// Service for obtaining OAuth access tokens using the client credentials grant type.

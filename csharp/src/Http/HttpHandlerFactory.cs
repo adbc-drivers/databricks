@@ -18,12 +18,11 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using AdbcDrivers.Databricks.Auth;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Apache.Thrift;
-using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
 using Apache.Arrow.Adbc.Tracing;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Http
+namespace AdbcDrivers.Databricks.Http
 {
     /// <summary>
     /// Factory for creating HTTP handlers with OAuth and other delegating handlers.

@@ -24,14 +24,14 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader;
 using Apache.Hive.Service.Rpc.Thrift;
 using Moq;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
+namespace AdbcDrivers.Databricks.Tests.Unit
 {
     public class DatabricksOperationStatusPollerTests
     {

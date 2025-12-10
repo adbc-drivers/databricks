@@ -21,13 +21,11 @@
 * limitations under the License.
 */
 
-using System;
-using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// HTTP handler that captures the x-thriftserver-error-message header from error responses

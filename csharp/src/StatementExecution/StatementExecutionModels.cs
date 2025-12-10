@@ -17,7 +17,7 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
+namespace AdbcDrivers.Databricks.StatementExecution
 {
     // ============================================================================
     // Session Management Models

@@ -25,7 +25,7 @@ using System;
 using System.Text;
 using System.Text.Json;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Auth
+namespace AdbcDrivers.Databricks.Auth
 {
     /// <summary>
     /// Utility class for decoding JWT tokens and extracting claims.

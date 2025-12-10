@@ -24,14 +24,14 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Apache;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Databricks;
 using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
 using Xunit;
 using Xunit.Abstractions;
+using Metadata = Apache.Arrow.Adbc.Tests.Metadata;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     public class DriverTests : DriverTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {

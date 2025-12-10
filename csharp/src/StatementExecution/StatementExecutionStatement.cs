@@ -21,12 +21,14 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
+namespace AdbcDrivers.Databricks.StatementExecution
 {
     /// <summary>
     /// Statement implementation using the Databricks Statement Execution REST API.
@@ -613,6 +615,6 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution
 
         // TracingStatement implementation
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
-        public override string AssemblyName => "Apache.Arrow.Adbc.Drivers.Databricks";
+        public override string AssemblyName => "AdbcDrivers.Databricks";
     }
 }

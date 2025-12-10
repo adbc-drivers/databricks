@@ -25,10 +25,10 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
-using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
+using AdbcDrivers.Databricks.Auth;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Auth
+namespace AdbcDrivers.Databricks.Tests.Unit.Auth
 {
     public class JwtTokenDecoderTests
     {

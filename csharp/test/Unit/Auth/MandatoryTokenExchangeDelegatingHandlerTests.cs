@@ -22,19 +22,18 @@
 */
 
 using System;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
+using AdbcDrivers.Databricks.Auth;
 using Moq;
 using Moq.Protected;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Auth
+namespace AdbcDrivers.Databricks.Tests.Unit.Auth
 {
     public class MandatoryTokenExchangeDelegatingHandlerTests : IDisposable
     {

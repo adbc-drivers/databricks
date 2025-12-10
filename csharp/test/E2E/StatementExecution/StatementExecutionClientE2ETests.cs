@@ -21,16 +21,14 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Databricks;
-using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
+using AdbcDrivers.Databricks.StatementExecution;
+using Apache.Arrow.Adbc.Tests;
 using Moq;
 using Moq.Protected;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
+namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 {
     /// <summary>
     /// E2E tests for Statement Execution API with support for both mock and real environments.

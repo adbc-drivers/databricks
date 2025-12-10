@@ -22,13 +22,11 @@
 */
 
 using System;
-using System.Diagnostics;
-using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
+using Apache.Arrow;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader
+namespace AdbcDrivers.Databricks.Reader
 {
     /// <summary>
     /// Base class for Databricks readers that handles common functionality of DatabricksReader and CloudFetchReader.

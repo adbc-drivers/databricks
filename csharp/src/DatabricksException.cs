@@ -22,8 +22,9 @@
 */
 
 using System;
+using Apache.Arrow.Adbc;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     public class DatabricksException : AdbcException
     {

@@ -30,15 +30,16 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
 using Moq;
 using Moq.Protected;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
+namespace AdbcDrivers.Databricks.Tests.CloudFetch
 {
     public class CloudFetchDownloaderTest : IDisposable
     {
@@ -311,7 +312,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Create test download results
             var mockDownloadResult = new Mock<IDownloadResult>();
-            var resultLink = new TSparkArrowResultLink {
+            var resultLink = new TSparkArrowResultLink
+            {
                 StartRowOffset = 0,
                 FileLink = "http://test.com/file1",
                 RowCount = 100,
@@ -332,7 +334,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             Exception? capturedException = null;
             bool setFailedCalled = false;
             mockDownloadResult.Setup(r => r.SetFailed(It.IsAny<Exception>()))
-                .Callback<Exception>(ex => {
+                .Callback<Exception>(ex =>
+                {
                     capturedException = ex;
                     setFailedCalled = true;
                     Console.WriteLine($"SetFailed called with exception: {ex.Message}");
@@ -611,7 +614,7 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
                     if (requestCount == 0)
                     {
                         requestCount++;
-                        Console.WriteLine($"HTTP Mock: Returning 403 Forbidden for request #{requestCount-1}");
+                        Console.WriteLine($"HTTP Mock: Returning 403 Forbidden for request #{requestCount - 1}");
                         return new HttpResponseMessage(HttpStatusCode.Forbidden);
                     }
 
@@ -654,7 +657,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
 
             // Setup URL refreshing - expect it to be called once during the HTTP 403 error handling
             bool refreshUrlsCalled = false;
-            var refreshedLink = new TSparkArrowResultLink {
+            var refreshedLink = new TSparkArrowResultLink
+            {
                 StartRowOffset = 0,
                 FileLink = "http://test.com/file1-refreshed",
                 RowCount = 100,
@@ -663,7 +667,8 @@ namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.CloudFetch
             };
             var refreshedResult = DownloadResult.FromThriftLink(0, refreshedLink, _mockMemoryManager.Object);
             _mockResultFetcher.Setup(f => f.RefreshUrlsAsync(0, It.IsAny<CancellationToken>()))
-                .Callback(() => {
+                .Callback(() =>
+                {
                     refreshUrlsCalled = true;
                     Console.WriteLine("RefreshUrlsAsync was called!");
                 })

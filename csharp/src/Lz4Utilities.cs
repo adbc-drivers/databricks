@@ -26,11 +26,11 @@ using System.Buffers;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using K4os.Compression.LZ4.Encoders;
+using Apache.Arrow.Adbc;
 using K4os.Compression.LZ4.Streams;
 using Microsoft.IO;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Utility class for LZ4 compression/decompression operations.

@@ -17,7 +17,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Utility class for parsing connection properties.

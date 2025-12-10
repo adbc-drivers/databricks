@@ -24,7 +24,7 @@
 using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
 using Xunit.Abstractions;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     public class TelemetryTests : TelemetryTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {

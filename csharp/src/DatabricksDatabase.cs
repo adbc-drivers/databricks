@@ -24,10 +24,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using AdbcDrivers.Databricks.StatementExecution;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
-using Apache.Arrow.Adbc.Drivers.Databricks.StatementExecution;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Databricks-specific implementation of <see cref="AdbcDatabase"/>

@@ -27,9 +27,10 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// HTTP handler that implements retry behavior for 408, 429, 502, 503, and 504 responses.

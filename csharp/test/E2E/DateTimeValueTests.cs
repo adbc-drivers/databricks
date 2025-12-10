@@ -28,7 +28,7 @@ using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     public class DateTimeValueTests : DateTimeValueTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {

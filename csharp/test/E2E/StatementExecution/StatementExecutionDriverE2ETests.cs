@@ -16,13 +16,13 @@
 
 using System;
 using System.Collections.Generic;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Databricks;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
+using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.StatementExecution
+namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 {
     /// <summary>
     /// E2E tests for the Statement Execution REST API through the full driver flow.

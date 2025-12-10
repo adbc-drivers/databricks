@@ -27,13 +27,12 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks.Auth;
-using Apache.Arrow.Adbc.Drivers.Databricks;
+using AdbcDrivers.Databricks.Auth;
 using Moq;
 using Moq.Protected;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit.Auth
+namespace AdbcDrivers.Databricks.Tests.Unit.Auth
 {
     public class TokenExchangeClientTests : IDisposable
     {

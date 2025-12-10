@@ -21,11 +21,9 @@
 * limitations under the License.
 */
 
-using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using System.Collections.Generic;
 
-namespace Apache.Arrow.Adbc.Drivers.Databricks
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Parameters used for connecting to Databricks data sources.

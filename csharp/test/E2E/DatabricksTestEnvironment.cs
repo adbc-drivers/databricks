@@ -25,15 +25,16 @@ using System;
 using System.Collections.Generic;
 using System.Data.SqlTypes;
 using System.Text;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Apache.Arrow.Adbc.Drivers.Databricks;
+using Apache.Arrow.Adbc.Tests;
 using Apache.Arrow.Adbc.Tests.Drivers.Apache;
 using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
 using Apache.Arrow.Types;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     public class DatabricksTestEnvironment : CommonTestEnvironment<DatabricksTestConfiguration>
     {
