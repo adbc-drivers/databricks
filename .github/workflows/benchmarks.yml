@@ -337,181 +337,34 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Find the last 10 successful workflow runs on main branch to calculate median baseline
-          MAIN_RUN_IDS=$(gh run list \
+          # Find the most recent successful workflow run on main branch
+          MAIN_RUN_ID=$(gh run list \
             --repo ${{ github.repository }} \
             --workflow benchmarks.yml \
             --branch main \
             --status success \
-            --limit 10 \
+            --limit 1 \
             --json databaseId \
-            --jq '.[].databaseId')
+            --jq '.[0].databaseId')
 
-          if [ -z "$MAIN_RUN_IDS" ]; then
-            echo "No baseline runs found on main branch"
+          if [ -z "$MAIN_RUN_ID" ]; then
+            echo "No baseline run found on main branch"
             exit 0
           fi
 
-          echo "Found $(echo "$MAIN_RUN_IDS" | wc -l) baseline runs for median calculation"
+          echo "Found baseline run: $MAIN_RUN_ID"
+          mkdir -p baseline-net8 baseline-net472
 
-          # Create directories for historical data
-          mkdir -p baseline-history-net8 baseline-history-net472 baseline-net8 baseline-net472
+          # Download baseline artifacts
+          gh run download $MAIN_RUN_ID \
+            --repo ${{ github.repository }} \
+            --name benchmark-results-net8 \
+            --dir baseline-net8 || echo "No baseline for .NET 8.0"
 
-          # Download artifacts from all runs
-          for RUN_ID in $MAIN_RUN_IDS; do
-            echo "Downloading artifacts from run $RUN_ID..."
-
-            # Download .NET 8.0 results
-            gh run download $RUN_ID \
-              --repo ${{ github.repository }} \
-              --name benchmark-results-net8 \
-              --dir "baseline-history-net8/$RUN_ID" 2>/dev/null || echo "  No .NET 8.0 results for run $RUN_ID"
-
-            # Download .NET Framework 4.7.2 results
-            gh run download $RUN_ID \
-              --repo ${{ github.repository }} \
-              --name benchmark-results-net472 \
-              --dir "baseline-history-net472/$RUN_ID" 2>/dev/null || echo "  No .NET Framework 4.7.2 results for run $RUN_ID"
-          done
-
-          # Function to calculate median baseline for a platform
-          calculate_median_baseline() {
-            local PLATFORM=$1
-            local HISTORY_DIR="baseline-history-$PLATFORM"
-            local OUTPUT_DIR="baseline-$PLATFORM"
-
-            echo "Calculating median baseline for $PLATFORM..."
-
-            # Find all result files
-            RESULT_FILES=$(find "$HISTORY_DIR" -name "*-report-full-compressed.json" 2>/dev/null)
-
-            if [ -z "$RESULT_FILES" ]; then
-              echo "  No result files found for $PLATFORM"
-              return
-            fi
-
-            # Extract all metrics for each query across all runs
-            # Create temporary files to store all values
-            TEMP_MEAN=$(mktemp)
-            TEMP_PEAK_MEMORY=$(mktemp)
-            TEMP_ALLOC_MEMORY=$(mktemp)
-            TEMP_GEN2=$(mktemp)
-
-            for FILE in $RESULT_FILES; do
-              jq -r '.Benchmarks[] |
-                (
-                  if (.Parameters | type) == "string" then
-                    (.Parameters | split("&") | map(select(startswith("benchmarkQuery=")) | split("=")[1]) | .[0] // "") as $param_query |
-                    if ($param_query | contains("(...)")) then
-                      (.FullName | match("benchmarkQuery: ([^,)]+)") | .captures[0].string)
-                    else
-                      $param_query
-                    end
-                  elif (.Parameters | type) == "object" then
-                    if (.Parameters.benchmarkQuery | type) == "object" then
-                      .Parameters.benchmarkQuery.name
-                    else
-                      .Parameters.benchmarkQuery
-                    end
-                  else
-                    ""
-                  end
-                ) as $query |
-                "\($query)|\(.Statistics.Mean)|\(.Memory.TotalBytesAllocated // .Memory.BytesAllocatedPerOperation // 0)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen2Collections // 0)"
-              ' "$FILE" | while IFS='|' read -r query mean peak_mem alloc_mem gen2; do
-                echo "$query|$mean" >> "$TEMP_MEAN"
-                echo "$query|$peak_mem" >> "$TEMP_PEAK_MEMORY"
-                echo "$query|$alloc_mem" >> "$TEMP_ALLOC_MEMORY"
-                echo "$query|$gen2" >> "$TEMP_GEN2"
-              done
-            done
-
-            # Calculate median for each query
-            QUERIES=$(cat "$TEMP_MEAN" | cut -d'|' -f1 | sort -u)
-
-            # Create a synthetic baseline file with median values
-            # Start with the structure from the first file
-            FIRST_FILE=$(echo "$RESULT_FILES" | head -1)
-            MEDIAN_FILE="$OUTPUT_DIR/median-baseline.json"
-
-            # Copy the first file as template
-            cp "$FIRST_FILE" "$MEDIAN_FILE"
-
-            # Helper function to calculate median from a list of values
-            calculate_median() {
-              local VALUES=$1
-              local COUNT=$(echo "$VALUES" | wc -l)
-
-              if [ "$COUNT" -eq 0 ]; then
-                echo "0"
-                return
-              fi
-
-              local MID=$((COUNT / 2))
-              if [ $((COUNT % 2)) -eq 1 ]; then
-                # Odd count - take middle value
-                echo "$VALUES" | sed -n "$((MID + 1))p"
-              else
-                # Even count - average of two middle values
-                local VAL1=$(echo "$VALUES" | sed -n "${MID}p")
-                local VAL2=$(echo "$VALUES" | sed -n "$((MID + 1))p")
-                echo "scale=2; ($VAL1 + $VAL2) / 2" | bc
-              fi
-            }
-
-            # For each query, calculate medians for all metrics and update the file
-            for QUERY in $QUERIES; do
-              if [ -z "$QUERY" ] || [ "$QUERY" = "null" ]; then
-                continue
-              fi
-
-              # Get all values for this query and calculate medians
-              MEAN_VALUES=$(grep "^$QUERY|" "$TEMP_MEAN" | cut -d'|' -f2 | sort -n)
-              PEAK_MEMORY_VALUES=$(grep "^$QUERY|" "$TEMP_PEAK_MEMORY" | cut -d'|' -f2 | sort -n)
-              ALLOC_MEMORY_VALUES=$(grep "^$QUERY|" "$TEMP_ALLOC_MEMORY" | cut -d'|' -f2 | sort -n)
-              GEN2_VALUES=$(grep "^$QUERY|" "$TEMP_GEN2" | cut -d'|' -f2 | sort -n)
-
-              COUNT=$(echo "$MEAN_VALUES" | wc -l)
-              if [ "$COUNT" -eq 0 ]; then
-                continue
-              fi
-
-              MEDIAN_MEAN=$(calculate_median "$MEAN_VALUES")
-              MEDIAN_PEAK_MEMORY=$(calculate_median "$PEAK_MEMORY_VALUES")
-              MEDIAN_ALLOC_MEMORY=$(calculate_median "$ALLOC_MEMORY_VALUES")
-              MEDIAN_GEN2=$(calculate_median "$GEN2_VALUES")
-
-              echo "  $QUERY: mean=$MEDIAN_MEAN, peak_mem=$MEDIAN_PEAK_MEMORY, alloc_mem=$MEDIAN_ALLOC_MEMORY, gen2=$MEDIAN_GEN2 (from $COUNT samples)"
-
-              # Update the JSON file with median values
-              jq --arg query "$QUERY" \
-                 --argjson median_mean "$MEDIAN_MEAN" \
-                 --argjson median_peak_memory "$MEDIAN_PEAK_MEMORY" \
-                 --argjson median_alloc_memory "$MEDIAN_ALLOC_MEMORY" \
-                 --argjson median_gen2 "$MEDIAN_GEN2" '
-                .Benchmarks |= map(
-                  if (
-                    ((.Parameters | type) == "string" and (.Parameters | contains("benchmarkQuery=" + $query))) or
-                    ((.Parameters | type) == "object" and ((.Parameters.benchmarkQuery.name // .Parameters.benchmarkQuery) == $query))
-                  ) then
-                    .Statistics.Mean = $median_mean |
-                    .Memory.TotalBytesAllocated = $median_peak_memory |
-                    .Memory.BytesAllocatedPerOperation = $median_alloc_memory |
-                    .Memory.Gen2Collections = $median_gen2
-                  else
-                    .
-                  end
-                )
-              ' "$MEDIAN_FILE" > "$MEDIAN_FILE.tmp" && mv "$MEDIAN_FILE.tmp" "$MEDIAN_FILE"
-            done
-
-            rm -f "$TEMP_MEAN" "$TEMP_PEAK_MEMORY" "$TEMP_ALLOC_MEMORY" "$TEMP_GEN2"
-            echo "  Median baseline saved to $MEDIAN_FILE"
-          }
-
-          # Calculate median baselines for both platforms
-          calculate_median_baseline "net8"
-          calculate_median_baseline "net472"
+          gh run download $MAIN_RUN_ID \
+            --repo ${{ github.repository }} \
+            --name benchmark-results-net472 \
+            --dir baseline-net472 || echo "No baseline for .NET Framework 4.7.2"
 
       - name: Compare and post results
         env:
@@ -520,17 +373,15 @@ jobs:
           # Find the result files
           NET8_RESULTS=$(find results-net8 -name "*-report-full-compressed.json" | head -1)
           NET472_RESULTS=$(find results-net472 -name "*-report-full-compressed.json" | head -1)
-          NET8_BASELINE="baseline-net8/median-baseline.json"
-          NET472_BASELINE="baseline-net472/median-baseline.json"
+          NET8_BASELINE=$(find baseline-net8 -name "*-report-full-compressed.json" 2>/dev/null | head -1)
+          NET472_BASELINE=$(find baseline-net472 -name "*-report-full-compressed.json" 2>/dev/null | head -1)
 
           # Debug: Check if baseline files exist
           echo "=== Baseline File Check ==="
           echo "NET8_BASELINE=$NET8_BASELINE"
           echo "NET472_BASELINE=$NET472_BASELINE"
-          ls -lh baseline-net8/ 2>&1 || echo "baseline-net8 directory not found"
-          ls -lh baseline-net472/ 2>&1 || echo "baseline-net472 directory not found"
-          if [ -f "$NET8_BASELINE" ]; then
-            echo "✅ NET8 baseline file exists"
+          if [ -n "$NET8_BASELINE" ]; then
+            echo "✅ NET8 baseline file found"
             echo "First benchmark entry:"
             jq '.Benchmarks[0] | {Parameters, Mean: .Statistics.Mean, Memory: .Memory.BytesAllocatedPerOperation, Gen2: .Memory.Gen2Collections}' "$NET8_BASELINE" 2>&1 || echo "Failed to parse baseline"
           else
@@ -704,7 +555,7 @@ jobs:
           *🟢 Improvement | 🔴 Regression | ⚪ No change*
 
           **Format:** `current_value (baseline) diff%`
-          - **Baseline**: Median of last 10 successful runs on main
+          - **Baseline**: Latest successful run on main branch
 
           **Metrics:**
           - **Mean**: Execution time in milliseconds
