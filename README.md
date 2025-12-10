@@ -188,16 +188,21 @@ var config = new Dictionary<string, string>
 
 | Property | Description | Default |
 |----------|-------------|---------|
-| `uri` | Full connection URI (alternative to host/port/path) | (required) |
+| `uri` | Full connection URI (alternative to host/port/path) | |
 | `adbc.spark.type` | Server type: `http` | `http` |
 | `adbc.spark.host` | Hostname without scheme/port | |
 | `adbc.spark.port` | Connection port | `443` |
 | `adbc.spark.path` | URI path on server | |
+| `adbc.spark.token` | Token for token-based authentication | |
+| `username` | Username for basic authentication | |
+| `password` | Password for basic authentication | |
 | `adbc.spark.connect_timeout_ms` | Session establishment timeout | `30000` |
 | `adbc.apache.statement.query_timeout_s` | Query execution timeout | `60` |
 | `adbc.apache.connection.polltime_ms` | Query status polling interval | `500` (Databricks: `100`) |
 | `adbc.apache.statement.batch_size` | Max rows per batch request | `50000` (Databricks: `2000000`) |
 | `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` |
+
+**Note:** Either `uri` or the combination of `adbc.spark.host` + `adbc.spark.path` is required.
 
 #### Databricks-Specific Properties
 
