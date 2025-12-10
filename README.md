@@ -211,11 +211,18 @@ var config = new Dictionary<string, string>
 | `adbc.connection.catalog` | Default catalog for session | |
 | `adbc.connection.db_schema` | Default schema for session | |
 | `adbc.databricks.enable_direct_results` | Use direct results when executing | `true` |
+| `adbc.databricks.max_bytes_per_fetch_request` | Max bytes per fetch request (supports B, KB, MB, GB) | `400MB` |
 | `adbc.databricks.apply_ssp_with_queries` | Apply server-side properties with queries | `false` |
 | `adbc.databricks.enable_multiple_catalog_support` | Support multiple catalogs | `true` |
 | `adbc.databricks.enable_pk_fk` | Enable primary/foreign key metadata | `true` |
 | `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` |
 | `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` |
+| `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (seconds) | `60` |
+| `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (seconds) | `30` |
+| `adbc.spark.temporarily_unavailable_retry` | Retry on 408/502/503/504 responses | `true` |
+| `adbc.spark.temporarily_unavailable_retry_timeout` | Max retry time for 4xx/5xx errors (seconds) | `900` |
+| `adbc.databricks.rate_limit_retry` | Retry on HTTP 429 (rate limit) responses | `true` |
+| `adbc.databricks.rate_limit_retry_timeout` | Max retry time for rate limits (seconds) | `120` |
 
 **Performance Notes:**
 - Databricks default `batch_size` is `2000000` (vs Spark's `50000`) - optimized for CloudFetch's 1024MB limit
@@ -250,6 +257,42 @@ var config = new Dictionary<string, string>
     ["adbc.databricks.cloudfetch.parallel_downloads"] = "5",
     ["adbc.databricks.cloudfetch.memory_buffer_size_mb"] = "500",
     ["adbc.databricks.cloudfetch.prefetch_count"] = "4"
+};
+```
+
+### Statement Execution API (REST Protocol)
+
+The driver supports both Thrift/HiveServer2 protocol (default) and Statement Execution REST API for query execution.
+
+**Protocol Properties:**
+
+| Property | Description | Default |
+|----------|-------------|---------|
+| `adbc.databricks.protocol` | Protocol: `thrift` or `rest` | `thrift` |
+| `adbc.databricks.warehouse_id` | Warehouse ID for query execution | (required for REST) |
+
+**REST API Configuration:**
+
+| Property | Description | Default |
+|----------|-------------|---------|
+| `adbc.databricks.rest.result_disposition` | Result mode: `inline`, `external_links`, or `inline_or_external_links` | `inline_or_external_links` |
+| `adbc.databricks.rest.result_format` | Format: `arrow_stream`, `json_array`, or `csv` | `arrow_stream` |
+| `adbc.databricks.rest.result_compression` | Compression: `lz4`, `gzip`, or `none` | (auto) |
+| `adbc.databricks.rest.wait_timeout` | Wait timeout in seconds (0=async, 5-50=sync) | `10` |
+| `adbc.databricks.rest.polling_interval_ms` | Polling interval for async execution (ms) | `1000` |
+| `adbc.databricks.rest.enable_session_management` | Enable session management | `true` |
+
+**Example - Using REST Protocol:**
+```csharp
+var config = new Dictionary<string, string>
+{
+    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
+    ["adbc.spark.auth_type"] = "oauth",
+    ["adbc.databricks.oauth.grant_type"] = "access_token",
+    ["adbc.spark.oauth.access_token"] = "your-token",
+    ["adbc.databricks.protocol"] = "rest",
+    ["adbc.databricks.warehouse_id"] = "your-warehouse-id",
+    ["adbc.databricks.rest.result_disposition"] = "inline_or_external_links"
 };
 ```
 
