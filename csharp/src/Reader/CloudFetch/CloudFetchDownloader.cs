@@ -351,7 +351,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
                         // Acquire memory for this download (FIFO - acquired in sequential loop)
                         long size = downloadResult.Size;
                         await _memoryManager.AcquireMemoryAsync(size, cancellationToken).ConfigureAwait(false);
-                        
+
                         activity?.AddEvent("cloudfetch.download_slot_acquired", [
                             new("chunk_index", downloadResult.ChunkIndex)
                         ]);
