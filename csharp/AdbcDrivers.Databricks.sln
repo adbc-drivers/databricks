@@ -13,8 +13,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc", "arrow-
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdbcDrivers.Databricks.Tests", "test\AdbcDrivers.Databricks.Tests.csproj", "{38222237-0B30-A05A-368A-6BBBBF0BBA30}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc.Tests", "arrow-adbc\csharp\test\Apache.Arrow.Adbc.Tests\Apache.Arrow.Adbc.Tests.csproj", "{7B96FF6C-E8BA-3E7D-850C-951EAC24BD6B}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc.Tests.Drivers.Apache", "arrow-adbc\csharp\test\Drivers\Apache\Apache.Arrow.Adbc.Tests.Drivers.Apache.csproj", "{DCFAC829-4278-219B-AAA9-BCFEEED23300}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc.Client", "arrow-adbc\csharp\src\Client\Apache.Arrow.Adbc.Client.csproj", "{D329B649-FFF3-6E1D-008A-A29291295470}"
@@ -22,6 +20,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DatabricksBenchmarks", "Benchmarks\DatabricksBenchmarks.csproj", "{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Dependencies", "Dependencies", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc.Testing", "arrow-adbc\csharp\test\Apache.Arrow.Adbc.Tests\Apache.Arrow.Adbc.Testing.csproj", "{EE0237C1-8A0B-A741-27F0-AF5CF3CBEE5A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -49,10 +49,6 @@ Global
 		{38222237-0B30-A05A-368A-6BBBBF0BBA30}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{38222237-0B30-A05A-368A-6BBBBF0BBA30}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{38222237-0B30-A05A-368A-6BBBBF0BBA30}.Release|Any CPU.Build.0 = Release|Any CPU
-		{7B96FF6C-E8BA-3E7D-850C-951EAC24BD6B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{7B96FF6C-E8BA-3E7D-850C-951EAC24BD6B}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{7B96FF6C-E8BA-3E7D-850C-951EAC24BD6B}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{7B96FF6C-E8BA-3E7D-850C-951EAC24BD6B}.Release|Any CPU.Build.0 = Release|Any CPU
 		{DCFAC829-4278-219B-AAA9-BCFEEED23300}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{DCFAC829-4278-219B-AAA9-BCFEEED23300}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DCFAC829-4278-219B-AAA9-BCFEEED23300}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -65,6 +61,10 @@ Global
 		{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EE0237C1-8A0B-A741-27F0-AF5CF3CBEE5A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EE0237C1-8A0B-A741-27F0-AF5CF3CBEE5A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EE0237C1-8A0B-A741-27F0-AF5CF3CBEE5A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EE0237C1-8A0B-A741-27F0-AF5CF3CBEE5A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -73,9 +73,9 @@ Global
 		{F1FD5D2D-B4F9-DFC5-FB32-EA5FE5640A81} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{BFE03B71-6E4A-9FCC-3A82-0FEA82BEEA97} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{147C9F86-54C4-5572-B0F8-D48DFDAAF667} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
-		{7B96FF6C-E8BA-3E7D-850C-951EAC24BD6B} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{DCFAC829-4278-219B-AAA9-BCFEEED23300} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{D329B649-FFF3-6E1D-008A-A29291295470} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{EE0237C1-8A0B-A741-27F0-AF5CF3CBEE5A} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {3E328445-1459-42C6-91C2-4F806ED141D5}
