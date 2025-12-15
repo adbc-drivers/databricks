@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765818165151,
+  "lastUpdate": 1765830025213,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Mean Execution Time (.NET 8.0)": [
@@ -648,6 +648,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 14571.78,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fd648ef183200e1453bd8706f81226e72228edc0",
+          "message": "fix(csharp): improve server-side property name validation (#72)\n\n## Summary\n\nImproves server-side property name validation to support standard Spark\nconfiguration naming conventions while maintaining security against SQL\ninjection attacks.\n\n### Changes\n\n- **Updated validation regex**: Changed from `^[a-zA-Z_]+$` to\n`^[a-zA-Z0-9_.]+$`\n- Now supports dots (e.g., `spark.databricks.sql.metricViewV2.enabled `)\n- Now supports numbers (e.g., `spark.databricks.sql.metricViewV2.enabled\n`)\n  - Maintains security by blocking special characters\n\n- **Refactored validation logic**:\n- Moved validation into `GetServerSideProperties()` for centralized\nfiltering\n- Changed `IsValidPropertyName` from `private` to `internal` for\ntestability\n- Removed duplicate validation code from\n`ApplyServerSidePropertiesAsync`\n\n- **Enhanced observability**:\n- Added Activity tracing with `connection.server_side_property.filtered`\nevent\n  - Added Activity tracing for SET query failures\n  - Wrapped `ApplyServerSidePropertiesAsync` in `TraceActivityAsync`\n\n- **Added comprehensive tests**:\n  - Created `DatabricksConnectionUnitTests.cs` with 41 test cases\n  - Tests cover valid patterns, invalid characters, and edge cases\n  - All tests passing ✅\n\n### Test Plan\n\n```bash\ndotnet test --filter \"FullyQualifiedName~DatabricksConnectionUnitTests\"\n```\n\n**Result**: All 41 tests passed\n\n### Examples of Now-Supported Properties\n\n- ✅ `spark.sql.adaptive.enabled`\n- ✅ `spark.executor.instances`\n- ✅ `spark.databricks.delta.optimizeWrite.enabled`\n- ✅ `my_custom_property123`\n\n### Security\n\nStill blocks potentially dangerous input:\n- ❌ Hyphens, spaces, semicolons\n- ❌ Quotes, equals signs\n- ❌ Special characters that could enable SQL injection\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com>",
+          "timestamp": "2025-12-15T12:07:39-08:00",
+          "tree_id": "4dc88c9361d377f6865747810efa7092876f9861",
+          "url": "https://github.com/adbc-drivers/databricks/commit/fd648ef183200e1453bd8706f81226e72228edc0"
+        },
+        "date": 1765830023778,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 4267.71,
+            "unit": "ms"
+          },
+          {
+            "name": "customer",
+            "value": 1164.29,
+            "unit": "ms"
+          },
+          {
+            "name": "inventory",
+            "value": 7119.19,
+            "unit": "ms"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 4718.14,
+            "unit": "ms"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 4101.53,
+            "unit": "ms"
+          },
+          {
+            "name": "web_sales",
+            "value": 2590.75,
+            "unit": "ms"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 12671.76,
             "unit": "ms"
           }
         ]
