@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765353526917,
+  "lastUpdate": 1765818166466,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Peak Memory (.NET 8.0)": [
@@ -589,6 +589,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 536.13,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "13318837+davidhcoe@users.noreply.github.com",
+            "name": "davidhcoe",
+            "username": "davidhcoe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9066f08616e269b425cf4f7d458bac3556fe5d02",
+          "message": "chore(csharp): aligning namespaces for new repo (#68)\n\n## What's Changed\n\n- Changes the namespaces to match the new repo \n- Restructures the solution\n- Minor code formatting\n\nThis will need https://github.com/apache/arrow-adbc/pull/3788/files to\nland.\n\n---------\n\nCo-authored-by: David Coe <>",
+          "timestamp": "2025-12-15T09:48:43-07:00",
+          "tree_id": "dcbfa3141b9d4ef606230fd978edb91e64838ca7",
+          "url": "https://github.com/adbc-drivers/databricks/commit/9066f08616e269b425cf4f7d458bac3556fe5d02"
+        },
+        "date": 1765818165953,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 439.3,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 358.8,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 482.76,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 423.93,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 430.21,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 411.14,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 491.48,
             "unit": "MB"
           }
         ]
