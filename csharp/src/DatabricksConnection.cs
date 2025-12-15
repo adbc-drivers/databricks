@@ -578,7 +578,7 @@ namespace AdbcDrivers.Databricks
                 // If not using queries to set server-side properties, include them in Configuration
                 if (!_applySSPWithQueries)
                 {
-                    var serverSideProperties = GetServerSideProperties();
+                    var serverSideProperties = GetServerSideProperties(activity);
                     foreach (var property in serverSideProperties)
                     {
                         req.Configuration[property.Key] = property.Value;
@@ -677,16 +677,32 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Gets a dictionary of server-side properties extracted from connection properties.
+        /// Only includes properties with valid property names (letters, numbers, dots, and underscores).
+        /// Invalid property names are logged to the activity trace and filtered out.
         /// </summary>
-        /// <returns>Dictionary of server-side properties with prefix removed from keys.</returns>
-        private Dictionary<string, string> GetServerSideProperties()
+        /// <param name="activity">Optional activity for tracing filtered properties.</param>
+        /// <returns>Dictionary of server-side properties with prefix removed from keys and invalid names filtered out.</returns>
+        private Dictionary<string, string> GetServerSideProperties(Activity? activity = null)
         {
-            return Properties
-                .Where(p => p.Key.ToLowerInvariant().StartsWith(DatabricksParameters.ServerSidePropertyPrefix))
-                .ToDictionary(
-                    p => p.Key.Substring(DatabricksParameters.ServerSidePropertyPrefix.Length),
-                    p => p.Value
-                );
+            var result = new Dictionary<string, string>();
+
+            foreach (var property in Properties.Where(p => p.Key.ToLowerInvariant().StartsWith(DatabricksParameters.ServerSidePropertyPrefix)))
+            {
+                string propertyName = property.Key.Substring(DatabricksParameters.ServerSidePropertyPrefix.Length);
+
+                if (!IsValidPropertyName(propertyName))
+                {
+                    activity?.AddEvent("connection.server_side_property.filtered", [
+                        new("property_name", propertyName),
+                        new("reason", "Invalid property name format")
+                    ]);
+                    continue;
+                }
+
+                result[propertyName] = property.Value;
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -695,49 +711,52 @@ namespace AdbcDrivers.Databricks
         /// <returns>A task representing the asynchronous operation.</returns>
         public async Task ApplyServerSidePropertiesAsync()
         {
-            if (!_applySSPWithQueries)
+            await this.TraceActivityAsync(async activity =>
             {
-                return;
-            }
-
-            var serverSideProperties = GetServerSideProperties();
-
-            if (serverSideProperties.Count == 0)
-            {
-                return;
-            }
-
-            using var statement = new DatabricksStatement(this);
-
-            foreach (var property in serverSideProperties)
-            {
-                if (!IsValidPropertyName(property.Key))
+                if (!_applySSPWithQueries)
                 {
-                    Debug.WriteLine($"Skipping invalid property name: {property.Key}");
-                    continue;
+                    return;
                 }
 
-                string escapedValue = EscapeSqlString(property.Value);
-                string query = $"SET {property.Key}={escapedValue}";
-                statement.SqlQuery = query;
+                var serverSideProperties = GetServerSideProperties(activity);
 
-                try
+                if (serverSideProperties.Count == 0)
                 {
-                    await statement.ExecuteUpdateAsync();
+                    return;
                 }
-                catch (Exception ex)
+
+                activity?.SetTag("connection.server_side_properties.count", serverSideProperties.Count);
+
+                using var statement = new DatabricksStatement(this);
+
+                foreach (var property in serverSideProperties)
                 {
-                    Debug.WriteLine($"Error setting server-side property '{property.Key}': {ex.Message}");
+                    string escapedValue = EscapeSqlString(property.Value);
+                    string query = $"SET {property.Key}={escapedValue}";
+                    statement.SqlQuery = query;
+
+                    try
+                    {
+                        await statement.ExecuteUpdateAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        activity?.AddEvent("connection.server_side_property.set_failed", [
+                            new("property_name", property.Key),
+                            new("error_message", ex.Message)
+                        ]);
+                    }
                 }
-            }
+            });
         }
 
-        private bool IsValidPropertyName(string propertyName)
+        internal bool IsValidPropertyName(string propertyName)
         {
-            // Allow only letters and underscores in property names
+            // Allow property names with letters, numbers, dots, and underscores
+            // Examples: spark.sql.adaptive.enabled, spark.executor.instances, my_property123
             return System.Text.RegularExpressions.Regex.IsMatch(
                 propertyName,
-                @"^[a-zA-Z_]+$");
+                @"^[a-zA-Z0-9_.]+$");
         }
 
         private string EscapeSqlString(string value)
