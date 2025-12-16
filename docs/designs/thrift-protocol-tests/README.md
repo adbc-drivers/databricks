@@ -13,6 +13,24 @@ This directory contains the design and specifications for a comprehensive test s
 - **[Design Document](./design.md)** - Full design, architecture, and implementation plan
 - **[Test Specifications](./specs/)** - Detailed test case specifications (to be created)
 
+## Relationship to Existing Validation
+
+This test suite is complementary to the existing [ADBC Driver Validation](https://github.com/adbc-drivers/validation) suite:
+
+**Existing Validation Suite** (Python/pytest):
+- Focuses on ADBC API feature validation
+- Tests SQL query correctness and data type support
+- Language-agnostic test definitions with driver-specific overrides
+- Validates ADBC compliance across different databases
+
+**This Thrift Protocol Test Suite**:
+- Focuses on Databricks Thrift protocol compliance
+- Tests protocol-specific features (CloudFetch, Direct Results, Arrow streaming)
+- Tests failure scenarios with proxy-based injection
+- Validates driver behavior under error conditions
+
+Both suites serve different purposes and can coexist. Future consideration: Thrift protocol tests could potentially be contributed to the validation repository.
+
 ## What's in This Test Suite?
 
 ### 300 Test Cases Across 16 Categories
@@ -39,21 +57,18 @@ This directory contains the design and specifications for a comprehensive test s
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────┐
-│  Test Specifications (Markdown)         │
-│  Language-agnostic test definitions     │
-└─────────────────────────────────────────┘
-                 ↓
-┌─────────────────────────────────────────┐
-│  Standalone Proxy Server (Go)           │
-│  Failure injection, request interception│
-└─────────────────────────────────────────┘
-                 ↓
-┌─────────────┬─────────────┬─────────────┐
-│  C# Tests   │ Java Tests  │  C++ Tests  │
-│  (Initial)  │  (Future)   │  (Future)   │
-└─────────────┴─────────────┴─────────────┘
+```mermaid
+graph TD
+    A[Test Specifications<br/>Markdown<br/>Language-agnostic test definitions]
+    B[Standalone Proxy Server<br/>Go<br/>Failure injection, request interception]
+    C1[C# Tests<br/>Initial]
+    C2[Java Tests<br/>Future]
+    C3[C++ Tests<br/>Future]
+
+    A --> B
+    B --> C1
+    B --> C2
+    B --> C3
 ```
 
 ### Key Components
@@ -82,7 +97,7 @@ Different drivers use different languages:
 - **C# ADBC**: This repository
 - **Java JDBC**: Separate repository
 - **C++ ODBC**: Separate repository
-- **Go ADBC**: Part of Apache Arrow ADBC
+- **Go driver**: Databricks Go driver
 
 By keeping specifications language-agnostic, we ensure:
 - ✅ Consistent behavior across all drivers
@@ -127,23 +142,6 @@ github.com/databricks/thrift-test-infrastructure/
 
 ## Getting Started
 
-### For Reviewers
-
-1. **Read the [Design Document](./design.md)**
-   - Understand the overall approach
-   - Review architecture decisions
-   - Provide feedback on multi-language strategy
-
-2. **Review Test Categories**
-   - Are all important scenarios covered?
-   - Are priorities correct?
-   - Any missing test cases?
-
-3. **Consider Implementation**
-   - Is the C# implementation approach sound?
-   - Will this work for Java/C++/Go drivers?
-   - Is the proxy server design adequate?
-
 ### For Implementers (Future)
 
 1. **Read Test Specifications**
@@ -171,15 +169,6 @@ github.com/databricks/thrift-test-infrastructure/
 - [ ] Java test implementation (future)
 - [ ] C++ test implementation (future)
 - [ ] Go test implementation (future)
-
-## Timeline
-
-- **Weeks 1-2**: Write specifications, implement proxy server
-- **Weeks 3-4**: C# critical tests (Session, CloudFetch, Execution)
-- **Weeks 5-6**: C# metadata and Arrow tests
-- **Weeks 7-8**: C# advanced features (parameters, errors)
-- **Weeks 9-10**: C# robustness tests (concurrency, edge cases)
-- **Future**: Adapt for Java, C++, Go drivers
 
 ## Questions?
 
