@@ -126,26 +126,20 @@ Hive Protocol V1-V10 → Spark Protocol V1-V9 → Databricks Extensions
 
 ### High-Level Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Test Specifications (Language-Agnostic Markdown)       │
-│  - 16 specification documents                           │
-│  - ~300 test cases                                      │
-│  - Shared by ALL driver implementations                 │
-└─────────────────────────────────────────────────────────┘
-                         ↓
-┌─────────────────────────────────────────────────────────┐
-│  Standalone Proxy Server (Go)                           │
-│  - HTTP/Thrift proxy with failure injection            │
-│  - Configuration-driven (YAML)                          │
-│  - Used by all language implementations                 │
-└─────────────────────────────────────────────────────────┘
-                         ↓
-┌──────────────┬──────────────┬──────────────┬───────────┐
-│  C# Tests    │  Java Tests  │  C++ Tests   │ Go Tests  │
-│  (ADBC)      │  (JDBC)      │  (ODBC)      │  (ADBC)   │
-│  [Initial]   │  [Future]    │  [Future]    │  [Future] │
-└──────────────┴──────────────┴──────────────┴───────────┘
+```mermaid
+graph TD
+    A["Test Specifications<br/>(Language-Agnostic Markdown)<br/>- 16 specification documents<br/>- ~300 test cases<br/>- Shared by ALL driver implementations"]
+    B["Standalone Proxy Server (Go)<br/>- HTTP/Thrift proxy with failure injection<br/>- Configuration-driven (YAML)<br/>- Used by all language implementations"]
+    C1["C# Tests<br/>(ADBC)<br/>[Initial]"]
+    C2["Java Tests<br/>(JDBC)<br/>[Future]"]
+    C3["C++ Tests<br/>(ODBC)<br/>[Future]"]
+    C4["Go Tests<br/>(ADBC)<br/>[Future]"]
+
+    A --> B
+    B --> C1
+    B --> C2
+    B --> C3
+    B --> C4
 ```
 
 ### Component Responsibilities
@@ -439,24 +433,24 @@ public abstract class ThriftProtocolTestBase : IDisposable
 
 ### Overview
 
-| Part | Category | Test Count | Priority | Initial Lang |
-|------|----------|------------|----------|--------------|
-| 1 | Test Strategy & Setup | - | Critical | All |
-| 2 | Session Lifecycle | 15 | Critical | C# |
-| 3 | Statement Execution | 25 | Critical | C# |
-| 4 | Metadata Operations | 40 | High | C# |
-| 5 | Arrow Format | 20 | High | C# |
-| 6 | CloudFetch Results | 20 | Critical | C# |
-| 7 | Direct Results | 15 | High | C# |
-| 8 | Parameterized Queries | 20 | High | C# |
-| 9 | Result Fetching | 15 | High | C# |
-| 10 | Error Handling | 30 | Critical | C# |
-| 11 | Timeout & Cleanup | 12 | Medium | C# |
-| 12 | Concurrency | 15 | Medium | C# |
-| 13 | Protocol Versions | 12 | Medium | C# |
-| 14 | Security | 15 | High | C# |
-| 15 | Performance | 10 | Low | C# |
-| 16 | Edge Cases | 36 | Medium | C# |
+| Part | Category | Test Count | Priority |
+|------|----------|------------|----------|
+| 1 | Test Strategy & Setup | - | Critical |
+| 2 | Session Lifecycle | 15 | Critical |
+| 3 | Statement Execution | 25 | Critical |
+| 4 | Metadata Operations | 40 | High |
+| 5 | Arrow Format | 20 | High |
+| 6 | CloudFetch Results | 20 | Critical |
+| 7 | Direct Results | 15 | High |
+| 8 | Parameterized Queries | 20 | High |
+| 9 | Result Fetching | 15 | High |
+| 10 | Error Handling | 30 | Critical |
+| 11 | Timeout & Cleanup | 12 | Medium |
+| 12 | Concurrency | 15 | Medium |
+| 13 | Protocol Versions | 12 | Medium |
+| 14 | Security | 15 | High |
+| 15 | Performance | 10 | Low |
+| 16 | Edge Cases | 36 | Medium |
 
 **Total: ~300 test cases**
 
