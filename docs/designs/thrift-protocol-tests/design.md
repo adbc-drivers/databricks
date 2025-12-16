@@ -346,9 +346,11 @@ We support two approaches for failure injection, similar to how mocking framewor
 - ✅ Better for stateful failure sequences
 - ❌ Requires code changes for new scenarios
 
-**Recommendation**: **Support both approaches**:
-1. **YAML for declarative scenarios** (90% of cases)
-2. **HTTP API for dynamic scenarios** (10% of cases)
+**Recommendation**: **Hybrid approach** - YAML defines scenarios, API controls them:
+1. **YAML**: Define all possible failure scenarios (version controlled, reviewable)
+2. **HTTP API**: Enable/disable scenarios dynamically per test (no server restart needed)
+
+This avoids the complexity of restarting the proxy server for each test case.
 
 **Example - YAML Configuration**:
 ```yaml
@@ -625,7 +627,19 @@ func TestSessionTimeoutRecovery(t *testing.T) {
 
 **Proxy API Endpoints**:
 ```bash
-# Configure failure
+# Enable a scenario defined in YAML (recommended)
+POST /api/v1/scenarios/{name}/enable
+
+# Disable a scenario
+POST /api/v1/scenarios/{name}/disable
+
+# List all defined scenarios (from YAML)
+GET /api/v1/scenarios
+
+# List currently active scenarios
+GET /api/v1/scenarios/active
+
+# Create a custom failure scenario on-the-fly (advanced)
 POST /api/v1/failures
 {
   "name": "custom_failure",
@@ -633,76 +647,76 @@ POST /api/v1/failures
   "action": {...}
 }
 
-# List active failures
-GET /api/v1/failures
-
-# Clear specific failure
-DELETE /api/v1/failures/{name}
-
-# Clear all failures
-DELETE /api/v1/failures
+# Clear all active failures/scenarios
+DELETE /api/v1/scenarios/active
 ```
 
-**Usage - YAML-Based Workflow**:
+**Recommended Workflow (Hybrid Approach)**:
 
-**Step 1**: Create test-specific proxy configuration
+**Step 1**: Start proxy ONCE with all scenario definitions
 ```bash
-# test-infrastructure/proxy-server/configs/cloudfetch-failures.yaml
-proxy:
-  listen_port: 8080
-  target_server: "https://workspace.databricks.com"
-
-failure_scenarios:
-  - name: "cloudfetch_expired_link"
-    trigger: "after_requests"
-    count: 1  # Expire link after first CloudFetch attempt
-    action: "expire_cloud_link"
-```
-
-**Step 2**: Start proxy with configuration
-```bash
+# All scenarios defined in YAML, but none are active initially
 cd test-infrastructure/proxy-server
-go run main.go --config configs/cloudfetch-failures.yaml
+go run main.go --config all-scenarios.yaml --api-port 8081
+
+# Proxy runs on :8080 (for Thrift traffic)
+# API runs on :8081 (for control)
 ```
 
-**Step 3**: Run tests pointing to proxy
+**Step 2**: Tests control failures via API (no restart needed)
 ```csharp
 // C# test - CloudFetchTests.cs
 [Fact]
 public async Task TestCloudFetchExpiredLinkRetry()
 {
-    // Test automatically uses proxy via environment variable
-    // DATABRICKS_HOST=localhost:8080 (set in test config)
+    var proxy = new ProxyControlClient("http://localhost:8081");
 
-    using var driver = CreateTestDriver();
+    // Enable specific failure scenario from YAML
+    await proxy.EnableScenario("cloudfetch_expired_link");
 
-    // First attempt: CloudFetch link will be expired by proxy
-    // Driver should detect expiration and retry with new link
-    var result = await driver.ExecuteQuery(
-        "SELECT * FROM large_table"
-    );
+    try
+    {
+        using var driver = CreateTestDriver();
 
-    // Verify driver successfully retried and got results
-    Assert.NotNull(result);
-    Assert.True(result.RowCount > 0);
+        // Proxy will now inject the failure
+        var result = await driver.ExecuteQuery("SELECT * FROM large_table");
+
+        // Verify driver correctly retried
+        Assert.NotNull(result);
+        Assert.True(result.RowCount > 0);
+    }
+    finally
+    {
+        // Clean up - disable scenario for next test
+        await proxy.DisableScenario("cloudfetch_expired_link");
+    }
+}
+
+[Fact]
+public async Task TestSessionTimeout()
+{
+    var proxy = new ProxyControlClient("http://localhost:8081");
+
+    // Different test, different scenario - same proxy server!
+    await proxy.EnableScenario("session_timeout_premature");
+
+    try
+    {
+        // Test session timeout handling...
+    }
+    finally
+    {
+        await proxy.DisableScenario("session_timeout_premature");
+    }
 }
 ```
 
-**Alternative**: Switch configurations per test
-```bash
-# Different configs for different test suites
-go run main.go --config configs/session-timeouts.yaml  # Session tests
-go run main.go --config configs/connection-resets.yaml  # Connection tests
-go run main.go --config configs/all-scenarios.yaml      # Full test run
-```
-
-**Alternative**: Environment-based configuration
-```bash
-# Set failure scenario via environment variable
-export PROXY_CONFIG_FILE=configs/cloudfetch-failures.yaml
-export DATABRICKS_HOST="localhost:8080"
-dotnet test --filter "Category=CloudFetch"
-```
+**Key Advantages**:
+- ✅ **No proxy restart** between tests
+- ✅ **YAML defines scenarios** (version controlled, reviewed)
+- ✅ **API controls activation** (flexible, per-test)
+- ✅ **Clean test isolation** (enable/disable per test)
+- ✅ **Fast test execution** (no startup overhead)
 
 **Failure Scenario Summary**:
 
