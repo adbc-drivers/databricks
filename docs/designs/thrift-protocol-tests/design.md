@@ -70,7 +70,7 @@ Create a **comprehensive, driver-agnostic test specification** with:
 ### Non-Goals
 
 - ❌ **Server-side testing**: Use existing runtime tests for ThriftServer behavior
-- ❌ **Performance benchmarking**: Focus on correctness, not performance optimization
+- ⏸️ **Performance benchmarking**: Focus on correctness first; performance tests can be added later
 - ❌ **Load testing**: Basic concurrency only, not large-scale load tests
 - ❌ **Protocol design**: Test existing protocol, not propose new features
 
@@ -130,10 +130,10 @@ Hive Protocol V1-V10 → Spark Protocol V1-V9 → Databricks Extensions
 graph TD
     A["Test Specifications<br/>(Language-Agnostic Markdown)<br/>- 16 specification documents<br/>- ~300 test cases<br/>- Shared by ALL driver implementations"]
     B["Standalone Proxy Server (Go)<br/>- HTTP/Thrift proxy with failure injection<br/>- Configuration-driven (YAML)<br/>- Used by all language implementations"]
-    C1["C# Tests<br/>(ADBC)<br/>[Initial]"]
-    C2["Java Tests<br/>(JDBC)<br/>[Future]"]
-    C3["C++ Tests<br/>(ODBC)<br/>[Future]"]
-    C4["Go Tests<br/>(ADBC)<br/>[Future]"]
+    C1["C# Tests<br/>(ADBC)"]
+    C2["Java Tests<br/>(JDBC)"]
+    C3["C++ Tests<br/>(ODBC)"]
+    C4["Go Tests<br/>(ADBC)"]
 
     A --> B
     B --> C1
@@ -806,56 +806,35 @@ public abstract class ThriftProtocolTestBase : IDisposable
 
 ## Implementation Plan
 
-### Phase 1: Foundation & Design (Weeks 1-2)
+### 2-Week Sprint: Foundation & Critical Tests
 
-**Deliverables:**
-1. ✅ Test specification documents (Parts 1-16)
-2. ✅ Design document (this document)
-3. ✅ Directory structure
-4. Proxy server basic implementation
-5. CI integration setup
+**Sprint Goals:**
+1. ✅ Design document (this document)
+2. ✅ Directory structure
+3. Test specification documents (critical categories)
+4. Proxy server MVP implementation
+5. C# critical test implementation (~60 tests)
+6. CI integration setup
 
-**Tasks:**
-- [ ] Write 16 test specification documents
-- [ ] Implement standalone proxy server in Go
-- [ ] Create C# test base classes
+**Week 1: Foundation**
+- [ ] Write test specifications for critical categories (Session, Statement, CloudFetch)
+- [ ] Implement proxy server MVP with basic failure injection
+- [ ] Create C# test base classes and helpers
 - [ ] Set up GitHub Actions workflow
 
-### Phase 2: Critical Tests - C# (Weeks 3-4)
+**Week 2: Critical Tests**
+- [ ] Implement Session lifecycle tests (15 tests)
+- [ ] Implement Statement execution tests (25 tests)
+- [ ] Implement CloudFetch tests with proxy (20 tests)
+- [ ] Validate CI pipeline with critical tests
 
-**Focus:** Session, Statement Execution, CloudFetch
+**Future Sprints:**
+- Additional test categories (Metadata, Arrow, Parameterized Queries, etc.)
+- Complete test specification documents (remaining categories)
+- Advanced proxy features
+- Cross-driver expansion
 
-**Deliverables:**
-- 60 tests implemented in C# and passing
-- Session lifecycle tests (15 tests)
-- Statement execution tests (25 tests)
-- CloudFetch tests with failure scenarios (20 tests)
-
-### Phase 3: Metadata & Arrow - C# (Weeks 5-6)
-
-**Focus:** Metadata operations, Arrow streaming
-
-**Deliverables:**
-- 60 additional tests (120 total)
-- Metadata operation tests (40 tests)
-- Arrow format tests (20 tests)
-
-### Phase 4: Advanced Features - C# (Weeks 7-8)
-
-**Focus:** Parameterized queries, Direct results, Error handling
-
-**Deliverables:**
-- 65 additional tests (185 total)
-
-### Phase 5: Robustness & Edge Cases - C# (Weeks 9-10)
-
-**Focus:** Concurrency, timeouts, edge cases
-
-**Deliverables:**
-- 115 additional tests (300 total)
-- Full C# implementation complete
-
-### Phase 6: Cross-Driver Expansion (Future)
+### Cross-Driver Expansion (Future)
 
 **Goal:** Adapt test suite for Java (JDBC), C++ (ODBC), Go (ADBC) drivers
 
@@ -933,7 +912,7 @@ public abstract class ThriftProtocolTestBase : IDisposable
 - Establishes patterns for future implementations
 
 **Future Rollout:**
-1. C# ADBC (Weeks 1-10)
+1. C# ADBC (initial 2-week sprint, then iterative)
 2. Go ADBC (adapt from C# learnings)
 3. Java JDBC (similar to C# patterns)
 4. C++ ODBC (adapted patterns)
@@ -1026,12 +1005,13 @@ public abstract class ThriftProtocolTestBase : IDisposable
 
 ### Rollout Plan
 
-**Phase 1: C# Implementation (Weeks 1-10)**
-- Implement in adbc-drivers/databricks repository
-- Run in CI for all PRs
+**Phase 1: C# Initial Sprint (2 weeks)**
+- Implement critical tests in adbc-drivers/databricks repository
+- Set up CI pipeline
 - Validate against dev/staging environments
 
-**Phase 2: Stabilization (Weeks 11-12)**
+**Phase 2: Iterative Expansion**
+- Add remaining test categories sprint by sprint
 - Fix issues discovered during implementation
 - Optimize test execution time
 - Improve documentation
@@ -1056,25 +1036,25 @@ public abstract class ThriftProtocolTestBase : IDisposable
 
 ## Next Steps
 
-1. **Review and Approval** (Week 0):
+1. **Review and Approval**:
    - Technical review from team
    - Security review for test credentials
    - Architecture review for multi-language design
 
-2. **Write Specifications** (Weeks 1-2):
-   - Create 16 test specification documents
-   - Write README for test suite
-   - Document proxy server interface
+2. **Sprint Planning** (2-week sprint):
+   - **Week 1**: Foundation setup
+     - Write test specifications for critical categories
+     - Implement proxy server MVP
+     - Set up C# test infrastructure
+   - **Week 2**: Critical tests implementation
+     - Session lifecycle tests
+     - Statement execution tests
+     - CloudFetch tests with proxy
 
-3. **Implement Proxy Server** (Weeks 1-2):
-   - Basic HTTP proxy functionality
-   - Configuration-driven failure injection
-   - Request/response logging
-
-4. **Begin C# Implementation** (Week 3):
-   - Set up test project structure
-   - Implement base test classes
-   - Start with critical tests (Session, CloudFetch)
+3. **Follow-up Sprints**:
+   - Additional test categories
+   - Complete specification documents
+   - Cross-driver expansion
 
 ---
 

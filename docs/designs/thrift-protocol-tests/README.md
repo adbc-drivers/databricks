@@ -170,13 +170,6 @@ github.com/databricks/thrift-test-infrastructure/
 - [ ] C++ test implementation (future)
 - [ ] Go test implementation (future)
 
-## Questions?
-
-For questions about this design:
-- Review the [Design Document](./design.md)
-- Check the [original design doc](https://github.com/databricks-eng/universe/blob/master/peco/docs/designs/adbc-thrift-test-suite-design.md)
-- Reach out to the PECO team
-
 ## Contributing
 
 When contributing test specifications:
