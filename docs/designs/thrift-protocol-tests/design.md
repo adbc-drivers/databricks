@@ -164,7 +164,41 @@ graph TD
 
 ### Example: Cross-Language Test Implementation
 
-**Specification** (shared):
+**Specification Options:**
+
+We support two specification formats to avoid AI code generation dependency:
+
+**Option 1: Structured JSON/YAML** (Machine-readable, tool-friendly):
+```yaml
+# test-session-001.yaml
+test_id: TEST-SESSION-001
+name: Basic OpenSession
+category: session_lifecycle
+priority: critical
+protocol_version: all
+
+setup:
+  - create_test_config:
+      auth_type: oauth
+      protocol_version: 9
+
+steps:
+  - action: open_session
+    params:
+      credentials: "{{test_credentials}}"
+      client_protocol: 9
+
+  - action: assert_not_null
+    target: session_handle
+
+  - action: assert_protocol_negotiated
+    expected_version: 9
+
+cleanup:
+  - action: close_session
+```
+
+**Option 2: Markdown** (Human-readable, documentation-friendly):
 ```markdown
 ## TEST-SESSION-001: Basic OpenSession
 1. Create OpenSession request with valid credentials
@@ -173,6 +207,11 @@ graph TD
 4. Verify sessionHandle is valid
 5. Verify protocol version negotiation
 ```
+
+**Recommendation**: Use **YAML for test definitions** (machine-readable) with **Markdown for documentation**. This allows:
+- Code generation tools to parse YAML and generate language-specific tests
+- Humans to read Markdown documentation
+- Validation tools to check test completeness
 
 **C# Implementation**:
 ```csharp
@@ -291,7 +330,27 @@ The proxy server is a standalone Go application that:
 - Injects failures based on configuration
 - Logs all traffic for debugging
 
-**Configuration Example**:
+**Failure Injection Approaches:**
+
+We support two approaches for failure injection, similar to how mocking frameworks work:
+
+**Approach 1: Configuration-Based (YAML)**
+- ✅ Simple for static test scenarios
+- ✅ Easy to version control and review
+- ✅ No code changes needed for new scenarios
+- ❌ Less flexible for dynamic scenarios
+
+**Approach 2: API-Based (Programmatic)**
+- ✅ More flexible for complex/dynamic scenarios
+- ✅ Can adjust failures during test execution
+- ✅ Better for stateful failure sequences
+- ❌ Requires code changes for new scenarios
+
+**Recommendation**: **Support both approaches**:
+1. **YAML for declarative scenarios** (90% of cases)
+2. **HTTP API for dynamic scenarios** (10% of cases)
+
+**Example - YAML Configuration**:
 ```yaml
 # proxy-config.yaml
 proxy:
@@ -514,15 +573,135 @@ failure_scenarios:
     priority: "P2"
 ```
 
-**Usage**:
-```bash
-# Start proxy server
-cd test-infrastructure/proxy-server
-go run main.go --config proxy-config.yaml
+**Example - API-Based (Programmatic)**:
 
-# Tests connect to proxy instead of real server
+For dynamic scenarios, the proxy server exposes an HTTP API:
+
+```csharp
+// C# test using programmatic failure injection
+[Fact]
+public async Task TestCloudFetchRetryAfterExpiration()
+{
+    // Configure proxy via HTTP API
+    var proxyClient = new ProxyControlClient("http://localhost:8081");
+
+    // Set up failure scenario programmatically
+    await proxyClient.ConfigureFailure(new FailureScenario
+    {
+        Name = "cloudfetch_expire_on_first_attempt",
+        Trigger = new AfterRequestsTrigger { Count = 1 },
+        Action = new ExpireCloudLinkAction(),
+        Duration = TimeSpan.FromMinutes(5)  // Auto-clear after 5 min
+    });
+
+    // Run test
+    using var driver = CreateTestDriver();
+    var result = await driver.ExecuteQuery("SELECT * FROM large_table");
+
+    // Verify driver correctly retries with new link
+    Assert.True(result.Success);
+
+    // Clear failure scenario
+    await proxyClient.ClearFailures();
+}
+
+// Go test using API
+func TestSessionTimeoutRecovery(t *testing.T) {
+    proxy := NewProxyClient("http://localhost:8081")
+
+    // Dynamic failure that changes based on state
+    proxy.ConfigureFailure(&FailureScenario{
+        Name: "session_expire_after_operations",
+        Trigger: &OperationCountTrigger{Count: 10},
+        Action: &InvalidateSessionAction{},
+    })
+
+    // Test automatically cleaned up via defer
+    defer proxy.ClearFailures()
+
+    // Run test...
+}
+```
+
+**Proxy API Endpoints**:
+```bash
+# Configure failure
+POST /api/v1/failures
+{
+  "name": "custom_failure",
+  "trigger": {...},
+  "action": {...}
+}
+
+# List active failures
+GET /api/v1/failures
+
+# Clear specific failure
+DELETE /api/v1/failures/{name}
+
+# Clear all failures
+DELETE /api/v1/failures
+```
+
+**Usage - YAML-Based Workflow**:
+
+**Step 1**: Create test-specific proxy configuration
+```bash
+# test-infrastructure/proxy-server/configs/cloudfetch-failures.yaml
+proxy:
+  listen_port: 8080
+  target_server: "https://workspace.databricks.com"
+
+failure_scenarios:
+  - name: "cloudfetch_expired_link"
+    trigger: "after_requests"
+    count: 1  # Expire link after first CloudFetch attempt
+    action: "expire_cloud_link"
+```
+
+**Step 2**: Start proxy with configuration
+```bash
+cd test-infrastructure/proxy-server
+go run main.go --config configs/cloudfetch-failures.yaml
+```
+
+**Step 3**: Run tests pointing to proxy
+```csharp
+// C# test - CloudFetchTests.cs
+[Fact]
+public async Task TestCloudFetchExpiredLinkRetry()
+{
+    // Test automatically uses proxy via environment variable
+    // DATABRICKS_HOST=localhost:8080 (set in test config)
+
+    using var driver = CreateTestDriver();
+
+    // First attempt: CloudFetch link will be expired by proxy
+    // Driver should detect expiration and retry with new link
+    var result = await driver.ExecuteQuery(
+        "SELECT * FROM large_table"
+    );
+
+    // Verify driver successfully retried and got results
+    Assert.NotNull(result);
+    Assert.True(result.RowCount > 0);
+}
+```
+
+**Alternative**: Switch configurations per test
+```bash
+# Different configs for different test suites
+go run main.go --config configs/session-timeouts.yaml  # Session tests
+go run main.go --config configs/connection-resets.yaml  # Connection tests
+go run main.go --config configs/all-scenarios.yaml      # Full test run
+```
+
+**Alternative**: Environment-based configuration
+```bash
+# Set failure scenario via environment variable
+export PROXY_CONFIG_FILE=configs/cloudfetch-failures.yaml
 export DATABRICKS_HOST="localhost:8080"
-dotnet test
+dotnet test --filter "Category=CloudFetch"
 ```
 
 **Failure Scenario Summary**:
