@@ -40,12 +40,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             Assert.NotNull(scenarios);
             Assert.NotEmpty(scenarios);
 
-            // Verify we have the expected CloudFetch scenarios from proxy-config.yaml
+            // Verify we have some expected scenarios from proxy-config.yaml
             Assert.Contains(scenarios, s => s.Name == "cloudfetch_expired_link");
             Assert.Contains(scenarios, s => s.Name == "cloudfetch_timeout");
-            Assert.Contains(scenarios, s => s.Name == "cloudfetch_403_forbidden");
-            Assert.Contains(scenarios, s => s.Name == "cloudfetch_malformed_arrow");
-            Assert.Contains(scenarios, s => s.Name == "cloudfetch_partial_read");
+            Assert.Contains(scenarios, s => s.Name == "cloudfetch_azure_403");
+            Assert.Contains(scenarios, s => s.Name == "invalid_session_handle");
         }
 
         [Fact]

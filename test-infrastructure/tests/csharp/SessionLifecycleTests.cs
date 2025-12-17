@@ -97,17 +97,21 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1 as test_value";
 
-            using var reader = statement.ExecuteQuery();
+            var result = statement.ExecuteQuery();
+            Assert.NotNull(result);
+
+            using var reader = result.Stream;
             Assert.NotNull(reader);
 
             // Assert - Verify query executed successfully
-            bool hasData = reader.Read();
-            Assert.True(hasData);
-
             var schema = reader.Schema;
             Assert.NotNull(schema);
             Assert.Single(schema.FieldsList);
             Assert.Equal("test_value", schema.FieldsList[0].Name);
+
+            var batch = reader.ReadNextRecordBatchAsync().Result;
+            Assert.NotNull(batch);
+            Assert.True(batch.Length > 0);
         }
 
         [Fact]
@@ -154,11 +158,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 using var statement2 = connection2.CreateStatement();
                 statement2.SqlQuery = "SELECT 2 as test_value";
 
-                using var reader2 = statement2.ExecuteQuery();
+                var result2 = statement2.ExecuteQuery();
+                Assert.NotNull(result2);
+
+                using var reader2 = result2.Stream;
                 Assert.NotNull(reader2);
 
-                bool hasData = reader2.Read();
-                Assert.True(hasData);
+                var batch2 = reader2.ReadNextRecordBatchAsync().Result;
+                Assert.NotNull(batch2);
+                Assert.True(batch2.Length > 0);
             }
         }
 
@@ -172,8 +180,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1 as test_value";
 
-            using var reader = statement.ExecuteQuery();
-            Assert.True(reader.Read());
+            var result = statement.ExecuteQuery();
+            Assert.NotNull(result);
+
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            var batch = reader.ReadNextRecordBatchAsync().Result;
+            Assert.NotNull(batch);
+            Assert.True(batch.Length > 0);
 
             // Act - Dispose connection (which should close session)
             connection.Dispose();
@@ -213,8 +228,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1 as test_value";
 
-            using var reader = statement.ExecuteQuery();
-            Assert.True(reader.Read());
+            var result = statement.ExecuteQuery();
+            Assert.NotNull(result);
+
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            var batch = reader.ReadNextRecordBatchAsync().Result;
+            Assert.NotNull(batch);
+            Assert.True(batch.Length > 0);
 
             // Enable close session error scenario
             await ControlClient.EnableScenarioAsync("close_session_error");

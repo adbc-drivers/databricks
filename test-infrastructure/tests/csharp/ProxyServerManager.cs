@@ -64,7 +64,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Auto-detect paths relative to the test project (test-infrastructure/tests/csharp/)
             var testProjectRoot = FindTestProjectRoot();
             _proxyBinaryPath = proxyBinaryPath ?? Path.Combine(testProjectRoot, "..", "..", "proxy-server", "proxy-server");
-            _configPath = configPath ?? Path.Combine(testProjectRoot, "..", "..", "proxy-server", "proxy-config.yaml");
+            _configPath = configPath ?? Path.Combine(testProjectRoot, "..", "..", "proxy-server", "proxy-config-test.yaml");
 
             // Ensure binary exists
             if (!File.Exists(_proxyBinaryPath))
