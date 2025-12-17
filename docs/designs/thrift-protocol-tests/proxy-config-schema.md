@@ -292,70 +292,53 @@ failure_scenarios:
   # === CloudFetch Failures ===
 
   - name: "cloudfetch_expired_link"
-    jira: "PECOBLR-1131"
     description: "CloudFetch link expires, driver should retry"
     operation: "CloudFetchDownload"
     action: "expire_cloud_link"
-    priority: "P0"
 
   - name: "cloudfetch_azure_403"
-    jira: "ES-1624602"
-    description: "Azure returns 403 Forbidden intermittently"
+    description: "Azure returns 403 Forbidden"
     operation: "CloudFetchDownload"
     action: "return_error"
     error_code: 403
     error_message: "[FILES_API_AZURE_FORBIDDEN]"
-    priority: "P1"
 
   - name: "cloudfetch_timeout"
-    jira: "BL-13239"
     description: "CloudFetch download times out"
     operation: "CloudFetchDownload"
     action: "delay"
     duration: "65s"
-    priority: "P0"
 
   - name: "cloudfetch_connection_reset"
     description: "Connection reset during CloudFetch download"
     operation: "CloudFetchDownload"
     action: "close_connection"
-    at_byte: 1048576
-    priority: "P1"
 
   # === Connection Failures ===
 
   - name: "connection_reset_during_fetch"
-    jira: "BL-13580"
     description: "Connection reset when fetching large results"
     operation: "FetchResults"
     action: "close_connection"
-    priority: "P0"
 
   - name: "tls_handshake_timeout"
-    jira: "BL-14202"
     description: "TLS handshake times out"
     action: "ssl_error"
     error_type: "handshake_timeout"
-    priority: "P1"
 
   # === Session Failures ===
 
   - name: "invalid_session_handle"
-    jira: "ES-610899"
     description: "Session invalidated but client unaware"
     operation: "GetOperationStatus"
     action: "return_error"
     error_message: "Invalid SessionHandle"
-    retryable: true
-    priority: "P0"
 
   - name: "session_terminated_active_query"
-    jira: "XTA-11040"
     description: "Session terminated with active queries"
     operation: "GetOperationStatus"
     action: "return_error"
     error_message: "Session terminated with active queries"
-    priority: "P1"
 
   # === Query Execution Failures ===
 
@@ -364,7 +347,6 @@ failure_scenarios:
     operation: "ExecuteStatement"
     action: "delay"
     duration: "35s"
-    priority: "P2"
 ```
 
 ---
