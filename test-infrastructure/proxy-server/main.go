@@ -184,6 +184,14 @@ func proxyHandler(proxy *httputil.ReverseProxy) http.HandlerFunc {
 					return // Failure was injected, don't proxy
 				}
 			}
+		} else if isThriftRequest(r) {
+			// Check for enabled Thrift operation scenarios
+			scenario := getEnabledThriftScenario()
+			if scenario != nil {
+				if handleThriftFailure(w, r, scenario) {
+					return // Failure was injected, don't proxy
+				}
+			}
 		}
 
 		// Normal proxying
@@ -205,6 +213,12 @@ func isCloudFetchDownload(r *http.Request) bool {
 		strings.Contains(host, "storage.googleapis.com")
 }
 
+// isThriftRequest detects Thrift/HTTP requests to SQL warehouse
+func isThriftRequest(r *http.Request) bool {
+	// Thrift requests are POST to /sql/1.0/warehouses/{warehouse_id}
+	return r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/sql/")
+}
+
 // getEnabledCloudFetchScenario finds an enabled CloudFetch scenario
 func getEnabledCloudFetchScenario() *FailureScenario {
 	mu.RLock()
@@ -216,6 +230,68 @@ func getEnabledCloudFetchScenario() *FailureScenario {
 		}
 	}
 	return nil
+}
+
+// getEnabledThriftScenario finds an enabled Thrift operation scenario
+func getEnabledThriftScenario() *FailureScenario {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	for _, scenario := range scenarios {
+		// For now, match any enabled scenario with a Thrift operation
+		// TODO: Parse Thrift binary protocol to match specific operations
+		if scenario.Enabled && scenario.Operation != "" && scenario.Operation != "CloudFetchDownload" {
+			return scenario
+		}
+	}
+	return nil
+}
+
+// handleThriftFailure injects Thrift operation failures
+func handleThriftFailure(w http.ResponseWriter, r *http.Request, scenario *FailureScenario) bool {
+	log.Printf("[INJECT] Triggering scenario: %s (operation: %s)", scenario.Name, scenario.Operation)
+
+	switch scenario.Action {
+	case "return_error":
+		// Return HTTP error with specified code and message
+		code := scenario.ErrorCode
+		if code == 0 {
+			code = http.StatusInternalServerError
+		}
+		http.Error(w, scenario.ErrorMessage, code)
+		disableScenario(scenario.Name)
+		return true
+
+	case "delay":
+		// Inject delay then continue with normal request
+		duration, err := time.ParseDuration(scenario.Duration)
+		if err != nil {
+			log.Printf("[ERROR] Invalid duration for scenario %s: %v", scenario.Name, err)
+			return false
+		}
+		log.Printf("[INJECT] Delaying %s for scenario: %s", duration, scenario.Name)
+		time.Sleep(duration)
+		disableScenario(scenario.Name)
+		return false // Continue with request after delay
+
+	case "close_connection":
+		// Close the connection abruptly to simulate connection reset
+		if hijacker, ok := w.(http.Hijacker); ok {
+			conn, _, err := hijacker.Hijack()
+			if err != nil {
+				log.Printf("[ERROR] Failed to hijack connection for scenario %s: %v", scenario.Name, err)
+				return false
+			}
+			log.Printf("[INJECT] Closing connection for scenario: %s", scenario.Name)
+			conn.Close()
+			disableScenario(scenario.Name)
+			return true
+		}
+		log.Printf("[ERROR] ResponseWriter does not support hijacking for scenario: %s", scenario.Name)
+		return false
+	}
+
+	return false
 }
 
 // handleCloudFetchFailure injects CloudFetch failures
@@ -251,6 +327,22 @@ func handleCloudFetchFailure(w http.ResponseWriter, r *http.Request, scenario *F
 		time.Sleep(duration)
 		disableScenario(scenario.Name)
 		return false // Continue with request after delay
+
+	case "close_connection":
+		// Close the connection abruptly to simulate connection reset
+		if hijacker, ok := w.(http.Hijacker); ok {
+			conn, _, err := hijacker.Hijack()
+			if err != nil {
+				log.Printf("[ERROR] Failed to hijack connection for scenario %s: %v", scenario.Name, err)
+				return false
+			}
+			log.Printf("[INJECT] Closing connection for scenario: %s", scenario.Name)
+			conn.Close()
+			disableScenario(scenario.Name)
+			return true
+		}
+		log.Printf("[ERROR] ResponseWriter does not support hijacking for scenario: %s", scenario.Name)
+		return false
 	}
 
 	return false
