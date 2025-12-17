@@ -77,6 +77,18 @@ failure_scenarios:
     action: "return_error"
     error_message: "Session terminated with active queries"
 
+  - name: "open_session_timeout"
+    description: "OpenSession operation times out"
+    operation: "OpenSession"
+    action: "delay"
+    duration: "35s"
+
+  - name: "close_session_error"
+    description: "CloseSession returns an error"
+    operation: "CloseSession"
+    action: "return_error"
+    error_message: "Failed to close session"
+
   - name: "query_execution_timeout"
     description: "Query execution exceeds timeout"
     operation: "ExecuteStatement"
