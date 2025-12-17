@@ -116,17 +116,27 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
         /// <summary>
         /// Builds connection parameters that route through the proxy server.
+        /// Our Go proxy is a simple HTTP reverse proxy, so we override hostname/port to localhost
+        /// and disable TLS. The proxy receives plain HTTP and forwards as HTTPS to Databricks.
         /// Override this method to customize connection configuration.
         /// </summary>
         protected virtual Dictionary<string, string> BuildProxiedConnectionParameters()
         {
             var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            // Use proxy as the hostname
+            // Override hostname and port to point to the proxy (plain HTTP)
             parameters[SparkParameters.HostName] = "localhost";
             parameters[SparkParameters.Port] = ProxyManager.ProxyPort.ToString();
+            parameters[SparkParameters.Type] = SparkServerTypeConstants.Http;
 
-            // Copy authentication from test config
+            // Disable TLS since proxy listens on plain HTTP
+            parameters["adbc.http_options.tls.enabled"] = "false";
+
+            // Copy path and authentication from test config
+            if (!string.IsNullOrEmpty(TestConfig.Path))
+            {
+                parameters[SparkParameters.Path] = TestConfig.Path;
+            }
             if (!string.IsNullOrEmpty(TestConfig.Token))
             {
                 parameters[SparkParameters.Token] = TestConfig.Token;
@@ -138,10 +148,6 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             if (!string.IsNullOrEmpty(TestConfig.AuthType))
             {
                 parameters[SparkParameters.AuthType] = TestConfig.AuthType;
-            }
-            if (!string.IsNullOrEmpty(TestConfig.Path))
-            {
-                parameters[SparkParameters.Path] = TestConfig.Path;
             }
 
             return parameters;

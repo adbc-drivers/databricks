@@ -1,0 +1,103 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Proxy Server Configuration for Thrift Protocol Test Suite
+# See docs/designs/thrift-protocol-tests/proxy-config-schema.md for full schema documentation
+
+proxy:
+  listen_port: 18080                                   # Port for Thrift/HTTP traffic (test port)
+  target_server: "https://adb-6436897454825492.12.azuredatabricks.net"   # Upstream Databricks server
+  api_port: 18081                                      # Control API port (test port)
+  log_requests: true                                   # Log all requests
+  log_level: "info"                                    # debug|info|warn|error
+
+failure_scenarios:
+  # === Priority 1: CloudFetch Failures ===
+
+  - name: "cloudfetch_expired_link"
+    description: "CloudFetch link expires, driver should retry via FetchResults"
+    jira: "PECOBLR-1131"
+    operation: "CloudFetchDownload"
+    action: "expire_cloud_link"
+
+  - name: "cloudfetch_azure_403"
+    description: "Azure returns 403 Forbidden during CloudFetch download"
+    operation: "CloudFetchDownload"
+    action: "return_error"
+    error_code: 403
+    error_message: "[FILES_API_AZURE_FORBIDDEN]"
+
+  - name: "cloudfetch_timeout"
+    description: "CloudFetch download times out (exceeds 60s)"
+    operation: "CloudFetchDownload"
+    action: "delay"
+    duration: "65s"
+
+  # === Priority 2: Connection Failures ===
+
+  - name: "connection_reset_during_fetch"
+    description: "Connection reset when fetching large result sets"
+    operation: "FetchResults"
+    action: "close_connection"
+
+  # === Priority 3: Session Failures ===
+
+  - name: "invalid_session_handle"
+    description: "Session becomes invalid but client is unaware"
+    operation: "GetOperationStatus"
+    action: "return_error"
+    error_message: "Invalid SessionHandle"
+
+  # === Additional Scenarios (for future PRs) ===
+
+  - name: "cloudfetch_connection_reset"
+    description: "Connection reset during CloudFetch download"
+    operation: "CloudFetchDownload"
+    action: "close_connection"
+
+  - name: "tls_handshake_timeout"
+    description: "TLS handshake times out"
+    action: "ssl_error"
+    error_type: "handshake_timeout"
+
+  - name: "session_terminated_active_query"
+    description: "Session terminated with active queries"
+    operation: "GetOperationStatus"
+    action: "return_error"
+    error_message: "Session terminated with active queries"
+
+  - name: "open_session_timeout"
+    description: "OpenSession operation times out"
+    operation: "OpenSession"
+    action: "delay"
+    duration: "35s"
+
+  - name: "close_session_error"
+    description: "CloseSession returns an error"
+    operation: "CloseSession"
+    action: "return_error"
+    error_message: "Failed to close session"
+
+  - name: "query_execution_timeout"
+    description: "Query execution exceeds timeout"
+    operation: "ExecuteStatement"
+    action: "delay"
+    duration: "35s"
+
+  - name: "direct_results_exceed_maxrows"
+    description: "DirectResults returns more rows than MaxRows"
+    operation: "OpenSession"
+    action: "modify_response"
+    field: "directResults"
+    modification: "exceed_maxrows"
