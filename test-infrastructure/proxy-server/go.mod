@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 module github.com/apache/arrow-adbc/databricks/test-infrastructure/proxy-server
 
 go 1.21
