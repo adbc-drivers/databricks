@@ -197,4 +197,3 @@ func TestConfigLoading(t *testing.T) {
 		}
 	})
 }
-
