@@ -113,101 +113,6 @@ jobs:
           echo "Multi-query mode: $IS_MULTI_QUERY"
           echo "Query count: $(echo "$QUERIES" | jq 'length')"
 
-  benchmark-net8:
-    name: Benchmark Suite (.NET 8.0)
-    needs: setup
-    if: |
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    environment: azure-prod
-    env:
-      DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
-      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
-      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Build
-        shell: bash
-        run: |
-          ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
-
-      - name: Run benchmark suite
-        shell: bash
-        run: |
-          mkdir -p ~/.databricks
-          mkdir -p benchmark-results
-
-          # Create config file with connection details (query will be read from benchmark-queries.json)
-          cat > ~/.databricks/connection.json << EOF
-          {
-            "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
-            "auth_type": "oauth",
-            "grant_type": "client_credentials",
-            "client_id": "${{ env.DATABRICKS_CLIENT_ID }}",
-            "client_secret": "${{ env.DATABRICKS_CLIENT_SECRET }}",
-            "type": "databricks",
-            "catalog": "main",
-            "db_schema": "ADBC_Testing",
-            "query": "select 1"
-          }
-          EOF
-
-          export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
-          export DATABRICKS_BENCHMARK_QUERIES_FILE="${{ github.workspace }}/csharp/Benchmarks/benchmark-queries.json"
-
-          QUERY_COUNT=$(jq 'length' "$DATABRICKS_BENCHMARK_QUERIES_FILE")
-          echo "=== Running benchmark suite with $QUERY_COUNT queries ==="
-          echo "Queries will be executed by BenchmarkDotNet in a single session"
-
-          # Run benchmark once - BenchmarkDotNet will run all queries via ArgumentsSource
-          if ./ci/scripts/csharp_benchmark.sh "${{ github.workspace }}" "net8.0"; then
-            echo "✅ Benchmark suite completed successfully"
-
-            # Save all results
-            if [ -d "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" ]; then
-              cp -r csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/* benchmark-results/
-            fi
-          else
-            echo "❌ Benchmark suite failed"
-            exit 1
-          fi
-
-      - name: Upload all benchmark results
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-results-net8
-          path: benchmark-results/
-          retention-days: 90
-
-      - name: Generate summary
-        if: needs.setup.outputs.is_multi_query == 'true'
-        run: |
-          echo "# Benchmark Suite Results (.NET 8.0)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "All queries executed in a single BenchmarkDotNet session to avoid redundant builds." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ -f "benchmark-results"/*-report-full-compressed.json ]; then
-            echo "✅ Benchmark suite completed successfully" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Results include all $(jq 'length' csharp/Benchmarks/benchmark-queries.json) queries from benchmark-queries.json" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Benchmark suite failed" >> $GITHUB_STEP_SUMMARY
-          fi
-
   benchmark-net472:
     name: Benchmark Suite (.NET Framework 4.7.2)
     needs: setup
@@ -311,6 +216,101 @@ jobs:
             echo "❌ Benchmark suite failed" >> $GITHUB_STEP_SUMMARY
           fi
 
+  benchmark-net8:
+    name: Benchmark Suite (.NET 8.0)
+    needs: setup
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: azure-prod
+    env:
+      DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        shell: bash
+        run: |
+          ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
+
+      - name: Run benchmark suite
+        shell: bash
+        run: |
+          mkdir -p ~/.databricks
+          mkdir -p benchmark-results
+
+          # Create config file with connection details (query will be read from benchmark-queries.json)
+          cat > ~/.databricks/connection.json << EOF
+          {
+            "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
+            "auth_type": "oauth",
+            "grant_type": "client_credentials",
+            "client_id": "${{ env.DATABRICKS_CLIENT_ID }}",
+            "client_secret": "${{ env.DATABRICKS_CLIENT_SECRET }}",
+            "type": "databricks",
+            "catalog": "main",
+            "db_schema": "ADBC_Testing",
+            "query": "select 1"
+          }
+          EOF
+
+          export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
+          export DATABRICKS_BENCHMARK_QUERIES_FILE="${{ github.workspace }}/csharp/Benchmarks/benchmark-queries.json"
+
+          QUERY_COUNT=$(jq 'length' "$DATABRICKS_BENCHMARK_QUERIES_FILE")
+          echo "=== Running benchmark suite with $QUERY_COUNT queries ==="
+          echo "Queries will be executed by BenchmarkDotNet in a single session"
+
+          # Run benchmark once - BenchmarkDotNet will run all queries via ArgumentsSource
+          if ./ci/scripts/csharp_benchmark.sh "${{ github.workspace }}" "net8.0"; then
+            echo "✅ Benchmark suite completed successfully"
+
+            # Save all results
+            if [ -d "csharp/Benchmarks/BenchmarkDotNet.Artifacts/results" ]; then
+              cp -r csharp/Benchmarks/BenchmarkDotNet.Artifacts/results/* benchmark-results/
+            fi
+          else
+            echo "❌ Benchmark suite failed"
+            exit 1
+          fi
+
+      - name: Upload all benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-net8
+          path: benchmark-results/
+          retention-days: 90
+
+      - name: Generate summary
+        if: needs.setup.outputs.is_multi_query == 'true'
+        run: |
+          echo "# Benchmark Suite Results (.NET 8.0)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All queries executed in a single BenchmarkDotNet session to avoid redundant builds." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "benchmark-results"/*-report-full-compressed.json ]; then
+            echo "✅ Benchmark suite completed successfully" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Results include all $(jq 'length' csharp/Benchmarks/benchmark-queries.json) queries from benchmark-queries.json" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Benchmark suite failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
   post-results:
     name: Post Benchmark Results to PR
     needs: [setup, benchmark-net8, benchmark-net472]
@@ -337,7 +337,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Find the latest successful workflow run on main branch
+          # Find the most recent successful workflow run on main branch
           MAIN_RUN_ID=$(gh run list \
             --repo ${{ github.repository }} \
             --workflow benchmarks.yml \
@@ -347,23 +347,24 @@ jobs:
             --json databaseId \
             --jq '.[0].databaseId')
 
-          if [ -n "$MAIN_RUN_ID" ]; then
-            echo "Found baseline run: $MAIN_RUN_ID"
-            mkdir -p baseline-net8 baseline-net472
-
-            # Download baseline artifacts
-            gh run download $MAIN_RUN_ID \
-              --repo ${{ github.repository }} \
-              --name benchmark-results-net8 \
-              --dir baseline-net8 || echo "No baseline for .NET 8.0"
-
-            gh run download $MAIN_RUN_ID \
-              --repo ${{ github.repository }} \
-              --name benchmark-results-net472 \
-              --dir baseline-net472 || echo "No baseline for .NET Framework 4.7.2"
-          else
+          if [ -z "$MAIN_RUN_ID" ]; then
             echo "No baseline run found on main branch"
+            exit 0
           fi
+
+          echo "Found baseline run: $MAIN_RUN_ID"
+          mkdir -p baseline-net8 baseline-net472
+
+          # Download baseline artifacts
+          gh run download $MAIN_RUN_ID \
+            --repo ${{ github.repository }} \
+            --name benchmark-results-net8 \
+            --dir baseline-net8 || echo "No baseline for .NET 8.0"
+
+          gh run download $MAIN_RUN_ID \
+            --repo ${{ github.repository }} \
+            --name benchmark-results-net472 \
+            --dir baseline-net472 || echo "No baseline for .NET Framework 4.7.2"
 
       - name: Compare and post results
         env:
@@ -374,6 +375,18 @@ jobs:
           NET472_RESULTS=$(find results-net472 -name "*-report-full-compressed.json" | head -1)
           NET8_BASELINE=$(find baseline-net8 -name "*-report-full-compressed.json" 2>/dev/null | head -1)
           NET472_BASELINE=$(find baseline-net472 -name "*-report-full-compressed.json" 2>/dev/null | head -1)
+
+          # Debug: Check if baseline files exist
+          echo "=== Baseline File Check ==="
+          echo "NET8_BASELINE=$NET8_BASELINE"
+          echo "NET472_BASELINE=$NET472_BASELINE"
+          if [ -n "$NET8_BASELINE" ]; then
+            echo "✅ NET8 baseline file found"
+            echo "First benchmark entry:"
+            jq '.Benchmarks[0] | {Parameters, Mean: .Statistics.Mean, Memory: .Memory.BytesAllocatedPerOperation, Gen2: .Memory.Gen2Collections}' "$NET8_BASELINE" 2>&1 || echo "Failed to parse baseline"
+          else
+            echo "❌ NET8 baseline file NOT found"
+          fi
 
           # Create comment body
           cat > comment.md << 'EOF'
@@ -392,8 +405,8 @@ jobs:
               return
             fi
 
-            echo "| Query | Mean (ms) | Baseline | Diff | Rows | Columns |"
-            echo "|-------|-----------|----------|------|------|---------|"
+            echo "| Query | Mean (ms) | Peak Memory (MB) | Allocated Memory (MB) | Gen2 | Rows | Cols |"
+            echo "|-------|-----------|------------------|----------------------|------|------|------|"
 
             # Parse current results - handle both string and object Parameters
             jq -r '
@@ -416,8 +429,8 @@ jobs:
                   ""
                 end
               ) as $query |
-              "\($query)|\(.Statistics.Mean / 1000000)"
-            ' "$CURRENT" | while IFS='|' read -r query mean; do
+              "\($query)|\(.Statistics.Mean / 1000000)|\(.Memory.TotalBytesAllocated // .Memory.BytesAllocatedPerOperation // 0)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen2Collections // 0)"
+            ' "$CURRENT" | while IFS='|' read -r query mean peak_memory alloc_memory gen2; do
 
               if [ -z "$query" ] || [ "$query" = "null" ]; then
                 continue
@@ -431,12 +444,17 @@ jobs:
                 cols=$(jq -r --arg q "$query" '.[] | select(.name == $q) | .columns // "-"' csharp/Benchmarks/benchmark-queries.json 2>/dev/null || echo "-")
               fi
 
-              # Format mean to 2 decimal places
+              # Format current values
               mean_formatted=$(printf "%.2f" "$mean")
+              peak_memory_mb=$(echo "scale=2; $peak_memory / 1048576" | bc)
+              peak_memory_formatted=$(printf "%.2f" "$peak_memory_mb")
+              alloc_memory_mb=$(echo "scale=2; $alloc_memory / 1048576" | bc)
+              alloc_memory_formatted=$(printf "%.2f" "$alloc_memory_mb")
 
               # Try to find baseline
               if [ -f "$BASELINE" ]; then
-                baseline_mean=$(jq -r --arg q "$query" '.Benchmarks[] |
+                # Extract all baseline metrics for this query
+                baseline_data=$(jq -r --arg q "$query" '.Benchmarks[] |
                   select(
                     if (.Parameters | type) == "string" then
                       # Handle truncated Parameters by checking FullName
@@ -451,24 +469,64 @@ jobs:
                       false
                     end
                   ) |
-                  .Statistics.Mean / 1000000' "$BASELINE" 2>/dev/null | head -1)
-                if [ -n "$baseline_mean" ] && [ "$baseline_mean" != "null" ]; then
-                  baseline_formatted=$(printf "%.2f" "$baseline_mean")
-                  # Calculate percentage difference
-                  diff=$(echo "scale=1; (($mean - $baseline_mean) / $baseline_mean) * 100" | bc)
-                  if (( $(echo "$diff > 0.5" | bc -l) )); then
-                    diff_formatted="🔴 +${diff}%"
-                  elif (( $(echo "$diff < -0.5" | bc -l) )); then
-                    diff_formatted="🟢 ${diff}%"
+                  "\(.Statistics.Mean / 1000000)|\(.Memory.TotalBytesAllocated // .Memory.BytesAllocatedPerOperation // 0)|\(.Memory.BytesAllocatedPerOperation // 0)|\(.Memory.Gen2Collections // 0)"' "$BASELINE" 2>/dev/null | head -1)
+
+                if [ -n "$baseline_data" ] && [ "$baseline_data" != "null" ]; then
+                  baseline_mean=$(echo "$baseline_data" | cut -d'|' -f1)
+                  baseline_peak_memory=$(echo "$baseline_data" | cut -d'|' -f2)
+                  baseline_alloc_memory=$(echo "$baseline_data" | cut -d'|' -f3)
+                  baseline_gen2=$(echo "$baseline_data" | cut -d'|' -f4)
+
+                  # Format baseline values
+                  baseline_mean_formatted=$(printf "%.2f" "$baseline_mean")
+                  baseline_peak_memory_mb=$(echo "scale=2; $baseline_peak_memory / 1048576" | bc)
+                  baseline_peak_memory_formatted=$(printf "%.2f" "$baseline_peak_memory_mb")
+                  baseline_alloc_memory_mb=$(echo "scale=2; $baseline_alloc_memory / 1048576" | bc)
+                  baseline_alloc_memory_formatted=$(printf "%.2f" "$baseline_alloc_memory_mb")
+
+                  # Calculate percentage differences with proper decimal handling
+                  time_diff=$(awk -v curr="$mean" -v base="$baseline_mean" 'BEGIN {printf "%.1f", ((curr - base) / base) * 100}')
+                  peak_memory_diff=$(awk -v curr="$peak_memory" -v base="$baseline_peak_memory" 'BEGIN {if (base != 0) printf "%.1f", ((curr - base) / base) * 100; else print "0"}')
+                  alloc_memory_diff=$(awk -v curr="$alloc_memory" -v base="$baseline_alloc_memory" 'BEGIN {if (base != 0) printf "%.1f", ((curr - base) / base) * 100; else print "0"}')
+
+                  # Format time diff
+                  if (( $(awk -v d="$time_diff" 'BEGIN {print (d > 0.5)}') )); then
+                    time_diff_formatted="🔴 +${time_diff}%"
+                  elif (( $(awk -v d="$time_diff" 'BEGIN {print (d < -0.5)}') )); then
+                    time_diff_formatted="🟢 ${time_diff}%"
                   else
-                    diff_formatted="⚪ ~0%"
+                    time_diff_formatted="⚪ ~0%"
                   fi
-                  echo "| $query | $mean_formatted | $baseline_formatted | $diff_formatted | $rows | $cols |"
+
+                  # Format peak memory diff
+                  if (( $(awk -v d="$peak_memory_diff" 'BEGIN {print (d > 0.5)}') )); then
+                    peak_memory_diff_formatted="🔴 +${peak_memory_diff}%"
+                  elif (( $(awk -v d="$peak_memory_diff" 'BEGIN {print (d < -0.5)}') )); then
+                    peak_memory_diff_formatted="🟢 ${peak_memory_diff}%"
+                  else
+                    peak_memory_diff_formatted="⚪ ~0%"
+                  fi
+
+                  # Format allocated memory diff
+                  if (( $(awk -v d="$alloc_memory_diff" 'BEGIN {print (d > 0.5)}') )); then
+                    alloc_memory_diff_formatted="🔴 +${alloc_memory_diff}%"
+                  elif (( $(awk -v d="$alloc_memory_diff" 'BEGIN {print (d < -0.5)}') )); then
+                    alloc_memory_diff_formatted="🟢 ${alloc_memory_diff}%"
+                  else
+                    alloc_memory_diff_formatted="⚪ ~0%"
+                  fi
+
+                  # Format with baseline in parentheses
+                  mean_with_baseline="${mean_formatted} (${baseline_mean_formatted}) ${time_diff_formatted}"
+                  peak_memory_with_baseline="${peak_memory_formatted} (${baseline_peak_memory_formatted}) ${peak_memory_diff_formatted}"
+                  alloc_memory_with_baseline="${alloc_memory_formatted} (${baseline_alloc_memory_formatted}) ${alloc_memory_diff_formatted}"
+
+                  echo "| $query | $mean_with_baseline | $peak_memory_with_baseline | $alloc_memory_with_baseline | $gen2 | $rows | $cols |"
                 else
-                  echo "| $query | $mean_formatted | - | - | $rows | $cols |"
+                  echo "| $query | $mean_formatted | $peak_memory_formatted | $alloc_memory_formatted | $gen2 | $rows | $cols |"
                 fi
               else
-                echo "| $query | $mean_formatted | - | - | $rows | $cols |"
+                echo "| $query | $mean_formatted | $peak_memory_formatted | $alloc_memory_formatted | $gen2 | $rows | $cols |"
               fi
             done
           }
@@ -494,7 +552,16 @@ jobs:
           cat >> comment.md << 'EOF'
 
           ---
-          *🟢 Improvement | 🔴 Regression | ⚪ No change | Baseline from latest main branch run*
+          *🟢 Improvement | 🔴 Regression | ⚪ No change*
+
+          **Format:** `current_value (baseline) diff%`
+          - **Baseline**: Latest successful run on main branch
+
+          **Metrics:**
+          - **Mean**: Execution time in milliseconds
+          - **Peak Memory**: Total bytes allocated during operation in MB
+          - **Allocated Memory**: Bytes allocated per operation in MB
+          - **Gen2**: Number of Gen2 garbage collections
           EOF
 
           # Post comment to PR

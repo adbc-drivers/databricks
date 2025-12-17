@@ -16,6 +16,7 @@ version: 2
 updates:
   - package-ecosystem: "github-actions"
     commit-message:
+      include: "scope"
       prefix: "chore: "
     directory: "/"
     groups:
@@ -28,6 +29,8 @@ updates:
   - package-ecosystem: "nuget"
     commit-message:
       prefix: "chore(csharp): "
+      prefix-development: "chore"
+      include: "scope"
     directory: "/csharp/"
     ignore:
       - dependency-name: "Microsoft.Extensions.*"
