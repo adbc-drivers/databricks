@@ -101,3 +101,5 @@ csharp/test/Unit/StatementExecution/StatementExecutionClientTests.cs
 csharp/test/Unit/StatementExecution/StatementExecutionConnectionAuthTests.cs
 csharp/test/Unit/StatementExecution/StatementExecutionModelsTests.cs
 csharp/test/Unit/ThriftErrorMessageHandlerTest.cs
+test-infrastructure/proxy-server/go.mod
+test-infrastructure/proxy-server/go.sum
