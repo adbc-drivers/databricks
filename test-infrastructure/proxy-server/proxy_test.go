@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,6 +39,28 @@ failure_scenarios:
     action: "return_error"
     error_code: 403
     error_message: "[TEST_ERROR]"
+
+  - name: "test_cloudfetch_connection_reset"
+    description: "Test CloudFetch connection reset"
+    operation: "CloudFetchDownload"
+    action: "close_connection"
+
+  - name: "test_thrift_connection_reset"
+    description: "Test Thrift connection reset"
+    operation: "FetchResults"
+    action: "close_connection"
+
+  - name: "test_cloudfetch_delay"
+    description: "Test CloudFetch delay"
+    operation: "CloudFetchDownload"
+    action: "delay"
+    duration: "1s"
+
+  - name: "test_thrift_delay"
+    description: "Test Thrift delay"
+    operation: "ExecuteStatement"
+    action: "delay"
+    duration: "500ms"
 `
 
 	tmpfile, err := os.CreateTemp("", "test-config-*.yaml")
@@ -75,6 +98,10 @@ failure_scenarios:
 	t.Run("ControlAPI_ListScenarios", testListScenarios)
 	t.Run("ControlAPI_EnableScenario", testEnableScenario)
 	t.Run("CloudFetch_InjectionWorks", testCloudFetchInjection)
+	t.Run("CloudFetch_ConnectionReset", testCloudFetchConnectionReset)
+	t.Run("Thrift_ConnectionReset", testThriftConnectionReset)
+	t.Run("CloudFetch_Delay", testCloudFetchDelay)
+	t.Run("Thrift_Delay", testThriftDelay)
 }
 
 func testListScenarios(t *testing.T) {
@@ -163,6 +190,134 @@ func testCloudFetchInjection(t *testing.T) {
 	// Should be forwarded to httpbin.org (404 or 200, not 403)
 	if resp2.StatusCode == http.StatusForbidden {
 		t.Error("Scenario should have been auto-disabled, but injection still occurred")
+	}
+}
+
+func testCloudFetchConnectionReset(t *testing.T) {
+	// Enable scenario
+	http.Post("http://localhost:18081/scenarios/test_cloudfetch_connection_reset/enable", "", nil)
+
+	// Make CloudFetch request that should trigger connection reset
+	req, _ := http.NewRequest("GET", "http://localhost:18080/test-file", nil)
+	req.Host = "test.blob.core.windows.net" // Simulate Azure CloudFetch
+
+	client := &http.Client{
+		Timeout: 2 * time.Second, // Short timeout to detect connection reset quickly
+	}
+	resp, err := client.Do(req)
+
+	// Connection reset should result in an error (connection closed or EOF)
+	if err == nil {
+		defer resp.Body.Close()
+		t.Error("Expected connection error, but request succeeded")
+		return
+	}
+
+	// Verify it's a connection-related error
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "EOF") &&
+		!strings.Contains(errMsg, "connection reset") &&
+		!strings.Contains(errMsg, "broken pipe") &&
+		!strings.Contains(errMsg, "connection refused") {
+		t.Errorf("Expected connection error, got: %v", err)
+	}
+}
+
+func testThriftConnectionReset(t *testing.T) {
+	// Enable scenario
+	http.Post("http://localhost:18081/scenarios/test_thrift_connection_reset/enable", "", nil)
+
+	// Make Thrift request (POST to /sql/) that should trigger connection reset
+	req, _ := http.NewRequest("POST", "http://localhost:18080/sql/1.0/warehouses/test", strings.NewReader("test data"))
+	req.Header.Set("Content-Type", "application/x-thrift")
+
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+	resp, err := client.Do(req)
+
+	// Connection reset should result in an error
+	if err == nil {
+		defer resp.Body.Close()
+		t.Error("Expected connection error, but request succeeded")
+		return
+	}
+
+	// Verify it's a connection-related error
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "EOF") &&
+		!strings.Contains(errMsg, "connection reset") &&
+		!strings.Contains(errMsg, "broken pipe") &&
+		!strings.Contains(errMsg, "connection refused") {
+		t.Errorf("Expected connection error, got: %v", err)
+	}
+}
+
+func testCloudFetchDelay(t *testing.T) {
+	// Enable scenario
+	http.Post("http://localhost:18081/scenarios/test_cloudfetch_delay/enable", "", nil)
+
+	// Record start time
+	start := time.Now()
+
+	// Make CloudFetch request that should be delayed
+	req, _ := http.NewRequest("GET", "http://localhost:18080/test-file", nil)
+	req.Host = "test.s3.amazonaws.com" // Simulate S3 CloudFetch
+
+	client := &http.Client{
+		Timeout: 5 * time.Second, // Must be longer than delay (1s)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Measure elapsed time
+	elapsed := time.Since(start)
+
+	// Verify delay was applied (should be >= 1s)
+	if elapsed < 1*time.Second {
+		t.Errorf("Expected delay of at least 1s, got %v", elapsed)
+	}
+
+	// Request should succeed after delay (forwarded to httpbin.org)
+	if resp.StatusCode >= 500 {
+		t.Errorf("Expected successful forward after delay, got status %d", resp.StatusCode)
+	}
+}
+
+func testThriftDelay(t *testing.T) {
+	// Enable scenario
+	http.Post("http://localhost:18081/scenarios/test_thrift_delay/enable", "", nil)
+
+	// Record start time
+	start := time.Now()
+
+	// Make Thrift request that should be delayed
+	req, _ := http.NewRequest("POST", "http://localhost:18080/sql/1.0/warehouses/test", strings.NewReader("test data"))
+	req.Header.Set("Content-Type", "application/x-thrift")
+
+	client := &http.Client{
+		Timeout: 3 * time.Second, // Must be longer than delay (500ms)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Measure elapsed time
+	elapsed := time.Since(start)
+
+	// Verify delay was applied (should be >= 500ms)
+	if elapsed < 500*time.Millisecond {
+		t.Errorf("Expected delay of at least 500ms, got %v", elapsed)
+	}
+
+	// Request should succeed after delay (forwarded to httpbin.org)
+	if resp.StatusCode >= 500 {
+		t.Errorf("Expected successful forward after delay, got status %d", resp.StatusCode)
 	}
 }
 
