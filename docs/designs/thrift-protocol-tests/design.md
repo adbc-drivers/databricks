@@ -363,216 +363,147 @@ proxy:
 
 # Production-validated failure scenarios based on real customer issues
 failure_scenarios:
-  # === CloudFetch Failures (Critical Priority) ===
+  # === CloudFetch Failures ===
 
   - name: "cloudfetch_expired_link"
     jira: "PECOBLR-1131"
     description: "OSS JDBC driver incorrectly refetching expired CloudFetch links"
-    trigger: "after_requests"
-    count: 1
+    operation: "CloudFetchDownload"
     action: "expire_cloud_link"
-    priority: "P0"
 
   - name: "cloudfetch_azure_403"
     jira: "ES-1624602"
     description: "Intermittent 403 from Azure for CloudFetch URLs"
-    trigger: "probability"
-    probability: 0.05
+    operation: "CloudFetchDownload"
     action: "return_error"
-    cloud_provider: "azure"
     error_code: 403
     error_message: "[FILES_API_AZURE_FORBIDDEN]"
-    priority: "P1"
 
   - name: "cloudfetch_ttl_future"
     jira: "ES-1654890"
     description: "Clock skew causes TTL_IN_THE_FUTURE error"
-    trigger: "probability"
-    probability: 0.02
+    operation: "CloudFetchDownload"
     action: "return_error"
     error_code: 500
     error_message: "FILES_API_ERROR_TTL_IN_THE_FUTURE"
-    priority: "P2"
 
   - name: "cloudfetch_timeout"
     jira: "BL-13239"
     description: "Queries timing out during Cloud Fetch process"
-    trigger: "operation_type"
     operation: "CloudFetchDownload"
     action: "delay"
-    duration: "65s"  # Exceeds typical 60s timeout
-    priority: "P0"
+    duration: "65s"
 
   - name: "cloudfetch_write_failed"
     jira: "ES-1539484"
     description: "Server-side failure writing results to cloud storage"
-    trigger: "probability"
-    probability: 0.01
+    operation: "ExecuteStatement"
     action: "return_error"
     error_message: "[QUERY_RESULT_WRITE_TO_CLOUD_STORE_FAILED]"
-    priority: "P1"
 
   - name: "cloudfetch_ssl_cert_error"
     jira: "PECO-2719"
     description: "SSL certificate validation failure for cloud storage URLs"
-    trigger: "probability"
-    probability: 0.02
+    operation: "CloudFetchDownload"
     action: "ssl_error"
     error_type: "certificate_validation_failed"
-    priority: "P1"
 
-  # === Connection Reset Errors (Critical Priority) ===
+  # === Connection Reset Errors ===
 
   - name: "tls_handshake_timeout"
     jira: "BL-14202"
     description: "TLS handshake exceeds 5s before connection closed"
-    trigger: "probability"
-    probability: 0.03
-    action: "delay"
-    phase: "tls_handshake"
-    duration: "6s"
-    priority: "P1"
+    action: "ssl_error"
+    error_type: "handshake_timeout"
 
   - name: "connection_reset_during_fetch"
     jira: "BL-13580"
     description: "Connection reset when fetching large results via JDBC"
-    trigger: "operation_type"
     operation: "FetchResults"
     action: "close_connection"
-    at_row: 5000  # Reset mid-fetch for large results
-    priority: "P0"
 
   - name: "ssl_connection_reset"
     jira: "ES-1657027"
     description: "javax.net.ssl.SSLException: Connection reset"
-    trigger: "probability"
-    probability: 0.02
     action: "ssl_error"
     error_type: "connection_reset"
-    priority: "P1"
 
   - name: "jetty_connection_draining"
     jira: "ES-1498241"
     description: "Connection reset during Jetty/Armeria server draining"
-    trigger: "after_requests"
-    count: 100
-    action: "graceful_close"
-    delay: "5s"
-    priority: "P2"
+    action: "close_connection"
 
-  # === Session Management Failures (High Priority) ===
+  # === Session Management Failures ===
 
   - name: "session_timeout_premature"
     jira: "ES-1661289"
-    description: "Session expires at 58 min instead of 60 min configured"
-    trigger: "after_duration"
-    duration: "58m"
+    description: "Session expires prematurely"
     action: "invalidate_session"
-    priority: "P1"
 
   - name: "invalid_session_handle"
     jira: "ES-610899"
     description: "Session invalidated but client unaware"
-    trigger: "after_operations"
-    count: 50
+    operation: "GetOperationStatus"
     action: "return_error"
     error_message: "Invalid SessionHandle"
-    retryable: true
-    priority: "P0"
 
   - name: "session_terminated_active_query"
     jira: "XTA-11040"
     description: "Unexpected session termination with active queries"
-    trigger: "operation_type"
     operation: "GetOperationStatus"
     action: "return_error"
     error_message: "Session terminated with active queries"
-    priority: "P1"
-
-  - name: "session_timeout_frequent"
-    jira: "ES-1608485"
-    description: "Session expires every 2-3 minutes despite longer timeout"
-    trigger: "random_window"
-    min_duration: "2m"
-    max_duration: "3m"
-    action: "invalidate_session"
-    priority: "P1"
 
   - name: "dbr_cp_session_mismatch"
     jira: "SC-207685"
     description: "DBR session timeout (1h) vs CP session timeout (8h) mismatch"
-    trigger: "after_duration"
-    duration: "1h"
     action: "invalidate_session"
-    context: "dbr_cluster"
-    priority: "P1"
 
   # === Protocol & Data Format Issues ===
 
   - name: "direct_results_exceed_maxrows"
     jira: "PECO-2524"
     description: "DirectResults returns more rows than MaxRows setting"
-    trigger: "operation_type"
     operation: "OpenSession"
     action: "modify_response"
     field: "directResults"
-    violation: "exceed_maxrows"
-    factor: 2  # Return 2x MaxRows
-    priority: "P2"
+    modification: "exceed_maxrows"
 
   - name: "retry_limit_exceeded"
     jira: "BL-14014"
     description: "Unable to continue fetch after reconnect"
-    trigger: "after_reconnect"
     action: "return_error"
     error_message: "Unable to continue fetch after reconnect. Retry limit exceeded"
-    priority: "P2"
 
   - name: "communication_link_failure"
     jira: "ES-1559149"
     description: "General communication link failure with Simba driver"
-    trigger: "probability"
-    probability: 0.03
     action: "close_connection"
-    error_message: "Communication link failure. Failed to connect to server"
-    priority: "P1"
 
   # === Rate Limiting & Resource Issues ===
 
   - name: "sqlgw_scheduler_timeout"
     description: "SQLGW scheduler timeout for long-running queries"
-    trigger: "operation_type"
     operation: "ExecuteStatement"
     action: "delay"
-    duration: "61s"  # Exceeds 60s SQLGW scheduler timeout
-    priority: "P2"
+    duration: "61s"
 
   - name: "rate_limit_retry_timeout"
-    description: "Rate limit retry timeout exceeded (120s default)"
-    trigger: "consecutive_requests"
-    count: 10
+    description: "Rate limit retry timeout exceeded"
     action: "return_error"
     error_message: "RateLimitRetryTimeout exceeded"
-    retry_after: 120  # seconds
-    priority: "P2"
 
   # === Network-Level Failures ===
 
   - name: "network_timeout"
     description: "Generic network timeout during request"
-    trigger: "operation_type"
     operation: "ExecuteStatement"
     action: "delay"
-    duration: "35s"  # Exceeds typical 30s timeout
-    priority: "P1"
+    duration: "35s"
 
   - name: "partial_response"
     description: "Response truncated mid-stream"
-    trigger: "probability"
-    probability: 0.01
-    action: "truncate_response"
-    at_percent: 60
-    priority: "P2"
+    action: "close_connection"
 ```
 
 **Example - API-Based (Programmatic)**:
@@ -720,45 +651,39 @@ public async Task TestSessionTimeout()
 
 **Failure Scenario Summary**:
 
-The proxy server configuration includes **24 production-validated failure scenarios** based on real customer issues from Databricks JIRA tickets. These scenarios are organized by category and priority:
+The proxy server configuration includes **24 production-validated failure scenarios** based on real customer issues from Databricks JIRA tickets. These scenarios are organized by category:
 
-| Category | Scenarios | P0 (Critical) | P1 (High) | P2 (Medium) | Key JIRA References |
-|----------|-----------|---------------|-----------|-------------|---------------------|
-| **CloudFetch Failures** | 6 | 2 | 3 | 1 | PECOBLR-1131, ES-1624602, BL-13239 |
-| **Connection Reset** | 4 | 1 | 2 | 1 | BL-13580, BL-14202, ES-1657027 |
-| **Session Management** | 5 | 1 | 4 | 0 | ES-610899, ES-1661289, XTA-11040 |
-| **Protocol Issues** | 3 | 0 | 1 | 2 | PECO-2524, BL-14014, ES-1559149 |
-| **Rate Limiting** | 2 | 0 | 0 | 2 | - |
-| **Network Failures** | 2 | 0 | 1 | 1 | - |
-| **Total** | **22** | **4** | **11** | **7** | - |
+| Category | Scenarios | Key JIRA References |
+|----------|-----------|---------------------|
+| **CloudFetch Failures** | 6 | PECOBLR-1131, ES-1624602, BL-13239 |
+| **Connection Reset** | 4 | BL-13580, BL-14202, ES-1657027 |
+| **Session Management** | 4 | ES-610899, ES-1661289, XTA-11040 |
+| **Protocol Issues** | 3 | PECO-2524, BL-14014, ES-1559149 |
+| **Rate Limiting** | 2 | - |
+| **Network Failures** | 2 | - |
+| **Total** | **21** | - |
 
-**Priority Definitions:**
-- **P0 (Critical)**: Common production issues that cause data loss or query failures
-- **P1 (High)**: Frequent customer-impacting issues
-- **P2 (Medium)**: Edge cases and less frequent issues
+**Recommended Scenarios to Implement First:**
 
-**Top Priority Scenarios to Implement First:**
-
-1. **cloudfetch_expired_link** (PECOBLR-1131) - P0
+1. **cloudfetch_expired_link** (PECOBLR-1131)
    - Most common CloudFetch issue affecting OSS JDBC driver
 
-2. **connection_reset_during_fetch** (BL-13580) - P0
+2. **connection_reset_during_fetch** (BL-13580)
    - Causes data loss in large result sets
 
-3. **invalid_session_handle** (ES-610899) - P0
+3. **invalid_session_handle** (ES-610899)
    - Leads to query failures when session is invalidated
 
-4. **cloudfetch_timeout** (BL-13239) - P0
+4. **cloudfetch_timeout** (BL-13239)
    - Queries timeout without clear error message
 
-5. **cloudfetch_azure_403** (ES-1624602) - P1
+5. **cloudfetch_azure_403** (ES-1624602)
    - Azure-specific issue affecting many customers
 
 **Implementation Notes:**
-- Each scenario includes a JIRA reference for traceability
-- Probabilities are tuned based on production frequency
-- Retryable errors are marked explicitly for driver testing
-- Cloud provider-specific failures (Azure, AWS, GCP) are distinguished
+- Each scenario includes a JIRA reference for traceability to production issues
+- Scenarios activate deterministically when enabled via API (no random probability)
+- Tests control when failures occur for reproducible results
 
 ### C# Test Structure
 
