@@ -1,0 +1,6 @@
+# Binary
+proxy-server
+
+# Test coverage
+coverage.out
+*.test
