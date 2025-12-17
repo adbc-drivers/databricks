@@ -132,7 +132,7 @@ await httpClient.PostAsync(
 
 try
 {
-    // Execute query - failure will be injected on next matching request
+    // Execute query - CloudFetch failure will be injected on next download
     var result = await driver.ExecuteQuery("SELECT * FROM large_table");
 
     // Verify driver handled the failure correctly
@@ -140,23 +140,41 @@ try
 }
 finally
 {
-    // Clean up
+    // Scenario auto-disables after injection, but you can explicitly disable too
     await httpClient.PostAsync(
         "http://localhost:8081/scenarios/cloudfetch_expired_link/disable",
         null);
 }
 ```
 
-## Current Limitations (v0.1)
+**How it works:**
 
-This is the initial version (PECO-2860) with basic structure:
+1. Test enables a scenario via Control API
+2. Driver executes query that triggers CloudFetch
+3. Proxy detects CloudFetch download (HTTP GET to cloud storage)
+4. Proxy injects the failure based on scenario action
+5. Scenario auto-disables after injection (one-shot)
+6. Test verifies driver recovery behavior
+
+## Features
+
+**v0.2 (PECO-2861)** - CloudFetch Failure Injection:
 
 - ✅ YAML configuration loading
 - ✅ Control API for enabling/disabling scenarios
-- ✅ Basic HTTP reverse proxy
-- ❌ Thrift protocol interception (coming in PECO-2861)
-- ❌ Failure injection logic (coming in PECO-2861)
-- ❌ CloudFetch URL modification (coming in PECO-2861)
+- ✅ HTTP reverse proxy with request interception
+- ✅ CloudFetch download detection (Azure Blob, S3, GCS)
+- ✅ CloudFetch failure injection (3 scenarios):
+  - `cloudfetch_expired_link`: Returns 403 with expired signature error
+  - `cloudfetch_azure_403`: Returns 403 Forbidden with custom message
+  - `cloudfetch_timeout`: Injects 65s delay before download
+- ✅ One-shot injection (scenarios auto-disable after triggering)
+
+**Coming next:**
+
+- ❌ Thrift protocol parsing and interception
+- ❌ Thrift operation-specific failures (session, statement execution)
+- ❌ Connection reset and SSL error injection
 
 See [design.md](../../docs/designs/thrift-protocol-tests/design.md) for the full implementation roadmap.
 

@@ -21,7 +21,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -68,25 +70,12 @@ func startProxy() {
 	// Create reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
-	// Customize the proxy director to handle Thrift protocol
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-
-		// TODO: Check if any scenarios should be injected here
-		// For now, just pass through
-
-		if config.Proxy.LogRequests {
-			log.Printf("[PROXY] %s %s", req.Method, req.URL.Path)
-		}
-	}
-
-	// TODO: Add response modifier for failure injection
-	// proxy.ModifyResponse = func(resp *http.Response) error { ... }
+	// Wrap proxy with failure injection handler
+	handler := proxyHandler(proxy)
 
 	addr := fmt.Sprintf(":%d", config.Proxy.ListenPort)
 	log.Printf("Starting proxy server on %s", addr)
-	if err := http.ListenAndServe(addr, proxy); err != nil {
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("Proxy server failed: %v", err)
 	}
 }
@@ -181,4 +170,99 @@ func handleScenarioAction(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, "{\"scenario\":\"%s\",\"enabled\":%t}", scenarioName, scenario.Enabled)
+}
+
+// proxyHandler wraps the reverse proxy to inject CloudFetch failures
+func proxyHandler(proxy *httputil.ReverseProxy) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Detect if this is a CloudFetch download
+		if isCloudFetchDownload(r) {
+			// Check for enabled CloudFetch scenarios
+			scenario := getEnabledCloudFetchScenario()
+			if scenario != nil {
+				if handleCloudFetchFailure(w, r, scenario) {
+					return // Failure was injected, don't proxy
+				}
+			}
+		}
+
+		// Normal proxying
+		if config.Proxy.LogRequests {
+			log.Printf("[PROXY] %s %s", r.Method, r.URL.Path)
+		}
+		proxy.ServeHTTP(w, r)
+	}
+}
+
+// isCloudFetchDownload detects CloudFetch downloads (HTTP GET to cloud storage)
+func isCloudFetchDownload(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	host := strings.ToLower(r.Host)
+	return strings.Contains(host, "blob.core.windows.net") ||
+		strings.Contains(host, "s3.amazonaws.com") ||
+		strings.Contains(host, "storage.googleapis.com")
+}
+
+// getEnabledCloudFetchScenario finds an enabled CloudFetch scenario
+func getEnabledCloudFetchScenario() *FailureScenario {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	for _, scenario := range scenarios {
+		if scenario.Enabled && scenario.Operation == "CloudFetchDownload" {
+			return scenario
+		}
+	}
+	return nil
+}
+
+// handleCloudFetchFailure injects CloudFetch failures
+func handleCloudFetchFailure(w http.ResponseWriter, r *http.Request, scenario *FailureScenario) bool {
+	log.Printf("[INJECT] Triggering scenario: %s", scenario.Name)
+
+	switch scenario.Action {
+	case "expire_cloud_link":
+		// Return 403 with Azure expired signature error
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("AuthorizationQueryParametersError: Query Parameters are not supported for this operation"))
+		disableScenario(scenario.Name)
+		return true
+
+	case "return_error":
+		// Return HTTP error with specified code and message
+		code := scenario.ErrorCode
+		if code == 0 {
+			code = http.StatusInternalServerError
+		}
+		http.Error(w, scenario.ErrorMessage, code)
+		disableScenario(scenario.Name)
+		return true
+
+	case "delay":
+		// Inject delay then continue with normal request
+		duration, err := time.ParseDuration(scenario.Duration)
+		if err != nil {
+			log.Printf("[ERROR] Invalid duration for scenario %s: %v", scenario.Name, err)
+			return false
+		}
+		log.Printf("[INJECT] Delaying %s for scenario: %s", duration, scenario.Name)
+		time.Sleep(duration)
+		disableScenario(scenario.Name)
+		return false // Continue with request after delay
+	}
+
+	return false
+}
+
+// disableScenario disables a scenario after injection (one-shot behavior)
+func disableScenario(name string) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if scenario, exists := scenarios[name]; exists {
+		scenario.Enabled = false
+		log.Printf("[INJECT] Auto-disabled scenario: %s", name)
+	}
 }
