@@ -79,44 +79,77 @@ See [proxy-config-schema.md](../../docs/designs/thrift-protocol-tests/proxy-conf
 
 ## Control API
 
-### List All Scenarios
+The Control API is defined using OpenAPI 3.0 specification in `openapi.yaml`. This enables automatic client generation for 50+ languages including C#, Java, C++, Python, Go, and Rust.
+
+### Generate Client Libraries
+
+See [CLIENTS.md](CLIENTS.md) for detailed instructions on generating clients for your language.
+
+**Quick start:**
 
 ```bash
+# Install OpenAPI Generator
+brew install openapi-generator
+
+# Generate C# client
+make generate-csharp
+
+# Generate Java client
+make generate-java
+
+# Or generate all supported clients
+make generate-clients
+```
+
+### Using curl (Simple Testing)
+
+```bash
+# List all scenarios
 curl http://localhost:8081/scenarios
-```
 
-Response:
-```json
-{
-  "scenarios": [
-    {
-      "name": "cloudfetch_expired_link",
-      "description": "CloudFetch link expires",
-      "enabled": false
-    }
-  ]
-}
-```
-
-### Enable a Scenario
-
-```bash
+# Enable a scenario
 curl -X POST http://localhost:8081/scenarios/cloudfetch_expired_link/enable
-```
 
-Response:
-```json
-{
-  "scenario": "cloudfetch_expired_link",
-  "enabled": true
-}
-```
-
-### Disable a Scenario
-
-```bash
+# Disable a scenario
 curl -X POST http://localhost:8081/scenarios/cloudfetch_expired_link/disable
 ```
+
+### Using Generated Clients
+
+**C#:**
+```csharp
+using ProxyControlApi.Api;
+using ProxyControlApi.Client;
+
+var config = new Configuration { BasePath = "http://localhost:18081" };
+var api = new ScenariosApi(config);
+
+// Enable scenario
+var status = api.EnableScenario("cloudfetch_timeout");
+```
+
+**Java:**
+```java
+import com.databricks.proxy.api.*;
+
+ApiClient client = new ApiClient();
+client.setBasePath("http://localhost:18081");
+ScenariosApi api = new ScenariosApi(client);
+
+ScenarioStatus status = api.enableScenario("cloudfetch_timeout");
+```
+
+**Python:**
+```python
+from proxy_control_client import ApiClient, Configuration, ScenariosApi
+
+config = Configuration(host="http://localhost:18081")
+api = ScenariosApi(ApiClient(config))
+
+status = api.enable_scenario("cloudfetch_timeout")
+```
+
+See [CLIENTS.md](CLIENTS.md) for more examples.
 
 ## Usage in Tests
 
