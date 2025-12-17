@@ -33,6 +33,7 @@
     <ProjectReference Include="..\arrow-adbc\csharp\test\Apache.Arrow.Adbc.Tests\Apache.Arrow.Adbc.Testing.csproj" />
     <ProjectReference Include="..\arrow-adbc\csharp\test\Drivers\Apache\Apache.Arrow.Adbc.Tests.Drivers.Apache.csproj" />
     <ProjectReference Include="..\src\AdbcDrivers.Databricks.csproj" />
+    <ProjectReference Include="..\..\test-infrastructure\proxy-server\generated\csharp\src\ProxyControlApi\ProxyControlApi.csproj" />
   </ItemGroup>
 
   <ItemGroup>

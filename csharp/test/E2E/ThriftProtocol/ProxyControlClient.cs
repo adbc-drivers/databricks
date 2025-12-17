@@ -20,31 +20,47 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using ProxyControlApi.Api;
+using ProxyControlApi.Client;
 
 namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 {
     /// <summary>
-    /// Client for interacting with the Proxy Server Control API.
-    /// Provides methods to enable/disable failure scenarios and query their status.
+    /// Simplified wrapper around the OpenAPI-generated ProxyControlApi client.
+    /// Provides a clean interface for test code without requiring full DI setup.
+    ///
+    /// This wrapper manually instantiates the generated client dependencies to avoid
+    /// requiring Microsoft.Extensions.Hosting setup in test code.
     /// </summary>
     public class ProxyControlClient : IDisposable
     {
+        private readonly DefaultApi _api;
         private readonly HttpClient _httpClient;
-        private readonly string _baseUrl;
+        private readonly ILoggerFactory _loggerFactory;
         private bool _disposed;
 
         public ProxyControlClient(int apiPort = 18081)
         {
-            _baseUrl = $"http://localhost:{apiPort}";
             _httpClient = new HttpClient
             {
-                BaseAddress = new Uri(_baseUrl),
+                BaseAddress = new Uri($"http://localhost:{apiPort}"),
                 Timeout = TimeSpan.FromSeconds(5)
             };
+
+            // Create minimal dependencies for the generated client
+            _loggerFactory = NullLoggerFactory.Instance;
+            var logger = _loggerFactory.CreateLogger<DefaultApi>();
+            var jsonOptions = new System.Text.Json.JsonSerializerOptions();
+            var jsonProvider = new JsonSerializerOptionsProvider(jsonOptions);
+            var events = new DefaultApiEvents();
+
+            _api = new DefaultApi(logger, _loggerFactory, _httpClient, jsonProvider, events);
         }
 
         /// <summary>
@@ -52,16 +68,25 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// </summary>
         public async Task<List<FailureScenarioStatus>> ListScenariosAsync(CancellationToken cancellationToken = default)
         {
-            var response = await _httpClient.GetAsync("/scenarios", cancellationToken);
-            response.EnsureSuccessStatusCode();
+            var response = await _api.ListScenariosAsync(cancellationToken);
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<ScenarioListResponse>(json, new JsonSerializerOptions
+            if (!response.IsOk)
             {
-                PropertyNameCaseInsensitive = true
-            });
+                throw new InvalidOperationException($"Failed to list scenarios. Status: {response.StatusCode}");
+            }
 
-            return result?.Scenarios ?? new List<FailureScenarioStatus>();
+            var scenarioList = response.Ok();
+            if (scenarioList?.Scenarios == null)
+            {
+                return new List<FailureScenarioStatus>();
+            }
+
+            return scenarioList.Scenarios.Select(s => new FailureScenarioStatus
+            {
+                Name = s.Name ?? string.Empty,
+                Description = s.Description ?? string.Empty,
+                Enabled = s.Enabled
+            }).ToList();
         }
 
         /// <summary>
@@ -69,16 +94,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// </summary>
         public async Task<bool> EnableScenarioAsync(string scenarioName, CancellationToken cancellationToken = default)
         {
-            var response = await _httpClient.PostAsync($"/scenarios/{scenarioName}/enable", null, cancellationToken);
-            response.EnsureSuccessStatusCode();
+            var response = await _api.EnableScenarioAsync(scenarioName, cancellationToken);
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<ScenarioActionResponse>(json, new JsonSerializerOptions
+            if (!response.IsOk)
             {
-                PropertyNameCaseInsensitive = true
-            });
+                throw new InvalidOperationException($"Failed to enable scenario '{scenarioName}'. Status: {response.StatusCode}");
+            }
 
-            return result?.Enabled ?? false;
+            var status = response.Ok();
+            return status?.Enabled ?? false;
         }
 
         /// <summary>
@@ -86,16 +110,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// </summary>
         public async Task<bool> DisableScenarioAsync(string scenarioName, CancellationToken cancellationToken = default)
         {
-            var response = await _httpClient.PostAsync($"/scenarios/{scenarioName}/disable", null, cancellationToken);
-            response.EnsureSuccessStatusCode();
+            var response = await _api.DisableScenarioAsync(scenarioName, cancellationToken);
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<ScenarioActionResponse>(json, new JsonSerializerOptions
+            if (!response.IsOk)
             {
-                PropertyNameCaseInsensitive = true
-            });
+                throw new InvalidOperationException($"Failed to disable scenario '{scenarioName}'. Status: {response.StatusCode}");
+            }
 
-            return result?.Enabled ?? false;
+            var status = response.Ok();
+            return status?.Enabled ?? false;
         }
 
         /// <summary>
@@ -128,24 +151,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             if (!_disposed)
             {
                 _httpClient?.Dispose();
+                _loggerFactory?.Dispose();
                 _disposed = true;
             }
         }
-
-        #region Response Models
-
-        private class ScenarioListResponse
-        {
-            public List<FailureScenarioStatus> Scenarios { get; set; } = new();
-        }
-
-        private class ScenarioActionResponse
-        {
-            public string Scenario { get; set; } = string.Empty;
-            public bool Enabled { get; set; }
-        }
-
-        #endregion
     }
 
     /// <summary>

@@ -27,9 +27,9 @@ docker pull openapitools/openapi-generator-cli
 
 ```bash
 # Generate C# client for .NET
-openapi-generator-cli generate \
+openapi-generator generate \
   -i openapi.yaml \
-  -g csharp-netcore \
+  -g csharp \
   -o generated/csharp \
   --additional-properties=packageName=ProxyControlApi,targetFramework=net8.0
 
@@ -213,7 +213,7 @@ add_custom_command(
 ```xml
 <!-- Add to .csproj -->
 <Target Name="GenerateOpenApiClient" BeforeTargets="CoreCompile">
-  <Exec Command="openapi-generator-cli generate -i openapi.yaml -g csharp-netcore -o generated/csharp" />
+  <Exec Command="openapi-generator generate -i openapi.yaml -g csharp -o generated/csharp" />
 </Target>
 ```
 

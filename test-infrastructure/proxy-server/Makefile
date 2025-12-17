@@ -33,10 +33,12 @@ clean:
 # Validate OpenAPI specification
 validate-api:
 	@echo "Validating OpenAPI spec..."
-	@if command -v openapi-generator-cli >/dev/null 2>&1; then \
+	@if command -v openapi-generator >/dev/null 2>&1; then \
+		openapi-generator validate -i openapi.yaml; \
+	elif command -v openapi-generator-cli >/dev/null 2>&1; then \
 		openapi-generator-cli validate -i openapi.yaml; \
 	else \
-		echo "⚠️  openapi-generator-cli not found. Install with:"; \
+		echo "⚠️  openapi-generator not found. Install with:"; \
 		echo "   brew install openapi-generator"; \
 		echo "   OR npm install -g @openapitools/openapi-generator-cli"; \
 	fi
@@ -48,50 +50,89 @@ generate-clients: generate-csharp generate-java generate-cpp generate-python gen
 generate-csharp:
 	@echo "Generating C# client..."
 	@mkdir -p generated/csharp
-	openapi-generator-cli generate \
-		-i openapi.yaml \
-		-g csharp-netcore \
-		-o generated/csharp \
-		--additional-properties=packageName=ProxyControlApi,targetFramework=net8.0,netCoreProjectFile=true
+	@if command -v openapi-generator >/dev/null 2>&1; then \
+		openapi-generator generate \
+			-i openapi.yaml \
+			-g csharp \
+			-o generated/csharp \
+			--additional-properties=packageName=ProxyControlApi,targetFramework=net8.0; \
+	else \
+		openapi-generator-cli generate \
+			-i openapi.yaml \
+			-g csharp \
+			-o generated/csharp \
+			--additional-properties=packageName=ProxyControlApi,targetFramework=net8.0; \
+	fi
 
 # Generate Java client
 generate-java:
 	@echo "Generating Java client..."
 	@mkdir -p generated/java
-	openapi-generator-cli generate \
-		-i openapi.yaml \
-		-g java \
-		-o generated/java \
-		--additional-properties=library=okhttp-gson,groupId=com.databricks,artifactId=proxy-control-client,invokerPackage=com.databricks.proxy,apiPackage=com.databricks.proxy.api,modelPackage=com.databricks.proxy.model
+	@if command -v openapi-generator >/dev/null 2>&1; then \
+		openapi-generator generate \
+			-i openapi.yaml \
+			-g java \
+			-o generated/java \
+			--additional-properties=library=okhttp-gson,groupId=com.databricks,artifactId=proxy-control-client,invokerPackage=com.databricks.proxy,apiPackage=com.databricks.proxy.api,modelPackage=com.databricks.proxy.model; \
+	else \
+		openapi-generator-cli generate \
+			-i openapi.yaml \
+			-g java \
+			-o generated/java \
+			--additional-properties=library=okhttp-gson,groupId=com.databricks,artifactId=proxy-control-client,invokerPackage=com.databricks.proxy,apiPackage=com.databricks.proxy.api,modelPackage=com.databricks.proxy.model; \
+	fi
 
 # Generate C++ client
 generate-cpp:
 	@echo "Generating C++ client..."
 	@mkdir -p generated/cpp
-	openapi-generator-cli generate \
-		-i openapi.yaml \
-		-g cpp-restsdk \
-		-o generated/cpp
+	@if command -v openapi-generator >/dev/null 2>&1; then \
+		openapi-generator generate \
+			-i openapi.yaml \
+			-g cpp-restsdk \
+			-o generated/cpp; \
+	else \
+		openapi-generator-cli generate \
+			-i openapi.yaml \
+			-g cpp-restsdk \
+			-o generated/cpp; \
+	fi
 
 # Generate Python client
 generate-python:
 	@echo "Generating Python client..."
 	@mkdir -p generated/python
-	openapi-generator-cli generate \
-		-i openapi.yaml \
-		-g python \
-		-o generated/python \
-		--additional-properties=packageName=proxy_control_client,projectName=proxy-control-client
+	@if command -v openapi-generator >/dev/null 2>&1; then \
+		openapi-generator generate \
+			-i openapi.yaml \
+			-g python \
+			-o generated/python \
+			--additional-properties=packageName=proxy_control_client,projectName=proxy-control-client; \
+	else \
+		openapi-generator-cli generate \
+			-i openapi.yaml \
+			-g python \
+			-o generated/python \
+			--additional-properties=packageName=proxy_control_client,projectName=proxy-control-client; \
+	fi
 
 # Generate Go client
 generate-go:
 	@echo "Generating Go client..."
 	@mkdir -p generated/go
-	openapi-generator-cli generate \
-		-i openapi.yaml \
-		-g go \
-		-o generated/go \
-		--additional-properties=packageName=proxycontrol,isGoSubmodule=true
+	@if command -v openapi-generator >/dev/null 2>&1; then \
+		openapi-generator generate \
+			-i openapi.yaml \
+			-g go \
+			-o generated/go \
+			--additional-properties=packageName=proxycontrol,isGoSubmodule=true; \
+	else \
+		openapi-generator-cli generate \
+			-i openapi.yaml \
+			-g go \
+			-o generated/go \
+			--additional-properties=packageName=proxycontrol,isGoSubmodule=true; \
+	fi
 
 # Help target
 help:
