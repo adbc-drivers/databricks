@@ -82,10 +82,3 @@ failure_scenarios:
     operation: "ExecuteStatement"
     action: "delay"
     duration: "35s"
-
-  - name: "direct_results_exceed_maxrows"
-    description: "DirectResults returns more rows than MaxRows"
-    operation: "OpenSession"
-    action: "modify_response"
-    field: "directResults"
-    modification: "exceed_maxrows"

@@ -47,9 +47,7 @@ type FailureScenario struct {
 	// Action-specific parameters
 	ErrorCode    int    `yaml:"error_code,omitempty"`
 	ErrorMessage string `yaml:"error_message,omitempty"`
-	Retryable    bool   `yaml:"retryable,omitempty"`
 	Duration     string `yaml:"duration,omitempty"`
-	AtByte       int64  `yaml:"at_byte,omitempty"`
 	ErrorType    string `yaml:"error_type,omitempty"`
 	Field        string `yaml:"field,omitempty"`
 	Modification string `yaml:"modification,omitempty"`
