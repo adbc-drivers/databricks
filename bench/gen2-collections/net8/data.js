@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765830030356,
+  "lastUpdate": 1765958338204,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Gen2 Collections (.NET 8.0)": [
@@ -707,6 +707,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 93,
+            "unit": "collections"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4ba90df43253c7e6cdf387133e69e81423f3f5b2",
+          "message": "feat(ci): add memory and GC metrics to benchmark comparison (#69)\n\n## Summary\n- Enhance benchmark comparison to show memory allocation and GC\ncollection metrics\n- Add comprehensive metric comparison in PR comments\n\n## Changes\n1. **Median Baseline Calculation**\n- Calculate median values for execution time, memory, and GC collections\nfrom last 10 runs\n   - More stable baseline that reduces noise from outliers\n\n2. **Enhanced Comparison Table**\n   - Add Memory (MB) column with baseline and percentage diff\n   - Add Gen0, Gen1, Gen2 columns showing GC collection counts\n   - Color-coded indicators for both time and memory changes\n\n3. **Improved Documentation**\n   - Update footer to explain all metrics\n   - Clarify baseline methodology\n\n## Test Plan\n- [x] Workflow syntax validated\n- [ ] Wait for benchmark workflow to run and verify output format\n- [ ] Confirm memory and GC metrics appear in PR comment\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com>",
+          "timestamp": "2025-12-16T23:44:40-08:00",
+          "tree_id": "f3d6385670749d74fd5f72996ffed475f735613c",
+          "url": "https://github.com/adbc-drivers/databricks/commit/4ba90df43253c7e6cdf387133e69e81423f3f5b2"
+        },
+        "date": 1765958337383,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 53,
+            "unit": "collections"
+          },
+          {
+            "name": "customer",
+            "value": 3,
+            "unit": "collections"
+          },
+          {
+            "name": "inventory",
+            "value": 18,
+            "unit": "collections"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 40,
+            "unit": "collections"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 48,
+            "unit": "collections"
+          },
+          {
+            "name": "web_sales",
+            "value": 31,
+            "unit": "collections"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 77,
             "unit": "collections"
           }
         ]
