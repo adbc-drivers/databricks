@@ -52,7 +52,7 @@ if ($Help){
     The local repository will then be pushed to your preferred git provider.
     If the remote repository does not exist yet and you are using GitHub,
     the repository will be created for you provided you have the GitHub CLI installed.
-    
+
     Parameters:
     -g | -GitHost   -> ex: github.com
     -m | -Message   -> the git commit message

@@ -14,7 +14,7 @@ All URIs are relative to *http://localhost:8081*
 
 Disable a failure scenario
 
-Disables a failure scenario by name. Disabled scenarios will not trigger even if matching requests are made through the proxy.  **Note:** Scenarios auto-disable after injection, so manual disable is typically only needed to cancel a scenario before it triggers. 
+Disables a failure scenario by name. Disabled scenarios will not trigger even if matching requests are made through the proxy.  **Note:** Scenarios auto-disable after injection, so manual disable is typically only needed to cancel a scenario before it triggers.
 
 
 ### Parameters
@@ -51,7 +51,7 @@ No authorization required
 
 Enable a failure scenario
 
-Enables a failure scenario by name. Once enabled, the scenario will trigger on the next matching request (CloudFetch download or Thrift operation).  **Note:** Scenarios auto-disable after first injection (one-shot behavior). 
+Enables a failure scenario by name. Once enabled, the scenario will trigger on the next matching request (CloudFetch download or Thrift operation).  **Note:** Scenarios auto-disable after first injection (one-shot behavior).
 
 
 ### Parameters
@@ -88,7 +88,7 @@ No authorization required
 
 List all available failure scenarios
 
-Returns a list of all configured failure scenarios with their current status. Each scenario includes its name, description, and enabled state. 
+Returns a list of all configured failure scenarios with their current status. Each scenario includes its name, description, and enabled state.
 
 
 ### Parameters
@@ -113,4 +113,3 @@ No authorization required
 | **200** | List of scenarios retrieved successfully |  -  |
 
 [[Back to top]](#) [[Back to API list]](../../README.md#documentation-for-api-endpoints) [[Back to Model list]](../../README.md#documentation-for-models) [[Back to README]](../../README.md)
-

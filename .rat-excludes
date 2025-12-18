@@ -18,3 +18,5 @@
 */*.sln
 csharp/test/Resources/databricks.json
 csharp/test/Resources/result_get_column_extended_all_types.json
+test-infrastructure/proxy-server/generated/**
+test-infrastructure/proxy-server/requirements.txt
