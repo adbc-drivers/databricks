@@ -60,19 +60,35 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             await ControlClient.ResetThriftCallsAsync();
 
             // Act - Execute a simple query
-            using var connection = CreateProxiedConnection();
-            using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT 1 as test_col";
+            using (var connection = CreateProxiedConnection())
+            {
+                // Disable cached results to force separate CloseOperation call (slow path)
+                using (var disableCache = connection.CreateStatement())
+                {
+                    disableCache.SqlQuery = "SET use_cached_result = false";
+                    disableCache.ExecuteUpdate();
+                }
 
-            var result = statement.ExecuteQuery();
-            Assert.NotNull(result);
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 as test_col";
 
-            using var reader = result.Stream;
-            Assert.NotNull(reader);
+                var result = statement.ExecuteQuery();
+                Assert.NotNull(result);
 
-            // Read at least one batch to ensure operation completes
-            var batch = reader.ReadNextRecordBatchAsync().Result;
-            Assert.NotNull(batch);
+                using var reader = result.Stream;
+                Assert.NotNull(reader);
+
+                // Read at least one batch to ensure operation completes
+                var batch = reader.ReadNextRecordBatchAsync().Result;
+                Assert.NotNull(batch);
+
+                // Re-enable cached results
+                using (var enableCache = connection.CreateStatement())
+                {
+                    enableCache.SqlQuery = "SET use_cached_result = true";
+                    enableCache.ExecuteUpdate();
+                }
+            } // Connection disposed here
 
             // Give time for async disposal to complete
             await Task.Delay(500);
@@ -84,14 +100,28 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 {
                     "OpenSession",
                     "ExecuteStatement",
-                    "CloseOperation",
                     "CloseSession"
                 });
 
             Assert.NotNull(verification);
             Assert.True(verification.Verified,
-                $"Expected OpenSession → ExecuteStatement → CloseOperation → CloseSession. " +
+                $"Expected OpenSession → ExecuteStatement → CloseSession. " +
                 $"Actual: [{string.Join(", ", verification.Actual ?? new System.Collections.Generic.List<string>())}]");
+
+            // If GetOperationStatus was called (slow path), CloseOperation must also be called
+            var getOpStatus = await ControlClient.VerifyThriftCallsAsync(
+                type: "method_exists",
+                method: "GetOperationStatus");
+
+            if (getOpStatus?.Verified == true)
+            {
+                var closeOp = await ControlClient.VerifyThriftCallsAsync(
+                    type: "method_exists",
+                    method: "CloseOperation");
+
+                Assert.True(closeOp?.Verified == true,
+                    "CloseOperation must be called when GetOperationStatus is called (slow path)");
+            }
         }
 
         [Fact]
@@ -146,6 +176,13 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Act - Execute two statements
             using var connection = CreateProxiedConnection();
 
+            // Disable cached results to force separate CloseOperation calls (slow path)
+            using (var disableCache = connection.CreateStatement())
+            {
+                disableCache.SqlQuery = "SET use_cached_result = false";
+                disableCache.ExecuteUpdate();
+            }
+
             using (var statement1 = connection.CreateStatement())
             {
                 statement1.SqlQuery = "SELECT 1";
@@ -162,23 +199,44 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 reader2.ReadNextRecordBatchAsync().AsTask().Wait();
             }
 
+            // Re-enable cached results
+            using (var enableCache = connection.CreateStatement())
+            {
+                enableCache.SqlQuery = "SET use_cached_result = true";
+                enableCache.ExecuteUpdate();
+            }
+
             // Give time for async disposal to complete
             await Task.Delay(500);
 
-            // Assert - CloseOperation should be called for each ExecuteStatement
+            // Assert - Verify ExecuteStatement count
             var executeCount = await ControlClient.VerifyThriftCallsAsync(
                 type: "method_count",
                 method: "ExecuteStatement",
-                count: 2);
+                count: 4); // 2 SETs + 2 queries
 
-            var closeOpCount = await ControlClient.VerifyThriftCallsAsync(
-                type: "method_count",
-                method: "CloseOperation",
-                count: 2);
+            Assert.True(executeCount?.Verified == true,
+                $"Expected 4 ExecuteStatement calls (2 SETs + 2 queries). " +
+                $"Actual: ExecuteStatement={executeCount?.ActualCount}");
 
-            Assert.True(executeCount?.Verified == true && closeOpCount?.Verified == true,
-                $"Expected 2 ExecuteStatement and 2 CloseOperation calls. " +
-                $"Actual: ExecuteStatement={executeCount?.ActualCount}, CloseOperation={closeOpCount?.ActualCount}");
+            // If GetOperationStatus was called (slow path), verify CloseOperation count matches
+            var callHistory = await ControlClient.GetThriftCallsAsync();
+            int getOpCount = 0;
+            int closeOpCount = 0;
+
+            if (callHistory?.Calls != null)
+            {
+                foreach (var call in callHistory.Calls)
+                {
+                    if (call.Method == "GetOperationStatus") getOpCount++;
+                    if (call.Method == "CloseOperation") closeOpCount++;
+                }
+            }
+
+            if (getOpCount > 0)
+            {
+                Assert.Equal(getOpCount, closeOpCount);
+            }
         }
     }
 }

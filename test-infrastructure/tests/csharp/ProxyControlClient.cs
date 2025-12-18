@@ -62,6 +62,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftVerificationRequestJsonConverter());
             jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftVerificationResultJsonConverter());
             jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftCallHistoryJsonConverter());
+            jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftCallHistoryCallsInnerJsonConverter());
 
             var jsonProvider = new JsonSerializerOptionsProvider(jsonOptions);
             var events = new DefaultApiEvents();
