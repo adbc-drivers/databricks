@@ -43,6 +43,13 @@ SCENARIOS = {
         "operation": "CloudFetchDownload",
         "action": "expire_cloud_link",
     },
+    "cloudfetch_400": {
+        "description": "CloudFetch returns 400 Bad Request (malformed request or missing parameters)",
+        "operation": "CloudFetchDownload",
+        "action": "return_error",
+        "error_code": 400,
+        "error_message": "Bad Request",
+    },
     "cloudfetch_403": {
         "description": "CloudFetch returns 403 Forbidden (expired link or insufficient permissions)",
         "operation": "CloudFetchDownload",
@@ -56,6 +63,27 @@ SCENARIOS = {
         "action": "return_error",
         "error_code": 404,
         "error_message": "Not Found",
+    },
+    "cloudfetch_405": {
+        "description": "CloudFetch returns 405 Method Not Allowed (incorrect HTTP method)",
+        "operation": "CloudFetchDownload",
+        "action": "return_error",
+        "error_code": 405,
+        "error_message": "Method Not Allowed",
+    },
+    "cloudfetch_412": {
+        "description": "CloudFetch returns 412 Precondition Failed (condition not met)",
+        "operation": "CloudFetchDownload",
+        "action": "return_error",
+        "error_code": 412,
+        "error_message": "Precondition Failed",
+    },
+    "cloudfetch_500": {
+        "description": "CloudFetch returns 500 Internal Server Error (server-side error)",
+        "operation": "CloudFetchDownload",
+        "action": "return_error",
+        "error_code": 500,
+        "error_message": "Internal Server Error",
     },
     "cloudfetch_503": {
         "description": "CloudFetch returns 503 Service Unavailable (rate limiting or temporary failure)",
