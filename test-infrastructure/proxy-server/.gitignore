@@ -19,5 +19,8 @@ proxy-server
 coverage.out
 *.test
 
-# Generated clients
-generated/
+# Generated clients (except C# which is needed for CI)
+generated/*
+!generated/csharp/
+generated/csharp/*/bin/
+generated/csharp/*/obj/
