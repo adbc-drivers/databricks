@@ -37,6 +37,7 @@ Driver (HTTP_PROXY set) → mitmproxy:18080 → Databricks/Cloud Storage
 ✅ **Battle-Tested** - mitmproxy is used by security researchers worldwide
 ✅ **Multi-Language Clients** - OpenAPI-generated clients for C#, Java, Python, C++, Go
 ✅ **Test Integration** - Automatically managed by C# test infrastructure
+✅ **Thrift Protocol Decoding** - Logs decoded HiveServer2/Databricks Thrift messages for debugging
 
 ## Quick Start
 
@@ -94,6 +95,44 @@ curl http://localhost:18081/scenarios
 curl -X POST http://localhost:18081/scenarios/disable-all
 ```
 
+## Thrift Protocol Decoding
+
+The proxy automatically decodes and logs Thrift Binary Protocol messages for debugging. This works with:
+- **Any Thrift protocol** (HiveServer2, Databricks extensions, JDBC, ADBC)
+- **No IDL files required** - Generic decoder reads wire format directly
+- **Forward compatible** - Works with protocol changes and custom fields
+
+### What Gets Logged
+
+When Thrift requests/responses pass through the proxy, you'll see:
+
+```
+[THRIFT REQUEST]
+Method: ExecuteStatement
+Type: CALL
+Bytes: 1245/1245
+Protocol: HiveServer2/Databricks
+Fields (5):
+  field_1 (STRUCT): {session_handle...}
+  field_2 (STRING): SELECT * FROM table
+  field_3 (MAP): {spark.sql.adaptive.enabled: true}
+  field_4 (I64): 10000
+  field_5 (I32): 2
+```
+
+### Implementation
+
+- **Generic decoder** (`thrift_decoder.py`) - Protocol-agnostic Thrift Binary Protocol parser
+- **Automatic logging** - Integrated into mitmproxy addon
+- **Field identification** - Shows field IDs, types, and values
+- **Error handling** - Gracefully handles malformed or partial messages
+
+This helps with:
+- Understanding protocol differences between drivers
+- Debugging test failures
+- Verifying proxy behavior
+- Documenting protocol extensions
+
 ## OpenAPI Client Generation
 
 The Control API is documented with OpenAPI 3.0, enabling auto-generated clients:
@@ -133,8 +172,9 @@ See `test-infrastructure/tests/csharp/ProxyTestBase.cs` for implementation.
 
 | File | Purpose |
 |------|---------|
-| `mitmproxy_addon.py` | mitmproxy addon with Flask control API |
-| `requirements.txt` | Python dependencies |
+| `mitmproxy_addon.py` | mitmproxy addon with Flask control API and Thrift decoding |
+| `thrift_decoder.py` | Generic Thrift Binary Protocol decoder |
+| `requirements.txt` | Python dependencies (mitmproxy, Flask, thrift) |
 | `openapi.yaml` | OpenAPI spec for Control API |
 | `Makefile` | Build automation (client generation, proxy management) |
 | `CLIENTS.md` | Multi-language client usage examples |
