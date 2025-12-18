@@ -57,6 +57,12 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             _loggerFactory = NullLoggerFactory.Instance;
             var logger = _loggerFactory.CreateLogger<DefaultApi>();
             var jsonOptions = new System.Text.Json.JsonSerializerOptions();
+
+            // Register custom JSON converters for proper serialization
+            jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftVerificationRequestJsonConverter());
+            jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftVerificationResultJsonConverter());
+            jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftCallHistoryJsonConverter());
+
             var jsonProvider = new JsonSerializerOptionsProvider(jsonOptions);
             var events = new DefaultApiEvents();
 
@@ -191,24 +197,35 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             int? count = null,
             CancellationToken cancellationToken = default)
         {
-            var request = new ProxyControlApi.Model.ThriftVerificationRequest(type)
+            var typeEnum = ProxyControlApi.Model.ThriftVerificationRequest.TypeEnumFromString(type);
+            var request = new ProxyControlApi.Model.ThriftVerificationRequest(typeEnum);
+
+            // Only set optional properties if they're not null
+            if (methods != null)
             {
-                Methods = methods,
-                Method = method,
-                Count = count
-            };
+                request.Methods = methods;
+            }
+            if (method != null)
+            {
+                request.Method = method;
+            }
+            if (count.HasValue)
+            {
+                request.Count = count.Value;
+            }
 
             var response = await _api.VerifyThriftCallsAsync(request, cancellationToken);
 
-            if (response.IsBadRequest)
-            {
-                var error = response.BadRequest();
-                throw new ArgumentException($"Verification request invalid: {error?.Error}");
-            }
+            // TODO: Fix BadRequest deserialization issue
+            // if (response.IsBadRequest)
+            // {
+            //     var error = response.BadRequest();
+            //     throw new ArgumentException($"Verification request invalid: {error?.Error}");
+            // }
 
             if (!response.IsOk)
             {
-                throw new InvalidOperationException($"Failed to verify Thrift calls. Status: {response.StatusCode}");
+                throw new InvalidOperationException($"Failed to verify Thrift calls. Status: {response.StatusCode}, RawContent: {response.RawContent}");
             }
 
             return response.Ok();

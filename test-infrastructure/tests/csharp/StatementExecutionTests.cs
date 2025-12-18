@@ -79,7 +79,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             var result = statement.ExecuteQuery();
             using var reader = result.Stream;
-            reader.ReadNextRecordBatchAsync().Wait();
+            reader.ReadNextRecordBatchAsync().AsTask().Wait();
 
             // Assert - Check if GetOperationStatus was called (optional, depends on timing)
             var callHistory = await ControlClient.GetThriftCallsAsync();
@@ -155,7 +155,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 statement.SqlQuery = $"SELECT {i} as num";
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
-                reader.ReadNextRecordBatchAsync().Wait();
+                reader.ReadNextRecordBatchAsync().AsTask().Wait();
             }
 
             // Assert - Should have 3 ExecuteStatement and 3 CloseOperation calls

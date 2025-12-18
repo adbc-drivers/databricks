@@ -74,6 +74,9 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
 
+            // Give time for async disposal to complete
+            await Task.Delay(500);
+
             // Assert - Verify expected sequence
             var verification = await ControlClient.VerifyThriftCallsAsync(
                 type: "contains_sequence",
@@ -106,7 +109,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 statement1.SqlQuery = "SELECT 1 as col1";
                 var result1 = statement1.ExecuteQuery();
                 using var reader1 = result1.Stream;
-                reader1.ReadNextRecordBatchAsync().Wait();
+                reader1.ReadNextRecordBatchAsync().AsTask().Wait();
             }
 
             // Second statement
@@ -115,7 +118,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 statement2.SqlQuery = "SELECT 2 as col2";
                 var result2 = statement2.ExecuteQuery();
                 using var reader2 = result2.Stream;
-                reader2.ReadNextRecordBatchAsync().Wait();
+                reader2.ReadNextRecordBatchAsync().AsTask().Wait();
             }
 
             // Assert - Verify OpenSession called once, ExecuteStatement called twice
@@ -148,7 +151,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 statement1.SqlQuery = "SELECT 1";
                 var result1 = statement1.ExecuteQuery();
                 using var reader1 = result1.Stream;
-                reader1.ReadNextRecordBatchAsync().Wait();
+                reader1.ReadNextRecordBatchAsync().AsTask().Wait();
             }
 
             using (var statement2 = connection.CreateStatement())
@@ -156,8 +159,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 statement2.SqlQuery = "SELECT 2";
                 var result2 = statement2.ExecuteQuery();
                 using var reader2 = result2.Stream;
-                reader2.ReadNextRecordBatchAsync().Wait();
+                reader2.ReadNextRecordBatchAsync().AsTask().Wait();
             }
+
+            // Give time for async disposal to complete
+            await Task.Delay(500);
 
             // Assert - CloseOperation should be called for each ExecuteStatement
             var executeCount = await ControlClient.VerifyThriftCallsAsync(
@@ -170,7 +176,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 method: "CloseOperation",
                 count: 2);
 
-            Assert.True(executeCount?.Verified && closeOpCount?.Verified,
+            Assert.True(executeCount?.Verified == true && closeOpCount?.Verified == true,
                 $"Expected 2 ExecuteStatement and 2 CloseOperation calls. " +
                 $"Actual: ExecuteStatement={executeCount?.ActualCount}, CloseOperation={closeOpCount?.ActualCount}");
         }
