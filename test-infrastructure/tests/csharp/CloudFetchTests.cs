@@ -96,14 +96,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         [Fact]
-        public async Task CloudFetchTimeout_RefreshesLinkViaFetchResults()
+        public async Task CloudFetchTimeout_RetriesWithExponentialBackoff()
         {
             // Arrange - Enable timeout scenario (65s delay)
             await ControlClient.EnableScenarioAsync("cloudfetch_timeout");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
-            // When CloudFetch download times out (exceeds 60s), the driver should
-            // refresh the link by calling FetchResults again and retrying.
+            // When CloudFetch download times out, the driver retries with exponential backoff
+            // (does NOT refresh URL via FetchResults - timeout is not treated as expired link).
+            // The generic retry logic will attempt up to 3 times with increasing delays.
             // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
@@ -115,9 +116,9 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var reader = result.Stream;
             Assert.NotNull(reader);
 
-            // Assert - Driver should timeout and refresh the link via FetchResults
+            // Assert - Driver should retry on timeout with exponential backoff
             // Note: This test may take 60+ seconds as it waits for CloudFetch timeout
-            // TODO: Add Thrift call verification once Thrift decoding is available
+            // TODO: Add Thrift call verification to confirm retries (not URL refresh)
             var schema = reader.Schema;
             Assert.NotNull(schema);
 
@@ -127,14 +128,16 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         [Fact]
-        public async Task CloudFetchConnectionReset_RefreshesLinkViaFetchResults()
+        public async Task CloudFetchConnectionReset_RetriesWithExponentialBackoff()
         {
             // Arrange - Enable connection reset scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_connection_reset");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
-            // When connection is reset during CloudFetch download, the driver should
-            // refresh the link by calling FetchResults again and retrying.
+            // When connection is reset during CloudFetch download, the driver retries with
+            // exponential backoff (does NOT refresh URL via FetchResults - connection errors
+            // are not treated as expired links). The generic retry logic attempts up to 3 times
+            // with delays of 1s, 2s, 3s between retries.
             // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
@@ -146,8 +149,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var reader = result.Stream;
             Assert.NotNull(reader);
 
-            // Assert - Driver should handle connection reset and refresh the link via FetchResults
-            // TODO: Add Thrift call verification once Thrift decoding is available
+            // Assert - Driver should retry on connection reset with exponential backoff
+            // TODO: Add Thrift call verification to confirm retries (not URL refresh)
             var schema = reader.Schema;
             Assert.NotNull(schema);
 
