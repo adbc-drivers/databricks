@@ -25,9 +25,10 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from flask import Flask, jsonify, request
 from mitmproxy import http, ctx
+from thrift_decoder import decode_thrift_message, format_thrift_message
 
 # Flask app for control API
 app = Flask(__name__)
@@ -226,9 +227,29 @@ class FailureInjectionAddon:
             self._disable_scenario(scenario_name)
 
     def _handle_thrift_request(self, flow: http.HTTPFlow) -> None:
-        """Handle Thrift requests (future implementation)."""
-        # TODO: Implement Thrift operation parsing and failure injection
-        pass
+        """Handle Thrift requests and log decoded messages."""
+        # Decode and log Thrift request
+        if flow.request.content:
+            decoded = decode_thrift_message(flow.request.content)
+            if decoded and "error" not in decoded:
+                formatted = format_thrift_message(decoded, max_field_length=100)
+                ctx.log.info(f"[THRIFT REQUEST]\n{formatted}")
+            elif decoded:
+                ctx.log.warn(f"[THRIFT REQUEST] Decode error: {decoded.get('error')}")
+
+    def response(self, flow: http.HTTPFlow) -> None:
+        """
+        Intercept responses to log Thrift messages.
+        Called by mitmproxy for each HTTP response.
+        """
+        if self._is_thrift_request(flow.request) and flow.response:
+            if flow.response.content:
+                decoded = decode_thrift_message(flow.response.content)
+                if decoded and "error" not in decoded:
+                    formatted = format_thrift_message(decoded, max_field_length=100)
+                    ctx.log.info(f"[THRIFT RESPONSE]\n{formatted}")
+                elif decoded:
+                    ctx.log.warn(f"[THRIFT RESPONSE] Decode error: {decoded.get('error')}")
 
     def _disable_scenario(self, scenario_name: str) -> None:
         """Disable a scenario after one-shot injection."""
