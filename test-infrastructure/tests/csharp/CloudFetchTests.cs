@@ -38,10 +38,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Arrange - Enable expired link scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
 
-            // Act - Execute a query that triggers CloudFetch
+            // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // Using 100k rows to ensure we exceed the 5MB CloudFetch threshold
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 10000";
+            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 100000";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
@@ -65,10 +66,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Arrange - Enable Azure 403 scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_azure_403");
 
-            // Act - Execute a query that triggers CloudFetch
+            // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // Using 100k rows to ensure we exceed the 5MB CloudFetch threshold
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 10000";
+            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 100000";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
@@ -91,10 +93,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Arrange - Enable timeout scenario (65s delay)
             await ControlClient.EnableScenarioAsync("cloudfetch_timeout");
 
-            // Act - Execute a query that triggers CloudFetch
+            // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // Using 100k rows to ensure we exceed the 5MB CloudFetch threshold
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 10000";
+            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 100000";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
@@ -118,10 +121,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Arrange - Enable connection reset scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_connection_reset");
 
-            // Act - Execute a query that triggers CloudFetch
+            // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // Using 100k rows to ensure we exceed the 5MB CloudFetch threshold
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 10000";
+            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 100000";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);

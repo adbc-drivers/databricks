@@ -29,14 +29,13 @@ using System.Threading.Tasks;
 namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 {
     /// <summary>
-    /// Manages the lifecycle of the Thrift Protocol Test Proxy Server (Go binary).
-    /// Starts the proxy server process and ensures it's running before tests execute.
+    /// Manages the lifecycle of the mitmproxy-based test proxy server.
+    /// Starts mitmproxy with the failure injection addon and ensures it's running before tests execute.
     /// </summary>
     public class ProxyServerManager : IDisposable
     {
         private Process? _proxyProcess;
-        private readonly string _proxyBinaryPath;
-        private readonly string _configPath;
+        private readonly string _addonScriptPath;
         private readonly int _proxyPort;
         private readonly int _apiPort;
         private bool _disposed;
@@ -48,13 +47,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// <summary>
         /// Creates a new ProxyServerManager.
         /// </summary>
-        /// <param name="proxyBinaryPath">Path to the compiled Go proxy binary (default: auto-detect)</param>
-        /// <param name="configPath">Path to proxy-config.yaml (default: auto-detect)</param>
+        /// <param name="addonScriptPath">Path to mitmproxy addon Python script (default: auto-detect)</param>
         /// <param name="proxyPort">Port for proxy server (default: 18080 for testing)</param>
         /// <param name="apiPort">Port for control API (default: 18081 for testing)</param>
         public ProxyServerManager(
-            string? proxyBinaryPath = null,
-            string? configPath = null,
+            string? addonScriptPath = null,
             int proxyPort = 18080,
             int apiPort = 18081)
         {
@@ -63,27 +60,28 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Auto-detect paths relative to the test project (test-infrastructure/tests/csharp/)
             var testProjectRoot = FindTestProjectRoot();
-            _proxyBinaryPath = proxyBinaryPath ?? Path.Combine(testProjectRoot, "..", "..", "proxy-server", "proxy-server");
-            _configPath = configPath ?? Path.Combine(testProjectRoot, "..", "..", "proxy-server", "proxy-config-test.yaml");
+            _addonScriptPath = addonScriptPath ?? Path.Combine(testProjectRoot, "..", "..", "proxy-server", "mitmproxy_addon.py");
 
-            // Ensure binary exists
-            if (!File.Exists(_proxyBinaryPath))
+            // Ensure addon script exists
+            if (!File.Exists(_addonScriptPath))
             {
                 throw new FileNotFoundException(
-                    $"Proxy binary not found at {_proxyBinaryPath}. " +
-                    "Build it first with: cd test-infrastructure/proxy-server && go build -o proxy-server",
-                    _proxyBinaryPath);
+                    $"mitmproxy addon script not found at {_addonScriptPath}. " +
+                    "Ensure mitmproxy_addon.py exists in test-infrastructure/proxy-server/",
+                    _addonScriptPath);
             }
 
-            // Ensure config exists
-            if (!File.Exists(_configPath))
+            // Check if mitmproxy is installed
+            if (!IsMitmproxyInstalled())
             {
-                throw new FileNotFoundException($"Proxy config not found at {_configPath}", _configPath);
+                throw new InvalidOperationException(
+                    "mitmproxy not found. Install it with: pip install mitmproxy flask\n" +
+                    "Or install from requirements.txt: pip install -r test-infrastructure/proxy-server/requirements.txt");
             }
         }
 
         /// <summary>
-        /// Starts the proxy server process and waits until it's ready to accept connections.
+        /// Starts the mitmproxy server process and waits until it's ready to accept connections.
         /// </summary>
         public async Task StartAsync(CancellationToken cancellationToken = default)
         {
@@ -92,18 +90,22 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 return; // Already running
             }
 
-            // Start the Go proxy process
+            // Start mitmproxy with our addon
+            // mitmdump: headless version of mitmproxy (no UI)
+            // -s: load addon script
+            // --listen-port: proxy port
+            // --set confdir=~/.mitmproxy: certificate directory
             _proxyProcess = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = _proxyBinaryPath,
-                    Arguments = $"--config {_configPath}",
+                    FileName = "mitmdump",
+                    Arguments = $"-s {_addonScriptPath} --listen-port {_proxyPort} --set confdir=~/.mitmproxy",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     CreateNoWindow = true,
-                    WorkingDirectory = Path.GetDirectoryName(_proxyBinaryPath)!
+                    WorkingDirectory = Path.GetDirectoryName(_addonScriptPath)!
                 }
             };
 
@@ -112,7 +114,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             {
                 if (!string.IsNullOrEmpty(args.Data))
                 {
-                    Debug.WriteLine($"[Proxy] {args.Data}");
+                    Debug.WriteLine($"[mitmproxy] {args.Data}");
                 }
             };
 
@@ -120,7 +122,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             {
                 if (!string.IsNullOrEmpty(args.Data))
                 {
-                    Debug.WriteLine($"[Proxy Error] {args.Data}");
+                    Debug.WriteLine($"[mitmproxy Error] {args.Data}");
                 }
             };
 
@@ -130,6 +132,35 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Wait for the API server to be ready
             await WaitForApiReadyAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Checks if mitmproxy (mitmdump) is installed and available on PATH.
+        /// </summary>
+        private static bool IsMitmproxyInstalled()
+        {
+            try
+            {
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "mitmdump",
+                        Arguments = "--version",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+                process.Start();
+                process.WaitForExit(5000);
+                return process.ExitCode == 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>

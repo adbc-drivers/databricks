@@ -1,0 +1,3 @@
+# Python dependencies for mitmproxy-based test infrastructure
+mitmproxy>=10.0.0
+Flask>=3.0.0
