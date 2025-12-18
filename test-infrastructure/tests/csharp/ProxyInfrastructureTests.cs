@@ -42,8 +42,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Verify we have the expected CloudFetch scenarios from mitmproxy addon
             Assert.Contains(scenarios, s => s.Name == "cloudfetch_expired_link");
+            Assert.Contains(scenarios, s => s.Name == "cloudfetch_403");
+            Assert.Contains(scenarios, s => s.Name == "cloudfetch_404");
+            Assert.Contains(scenarios, s => s.Name == "cloudfetch_503");
             Assert.Contains(scenarios, s => s.Name == "cloudfetch_timeout");
-            Assert.Contains(scenarios, s => s.Name == "cloudfetch_azure_403");
             Assert.Contains(scenarios, s => s.Name == "cloudfetch_connection_reset");
         }
 

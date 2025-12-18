@@ -66,13 +66,13 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         [Fact]
-        public async Task CloudFetchAzure403_RefreshesLinkViaFetchResults()
+        public async Task CloudFetch403_RefreshesLinkViaFetchResults()
         {
-            // Arrange - Enable Azure 403 scenario
-            await ControlClient.EnableScenarioAsync("cloudfetch_azure_403");
+            // Arrange - Enable 403 Forbidden scenario
+            await ControlClient.EnableScenarioAsync("cloudfetch_403");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
-            // When Azure returns 403 Forbidden, the driver should refresh the link
+            // When CloudFetch returns 403 Forbidden, the driver should refresh the link
             // by calling FetchResults again and retrying the download.
             // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();

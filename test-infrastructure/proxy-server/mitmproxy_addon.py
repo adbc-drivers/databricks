@@ -43,40 +43,26 @@ SCENARIOS = {
         "operation": "CloudFetchDownload",
         "action": "expire_cloud_link",
     },
-    "cloudfetch_azure_403": {
-        "description": "Azure returns 403 Forbidden during CloudFetch download",
+    "cloudfetch_403": {
+        "description": "CloudFetch returns 403 Forbidden (expired link or insufficient permissions)",
         "operation": "CloudFetchDownload",
         "action": "return_error",
         "error_code": 403,
-        "error_message": "[FILES_API_AZURE_FORBIDDEN]",
+        "error_message": "Forbidden",
     },
-    "cloudfetch_s3_403": {
-        "description": "S3 returns 403 Forbidden (expired signature or insufficient permissions)",
-        "operation": "CloudFetchDownload",
-        "action": "return_error",
-        "error_code": 403,
-        "error_message": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>AccessDenied</Code><Message>Request has expired</Message></Error>",
-    },
-    "cloudfetch_s3_404": {
-        "description": "S3 returns 404 Not Found (object does not exist)",
+    "cloudfetch_404": {
+        "description": "CloudFetch returns 404 Not Found (object does not exist)",
         "operation": "CloudFetchDownload",
         "action": "return_error",
         "error_code": 404,
-        "error_message": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>",
+        "error_message": "Not Found",
     },
-    "cloudfetch_s3_503": {
-        "description": "S3 returns 503 Slow Down (request rate too high)",
+    "cloudfetch_503": {
+        "description": "CloudFetch returns 503 Service Unavailable (rate limiting or temporary failure)",
         "operation": "CloudFetchDownload",
         "action": "return_error",
         "error_code": 503,
-        "error_message": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>",
-    },
-    "cloudfetch_gcs_403": {
-        "description": "GCS returns 403 Forbidden (insufficient permissions or expired signature)",
-        "operation": "CloudFetchDownload",
-        "action": "return_error",
-        "error_code": 403,
-        "error_message": "{\"error\": {\"code\": 403, \"message\": \"Forbidden\", \"errors\": [{\"reason\": \"forbidden\"}]}}",
+        "error_message": "Service Unavailable",
     },
     "cloudfetch_timeout": {
         "description": "CloudFetch download times out (exceeds 60s) - configurable delay",
