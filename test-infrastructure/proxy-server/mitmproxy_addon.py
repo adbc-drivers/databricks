@@ -25,7 +25,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from flask import Flask, jsonify, request
 from mitmproxy import http, ctx
 from thrift_decoder import decode_thrift_message, format_thrift_message
@@ -36,6 +36,10 @@ app = Flask(__name__)
 # Global state for enabled scenarios (thread-safe with lock)
 state_lock = threading.Lock()
 enabled_scenarios: Dict[str, bool] = {}
+
+# Call tracking state (thread-safe with lock)
+MAX_CALL_HISTORY = 1000
+call_history: List[Dict[str, Any]] = []
 
 # Load scenario definitions from YAML (we'll parse the existing config)
 SCENARIOS = {
@@ -84,15 +88,17 @@ def list_scenarios():
 
 @app.route('/scenarios/<scenario_name>/enable', methods=['POST'])
 def enable_scenario(scenario_name):
-    """Enable a failure scenario."""
+    """Enable a failure scenario and auto-reset call history."""
     if scenario_name not in SCENARIOS:
         return jsonify({"error": f"Scenario not found: {scenario_name}"}), 404
 
     with state_lock:
         enabled_scenarios[scenario_name] = True
+        # Auto-reset call history when scenario is enabled (new test scenario)
+        call_history.clear()
 
-    ctx.log.info(f"[API] Enabled scenario: {scenario_name}")
-    return jsonify({"scenario": scenario_name, "enabled": True})
+    ctx.log.info(f"[API] Enabled scenario: {scenario_name}, reset call history")
+    return jsonify({"scenario": scenario_name, "enabled": True, "call_history_reset": True})
 
 
 @app.route('/scenarios/<scenario_name>/disable', methods=['POST'])
@@ -122,6 +128,131 @@ def get_scenario_status(scenario_name):
         "description": SCENARIOS[scenario_name]["description"],
         "enabled": enabled
     })
+
+
+@app.route('/scenarios/disable-all', methods=['POST'])
+def disable_all_scenarios():
+    """Disable all failure scenarios."""
+    with state_lock:
+        for scenario_name in SCENARIOS.keys():
+            enabled_scenarios[scenario_name] = False
+
+    ctx.log.info("[API] Disabled all scenarios")
+    return jsonify({"message": "All scenarios disabled"})
+
+
+@app.route('/thrift/calls', methods=['GET'])
+def get_thrift_calls():
+    """Get history of Thrift method calls."""
+    with state_lock:
+        return jsonify({
+            "calls": call_history.copy(),
+            "count": len(call_history),
+            "max_history": MAX_CALL_HISTORY
+        })
+
+
+@app.route('/thrift/calls/reset', methods=['POST'])
+def reset_thrift_calls():
+    """Reset Thrift call history."""
+    with state_lock:
+        call_history.clear()
+
+    ctx.log.info("[API] Reset Thrift call history")
+    return jsonify({"message": "Call history reset", "count": 0})
+
+
+@app.route('/thrift/calls/verify', methods=['POST'])
+def verify_thrift_calls():
+    """
+    Verify that Thrift calls match expected patterns.
+
+    Request body examples:
+
+    1. Exact sequence match:
+    {
+        "type": "exact_sequence",
+        "methods": ["ExecuteStatement", "FetchResults", "CloseOperation"]
+    }
+
+    2. Contains sequence (in order):
+    {
+        "type": "contains_sequence",
+        "methods": ["ExecuteStatement", "FetchResults"]
+    }
+
+    3. Method count:
+    {
+        "type": "method_count",
+        "method": "FetchResults",
+        "count": 2
+    }
+
+    4. Method exists:
+    {
+        "type": "method_exists",
+        "method": "ExecuteStatement"
+    }
+    """
+    try:
+        data = request.get_json(force=True, silent=True)
+    except Exception:
+        data = None
+
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
+
+    verification_type = data.get("type")
+    if not verification_type:
+        return jsonify({"error": "Verification type required"}), 400
+
+    with state_lock:
+        methods = [call["method"] for call in call_history]
+
+    try:
+        if verification_type == "exact_sequence":
+            expected = data.get("methods", [])
+            if methods == expected:
+                return jsonify({"verified": True, "actual": methods, "expected": expected})
+            else:
+                return jsonify({"verified": False, "actual": methods, "expected": expected})
+
+        elif verification_type == "contains_sequence":
+            expected = data.get("methods", [])
+            # Check if expected sequence appears in order (but not necessarily consecutive)
+            idx = 0
+            for method in methods:
+                if idx < len(expected) and method == expected[idx]:
+                    idx += 1
+            verified = (idx == len(expected))
+            return jsonify({"verified": verified, "actual": methods, "expected": expected})
+
+        elif verification_type == "method_count":
+            method_name = data.get("method")
+            expected_count = data.get("count")
+            if not method_name or expected_count is None:
+                return jsonify({"error": "method and count required"}), 400
+            actual_count = methods.count(method_name)
+            verified = (actual_count == expected_count)
+            return jsonify({
+                "verified": verified,
+                "method": method_name,
+                "actual_count": actual_count,
+                "expected_count": expected_count
+            })
+
+        elif verification_type == "method_exists":
+            method_name = data.get("method")
+            if not method_name:
+                return jsonify({"error": "method required"}), 400
+            verified = method_name in methods
+            return jsonify({"verified": verified, "method": method_name, "actual": methods})
+
+        else:
+            return jsonify({"error": f"Unknown verification type: {verification_type}"}), 400
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ===== mitmproxy Addon Class =====
@@ -227,13 +358,29 @@ class FailureInjectionAddon:
             self._disable_scenario(scenario_name)
 
     def _handle_thrift_request(self, flow: http.HTTPFlow) -> None:
-        """Handle Thrift requests and log decoded messages."""
+        """Handle Thrift requests, log decoded messages, and track call history."""
         # Decode and log Thrift request
         if flow.request.content:
             decoded = decode_thrift_message(flow.request.content)
             if decoded and "error" not in decoded:
                 formatted = format_thrift_message(decoded, max_field_length=100)
                 ctx.log.info(f"[THRIFT REQUEST]\n{formatted}")
+
+                # Track call in history
+                with state_lock:
+                    call_record = {
+                        "timestamp": time.time(),
+                        "method": decoded.get("method", "unknown"),
+                        "message_type": decoded.get("message_type", "unknown"),
+                        "sequence_id": decoded.get("sequence_id", 0),
+                    }
+                    call_history.append(call_record)
+
+                    # Enforce max history limit
+                    if len(call_history) > MAX_CALL_HISTORY:
+                        # Remove oldest calls to stay within limit
+                        del call_history[:len(call_history) - MAX_CALL_HISTORY]
+
             elif decoded:
                 ctx.log.warn(f"[THRIFT REQUEST] Decode error: {decoded.get('error')}")
 
