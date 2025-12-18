@@ -12,22 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: all build test clean generate-clients validate-api
+.PHONY: all start-proxy stop-proxy clean generate-clients validate-api
 
 # Default target
-all: build
+all: generate-csharp
 
-# Build the proxy server
-build:
-	go build -o proxy-server
+# Start mitmproxy with the addon
+start-proxy:
+	@echo "Starting mitmproxy with failure injection addon..."
+	@echo "Control API will be available at http://localhost:18081"
+	@echo "Proxy will listen on port 18080"
+	@mitmdump -s mitmproxy_addon.py --set block_global=false --listen-port 18080
 
-# Run tests
-test:
-	go test -v
+# Stop any running mitmproxy instances
+stop-proxy:
+	@echo "Stopping mitmproxy..."
+	@pkill -f "mitmdump.*mitmproxy_addon.py" || echo "No mitmproxy process found"
 
-# Clean build artifacts
+# Clean generated artifacts
 clean:
-	rm -f proxy-server
 	rm -rf generated/
 
 # Validate OpenAPI specification
@@ -137,9 +140,9 @@ generate-go:
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  make build              - Build the proxy server"
-	@echo "  make test               - Run Go tests"
-	@echo "  make clean              - Remove build artifacts"
+	@echo "  make start-proxy        - Start mitmproxy with failure injection addon"
+	@echo "  make stop-proxy         - Stop running mitmproxy instances"
+	@echo "  make clean              - Remove generated artifacts"
 	@echo "  make validate-api       - Validate OpenAPI spec"
 	@echo "  make generate-clients   - Generate all language clients"
 	@echo "  make generate-csharp    - Generate C# client only"
@@ -148,4 +151,5 @@ help:
 	@echo "  make generate-python    - Generate Python client only"
 	@echo "  make generate-go        - Generate Go client only"
 	@echo ""
-	@echo "See CLIENTS.md for usage examples in each language"
+	@echo "See README-mitmproxy.md for mitmproxy setup and usage"
+	@echo "See CLIENTS.md for client usage examples in each language"
