@@ -39,10 +39,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
-            // Using 100k rows to ensure we exceed the 5MB CloudFetch threshold
+            // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 100000";
+            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
@@ -67,10 +67,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             await ControlClient.EnableScenarioAsync("cloudfetch_azure_403");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
-            // Using 100k rows to ensure we exceed the 5MB CloudFetch threshold
+            // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 100000";
+            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
@@ -94,10 +94,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             await ControlClient.EnableScenarioAsync("cloudfetch_timeout");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
-            // Using 100k rows to ensure we exceed the 5MB CloudFetch threshold
+            // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 100000";
+            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
@@ -122,10 +122,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             await ControlClient.EnableScenarioAsync("cloudfetch_connection_reset");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
-            // Using 100k rows to ensure we exceed the 5MB CloudFetch threshold
+            // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 100000";
+            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
@@ -148,9 +148,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Arrange - No failure scenarios enabled (all disabled by ProxyTestBase.InitializeAsync)
 
             // Act - Execute a query that triggers CloudFetch (large result set)
+            // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM samples.nyctaxi.trips LIMIT 10000";
+            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);

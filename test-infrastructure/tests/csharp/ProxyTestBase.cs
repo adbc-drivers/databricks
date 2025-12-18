@@ -20,6 +20,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
@@ -64,6 +65,12 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 await _proxyManager.StartAsync();
                 _proxyStarted = true;
 
+                // Set environment variables so CloudFetch HttpClient routes through proxy
+                // This enables mitmproxy to intercept HTTPS requests to cloud storage
+                var proxyUrl = $"http://localhost:{_proxyManager.ProxyPort}";
+                Environment.SetEnvironmentVariable("HTTP_PROXY", proxyUrl);
+                Environment.SetEnvironmentVariable("HTTPS_PROXY", proxyUrl);
+
                 // Ensure all scenarios are disabled at the start of each test
                 await _controlClient.DisableAllScenariosAsync();
             }
@@ -71,7 +78,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             {
                 throw new InvalidOperationException(
                     "Failed to start proxy server. " +
-                    "Ensure the Go binary is built: cd test-infrastructure/proxy-server && go build -o proxy-server",
+                    "Ensure mitmproxy is installed: pip install mitmproxy flask",
                     ex);
             }
         }
@@ -94,6 +101,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 }
             }
 
+            // Clear proxy environment variables
+            Environment.SetEnvironmentVariable("HTTP_PROXY", null);
+            Environment.SetEnvironmentVariable("HTTPS_PROXY", null);
+
             _controlClient?.Dispose();
             _proxyManager?.Dispose();
         }
@@ -115,24 +126,47 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         /// <summary>
-        /// Builds connection parameters that route through the proxy server.
-        /// Our Go proxy is a simple HTTP reverse proxy, so we override hostname/port to localhost
-        /// and disable TLS. The proxy receives plain HTTP and forwards as HTTPS to Databricks.
+        /// Builds connection parameters that route through the mitmproxy server.
+        /// Uses proper proxy settings with TLS certificate handling for HTTPS interception.
         /// Override this method to customize connection configuration.
         /// </summary>
         protected virtual Dictionary<string, string> BuildProxiedConnectionParameters()
         {
             var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            // Override hostname and port to point to the proxy (plain HTTP)
-            parameters[SparkParameters.HostName] = "localhost";
-            parameters[SparkParameters.Port] = ProxyManager.ProxyPort.ToString();
-            parameters[SparkParameters.Type] = SparkServerTypeConstants.Http;
+            // Driver config takes precedence over environment variables
+            parameters["adbc.databricks.driver_config_take_precedence"] = "true";
 
-            // Disable TLS since proxy listens on plain HTTP
-            parameters["adbc.http_options.tls.enabled"] = "false";
+            // Configure proxy settings to route through mitmproxy
+            parameters["adbc.proxy_options.use_proxy"] = "true";
+            parameters["adbc.proxy_options.proxy_host"] = "localhost";
+            parameters["adbc.proxy_options.proxy_port"] = ProxyManager.ProxyPort.ToString();
 
-            // Copy path and authentication from test config
+            // Enable TLS but allow mitmproxy's self-signed certificate
+            parameters["adbc.http_options.tls.enabled"] = "true";
+            parameters["adbc.http_options.tls.allow_self_signed"] = "true";
+            parameters["adbc.http_options.tls.disable_server_certificate_validation"] = "true";
+            parameters["adbc.http_options.tls.allow_hostname_mismatch"] = "true";
+
+            // Point to mitmproxy's CA certificate
+            var mitmproxyCertPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".mitmproxy",
+                "mitmproxy-ca-cert.pem");
+            if (File.Exists(mitmproxyCertPath))
+            {
+                parameters["adbc.http_options.tls.trusted_certificate_path"] = mitmproxyCertPath;
+            }
+
+            // Copy connection details from test config
+            if (!string.IsNullOrEmpty(TestConfig.HostName))
+            {
+                parameters[SparkParameters.HostName] = TestConfig.HostName;
+            }
+            if (!string.IsNullOrEmpty(TestConfig.Port))
+            {
+                parameters[SparkParameters.Port] = TestConfig.Port;
+            }
             if (!string.IsNullOrEmpty(TestConfig.Path))
             {
                 parameters[SparkParameters.Path] = TestConfig.Path;

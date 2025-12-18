@@ -188,27 +188,57 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         /// <summary>
-        /// Waits until the Control API is ready to accept connections.
+        /// Waits until both the proxy and Control API are ready to accept connections.
         /// </summary>
         private async Task WaitForApiReadyAsync(CancellationToken cancellationToken)
         {
             using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
             var apiUrl = $"http://localhost:{_apiPort}/scenarios";
 
-            for (int i = 0; i < 30; i++) // Try for up to 3 seconds
+            bool apiReady = false;
+            bool proxyReady = false;
+
+            for (int i = 0; i < 50; i++) // Try for up to 5 seconds
             {
-                try
+                // Check Control API
+                if (!apiReady)
                 {
-                    var response = await httpClient.GetAsync(apiUrl, cancellationToken);
-                    if (response.StatusCode == HttpStatusCode.OK)
+                    try
                     {
-                        Debug.WriteLine($"[Proxy] Control API ready at {apiUrl}");
-                        return;
+                        var response = await httpClient.GetAsync(apiUrl, cancellationToken);
+                        if (response.StatusCode == HttpStatusCode.OK)
+                        {
+                            Debug.WriteLine($"[Proxy] Control API ready at {apiUrl}");
+                            apiReady = true;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // Expected during startup, continue waiting
                     }
                 }
-                catch (Exception)
+
+                // Check proxy port is listening
+                if (!proxyReady && apiReady)
                 {
-                    // Expected during startup, continue waiting
+                    try
+                    {
+                        using var tcpClient = new System.Net.Sockets.TcpClient();
+                        await tcpClient.ConnectAsync("localhost", _proxyPort, cancellationToken);
+                        Debug.WriteLine($"[Proxy] Proxy port {_proxyPort} is listening");
+                        proxyReady = true;
+                    }
+                    catch (Exception)
+                    {
+                        // Expected during startup, continue waiting
+                    }
+                }
+
+                if (apiReady && proxyReady)
+                {
+                    // Give it a bit more time to fully initialize
+                    await Task.Delay(100, cancellationToken);
+                    return;
                 }
 
                 await Task.Delay(100, cancellationToken);
@@ -221,7 +251,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 }
             }
 
-            throw new TimeoutException($"Proxy Control API at {apiUrl} did not become ready within 3 seconds");
+            var statusMsg = $"API Ready: {apiReady}, Proxy Ready: {proxyReady}";
+            throw new TimeoutException($"Proxy did not become fully ready within 5 seconds. {statusMsg}");
         }
 
         /// <summary>
