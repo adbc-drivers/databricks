@@ -33,12 +33,14 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
     public class CloudFetchTests : ProxyTestBase
     {
         [Fact]
-        public async Task CloudFetchExpiredLink_FallsBackToFetchResults()
+        public async Task CloudFetchExpiredLink_RefreshesLinkViaFetchResults()
         {
             // Arrange - Enable expired link scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // When the CloudFetch download link expires (403), the driver should call FetchResults
+            // again with the same offset to get a fresh download link, then retry the download.
             // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
@@ -50,7 +52,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var reader = result.Stream;
             Assert.NotNull(reader);
 
-            // Assert - Driver should fall back to FetchResults and succeed
+            // Assert - Driver should refresh the CloudFetch link by calling FetchResults again
+            // and successfully retrieve the data
+            // TODO: Add Thrift call verification once Thrift decoding is available in this branch
+            // Should verify: FetchResults called 2+ times (initial + refresh after link expiry)
             var schema = reader.Schema;
             Assert.NotNull(schema);
             Assert.True(schema.FieldsList.Count > 0);
@@ -61,12 +66,14 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         [Fact]
-        public async Task CloudFetchAzure403_FallsBackToFetchResults()
+        public async Task CloudFetchAzure403_RefreshesLinkViaFetchResults()
         {
             // Arrange - Enable Azure 403 scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_azure_403");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // When Azure returns 403 Forbidden, the driver should refresh the link
+            // by calling FetchResults again and retrying the download.
             // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
@@ -78,7 +85,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var reader = result.Stream;
             Assert.NotNull(reader);
 
-            // Assert - Driver should handle 403 and fall back to FetchResults
+            // Assert - Driver should handle 403 and refresh the link via FetchResults
+            // TODO: Add Thrift call verification once Thrift decoding is available
             var schema = reader.Schema;
             Assert.NotNull(schema);
 
@@ -88,12 +96,14 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         [Fact]
-        public async Task CloudFetchTimeout_FallsBackToFetchResults()
+        public async Task CloudFetchTimeout_RefreshesLinkViaFetchResults()
         {
             // Arrange - Enable timeout scenario (65s delay)
             await ControlClient.EnableScenarioAsync("cloudfetch_timeout");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // When CloudFetch download times out (exceeds 60s), the driver should
+            // refresh the link by calling FetchResults again and retrying.
             // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
@@ -105,8 +115,9 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var reader = result.Stream;
             Assert.NotNull(reader);
 
-            // Assert - Driver should timeout and fall back to FetchResults
+            // Assert - Driver should timeout and refresh the link via FetchResults
             // Note: This test may take 60+ seconds as it waits for CloudFetch timeout
+            // TODO: Add Thrift call verification once Thrift decoding is available
             var schema = reader.Schema;
             Assert.NotNull(schema);
 
@@ -116,12 +127,14 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         [Fact]
-        public async Task CloudFetchConnectionReset_FallsBackToFetchResults()
+        public async Task CloudFetchConnectionReset_RefreshesLinkViaFetchResults()
         {
             // Arrange - Enable connection reset scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_connection_reset");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // When connection is reset during CloudFetch download, the driver should
+            // refresh the link by calling FetchResults again and retrying.
             // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
@@ -133,7 +146,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var reader = result.Stream;
             Assert.NotNull(reader);
 
-            // Assert - Driver should handle connection reset and fall back
+            // Assert - Driver should handle connection reset and refresh the link via FetchResults
+            // TODO: Add Thrift call verification once Thrift decoding is available
             var schema = reader.Schema;
             Assert.NotNull(schema);
 

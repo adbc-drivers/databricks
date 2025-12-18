@@ -50,11 +50,39 @@ SCENARIOS = {
         "error_code": 403,
         "error_message": "[FILES_API_AZURE_FORBIDDEN]",
     },
+    "cloudfetch_s3_403": {
+        "description": "S3 returns 403 Forbidden (expired signature or insufficient permissions)",
+        "operation": "CloudFetchDownload",
+        "action": "return_error",
+        "error_code": 403,
+        "error_message": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>AccessDenied</Code><Message>Request has expired</Message></Error>",
+    },
+    "cloudfetch_s3_404": {
+        "description": "S3 returns 404 Not Found (object does not exist)",
+        "operation": "CloudFetchDownload",
+        "action": "return_error",
+        "error_code": 404,
+        "error_message": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>",
+    },
+    "cloudfetch_s3_503": {
+        "description": "S3 returns 503 Slow Down (request rate too high)",
+        "operation": "CloudFetchDownload",
+        "action": "return_error",
+        "error_code": 503,
+        "error_message": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>",
+    },
+    "cloudfetch_gcs_403": {
+        "description": "GCS returns 403 Forbidden (insufficient permissions or expired signature)",
+        "operation": "CloudFetchDownload",
+        "action": "return_error",
+        "error_code": 403,
+        "error_message": "{\"error\": {\"code\": 403, \"message\": \"Forbidden\", \"errors\": [{\"reason\": \"forbidden\"}]}}",
+    },
     "cloudfetch_timeout": {
-        "description": "CloudFetch download times out (exceeds 60s)",
+        "description": "CloudFetch download times out (exceeds 60s) - configurable delay",
         "operation": "CloudFetchDownload",
         "action": "delay",
-        "duration": "65s",
+        "duration_seconds": 65,  # Changed from "65s" string to integer
     },
     "cloudfetch_connection_reset": {
         "description": "Connection reset during CloudFetch download",
@@ -74,7 +102,7 @@ def list_scenarios():
             {
                 "name": name,
                 "description": config["description"],
-                "enabled": enabled_scenarios.get(name, False)
+                "enabled": name in enabled_scenarios and enabled_scenarios[name] is not False
             }
             for name, config in SCENARIOS.items()
         ]
@@ -83,15 +111,41 @@ def list_scenarios():
 
 @app.route('/scenarios/<scenario_name>/enable', methods=['POST'])
 def enable_scenario(scenario_name):
-    """Enable a failure scenario."""
+    """
+    Enable a failure scenario.
+
+    Optional request body for configurable scenarios:
+    {
+        "duration_seconds": 30  // For delay scenarios (overrides default)
+    }
+    """
     if scenario_name not in SCENARIOS:
         return jsonify({"error": f"Scenario not found: {scenario_name}"}), 404
 
+    # Check for runtime configuration
+    try:
+        data = request.get_json(force=True, silent=True)
+    except Exception:
+        data = None
+
+    scenario_config = SCENARIOS[scenario_name].copy()
+
+    # Apply runtime overrides for configurable parameters
+    if data:
+        if "duration_seconds" in data and scenario_config.get("action") == "delay":
+            scenario_config["duration_seconds"] = int(data["duration_seconds"])
+            ctx.log.info(f"[API] Override delay duration: {data['duration_seconds']}s")
+
     with state_lock:
-        enabled_scenarios[scenario_name] = True
+        # Store the potentially modified config
+        enabled_scenarios[scenario_name] = scenario_config
 
     ctx.log.info(f"[API] Enabled scenario: {scenario_name}")
-    return jsonify({"scenario": scenario_name, "enabled": True})
+    return jsonify({
+        "scenario": scenario_name,
+        "enabled": True,
+        "config": scenario_config
+    })
 
 
 @app.route('/scenarios/<scenario_name>/disable', methods=['POST'])
@@ -114,12 +168,14 @@ def get_scenario_status(scenario_name):
         return jsonify({"error": f"Scenario not found: {scenario_name}"}), 404
 
     with state_lock:
-        enabled = enabled_scenarios.get(scenario_name, False)
+        enabled_config = enabled_scenarios.get(scenario_name, False)
+        enabled = enabled_config is not False
 
     return jsonify({
         "name": scenario_name,
         "description": SCENARIOS[scenario_name]["description"],
-        "enabled": enabled
+        "enabled": enabled,
+        "config": enabled_config if enabled else None
     })
 
 
@@ -164,18 +220,33 @@ class FailureInjectionAddon:
         )
 
     def _is_thrift_request(self, request: http.Request) -> bool:
-        """Detect if this is a Thrift request to Databricks SQL warehouse."""
-        return request.method == "POST" and request.path.startswith("/sql/")
+        """
+        Detect if this is a Thrift request to Databricks SQL warehouse.
+
+        Distinguishes Thrift API from SEA (SQL Execution API):
+        - Thrift: POST /sql/1.0/warehouses/{warehouse_id} or POST /sql/1.0/endpoints/{endpoint_id}
+        - SEA: POST /api/2.0/sql/statements
+        """
+        if request.method != "POST":
+            return False
+
+        # Thrift requests use /sql/1.0/warehouses/ or /sql/1.0/endpoints/ paths
+        # SEA requests use /api/2.0/sql/statements path
+        return "/sql/1.0/warehouses/" in request.path or "/sql/1.0/endpoints/" in request.path
 
     def _handle_cloudfetch_request(self, flow: http.HTTPFlow) -> None:
         """Handle CloudFetch requests and inject failures if scenario is enabled."""
         with state_lock:
             # Find first enabled CloudFetch scenario
             enabled_scenario = None
-            for name, config in SCENARIOS.items():
-                if config["operation"] == "CloudFetchDownload" and enabled_scenarios.get(name):
-                    enabled_scenario = (name, config)
-                    break
+            for name in enabled_scenarios:
+                scenario_config = enabled_scenarios[name]
+                if scenario_config is not False:
+                    # scenario_config is now the full config dict
+                    base_config = SCENARIOS.get(name, {})
+                    if base_config.get("operation") == "CloudFetchDownload":
+                        enabled_scenario = (name, scenario_config)
+                        break
 
         if not enabled_scenario:
             return  # No scenario enabled, let request proceed normally
@@ -207,11 +278,10 @@ class FailureInjectionAddon:
             self._disable_scenario(scenario_name)
 
         elif action == "delay":
-            # Inject delay (simulates timeout)
-            duration_str = scenario_config.get("duration", "5s")
-            seconds = int(duration_str.rstrip('s'))
-            ctx.log.info(f"[INJECT] Delaying {seconds}s for scenario: {scenario_name}")
-            time.sleep(seconds)
+            # Inject delay (simulates timeout) - now supports configurable duration
+            duration_seconds = scenario_config.get("duration_seconds", 5)
+            ctx.log.info(f"[INJECT] Delaying {duration_seconds}s for scenario: {scenario_name}")
+            time.sleep(duration_seconds)
             self._disable_scenario(scenario_name)
             # Let request continue after delay
 
