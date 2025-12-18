@@ -70,6 +70,19 @@ func startProxy() {
 	// Create reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
+	// Customize the Director to ensure proper header forwarding
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		// Ensure the Host header is set to the target server
+		req.Host = targetURL.Host
+		req.Header.Set("X-Forwarded-Host", req.Header.Get("Host"))
+
+		if config.Proxy.LogRequests {
+			log.Printf("[PROXY] Forwarding to: %s%s", targetURL.String(), req.URL.Path)
+		}
+	}
+
 	// Wrap proxy with failure injection handler
 	handler := proxyHandler(proxy)
 

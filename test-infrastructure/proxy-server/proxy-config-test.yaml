@@ -16,9 +16,9 @@
 # See docs/designs/thrift-protocol-tests/proxy-config-schema.md for full schema documentation
 
 proxy:
-  listen_port: 8080                                    # Port for Thrift/HTTP traffic
-  target_server: "https://workspace.databricks.com"   # Upstream Databricks server
-  api_port: 8081                                       # Control API port
+  listen_port: 18080                                   # Port for Thrift/HTTP traffic (test port)
+  target_server: "https://adb-6436897454825492.12.azuredatabricks.net"   # Upstream Databricks server
+  api_port: 18081                                      # Control API port (test port)
   log_requests: true                                   # Log all requests
   log_level: "info"                                    # debug|info|warn|error
 
@@ -94,3 +94,10 @@ failure_scenarios:
     operation: "ExecuteStatement"
     action: "delay"
     duration: "35s"
+
+  - name: "direct_results_exceed_maxrows"
+    description: "DirectResults returns more rows than MaxRows"
+    operation: "OpenSession"
+    action: "modify_response"
+    field: "directResults"
+    modification: "exceed_maxrows"

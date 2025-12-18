@@ -26,7 +26,7 @@ using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 using AdbcDrivers.Databricks;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks
+namespace AdbcDrivers.Databricks.Tests
 {
     /// <summary>
     /// Unit tests for DatabricksConnection class methods.
