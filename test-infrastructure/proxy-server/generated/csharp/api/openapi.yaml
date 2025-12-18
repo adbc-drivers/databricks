@@ -1,0 +1,196 @@
+openapi: 3.0.0
+info:
+  description: |
+    Control API for the Thrift Protocol Test Proxy Server.
+
+    Enables runtime control of failure injection scenarios for testing ADBC drivers.
+    Tests can enable/disable scenarios to inject failures like connection resets,
+    timeouts, and error responses during CloudFetch downloads or Thrift operations.
+
+    ## Usage Pattern
+
+    1. List available scenarios with `GET /scenarios`
+    2. Enable a scenario with `POST /scenarios/{name}/enable`
+    3. Trigger the scenario by making a request through the proxy
+    4. Scenario auto-disables after first injection (one-shot behavior)
+    5. Optionally disable manually with `POST /scenarios/{name}/disable`
+
+    ## Base URL
+
+    Default: `http://localhost:8081` (configurable via `proxy.api_port` in config)
+  title: Thrift Protocol Test Proxy - Control API
+  version: 1.0.0
+servers:
+- description: Default Control API endpoint
+  url: http://localhost:8081
+tags:
+- description: Failure scenario management operations
+  name: Scenarios
+paths:
+  /scenarios:
+    get:
+      description: |
+        Returns a list of all configured failure scenarios with their current status.
+        Each scenario includes its name, description, and enabled state.
+      operationId: listScenarios
+      responses:
+        "200":
+          content:
+            application/json:
+              example:
+                scenarios:
+                - name: cloudfetch_expired_link
+                  description: "CloudFetch link expires, driver should retry via FetchResults"
+                  enabled: false
+                - name: connection_reset_during_fetch
+                  description: Connection reset when fetching large result sets
+                  enabled: true
+              schema:
+                $ref: "#/components/schemas/ScenarioList"
+          description: List of scenarios retrieved successfully
+      summary: List all available failure scenarios
+  /scenarios/{name}/enable:
+    post:
+      description: |
+        Enables a failure scenario by name. Once enabled, the scenario will trigger
+        on the next matching request (CloudFetch download or Thrift operation).
+
+        **Note:** Scenarios auto-disable after first injection (one-shot behavior).
+      operationId: enableScenario
+      parameters:
+      - description: The unique name of the failure scenario (from proxy-config.yaml)
+        example: cloudfetch_expired_link
+        explode: false
+        in: path
+        name: name
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              example:
+                scenario: cloudfetch_timeout
+                enabled: true
+              schema:
+                $ref: "#/components/schemas/ScenarioStatus"
+          description: Scenario enabled successfully
+        "404":
+          content:
+            text/plain:
+              schema:
+                example: "Scenario not found: invalid_scenario_name"
+                type: string
+          description: Scenario not found
+      summary: Enable a failure scenario
+  /scenarios/{name}/disable:
+    post:
+      description: |
+        Disables a failure scenario by name. Disabled scenarios will not trigger
+        even if matching requests are made through the proxy.
+
+        **Note:** Scenarios auto-disable after injection, so manual disable is
+        typically only needed to cancel a scenario before it triggers.
+      operationId: disableScenario
+      parameters:
+      - description: The unique name of the failure scenario (from proxy-config.yaml)
+        example: cloudfetch_expired_link
+        explode: false
+        in: path
+        name: name
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              example:
+                scenario: cloudfetch_timeout
+                enabled: false
+              schema:
+                $ref: "#/components/schemas/ScenarioStatus"
+          description: Scenario disabled successfully
+        "404":
+          content:
+            text/plain:
+              schema:
+                example: "Scenario not found: invalid_scenario_name"
+                type: string
+          description: Scenario not found
+      summary: Disable a failure scenario
+components:
+  parameters:
+    ScenarioName:
+      description: The unique name of the failure scenario (from proxy-config.yaml)
+      example: cloudfetch_expired_link
+      explode: false
+      in: path
+      name: name
+      required: true
+      schema:
+        type: string
+      style: simple
+  schemas:
+    ScenarioList:
+      example:
+        scenarios:
+        - name: cloudfetch_expired_link
+          description: "CloudFetch link expires, driver should retry via FetchResults"
+          enabled: false
+        - name: cloudfetch_expired_link
+          description: "CloudFetch link expires, driver should retry via FetchResults"
+          enabled: false
+      properties:
+        scenarios:
+          description: List of all configured failure scenarios
+          items:
+            $ref: "#/components/schemas/Scenario"
+          type: array
+      required:
+      - scenarios
+      type: object
+    Scenario:
+      example:
+        name: cloudfetch_expired_link
+        description: "CloudFetch link expires, driver should retry via FetchResults"
+        enabled: false
+      properties:
+        name:
+          description: Unique scenario identifier (from YAML config)
+          example: cloudfetch_expired_link
+          type: string
+        description:
+          description: Human-readable description of the failure scenario
+          example: "CloudFetch link expires, driver should retry via FetchResults"
+          type: string
+        enabled:
+          description: Whether the scenario is currently enabled
+          example: false
+          type: boolean
+      required:
+      - description
+      - enabled
+      - name
+      type: object
+    ScenarioStatus:
+      example:
+        scenario: cloudfetch_timeout
+        enabled: true
+      properties:
+        scenario:
+          description: The scenario name
+          example: cloudfetch_timeout
+          type: string
+        enabled:
+          description: Current enabled state after the operation
+          example: true
+          type: boolean
+      required:
+      - enabled
+      - scenario
+      type: object
+

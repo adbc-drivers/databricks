@@ -104,3 +104,5 @@ csharp/test/Unit/ThriftErrorMessageHandlerTest.cs
 test-infrastructure/proxy-server/go.mod
 test-infrastructure/proxy-server/go.sum
 test-infrastructure/proxy-server/generated/csharp/
+test-infrastructure/proxy-server/requirements.txt
+test-infrastructure/proxy-server/CLIENTS.md
