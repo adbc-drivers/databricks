@@ -26,29 +26,52 @@ using ProxyControlApi.Client;
 namespace ProxyControlApi.Model
 {
     /// <summary>
-    /// ScenarioList
+    /// ResetThriftCalls200Response
     /// </summary>
-    public partial class ScenarioList : IValidatableObject
+    public partial class ResetThriftCalls200Response : IValidatableObject
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="ScenarioList" /> class.
+        /// Initializes a new instance of the <see cref="ResetThriftCalls200Response" /> class.
         /// </summary>
-        /// <param name="scenarios">List of all configured failure scenarios</param>
+        /// <param name="message">message</param>
+        /// <param name="count">count</param>
         [JsonConstructor]
-        public ScenarioList(List<Scenario> scenarios)
+        public ResetThriftCalls200Response(Option<string?> message = default, Option<int?> count = default)
         {
-            Scenarios = scenarios;
+            MessageOption = message;
+            CountOption = count;
             OnCreated();
         }
 
         partial void OnCreated();
 
         /// <summary>
-        /// List of all configured failure scenarios
+        /// Used to track the state of Message
         /// </summary>
-        /// <value>List of all configured failure scenarios</value>
-        [JsonPropertyName("scenarios")]
-        public List<Scenario> Scenarios { get; set; }
+        [JsonIgnore]
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        public Option<string?> MessageOption { get; private set; }
+
+        /// <summary>
+        /// Gets or Sets Message
+        /// </summary>
+        /* <example>Call history reset</example> */
+        [JsonPropertyName("message")]
+        public string? Message { get { return this.MessageOption; } set { this.MessageOption = new(value); } }
+
+        /// <summary>
+        /// Used to track the state of Count
+        /// </summary>
+        [JsonIgnore]
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        public Option<int?> CountOption { get; private set; }
+
+        /// <summary>
+        /// Gets or Sets Count
+        /// </summary>
+        /* <example>0</example> */
+        [JsonPropertyName("count")]
+        public int? Count { get { return this.CountOption; } set { this.CountOption = new(value); } }
 
         /// <summary>
         /// Returns the string presentation of the object
@@ -57,8 +80,9 @@ namespace ProxyControlApi.Model
         public override string ToString()
         {
             StringBuilder sb = new StringBuilder();
-            sb.Append("class ScenarioList {\n");
-            sb.Append("  Scenarios: ").Append(Scenarios).Append("\n");
+            sb.Append("class ResetThriftCalls200Response {\n");
+            sb.Append("  Message: ").Append(Message).Append("\n");
+            sb.Append("  Count: ").Append(Count).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }
@@ -75,19 +99,19 @@ namespace ProxyControlApi.Model
     }
 
     /// <summary>
-    /// A Json converter for type <see cref="ScenarioList" />
+    /// A Json converter for type <see cref="ResetThriftCalls200Response" />
     /// </summary>
-    public class ScenarioListJsonConverter : JsonConverter<ScenarioList>
+    public class ResetThriftCalls200ResponseJsonConverter : JsonConverter<ResetThriftCalls200Response>
     {
         /// <summary>
-        /// Deserializes json to <see cref="ScenarioList" />
+        /// Deserializes json to <see cref="ResetThriftCalls200Response" />
         /// </summary>
         /// <param name="utf8JsonReader"></param>
         /// <param name="typeToConvert"></param>
         /// <param name="jsonSerializerOptions"></param>
         /// <returns></returns>
         /// <exception cref="JsonException"></exception>
-        public override ScenarioList Read(ref Utf8JsonReader utf8JsonReader, Type typeToConvert, JsonSerializerOptions jsonSerializerOptions)
+        public override ResetThriftCalls200Response Read(ref Utf8JsonReader utf8JsonReader, Type typeToConvert, JsonSerializerOptions jsonSerializerOptions)
         {
             int currentDepth = utf8JsonReader.CurrentDepth;
 
@@ -96,7 +120,8 @@ namespace ProxyControlApi.Model
 
             JsonTokenType startingTokenType = utf8JsonReader.TokenType;
 
-            Option<List<Scenario>?> scenarios = default;
+            Option<string?> message = default;
+            Option<int?> count = default;
 
             while (utf8JsonReader.Read())
             {
@@ -113,8 +138,11 @@ namespace ProxyControlApi.Model
 
                     switch (localVarJsonPropertyName)
                     {
-                        case "scenarios":
-                            scenarios = new Option<List<Scenario>?>(JsonSerializer.Deserialize<List<Scenario>>(ref utf8JsonReader, jsonSerializerOptions)!);
+                        case "message":
+                            message = new Option<string?>(utf8JsonReader.GetString()!);
+                            break;
+                        case "count":
+                            count = new Option<int?>(utf8JsonReader.TokenType == JsonTokenType.Null ? (int?)null : utf8JsonReader.GetInt32());
                             break;
                         default:
                             break;
@@ -122,44 +150,47 @@ namespace ProxyControlApi.Model
                 }
             }
 
-            if (!scenarios.IsSet)
-                throw new ArgumentException("Property is required for class ScenarioList.", nameof(scenarios));
+            if (message.IsSet && message.Value == null)
+                throw new ArgumentNullException(nameof(message), "Property is not nullable for class ResetThriftCalls200Response.");
 
-            if (scenarios.IsSet && scenarios.Value == null)
-                throw new ArgumentNullException(nameof(scenarios), "Property is not nullable for class ScenarioList.");
+            if (count.IsSet && count.Value == null)
+                throw new ArgumentNullException(nameof(count), "Property is not nullable for class ResetThriftCalls200Response.");
 
-            return new ScenarioList(scenarios.Value!);
+            return new ResetThriftCalls200Response(message, count);
         }
 
         /// <summary>
-        /// Serializes a <see cref="ScenarioList" />
+        /// Serializes a <see cref="ResetThriftCalls200Response" />
         /// </summary>
         /// <param name="writer"></param>
-        /// <param name="scenarioList"></param>
+        /// <param name="resetThriftCalls200Response"></param>
         /// <param name="jsonSerializerOptions"></param>
         /// <exception cref="NotImplementedException"></exception>
-        public override void Write(Utf8JsonWriter writer, ScenarioList scenarioList, JsonSerializerOptions jsonSerializerOptions)
+        public override void Write(Utf8JsonWriter writer, ResetThriftCalls200Response resetThriftCalls200Response, JsonSerializerOptions jsonSerializerOptions)
         {
             writer.WriteStartObject();
 
-            WriteProperties(writer, scenarioList, jsonSerializerOptions);
+            WriteProperties(writer, resetThriftCalls200Response, jsonSerializerOptions);
             writer.WriteEndObject();
         }
 
         /// <summary>
-        /// Serializes the properties of <see cref="ScenarioList" />
+        /// Serializes the properties of <see cref="ResetThriftCalls200Response" />
         /// </summary>
         /// <param name="writer"></param>
-        /// <param name="scenarioList"></param>
+        /// <param name="resetThriftCalls200Response"></param>
         /// <param name="jsonSerializerOptions"></param>
         /// <exception cref="NotImplementedException"></exception>
-        public void WriteProperties(Utf8JsonWriter writer, ScenarioList scenarioList, JsonSerializerOptions jsonSerializerOptions)
+        public void WriteProperties(Utf8JsonWriter writer, ResetThriftCalls200Response resetThriftCalls200Response, JsonSerializerOptions jsonSerializerOptions)
         {
-            if (scenarioList.Scenarios == null)
-                throw new ArgumentNullException(nameof(scenarioList.Scenarios), "Property is required for class ScenarioList.");
+            if (resetThriftCalls200Response.MessageOption.IsSet && resetThriftCalls200Response.Message == null)
+                throw new ArgumentNullException(nameof(resetThriftCalls200Response.Message), "Property is required for class ResetThriftCalls200Response.");
 
-            writer.WritePropertyName("scenarios");
-            JsonSerializer.Serialize(writer, scenarioList.Scenarios, jsonSerializerOptions);
+            if (resetThriftCalls200Response.MessageOption.IsSet)
+                writer.WriteString("message", resetThriftCalls200Response.Message);
+
+            if (resetThriftCalls200Response.CountOption.IsSet)
+                writer.WriteNumber("count", resetThriftCalls200Response.CountOption.Value!.Value);
         }
     }
 }

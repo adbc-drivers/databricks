@@ -28,7 +28,7 @@ namespace ProxyControlApi.Client
         internal TokenBase(TimeSpan? timeout = null)
         {
             Timeout = timeout;
-
+            
             if (Timeout != null)
                 StartTimer(Timeout.Value);
         }

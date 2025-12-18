@@ -26,29 +26,36 @@ using ProxyControlApi.Client;
 namespace ProxyControlApi.Model
 {
     /// <summary>
-    /// ScenarioList
+    /// VerifyThriftCalls400Response
     /// </summary>
-    public partial class ScenarioList : IValidatableObject
+    public partial class VerifyThriftCalls400Response : IValidatableObject
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="ScenarioList" /> class.
+        /// Initializes a new instance of the <see cref="VerifyThriftCalls400Response" /> class.
         /// </summary>
-        /// <param name="scenarios">List of all configured failure scenarios</param>
+        /// <param name="error">error</param>
         [JsonConstructor]
-        public ScenarioList(List<Scenario> scenarios)
+        public VerifyThriftCalls400Response(Option<string?> error = default)
         {
-            Scenarios = scenarios;
+            ErrorOption = error;
             OnCreated();
         }
 
         partial void OnCreated();
 
         /// <summary>
-        /// List of all configured failure scenarios
+        /// Used to track the state of Error
         /// </summary>
-        /// <value>List of all configured failure scenarios</value>
-        [JsonPropertyName("scenarios")]
-        public List<Scenario> Scenarios { get; set; }
+        [JsonIgnore]
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        public Option<string?> ErrorOption { get; private set; }
+
+        /// <summary>
+        /// Gets or Sets Error
+        /// </summary>
+        /* <example>Verification type required</example> */
+        [JsonPropertyName("error")]
+        public string? Error { get { return this.ErrorOption; } set { this.ErrorOption = new(value); } }
 
         /// <summary>
         /// Returns the string presentation of the object
@@ -57,8 +64,8 @@ namespace ProxyControlApi.Model
         public override string ToString()
         {
             StringBuilder sb = new StringBuilder();
-            sb.Append("class ScenarioList {\n");
-            sb.Append("  Scenarios: ").Append(Scenarios).Append("\n");
+            sb.Append("class VerifyThriftCalls400Response {\n");
+            sb.Append("  Error: ").Append(Error).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }
@@ -75,19 +82,19 @@ namespace ProxyControlApi.Model
     }
 
     /// <summary>
-    /// A Json converter for type <see cref="ScenarioList" />
+    /// A Json converter for type <see cref="VerifyThriftCalls400Response" />
     /// </summary>
-    public class ScenarioListJsonConverter : JsonConverter<ScenarioList>
+    public class VerifyThriftCalls400ResponseJsonConverter : JsonConverter<VerifyThriftCalls400Response>
     {
         /// <summary>
-        /// Deserializes json to <see cref="ScenarioList" />
+        /// Deserializes json to <see cref="VerifyThriftCalls400Response" />
         /// </summary>
         /// <param name="utf8JsonReader"></param>
         /// <param name="typeToConvert"></param>
         /// <param name="jsonSerializerOptions"></param>
         /// <returns></returns>
         /// <exception cref="JsonException"></exception>
-        public override ScenarioList Read(ref Utf8JsonReader utf8JsonReader, Type typeToConvert, JsonSerializerOptions jsonSerializerOptions)
+        public override VerifyThriftCalls400Response Read(ref Utf8JsonReader utf8JsonReader, Type typeToConvert, JsonSerializerOptions jsonSerializerOptions)
         {
             int currentDepth = utf8JsonReader.CurrentDepth;
 
@@ -96,7 +103,7 @@ namespace ProxyControlApi.Model
 
             JsonTokenType startingTokenType = utf8JsonReader.TokenType;
 
-            Option<List<Scenario>?> scenarios = default;
+            Option<string?> error = default;
 
             while (utf8JsonReader.Read())
             {
@@ -113,8 +120,8 @@ namespace ProxyControlApi.Model
 
                     switch (localVarJsonPropertyName)
                     {
-                        case "scenarios":
-                            scenarios = new Option<List<Scenario>?>(JsonSerializer.Deserialize<List<Scenario>>(ref utf8JsonReader, jsonSerializerOptions)!);
+                        case "error":
+                            error = new Option<string?>(utf8JsonReader.GetString()!);
                             break;
                         default:
                             break;
@@ -122,44 +129,41 @@ namespace ProxyControlApi.Model
                 }
             }
 
-            if (!scenarios.IsSet)
-                throw new ArgumentException("Property is required for class ScenarioList.", nameof(scenarios));
+            if (error.IsSet && error.Value == null)
+                throw new ArgumentNullException(nameof(error), "Property is not nullable for class VerifyThriftCalls400Response.");
 
-            if (scenarios.IsSet && scenarios.Value == null)
-                throw new ArgumentNullException(nameof(scenarios), "Property is not nullable for class ScenarioList.");
-
-            return new ScenarioList(scenarios.Value!);
+            return new VerifyThriftCalls400Response(error);
         }
 
         /// <summary>
-        /// Serializes a <see cref="ScenarioList" />
+        /// Serializes a <see cref="VerifyThriftCalls400Response" />
         /// </summary>
         /// <param name="writer"></param>
-        /// <param name="scenarioList"></param>
+        /// <param name="verifyThriftCalls400Response"></param>
         /// <param name="jsonSerializerOptions"></param>
         /// <exception cref="NotImplementedException"></exception>
-        public override void Write(Utf8JsonWriter writer, ScenarioList scenarioList, JsonSerializerOptions jsonSerializerOptions)
+        public override void Write(Utf8JsonWriter writer, VerifyThriftCalls400Response verifyThriftCalls400Response, JsonSerializerOptions jsonSerializerOptions)
         {
             writer.WriteStartObject();
 
-            WriteProperties(writer, scenarioList, jsonSerializerOptions);
+            WriteProperties(writer, verifyThriftCalls400Response, jsonSerializerOptions);
             writer.WriteEndObject();
         }
 
         /// <summary>
-        /// Serializes the properties of <see cref="ScenarioList" />
+        /// Serializes the properties of <see cref="VerifyThriftCalls400Response" />
         /// </summary>
         /// <param name="writer"></param>
-        /// <param name="scenarioList"></param>
+        /// <param name="verifyThriftCalls400Response"></param>
         /// <param name="jsonSerializerOptions"></param>
         /// <exception cref="NotImplementedException"></exception>
-        public void WriteProperties(Utf8JsonWriter writer, ScenarioList scenarioList, JsonSerializerOptions jsonSerializerOptions)
+        public void WriteProperties(Utf8JsonWriter writer, VerifyThriftCalls400Response verifyThriftCalls400Response, JsonSerializerOptions jsonSerializerOptions)
         {
-            if (scenarioList.Scenarios == null)
-                throw new ArgumentNullException(nameof(scenarioList.Scenarios), "Property is required for class ScenarioList.");
+            if (verifyThriftCalls400Response.ErrorOption.IsSet && verifyThriftCalls400Response.Error == null)
+                throw new ArgumentNullException(nameof(verifyThriftCalls400Response.Error), "Property is required for class VerifyThriftCalls400Response.");
 
-            writer.WritePropertyName("scenarios");
-            JsonSerializer.Serialize(writer, scenarioList.Scenarios, jsonSerializerOptions);
+            if (verifyThriftCalls400Response.ErrorOption.IsSet)
+                writer.WriteString("error", verifyThriftCalls400Response.Error);
         }
     }
 }

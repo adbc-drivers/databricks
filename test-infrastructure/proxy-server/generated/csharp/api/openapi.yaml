@@ -26,6 +26,8 @@ servers:
 tags:
 - description: Failure scenario management operations
   name: Scenarios
+- description: Thrift method call tracking and verification
+  name: Thrift Tracking
 paths:
   /scenarios:
     get:
@@ -122,6 +124,108 @@ paths:
                 type: string
           description: Scenario not found
       summary: Disable a failure scenario
+  /thrift/calls:
+    get:
+      description: |
+        Returns the history of Thrift method calls tracked by the proxy.
+        Includes method name, timestamp, message type, and sequence ID.
+
+        **Note:** Call history is automatically reset when a scenario is enabled.
+      operationId: getThriftCalls
+      responses:
+        "200":
+          content:
+            application/json:
+              example:
+                calls:
+                - timestamp: 1.702918234567E9
+                  method: ExecuteStatement
+                  message_type: CALL
+                  sequence_id: 1
+                - timestamp: 1.702918235123E9
+                  method: FetchResults
+                  message_type: CALL
+                  sequence_id: 2
+                count: 2
+                max_history: 1000
+              schema:
+                $ref: "#/components/schemas/ThriftCallHistory"
+          description: Call history retrieved successfully
+      summary: Get Thrift method call history
+  /thrift/calls/reset:
+    post:
+      description: |
+        Manually resets the Thrift call history to empty.
+
+        **Note:** Call history is automatically reset when a scenario is enabled,
+        so manual reset is typically not needed.
+      operationId: resetThriftCalls
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/resetThriftCalls_200_response"
+          description: Call history reset successfully
+      summary: Reset Thrift call history
+  /thrift/calls/verify:
+    post:
+      description: |
+        Verifies that Thrift method calls match expected patterns.
+
+        Supports four verification types:
+        - **exact_sequence**: Exact match of method sequence
+        - **contains_sequence**: Methods appear in order (not necessarily consecutive)
+        - **method_count**: Verify specific method called N times
+        - **method_exists**: Verify method was called at least once
+      operationId: verifyThriftCalls
+      requestBody:
+        content:
+          application/json:
+            examples:
+              exact_sequence:
+                summary: Exact sequence match
+                value:
+                  type: exact_sequence
+                  methods:
+                  - ExecuteStatement
+                  - FetchResults
+                  - CloseOperation
+              contains_sequence:
+                summary: Contains sequence (in order)
+                value:
+                  type: contains_sequence
+                  methods:
+                  - ExecuteStatement
+                  - FetchResults
+              method_count:
+                summary: Method count
+                value:
+                  type: method_count
+                  method: FetchResults
+                  count: 2
+              method_exists:
+                summary: Method exists
+                value:
+                  type: method_exists
+                  method: ExecuteStatement
+            schema:
+              $ref: "#/components/schemas/ThriftVerificationRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThriftVerificationResult"
+          description: Verification result
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/verifyThriftCalls_400_response"
+          description: Invalid request
+      summary: Verify Thrift call sequence
 components:
   parameters:
     ScenarioName:
@@ -193,3 +297,141 @@ components:
       - enabled
       - scenario
       type: object
+    ThriftCallHistory:
+      example:
+        calls:
+        - method: method
+          sequence_id: 6
+          message_type: message_type
+          timestamp: 0.8008281904610115
+        - method: method
+          sequence_id: 6
+          message_type: message_type
+          timestamp: 0.8008281904610115
+        count: 1
+        max_history: 5
+      properties:
+        calls:
+          description: List of tracked Thrift method calls
+          items:
+            $ref: "#/components/schemas/ThriftCallHistory_calls_inner"
+          type: array
+        count:
+          description: Number of calls in history
+          type: integer
+        max_history:
+          description: Maximum number of calls stored (1000)
+          type: integer
+      required:
+      - calls
+      - count
+      - max_history
+      type: object
+    ThriftVerificationRequest:
+      example:
+        method: method
+        methods:
+        - methods
+        - methods
+        count: 0
+        type: exact_sequence
+      properties:
+        type:
+          description: Type of verification
+          enum:
+          - exact_sequence
+          - contains_sequence
+          - method_count
+          - method_exists
+          type: string
+        methods:
+          description: Expected method sequence (for sequence verifications)
+          items:
+            type: string
+          type: array
+        method:
+          description: Method name (for method_count/method_exists)
+          type: string
+        count:
+          description: Expected count (for method_count)
+          type: integer
+      required:
+      - type
+      type: object
+    ThriftVerificationResult:
+      example:
+        actual:
+        - actual
+        - actual
+        method: method
+        expected:
+        - expected
+        - expected
+        verified: true
+        expected_count: 6
+        actual_count: 0
+      properties:
+        verified:
+          description: Whether verification passed
+          type: boolean
+        actual:
+          description: Actual method sequence
+          items:
+            type: string
+          type: array
+        expected:
+          description: Expected method sequence
+          items:
+            type: string
+          type: array
+        method:
+          description: Method name
+          type: string
+        actual_count:
+          description: Actual count
+          type: integer
+        expected_count:
+          description: Expected count
+          type: integer
+      required:
+      - verified
+      type: object
+    resetThriftCalls_200_response:
+      example:
+        count: 0
+        message: Call history reset
+      properties:
+        message:
+          example: Call history reset
+          type: string
+        count:
+          example: 0
+          type: integer
+      type: object
+    verifyThriftCalls_400_response:
+      example:
+        error: Verification type required
+      properties:
+        error:
+          example: Verification type required
+          type: string
+      type: object
+    ThriftCallHistory_calls_inner:
+      example:
+        method: method
+        sequence_id: 6
+        message_type: message_type
+        timestamp: 0.8008281904610115
+      properties:
+        timestamp:
+          description: Unix timestamp
+          type: number
+        method:
+          description: Thrift method name
+          type: string
+        message_type:
+          type: string
+        sequence_id:
+          type: integer
+      type: object
+
