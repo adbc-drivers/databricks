@@ -90,7 +90,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         [Fact]
-        public async Task ProxiedConnection_CanConnectThroughProxy()
+        public void ProxiedConnection_CanConnectThroughProxy()
         {
             // Act
             using var connection = CreateProxiedConnection();
@@ -102,17 +102,22 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             using var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1 as test_value";
 
-            using var reader = statement.ExecuteQuery();
+            var result = statement.ExecuteQuery();
+            Assert.NotNull(result);
+
+            using var reader = result.Stream;
             Assert.NotNull(reader);
 
-            // Verify we can read the result
-            bool hasData = reader.Read();
-            Assert.True(hasData);
-
+            // Verify the schema
             var schema = reader.Schema;
             Assert.NotNull(schema);
             Assert.Single(schema.FieldsList);
             Assert.Equal("test_value", schema.FieldsList[0].Name);
+
+            // Verify we can read the result
+            var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+            Assert.NotNull(batch);
+            Assert.Equal(1, batch.Length);
         }
     }
 }

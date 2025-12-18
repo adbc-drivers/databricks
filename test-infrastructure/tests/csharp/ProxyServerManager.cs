@@ -61,10 +61,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             _proxyPort = proxyPort;
             _apiPort = apiPort;
 
-            // Auto-detect paths relative to the test project
+            // Auto-detect paths relative to the test project (test-infrastructure/tests/csharp/)
             var testProjectRoot = FindTestProjectRoot();
-            _proxyBinaryPath = proxyBinaryPath ?? Path.Combine(testProjectRoot, "..", "..", "test-infrastructure", "proxy-server", "proxy-server");
-            _configPath = configPath ?? Path.Combine(testProjectRoot, "..", "..", "test-infrastructure", "proxy-server", "proxy-config.yaml");
+            _proxyBinaryPath = proxyBinaryPath ?? Path.Combine(testProjectRoot, "..", "..", "proxy-server", "proxy-server");
+            _configPath = configPath ?? Path.Combine(testProjectRoot, "..", "..", "proxy-server", "proxy-config.yaml");
 
             // Ensure binary exists
             if (!File.Exists(_proxyBinaryPath))
@@ -199,14 +199,14 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         private static string FindTestProjectRoot()
         {
             var currentDir = AppContext.BaseDirectory;
-            while (currentDir != null && !File.Exists(Path.Combine(currentDir, "Apache.Arrow.Adbc.Tests.Drivers.Databricks.csproj")))
+            while (currentDir != null && !File.Exists(Path.Combine(currentDir, "ProxyTests.csproj")))
             {
                 currentDir = Directory.GetParent(currentDir)?.FullName;
             }
 
             if (currentDir == null)
             {
-                throw new InvalidOperationException("Could not find test project root directory");
+                throw new InvalidOperationException("Could not find test project root directory (ProxyTests.csproj)");
             }
 
             return currentDir;
