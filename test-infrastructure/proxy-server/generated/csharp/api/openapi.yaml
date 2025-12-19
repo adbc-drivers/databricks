@@ -434,4 +434,3 @@ components:
         sequence_id:
           type: integer
       type: object
-

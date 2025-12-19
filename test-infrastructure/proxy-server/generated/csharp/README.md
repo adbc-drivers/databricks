@@ -1,2 +1,2 @@
 # Created with Openapi Generator
-See the project's [REAMDE](src/ProxyControlApi/README.md)
+See the project's [README](src/ProxyControlApi/README.md)

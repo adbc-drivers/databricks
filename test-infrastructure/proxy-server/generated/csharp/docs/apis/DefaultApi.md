@@ -17,7 +17,7 @@ All URIs are relative to *http://localhost:8081*
 
 Disable a failure scenario
 
-Disables a failure scenario by name. Disabled scenarios will not trigger even if matching requests are made through the proxy.  **Note:** Scenarios auto-disable after injection, so manual disable is typically only needed to cancel a scenario before it triggers. 
+Disables a failure scenario by name. Disabled scenarios will not trigger even if matching requests are made through the proxy.  **Note:** Scenarios auto-disable after injection, so manual disable is typically only needed to cancel a scenario before it triggers.
 
 
 ### Parameters
@@ -54,7 +54,7 @@ No authorization required
 
 Enable a failure scenario
 
-Enables a failure scenario by name. Once enabled, the scenario will trigger on the next matching request (CloudFetch download or Thrift operation).  **Note:** Scenarios auto-disable after first injection (one-shot behavior). 
+Enables a failure scenario by name. Once enabled, the scenario will trigger on the next matching request (CloudFetch download or Thrift operation).  **Note:** Scenarios auto-disable after first injection (one-shot behavior).
 
 
 ### Parameters
@@ -91,7 +91,7 @@ No authorization required
 
 Get Thrift method call history
 
-Returns the history of Thrift method calls tracked by the proxy. Includes method name, timestamp, message type, and sequence ID.  **Note:** Call history is automatically reset when a scenario is enabled. 
+Returns the history of Thrift method calls tracked by the proxy. Includes method name, timestamp, message type, and sequence ID.  **Note:** Call history is automatically reset when a scenario is enabled.
 
 
 ### Parameters
@@ -123,7 +123,7 @@ No authorization required
 
 List all available failure scenarios
 
-Returns a list of all configured failure scenarios with their current status. Each scenario includes its name, description, and enabled state. 
+Returns a list of all configured failure scenarios with their current status. Each scenario includes its name, description, and enabled state.
 
 
 ### Parameters
@@ -155,7 +155,7 @@ No authorization required
 
 Reset Thrift call history
 
-Manually resets the Thrift call history to empty.  **Note:** Call history is automatically reset when a scenario is enabled, so manual reset is typically not needed. 
+Manually resets the Thrift call history to empty.  **Note:** Call history is automatically reset when a scenario is enabled, so manual reset is typically not needed.
 
 
 ### Parameters
@@ -187,7 +187,7 @@ No authorization required
 
 Verify Thrift call sequence
 
-Verifies that Thrift method calls match expected patterns.  Supports four verification types: - **exact_sequence**: Exact match of method sequence - **contains_sequence**: Methods appear in order (not necessarily consecutive) - **method_count**: Verify specific method called N times - **method_exists**: Verify method was called at least once 
+Verifies that Thrift method calls match expected patterns.  Supports four verification types: - **exact_sequence**: Exact match of method sequence - **contains_sequence**: Methods appear in order (not necessarily consecutive) - **method_count**: Verify specific method called N times - **method_exists**: Verify method was called at least once
 
 
 ### Parameters
@@ -217,4 +217,3 @@ No authorization required
 | **400** | Invalid request |  -  |
 
 [[Back to top]](#) [[Back to API list]](../../README.md#documentation-for-api-endpoints) [[Back to Model list]](../../README.md#documentation-for-models) [[Back to README]](../../README.md)
-
