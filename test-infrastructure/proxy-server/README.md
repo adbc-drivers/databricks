@@ -133,6 +133,113 @@ This helps with:
 - Verifying proxy behavior
 - Documenting protocol extensions
 
+## Call Tracking and Verification
+
+The proxy tracks all Thrift method calls and provides verification APIs to assert expected call sequences in tests. This is useful for:
+- **Verifying fallback behavior** - e.g., CloudFetch failure → FetchResults → retry CloudFetch
+- **Ensuring correct call sequences** - e.g., OpenSession → ExecuteStatement → CloseOperation
+- **Debugging test failures** - See actual call sequences when tests fail
+
+### Features
+
+✅ **Automatic tracking** - All Thrift requests logged with method name, timestamp, type
+✅ **Auto-reset** - Call history resets when a scenario is enabled (per test)
+✅ **Limited history** - Max 1000 calls to prevent memory issues
+✅ **Flexible verification** - Exact sequence, contains sequence, method count, method exists
+
+### Tracking API
+
+```bash
+# Get current call history
+curl http://localhost:18081/thrift/calls
+
+# Manually reset call history
+curl -X POST http://localhost:18081/thrift/calls/reset
+```
+
+### Verification API
+
+Verify call sequences using POST requests to `/thrift/calls/verify`:
+
+```bash
+# 1. Exact sequence match
+curl -X POST http://localhost:18081/thrift/calls/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "exact_sequence",
+    "methods": ["ExecuteStatement", "FetchResults", "CloseOperation"]
+  }'
+
+# 2. Contains sequence (in order, but not consecutive)
+curl -X POST http://localhost:18081/thrift/calls/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "contains_sequence",
+    "methods": ["ExecuteStatement", "FetchResults"]
+  }'
+
+# 3. Method count
+curl -X POST http://localhost:18081/thrift/calls/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "method_count",
+    "method": "FetchResults",
+    "count": 2
+  }'
+
+# 4. Method exists
+curl -X POST http://localhost:18081/thrift/calls/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "method_exists",
+    "method": "ExecuteStatement"
+  }'
+```
+
+### C# Test Integration Example
+
+```csharp
+// In your test class
+private async Task<bool> VerifyThriftSequence(string type, params string[] methods)
+{
+    var payload = new { type, methods };
+    var json = JsonSerializer.Serialize(payload);
+    var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+    var response = await _httpClient.PostAsync(
+        "http://localhost:18081/thrift/calls/verify",
+        content
+    );
+
+    var result = await response.Content.ReadAsStringAsync();
+    var verification = JsonSerializer.Deserialize<JsonElement>(result);
+    return verification.GetProperty("verified").GetBoolean();
+}
+
+// In your test method
+[Fact]
+public async Task CloudFetchExpiredLink_ShouldFallbackToFetchResults()
+{
+    // Enable scenario (auto-resets call history)
+    await _scenarioClient.EnableAsync("cloudfetch_expired_link");
+
+    // Execute query that triggers CloudFetch
+    var statement = connection.CreateStatement();
+    statement.SqlQuery = "SELECT * FROM catalog_returns LIMIT 10000";
+    var reader = statement.ExecuteQuery();
+
+    // Verify expected call sequence
+    var verified = await VerifyThriftSequence(
+        "contains_sequence",
+        "ExecuteStatement",
+        "FetchResults",  // Fallback after CloudFetch fails
+        "CloseOperation"
+    );
+
+    Assert.True(verified, "Expected fallback to FetchResults");
+}
+```
+
 ## OpenAPI Client Generation
 
 The Control API is documented with OpenAPI 3.0, enabling auto-generated clients:
