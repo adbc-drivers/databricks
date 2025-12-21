@@ -18,5 +18,10 @@
 */*.sln
 csharp/test/Resources/databricks.json
 csharp/test/Resources/result_get_column_extended_all_types.json
+csharp/AdbcDrivers.snk
+csharp/Benchmarks/benchmark-queries.json
+test-infrastructure/proxy-server/go.sum
+go/go.sum
+# adbc.h is vendored
+go/pkg/adbc.h
 test-infrastructure/proxy-server/generated/**
-test-infrastructure/proxy-server/requirements.txt

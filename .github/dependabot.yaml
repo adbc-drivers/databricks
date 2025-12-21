@@ -26,6 +26,28 @@ updates:
     schedule:
       interval: "weekly"
 
+  - package-ecosystem: "gomod"
+    commit-message:
+      prefix: "chore(go): "
+    directory: "/go"
+    groups:
+      "cloud.google.com":
+        applies-to: version-updates
+        patterns:
+          - "cloud.google.com/*"
+      "golang.org/x":
+        applies-to: version-updates
+        patterns:
+          - "golang.org/x/*"
+      opentelemetry:
+        applies-to: version-updates
+        patterns:
+          - "go.opentelemetry.io/otel"
+          - "go.opentelemetry.io/otel/*"
+    open-pull-requests-limit: 5
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "nuget"
     commit-message:
       prefix: "chore(csharp): "

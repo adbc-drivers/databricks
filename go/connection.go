@@ -1,3 +1,8 @@
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -24,8 +29,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
-	"github.com/apache/arrow-adbc/go/adbc/driver/internal/driverbase"
 	_ "github.com/databricks/databricks-sql-go"
 )
 
