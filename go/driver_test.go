@@ -249,7 +249,7 @@ func (d *DatabricksQuirks) DBSchema() string                            { return
 func (d *DatabricksQuirks) GetMetadata(code adbc.InfoCode) interface{} {
 	switch code {
 	case adbc.InfoDriverName:
-		return "ADBC Databricks Driver - Go"
+		return "ADBC Driver Foundry Driver for Databricks"
 	case adbc.InfoDriverVersion:
 		return "(unknown or development build)"
 	case adbc.InfoDriverArrowVersion:
