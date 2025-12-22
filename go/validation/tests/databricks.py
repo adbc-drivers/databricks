@@ -22,8 +22,7 @@ class DatabricksQuirks(model.DriverQuirks):
     driver = "adbc_driver_databricks"
     driver_name = "ADBC Driver Foundry Driver for Databricks"
     vendor_name = "Databricks"
-    # TODO: Think about what vendor_version should be
-    vendor_version = "Databricks Serverless Starter Warehouse"
+    vendor_version = "v1.9.0"
     # TODO: Think about what short_version should be
     short_version = "serverless"
     # I copied in the members of DriverFeatures here and set them all to False
