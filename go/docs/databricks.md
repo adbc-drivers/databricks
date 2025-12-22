@@ -20,7 +20,7 @@
 
 {{ heading|safe }}
 
-This driver provides access to [Databricks][databricks]{target="_blank"}, a
+This driver provides access to [Databricks][databricks], a
 cloud-based platform for data analytics.
 
 ## Installation
