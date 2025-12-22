@@ -24,6 +24,10 @@ test-infrastructure/proxy-server/go.sum
 go/go.sum
 go/pixi.lock
 go/validation/tests/.gitkeep
+go/validation/queries/ingest/.gitkeep
+go/validation/queries/type/bind/.gitkeep
+go/validation/queries/type/literal/.gitkeep
+go/validation/queries/type/select/.gitkeep
 # adbc.h is vendored
 go/pkg/adbc.h
 test-infrastructure/proxy-server/generated/**
