@@ -22,9 +22,8 @@ class DatabricksQuirks(model.DriverQuirks):
     driver = "adbc_driver_databricks"
     driver_name = "ADBC Driver Foundry Driver for Databricks"
     vendor_name = "Databricks"
-    vendor_version = "v1.9.0"
-    # TODO: Think about what short_version should be
-    short_version = "serverless"
+    vendor_version = "Databricks SQL Driver for Go v1.9.0"
+    short_version = "v1.9.0"
     # I copied in the members of DriverFeatures here and set them all to False
     # or None. TODO: Disable/enable what should be enabled/disabled.
     features = model.DriverFeatures(
