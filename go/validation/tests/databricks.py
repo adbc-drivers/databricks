@@ -46,8 +46,8 @@ class DatabricksQuirks(model.DriverQuirks):
         statement_get_parameter_schema= False,
         statement_prepare= False,
         statement_rows_affected= False,
-        current_catalog=None, # TODO: I'm not sure what these should be
-        current_schema=None, # TODO: I"m not sure what these should be
+        current_catalog="workspace", # TODO: I'm not sure what these should be
+        current_schema="default", # TODO: I"m not sure what these should be
         supported_xdbc_fields=[],
     )
     setup = model.DriverSetup(
