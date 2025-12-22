@@ -22,8 +22,12 @@ class DatabricksQuirks(model.DriverQuirks):
     driver = "adbc_driver_databricks"
     driver_name = "ADBC Driver Foundry Driver for Databricks"
     vendor_name = "Databricks"
+    # TODO: Think about what vendor_version should be
     vendor_version = "Databricks Serverless Starter Warehouse"
+    # TODO: Think about what short_version should be
     short_version = "serverless"
+    # I copied in the members of DriverFeatures here and set them all to False
+    # or None. TODO: Disable/enable what should be enabled/disabled.
     features = model.DriverFeatures(
         connection_get_table_schema = False,
         connection_set_current_catalog = False,
@@ -42,8 +46,8 @@ class DatabricksQuirks(model.DriverQuirks):
         statement_get_parameter_schema= False,
         statement_prepare= False,
         statement_rows_affected= False,
-        current_catalog="db",  # TODO
-        current_schema="",  # TODO
+        current_catalog=None, # TODO: I'm not sure what these should be
+        current_schema=None, # TODO: I"m not sure what these should be
         supported_xdbc_fields=[],
     )
     setup = model.DriverSetup(
