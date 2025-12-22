@@ -22,6 +22,8 @@ csharp/AdbcDrivers.snk
 csharp/Benchmarks/benchmark-queries.json
 test-infrastructure/proxy-server/go.sum
 go/go.sum
+go/pixi.lock
+go/validation/tests/.gitkeep
 # adbc.h is vendored
 go/pkg/adbc.h
 test-infrastructure/proxy-server/generated/**
