@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1765958343546,
+  "lastUpdate": 1766362992445,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Allocated Memory (.NET Framework 4.7.2)": [
@@ -766,6 +766,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 2905.91,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "petridish@gmail.com",
+            "name": "Bryce Mecum",
+            "username": "amoeba"
+          },
+          "committer": {
+            "email": "petridish@gmail.com",
+            "name": "Bryce Mecum",
+            "username": "amoeba"
+          },
+          "distinct": true,
+          "id": "e6224770def90297e4f7d375b646a4761aa0e4a5",
+          "message": "chore(go): migrate go driver from ADBC Repo\n\nMigrates the Go Databricks driver from the ADBC repo to the `./go` directory in this repo. This PR includes changes to port the driver to the new driverbase and make it build and test cleanly. There was only one commit to migrate and I did that by running git filter-repo with `--path-rename`:\n\n```sh\ngit filter-repo --force --path go/adbc/driver/databricks --path go/adbc/pkg/databricks/ --path-rename go/adbc/driver/databricks:go --path-rename go/adbc/pkg/databricks:go/pkg\n```\n\nand then cherry-picking the commit on this brach. This gives us a new hash but preserves the original commit including date.\n\nThis PR also makes a number of changes to the existing C# driver, mostly to CI files, to make this all work together better.\n\nCloses #31",
+          "timestamp": "2025-12-21T16:10:09-08:00",
+          "tree_id": "96f7d4aacf938dd537a3204a97315ff54bbe6c16",
+          "url": "https://github.com/adbc-drivers/databricks/commit/e6224770def90297e4f7d375b646a4761aa0e4a5"
+        },
+        "date": 1766362992079,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 537.3,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 38.8,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 225.63,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 146.62,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 400.29,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 402.67,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 2918.12,
             "unit": "MB"
           }
         ]
