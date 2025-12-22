@@ -29,7 +29,7 @@
 #pragma once
 
 #include <stdlib.h>
-#include "../../drivermgr/arrow-adbc/adbc.h"
+#include "adbc.h"
 
 struct AdbcError* DatabricksErrorFromArrayStream(struct ArrowArrayStream*,
                                                  AdbcStatusCode*);
