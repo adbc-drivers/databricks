@@ -434,45 +434,68 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 catalogs = await GetCatalogsAsync(catalogPattern).ConfigureAwait(false);
 
-                // Fetch schemas
+                // Fetch schemas in parallel
                 if (depth >= GetObjectsDepth.DbSchemas)
                 {
-                    foreach (var catalog in catalogs)
+                    var schemaTasks = catalogs.Select(async catalog =>
                     {
                         var schemas = await GetSchemasAsync(catalog, schemaPattern).ConfigureAwait(false);
-                        catalogSchemas[catalog] = schemas;
+                        return (catalog, schemas);
+                    }).ToList();
 
-                        // Fetch tables
-                        if (depth >= GetObjectsDepth.Tables)
+                    var schemaResults = await Task.WhenAll(schemaTasks).ConfigureAwait(false);
+
+                    foreach (var (catalog, schemas) in schemaResults)
+                    {
+                        catalogSchemas[catalog] = schemas;
+                    }
+
+                    // Fetch tables in parallel
+                    if (depth >= GetObjectsDepth.Tables)
+                    {
+                        var tableTasks = schemaResults.SelectMany(result =>
+                            result.schemas.Select(async schema =>
+                            {
+                                var tables = await GetTablesAsync(result.catalog, schema, tableNamePattern, tableTypes).ConfigureAwait(false);
+                                return (catalog: result.catalog, schema, tables);
+                            })
+                        ).ToList();
+
+                        var tableResults = await Task.WhenAll(tableTasks).ConfigureAwait(false);
+
+                        foreach (var (catalog, schema, tables) in tableResults)
                         {
                             if (!catalogSchemaTables.ContainsKey(catalog))
                             {
                                 catalogSchemaTables[catalog] = new Dictionary<string, List<(string, string)>>();
                             }
+                            catalogSchemaTables[catalog][schema] = tables;
+                        }
 
-                            foreach (var schema in schemas)
-                            {
-                                var tables = await GetTablesAsync(catalog, schema, tableNamePattern, tableTypes).ConfigureAwait(false);
-                                catalogSchemaTables[catalog][schema] = tables;
-
-                                // Fetch columns (only for All depth)
-                                if (depth == GetObjectsDepth.All)
+                        // Fetch columns in parallel (only for All depth)
+                        if (depth == GetObjectsDepth.All)
+                        {
+                            var columnTasks = tableResults.SelectMany(result =>
+                                result.tables.Select(async table =>
                                 {
-                                    if (!catalogSchemaTableColumns.ContainsKey(catalog))
-                                    {
-                                        catalogSchemaTableColumns[catalog] = new Dictionary<string, Dictionary<string, List<ColumnInfo>>>();
-                                    }
-                                    if (!catalogSchemaTableColumns[catalog].ContainsKey(schema))
-                                    {
-                                        catalogSchemaTableColumns[catalog][schema] = new Dictionary<string, List<ColumnInfo>>();
-                                    }
+                                    var columns = await GetColumnsAsync(result.catalog, result.schema, table.tableName, columnNamePattern).ConfigureAwait(false);
+                                    return (catalog: result.catalog, schema: result.schema, tableName: table.tableName, columns);
+                                })
+                            ).ToList();
 
-                                    foreach (var (tableName, _) in tables)
-                                    {
-                                        var columns = await GetColumnsAsync(catalog, schema, tableName, columnNamePattern).ConfigureAwait(false);
-                                        catalogSchemaTableColumns[catalog][schema][tableName] = columns;
-                                    }
+                            var columnResults = await Task.WhenAll(columnTasks).ConfigureAwait(false);
+
+                            foreach (var (catalog, schema, tableName, columns) in columnResults)
+                            {
+                                if (!catalogSchemaTableColumns.ContainsKey(catalog))
+                                {
+                                    catalogSchemaTableColumns[catalog] = new Dictionary<string, Dictionary<string, List<ColumnInfo>>>();
                                 }
+                                if (!catalogSchemaTableColumns[catalog].ContainsKey(schema))
+                                {
+                                    catalogSchemaTableColumns[catalog][schema] = new Dictionary<string, List<ColumnInfo>>();
+                                }
+                                catalogSchemaTableColumns[catalog][schema][tableName] = columns;
                             }
                         }
                     }

@@ -599,7 +599,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         private bool GetBoolValueFromUnion(DenseUnionArray unionArray, int index)
         {
             var boolArray = unionArray.Fields[1] as BooleanArray;
-            return boolArray!.GetValue(index);
+            return boolArray!.GetValue(index) ?? false; // Handle nullable bool
         }
     }
 }
