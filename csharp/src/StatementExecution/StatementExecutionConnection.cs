@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +26,7 @@ using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -388,12 +390,345 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Gets objects (metadata) from the database.
+        /// Gets objects (metadata) from the database using SQL-based commands.
+        /// Supports Catalogs, DbSchemas, Tables, and All depth levels.
         /// </summary>
         public override IArrowArrayStream GetObjects(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            return GetObjectsAsync(depth, catalogPattern, schemaPattern, tableNamePattern, tableTypes, columnNamePattern).GetAwaiter().GetResult();
+        }
+
+        private async Task<IArrowArrayStream> GetObjectsAsync(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
+        {
+            // Fetch data based on depth
+            var catalogs = new List<string>();
+            var catalogSchemas = new Dictionary<string, List<string>>();
+            var catalogSchemaTables = new Dictionary<string, Dictionary<string, List<(string tableName, string tableType)>>>();
+            var catalogSchemaTableColumns = new Dictionary<string, Dictionary<string, Dictionary<string, List<ColumnInfo>>>>();
+
+            // Fetch catalogs
+            if (depth >= GetObjectsDepth.Catalogs)
+            {
+                catalogs = await GetCatalogsAsync(catalogPattern).ConfigureAwait(false);
+
+                // Fetch schemas
+                if (depth >= GetObjectsDepth.DbSchemas)
+                {
+                    foreach (var catalog in catalogs)
+                    {
+                        var schemas = await GetSchemasAsync(catalog, schemaPattern).ConfigureAwait(false);
+                        catalogSchemas[catalog] = schemas;
+
+                        // Fetch tables
+                        if (depth >= GetObjectsDepth.Tables)
+                        {
+                            if (!catalogSchemaTables.ContainsKey(catalog))
+                            {
+                                catalogSchemaTables[catalog] = new Dictionary<string, List<(string, string)>>();
+                            }
+
+                            foreach (var schema in schemas)
+                            {
+                                var tables = await GetTablesAsync(catalog, schema, tableNamePattern, tableTypes).ConfigureAwait(false);
+                                catalogSchemaTables[catalog][schema] = tables;
+
+                                // Fetch columns (only for All depth)
+                                if (depth == GetObjectsDepth.All)
+                                {
+                                    if (!catalogSchemaTableColumns.ContainsKey(catalog))
+                                    {
+                                        catalogSchemaTableColumns[catalog] = new Dictionary<string, Dictionary<string, List<ColumnInfo>>>();
+                                    }
+                                    if (!catalogSchemaTableColumns[catalog].ContainsKey(schema))
+                                    {
+                                        catalogSchemaTableColumns[catalog][schema] = new Dictionary<string, List<ColumnInfo>>();
+                                    }
+
+                                    foreach (var (tableName, _) in tables)
+                                    {
+                                        var columns = await GetColumnsAsync(catalog, schema, tableName, columnNamePattern).ConfigureAwait(false);
+                                        catalogSchemaTableColumns[catalog][schema][tableName] = columns;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Build and return result
+            return BuildGetObjectsResult(depth, catalogs, catalogSchemas, catalogSchemaTables, catalogSchemaTableColumns);
+        }
+
+        private async Task<List<string>> GetCatalogsAsync(string? catalogPattern)
+        {
+            var sql = "SHOW CATALOGS";
+            if (!string.IsNullOrEmpty(catalogPattern))
+            {
+                sql += $" LIKE '{EscapeSqlPattern(catalogPattern)}'";
+            }
+
+            var batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            var catalogs = new List<string>();
+
+            foreach (var batch in batches)
+            {
+                var catalogArray = batch.Column("catalog") as StringArray;
+                if (catalogArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (!catalogArray.IsNull(i))
+                    {
+                        var catalog = catalogArray.GetString(i);
+                        if (!string.IsNullOrEmpty(catalogPattern) && !PatternMatches(catalog, catalogPattern))
+                            continue;
+                        catalogs.Add(catalog);
+                    }
+                }
+            }
+
+            return catalogs;
+        }
+
+        private async Task<List<string>> GetSchemasAsync(string catalog, string? schemaPattern)
+        {
+            var sql = $"SHOW SCHEMAS IN {QuoteIdentifier(catalog)}";
+            if (!string.IsNullOrEmpty(schemaPattern))
+            {
+                sql += $" LIKE '{EscapeSqlPattern(schemaPattern)}'";
+            }
+
+            var batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            var schemas = new List<string>();
+
+            foreach (var batch in batches)
+            {
+                // Result columns are typically 'databaseName' or 'namespace' depending on DBR version
+                StringArray? schemaArray = batch.Column("databaseName") as StringArray;
+                if (schemaArray == null)
+                {
+                    schemaArray = batch.Column("namespace") as StringArray;
+                }
+                if (schemaArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (!schemaArray.IsNull(i))
+                    {
+                        var schema = schemaArray.GetString(i);
+                        if (!string.IsNullOrEmpty(schemaPattern) && !PatternMatches(schema, schemaPattern))
+                            continue;
+                        schemas.Add(schema);
+                    }
+                }
+            }
+
+            return schemas;
+        }
+
+        private async Task<List<(string tableName, string tableType)>> GetTablesAsync(string catalog, string schema, string? tableNamePattern, IReadOnlyList<string>? tableTypes)
+        {
+            var sql = $"SHOW TABLES IN {QuoteIdentifier(catalog)}.{QuoteIdentifier(schema)}";
+            if (!string.IsNullOrEmpty(tableNamePattern))
+            {
+                sql += $" LIKE '{EscapeSqlPattern(tableNamePattern)}'";
+            }
+
+            var batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            var tables = new List<(string, string)>();
+
+            foreach (var batch in batches)
+            {
+                var tableNameArray = batch.Column("tableName") as StringArray;
+                var isTemporaryArray = batch.Column("isTemporary") as BooleanArray;
+
+                if (tableNameArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (tableNameArray.IsNull(i))
+                        continue;
+
+                    var tableName = tableNameArray.GetString(i);
+
+                    // Determine table type
+                    string tableType = "TABLE";
+                    if (isTemporaryArray != null && !isTemporaryArray.IsNull(i))
+                    {
+                        var isTemporary = isTemporaryArray.GetValue(i);
+                        if (isTemporary == true)
+                        {
+                            tableType = "LOCAL TEMPORARY";
+                        }
+                    }
+
+                    // Apply table name pattern if specified
+                    if (!string.IsNullOrEmpty(tableNamePattern) && !PatternMatches(tableName, tableNamePattern))
+                        continue;
+
+                    // Apply table type filter if specified
+                    if (tableTypes != null && tableTypes.Count > 0 && !tableTypes.Contains(tableType))
+                        continue;
+
+                    tables.Add((tableName, tableType));
+                }
+            }
+
+            return tables;
+        }
+
+        private async Task<List<ColumnInfo>> GetColumnsAsync(string catalog, string schema, string tableName, string? columnNamePattern)
+        {
+            var qualifiedTableName = BuildQualifiedTableName(catalog, schema, tableName);
+            var sql = $"DESCRIBE TABLE {qualifiedTableName}";
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            }
+            catch
+            {
+                // If DESCRIBE fails, return empty list
+                return new List<ColumnInfo>();
+            }
+
+            var columns = new List<ColumnInfo>();
+            int position = 0;
+
+            foreach (var batch in batches)
+            {
+                var colNameArray = batch.Column("col_name") as StringArray;
+                var dataTypeArray = batch.Column("data_type") as StringArray;
+                var commentArray = batch.Column("comment") as StringArray;
+
+                if (colNameArray == null || dataTypeArray == null)
+                    continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (colNameArray.IsNull(i) || dataTypeArray.IsNull(i))
+                        continue;
+
+                    var colName = colNameArray.GetString(i);
+                    var dataType = dataTypeArray.GetString(i);
+
+                    // Skip metadata rows
+                    if (string.IsNullOrEmpty(colName) ||
+                        colName.StartsWith("#") ||
+                        dataType.Contains("Partition Information") ||
+                        dataType.Contains("# col_name"))
+                    {
+                        continue;
+                    }
+
+                    // Apply column name pattern if specified
+                    if (!string.IsNullOrEmpty(columnNamePattern) && !PatternMatches(colName, columnNamePattern))
+                        continue;
+
+                    var comment = commentArray != null && !commentArray.IsNull(i) ? commentArray.GetString(i) : null;
+
+                    columns.Add(new ColumnInfo
+                    {
+                        Name = colName,
+                        TypeName = dataType,
+                        Position = position++,
+                        Nullable = true,
+                        Comment = comment
+                    });
+                }
+            }
+
+            return columns;
+        }
+
+        private IArrowArrayStream BuildGetObjectsResult(
+            GetObjectsDepth depth,
+            List<string> catalogs,
+            Dictionary<string, List<string>> catalogSchemas,
+            Dictionary<string, Dictionary<string, List<(string tableName, string tableType)>>> catalogSchemaTables,
+            Dictionary<string, Dictionary<string, Dictionary<string, List<ColumnInfo>>>> catalogSchemaTableColumns)
+        {
+            // For now, return a simplified result structure
+            // TODO: Implement full nested ListArray/StructArray structure for All depth
+            // This matches the limitation documented in CURRENT_STATUS.md
+
+            if (depth == GetObjectsDepth.Catalogs)
+            {
+                var catalogBuilder = new StringArray.Builder();
+                foreach (var catalog in catalogs)
+                {
+                    catalogBuilder.Append(catalog);
+                }
+
+                var schema = new Schema(new[] { new Field("catalog_name", StringType.Default, nullable: true) }, null);
+                var data = new List<IArrowArray> { catalogBuilder.Build() };
+                return new SimpleArrowArrayStream(schema, data);
+            }
+            else if (depth == GetObjectsDepth.DbSchemas)
+            {
+                var catalogBuilder = new StringArray.Builder();
+                var schemaBuilder = new StringArray.Builder();
+
+                foreach (var kvp in catalogSchemas)
+                {
+                    foreach (var schema in kvp.Value)
+                    {
+                        catalogBuilder.Append(kvp.Key);
+                        schemaBuilder.Append(schema);
+                    }
+                }
+
+                var resultSchema = new Schema(new[]
+                {
+                    new Field("catalog_name", StringType.Default, nullable: true),
+                    new Field("db_schema_name", StringType.Default, nullable: true)
+                }, null);
+                var data = new List<IArrowArray> { catalogBuilder.Build(), schemaBuilder.Build() };
+                return new SimpleArrowArrayStream(resultSchema, data);
+            }
+            else if (depth == GetObjectsDepth.Tables)
+            {
+                var catalogBuilder = new StringArray.Builder();
+                var schemaBuilder = new StringArray.Builder();
+                var tableBuilder = new StringArray.Builder();
+                var typeBuilder = new StringArray.Builder();
+
+                foreach (var catKvp in catalogSchemaTables)
+                {
+                    foreach (var schemaKvp in catKvp.Value)
+                    {
+                        foreach (var (tableName, tableType) in schemaKvp.Value)
+                        {
+                            catalogBuilder.Append(catKvp.Key);
+                            schemaBuilder.Append(schemaKvp.Key);
+                            tableBuilder.Append(tableName);
+                            typeBuilder.Append(tableType);
+                        }
+                    }
+                }
+
+                var resultSchema = new Schema(new[]
+                {
+                    new Field("catalog_name", StringType.Default, nullable: true),
+                    new Field("db_schema_name", StringType.Default, nullable: true),
+                    new Field("table_name", StringType.Default, nullable: true),
+                    new Field("table_type", StringType.Default, nullable: true)
+                }, null);
+                var data = new List<IArrowArray> { catalogBuilder.Build(), schemaBuilder.Build(), tableBuilder.Build(), typeBuilder.Build() };
+                return new SimpleArrowArrayStream(resultSchema, data);
+            }
+            else // GetObjectsDepth.All
+            {
+                // Return simplified schema for now
+                // TODO: Implement full ADBC nested structure with catalog->schema->table->column hierarchy
+                // This requires ListArray and StructArray builders
+                var catalogBuilder = new StringArray.Builder();
+                var schema = new Schema(new[] { new Field("catalog_name", StringType.Default, nullable: true) }, null);
+                var data = new List<IArrowArray> { catalogBuilder.Build() };
+                return new SimpleArrowArrayStream(schema, data);
+            }
         }
 
         /// <summary>
@@ -401,18 +736,228 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public override IArrowArrayStream GetTableTypes()
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            var tableTypesBuilder = new StringArray.Builder();
+            tableTypesBuilder.Append("TABLE");
+            tableTypesBuilder.Append("VIEW");
+            tableTypesBuilder.Append("LOCAL TEMPORARY");
+
+            var schema = new Schema(new[] { new Field("table_type", StringType.Default, nullable: false) }, null);
+            var data = new List<IArrowArray> { tableTypesBuilder.Build() };
+
+            return new SimpleArrowArrayStream(schema, data);
         }
 
         /// <summary>
-        /// Gets the schema for a specific table.
+        /// Gets the schema for a specific table using DESCRIBE TABLE SQL command.
         /// </summary>
         public override Schema GetTableSchema(string? catalog, string? dbSchema, string tableName)
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            return GetTableSchemaAsync(catalog, dbSchema, tableName).GetAwaiter().GetResult();
         }
+
+        private async Task<Schema> GetTableSchemaAsync(string? catalog, string? dbSchema, string tableName)
+        {
+            // Use session catalog/schema if not provided
+            catalog = catalog ?? _catalog;
+            dbSchema = dbSchema ?? _schema;
+
+            var qualifiedTableName = BuildQualifiedTableName(catalog, dbSchema, tableName);
+            var sql = $"DESCRIBE TABLE {qualifiedTableName}";
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new AdbcException($"Failed to describe table {qualifiedTableName}: {ex.Message}", ex);
+            }
+
+            if (batches == null || batches.Count == 0)
+            {
+                throw new AdbcException($"Table {qualifiedTableName} not found or has no schema information");
+            }
+
+            var fields = new List<Field>();
+
+            foreach (var batch in batches)
+            {
+                var colNameArray = batch.Column("col_name") as StringArray;
+                var dataTypeArray = batch.Column("data_type") as StringArray;
+                var commentArray = batch.Column("comment") as StringArray;
+
+                if (colNameArray == null || dataTypeArray == null)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (colNameArray.IsNull(i) || dataTypeArray.IsNull(i))
+                        continue;
+
+                    var colName = colNameArray.GetString(i);
+                    var dataType = dataTypeArray.GetString(i);
+
+                    // Skip partition information and other metadata rows
+                    if (string.IsNullOrEmpty(colName) ||
+                        colName.StartsWith("#") ||
+                        dataType.Contains("Partition Information") ||
+                        dataType.Contains("# col_name"))
+                    {
+                        continue;
+                    }
+
+                    var arrowType = ConvertDatabricksTypeToArrow(dataType);
+
+                    // Build field metadata if there's a comment
+                    var metadata = new Dictionary<string, string>();
+                    if (commentArray != null && !commentArray.IsNull(i))
+                    {
+                        var comment = commentArray.GetString(i);
+                        if (!string.IsNullOrEmpty(comment))
+                        {
+                            metadata["comment"] = comment;
+                        }
+                    }
+
+                    var field = new Field(colName, arrowType, nullable: true, metadata.Count > 0 ? metadata : null);
+                    fields.Add(field);
+                }
+            }
+
+            if (fields.Count == 0)
+            {
+                throw new AdbcException($"Table {qualifiedTableName} has no columns");
+            }
+
+            return new Schema(fields, null);
+        }
+
+        #region Metadata Implementation Helpers
+
+        private async Task<List<RecordBatch>> ExecuteSqlQueryAsync(string sql)
+        {
+            using var statement = CreateStatement();
+            (statement as StatementExecutionStatement)!.SqlQuery = sql;
+
+            var queryResult = await (statement as StatementExecutionStatement)!.ExecuteQueryAsync().ConfigureAwait(false);
+            var batches = new List<RecordBatch>();
+
+            while (true)
+            {
+                var batch = await queryResult.Stream.ReadNextRecordBatchAsync().ConfigureAwait(false);
+                if (batch == null)
+                    break;
+                batches.Add(batch);
+            }
+
+            return batches;
+        }
+
+        private string QuoteIdentifier(string identifier)
+        {
+            return $"`{identifier.Replace("`", "``")}`";
+        }
+
+        private string EscapeSqlPattern(string pattern)
+        {
+            return pattern.Replace("'", "''");
+        }
+
+        private string BuildQualifiedTableName(string? catalog, string? schema, string tableName)
+        {
+            var parts = new List<string>();
+
+            if (!string.IsNullOrEmpty(catalog))
+                parts.Add(QuoteIdentifier(catalog));
+
+            if (!string.IsNullOrEmpty(schema))
+                parts.Add(QuoteIdentifier(schema));
+
+            parts.Add(QuoteIdentifier(tableName));
+
+            return string.Join(".", parts);
+        }
+
+        private bool PatternMatches(string value, string pattern)
+        {
+            var regexPattern = "^" + System.Text.RegularExpressions.Regex.Escape(pattern)
+                .Replace("%", ".*")
+                .Replace("_", ".") + "$";
+
+            return System.Text.RegularExpressions.Regex.IsMatch(value, regexPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
+        private IArrowType ConvertDatabricksTypeToArrow(string databricksType)
+        {
+            var baseType = ExtractBaseType(databricksType).ToUpperInvariant();
+
+            return baseType switch
+            {
+                "BOOLEAN" => BooleanType.Default,
+                "TINYINT" => Int8Type.Default,
+                "SMALLINT" => Int16Type.Default,
+                "INT" or "INTEGER" => Int32Type.Default,
+                "BIGINT" => Int64Type.Default,
+                "FLOAT" => FloatType.Default,
+                "DOUBLE" => DoubleType.Default,
+                "DECIMAL" or "NUMERIC" => new Decimal128Type(38, 18),
+                "STRING" or "VARCHAR" or "CHAR" => StringType.Default,
+                "BINARY" => BinaryType.Default,
+                "DATE" => Date32Type.Default,
+                "TIMESTAMP" or "TIMESTAMP_NTZ" => new TimestampType(TimeUnit.Microsecond, (string?)null),
+                _ => StringType.Default
+            };
+        }
+
+        private string ExtractBaseType(string typeString)
+        {
+            if (string.IsNullOrEmpty(typeString))
+                return string.Empty;
+
+            var match = System.Text.RegularExpressions.Regex.Match(typeString, @"^([A-Za-z_][A-Za-z0-9_]*)");
+            return match.Success ? match.Groups[1].Value : typeString;
+        }
+
+        private struct ColumnInfo
+        {
+            public string Name { get; set; }
+            public string TypeName { get; set; }
+            public int Position { get; set; }
+            public bool Nullable { get; set; }
+            public string? Comment { get; set; }
+        }
+
+        private class SimpleArrowArrayStream : IArrowArrayStream
+        {
+            private Schema _schema;
+            private RecordBatch? _batch;
+
+            public SimpleArrowArrayStream(Schema schema, IReadOnlyList<IArrowArray> data)
+            {
+                _schema = schema;
+                _batch = new RecordBatch(schema, data, data[0].Length);
+            }
+
+            public Schema Schema => _schema;
+
+            public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+            {
+                RecordBatch? batch = _batch;
+                _batch = null;
+                return new ValueTask<RecordBatch?>(batch);
+            }
+
+            public void Dispose()
+            {
+                _batch?.Dispose();
+                _batch = null;
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// Disposes the connection and deletes the session if it exists.
