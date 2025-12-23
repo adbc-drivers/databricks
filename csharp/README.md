@@ -296,6 +296,212 @@ var config = new Dictionary<string, string>
 };
 ```
 
+### Metadata Operations
+
+The driver provides comprehensive database metadata operations following the ADBC specification. Both Thrift and REST protocols support metadata retrieval, with some differences in capabilities.
+
+#### Supported Metadata Operations
+
+- **GetTableTypes()**: Get all supported table types (TABLE, VIEW, LOCAL TEMPORARY)
+- **GetObjects()**: Retrieve catalogs, schemas, tables, and columns with filtering
+- **GetTableSchema()**: Get the Arrow schema for a specific table
+
+#### Get Table Types
+
+Retrieve all table types supported by Databricks:
+
+```csharp
+using var connection = database.Connect();
+using var stream = connection.GetTableTypes();
+
+var schema = stream.Schema;  // Single column: table_type
+while (true)
+{
+    using var batch = stream.ReadNextRecordBatchAsync().Result;
+    if (batch == null) break;
+
+    var tableTypeArray = batch.Column("table_type") as StringArray;
+    for (int i = 0; i < batch.Length; i++)
+    {
+        if (!tableTypeArray.IsNull(i))
+        {
+            var tableType = tableTypeArray.GetString(i);
+            Console.WriteLine($"Table Type: {tableType}");
+        }
+    }
+}
+// Output: TABLE, VIEW, LOCAL TEMPORARY
+```
+
+#### Get Objects - Catalogs
+
+Retrieve all available catalogs:
+
+```csharp
+using var connection = database.Connect();
+using var stream = connection.GetObjects(
+    AdbcConnection.GetObjectsDepth.Catalogs,
+    catalogPattern: null,
+    schemaPattern: null,
+    tableNamePattern: null,
+    tableTypes: null,
+    columnNamePattern: null);
+
+// Schema: (catalog_name)
+while (true)
+{
+    using var batch = stream.ReadNextRecordBatchAsync().Result;
+    if (batch == null) break;
+
+    var catalogArray = batch.Column("catalog_name") as StringArray;
+    for (int i = 0; i < batch.Length; i++)
+    {
+        Console.WriteLine($"Catalog: {catalogArray.GetString(i)}");
+    }
+}
+```
+
+#### Get Objects - Schemas
+
+Retrieve schemas in a specific catalog with pattern matching:
+
+```csharp
+using var connection = database.Connect();
+using var stream = connection.GetObjects(
+    AdbcConnection.GetObjectsDepth.DbSchemas,
+    catalogPattern: "main",          // Specific catalog
+    schemaPattern: "def%",           // Pattern: schemas starting with "def"
+    tableNamePattern: null,
+    tableTypes: null,
+    columnNamePattern: null);
+
+// Schema: (catalog_name, db_schema_name)
+while (true)
+{
+    using var batch = stream.ReadNextRecordBatchAsync().Result;
+    if (batch == null) break;
+
+    var catalogArray = batch.Column("catalog_name") as StringArray;
+    var schemaArray = batch.Column("db_schema_name") as StringArray;
+
+    for (int i = 0; i < batch.Length; i++)
+    {
+        Console.WriteLine($"Schema: {catalogArray.GetString(i)}.{schemaArray.GetString(i)}");
+    }
+}
+```
+
+#### Get Objects - Tables
+
+Retrieve tables with optional table type filtering:
+
+```csharp
+using var connection = database.Connect();
+using var stream = connection.GetObjects(
+    AdbcConnection.GetObjectsDepth.Tables,
+    catalogPattern: "main",
+    schemaPattern: "default",
+    tableNamePattern: "sales_%",     // Pattern: tables starting with "sales_"
+    tableTypes: new[] { "TABLE", "VIEW" },  // Filter to tables and views only
+    columnNamePattern: null);
+
+// Schema: (catalog_name, db_schema_name, table_name, table_type)
+while (true)
+{
+    using var batch = stream.ReadNextRecordBatchAsync().Result;
+    if (batch == null) break;
+
+    var tableArray = batch.Column("table_name") as StringArray;
+    var typeArray = batch.Column("table_type") as StringArray;
+
+    for (int i = 0; i < batch.Length; i++)
+    {
+        Console.WriteLine($"Table: {tableArray.GetString(i)} ({typeArray.GetString(i)})");
+    }
+}
+```
+
+#### Get Table Schema
+
+Retrieve the Arrow schema for a specific table:
+
+```csharp
+using var connection = database.Connect();
+var schema = connection.GetTableSchema(
+    catalog: "main",
+    dbSchema: "default",
+    tableName: "customers");
+
+Console.WriteLine($"Table has {schema.FieldsList.Count} columns:");
+foreach (var field in schema.FieldsList)
+{
+    Console.WriteLine($"  {field.Name}: {field.DataType}");
+
+    // Access column comment if available
+    if (field.Metadata != null && field.Metadata.ContainsKey("comment"))
+    {
+        Console.WriteLine($"    Comment: {field.Metadata["comment"]}");
+    }
+}
+```
+
+#### Pattern Matching
+
+All metadata operations support SQL LIKE pattern matching:
+
+- **`%`** - Matches any sequence of characters (0 or more)
+- **`_`** - Matches any single character
+
+**Examples:**
+
+```csharp
+// Match catalogs starting with "main"
+catalogPattern: "main%"
+
+// Match schemas containing "analytics"
+schemaPattern: "%analytics%"
+
+// Match tables ending with "_temp"
+tableNamePattern: "%_temp"
+
+// Match columns named "id", "Id", "ID" (case-insensitive)
+columnNamePattern: "id"
+```
+
+**Pattern matching is case-insensitive** and applies to catalog, schema, table, and column names.
+
+#### REST vs Thrift Protocol Differences
+
+| Feature | REST Protocol | Thrift Protocol |
+|---------|--------------|-----------------|
+| GetTableTypes() | Returns 3 types: TABLE, VIEW, LOCAL TEMPORARY | Returns 2 types: TABLE, VIEW |
+| GetObjects(Catalogs) | ✅ Supported | ✅ Supported |
+| GetObjects(DbSchemas) | ✅ Supported | ✅ Supported |
+| GetObjects(Tables) | ✅ Supported | ✅ Supported |
+| GetObjects(All) | ⚠️ Simplified structure | ✅ Full nested structure |
+| GetTableSchema() | ✅ Supported | ✅ Supported |
+| Implementation | SQL-based (SHOW commands) | Native Thrift calls |
+| Performance | Good for most use cases | Optimized for metadata |
+
+**Note on GetObjects(All):**
+- REST protocol currently returns a simplified flat structure for `GetObjectsDepth.All`
+- Full ADBC nested ListArray/StructArray structure is planned for a future release
+- For most use cases, use specific depths (Catalogs, DbSchemas, Tables) which are fully supported
+
+#### Implementation Details
+
+The REST protocol implements metadata operations using SQL commands:
+- **SHOW CATALOGS** - Retrieve available catalogs
+- **SHOW SCHEMAS IN catalog** - Retrieve schemas in a catalog
+- **SHOW TABLES IN catalog.schema** - Retrieve tables in a schema
+- **DESCRIBE TABLE catalog.schema.table** - Retrieve table schema and column details
+
+This SQL-based approach provides:
+- ✅ Consistent behavior across Databricks deployments
+- ✅ Pattern matching via SQL LIKE syntax
+- ✅ Easy debugging (SQL queries can be tested directly)
+- ✅ Type detection including temporary tables (via isTemporary column)
+
 ### TLS/SSL Configuration
 
 | Property | Description | Default |
