@@ -24,6 +24,7 @@ using AdbcDrivers.Databricks.Http;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using Apache.Arrow.Adbc.Extensions;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
@@ -743,13 +744,32 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             else // GetObjectsDepth.All
             {
-                // Return simplified schema for now
-                // TODO: Implement full ADBC nested structure with catalog->schema->table->column hierarchy
-                // This requires ListArray and StructArray builders
-                var catalogBuilder = new StringArray.Builder();
-                var schema = new Schema(new[] { new Field("catalog_name", StringType.Default, nullable: true) }, null);
-                var data = new List<IArrowArray> { catalogBuilder.Build() };
-                return new SimpleArrowArrayStream(schema, data);
+                // Build full ADBC nested structure with catalog->schema->table->column hierarchy
+                var catalogNameBuilder = new StringArray.Builder();
+                var catalogDbSchemasValues = new List<IArrowArray?>();
+
+                foreach (var catalogEntry in catalogSchemaTables)
+                {
+                    catalogNameBuilder.Append(catalogEntry.Key);
+
+                    // Build db_schemas struct for this catalog
+                    var schemaMap = catalogEntry.Value;
+                    if (!catalogSchemaTableColumns.TryGetValue(catalogEntry.Key, out var schemaTableColumns))
+                    {
+                        schemaTableColumns = new Dictionary<string, Dictionary<string, List<ColumnInfo>>>();
+                    }
+
+                    catalogDbSchemasValues.Add(BuildDbSchemasStruct(depth, schemaMap, schemaTableColumns));
+                }
+
+                var resultSchema = StandardSchemas.GetObjectsSchema;
+                var dataArrays = resultSchema.Validate(new List<IArrowArray>
+                {
+                    catalogNameBuilder.Build(),
+                    catalogDbSchemasValues.BuildListArrayForType(new StructType(StandardSchemas.DbSchemaSchema))
+                });
+
+                return new SimpleArrowArrayStream(resultSchema, dataArrays);
             }
         }
 
@@ -984,6 +1004,196 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             var match = System.Text.RegularExpressions.Regex.Match(typeString, @"^([A-Za-z_][A-Za-z0-9_]*)");
             return match.Success ? match.Groups[1].Value : typeString;
+        }
+
+        /// <summary>
+        /// Builds a StructArray for db_schemas with nested table lists.
+        /// Used for GetObjects(All) depth to create the full nested structure.
+        /// </summary>
+        private static StructArray BuildDbSchemasStruct(
+            GetObjectsDepth depth,
+            Dictionary<string, List<(string tableName, string tableType)>> schemaMap,
+            Dictionary<string, Dictionary<string, List<ColumnInfo>>> schemaTableColumns)
+        {
+            var dbSchemaNameBuilder = new StringArray.Builder();
+            var dbSchemaTablesValues = new List<IArrowArray?>();
+            var nullBitmapBuffer = new ArrowBuffer.BitmapBuilder();
+            int length = 0;
+
+            foreach (var schemaEntry in schemaMap)
+            {
+                dbSchemaNameBuilder.Append(schemaEntry.Key);
+                length++;
+                nullBitmapBuffer.Append(true);
+
+                if (depth == GetObjectsDepth.DbSchemas)
+                {
+                    dbSchemaTablesValues.Add(null);
+                }
+                else
+                {
+                    // Build tables struct for this schema
+                    var tableMap = schemaEntry.Value;
+                    if (!schemaTableColumns.TryGetValue(schemaEntry.Key, out var tableColumns))
+                    {
+                        tableColumns = new Dictionary<string, List<ColumnInfo>>();
+                    }
+                    dbSchemaTablesValues.Add(BuildTablesStruct(depth, tableMap, tableColumns));
+                }
+            }
+
+            var schema = StandardSchemas.DbSchemaSchema;
+            var dataArrays = schema.Validate(new List<IArrowArray>
+            {
+                dbSchemaNameBuilder.Build(),
+                dbSchemaTablesValues.BuildListArrayForType(new StructType(StandardSchemas.TableSchema))
+            });
+
+            return new StructArray(
+                new StructType(schema),
+                length,
+                dataArrays,
+                nullBitmapBuffer.Build());
+        }
+
+        /// <summary>
+        /// Builds a StructArray for tables with nested column lists.
+        /// Used for GetObjects(All) depth to create the full nested structure.
+        /// </summary>
+        private static StructArray BuildTablesStruct(
+            GetObjectsDepth depth,
+            List<(string tableName, string tableType)> tableMap,
+            Dictionary<string, List<ColumnInfo>> tableColumns)
+        {
+            var tableNameBuilder = new StringArray.Builder();
+            var tableTypeBuilder = new StringArray.Builder();
+            var tableColumnsValues = new List<IArrowArray?>();
+            var tableConstraintsValues = new List<IArrowArray?>();
+            var nullBitmapBuffer = new ArrowBuffer.BitmapBuilder();
+            int length = 0;
+
+            foreach (var (tableName, tableType) in tableMap)
+            {
+                tableNameBuilder.Append(tableName);
+                tableTypeBuilder.Append(tableType);
+                nullBitmapBuffer.Append(true);
+                length++;
+
+                // Constraints not supported in REST API
+                tableConstraintsValues.Add(null);
+
+                if (depth == GetObjectsDepth.Tables)
+                {
+                    tableColumnsValues.Add(null);
+                }
+                else
+                {
+                    if (!tableColumns.TryGetValue(tableName, out var columns))
+                    {
+                        columns = new List<ColumnInfo>();
+                    }
+                    tableColumnsValues.Add(BuildColumnsStruct(columns));
+                }
+            }
+
+            var schema = StandardSchemas.TableSchema;
+            var dataArrays = schema.Validate(new List<IArrowArray>
+            {
+                tableNameBuilder.Build(),
+                tableTypeBuilder.Build(),
+                tableColumnsValues.BuildListArrayForType(new StructType(StandardSchemas.ColumnSchema)),
+                tableConstraintsValues.BuildListArrayForType(new StructType(StandardSchemas.ConstraintSchema))
+            });
+
+            return new StructArray(
+                new StructType(schema),
+                length,
+                dataArrays,
+                nullBitmapBuffer.Build());
+        }
+
+        /// <summary>
+        /// Builds a StructArray for columns.
+        /// Used for GetObjects(All) depth to create the full nested structure.
+        /// </summary>
+        private static StructArray BuildColumnsStruct(List<ColumnInfo> columns)
+        {
+            var columnNameBuilder = new StringArray.Builder();
+            var ordinalPositionBuilder = new Int32Array.Builder();
+            var remarksBuilder = new StringArray.Builder();
+            var xdbcDataTypeBuilder = new Int16Array.Builder();
+            var xdbcTypeNameBuilder = new StringArray.Builder();
+            var xdbcColumnSizeBuilder = new Int32Array.Builder();
+            var xdbcDecimalDigitsBuilder = new Int16Array.Builder();
+            var xdbcNumPrecRadixBuilder = new Int16Array.Builder();
+            var xdbcNullableBuilder = new Int16Array.Builder();
+            var xdbcColumnDefBuilder = new StringArray.Builder();
+            var xdbcSqlDataTypeBuilder = new Int16Array.Builder();
+            var xdbcDatetimeSubBuilder = new Int16Array.Builder();
+            var xdbcCharOctetLengthBuilder = new Int32Array.Builder();
+            var xdbcIsNullableBuilder = new StringArray.Builder();
+            var xdbcScopeCatalogBuilder = new StringArray.Builder();
+            var xdbcScopeSchemaBuilder = new StringArray.Builder();
+            var xdbcScopeTableBuilder = new StringArray.Builder();
+            var xdbcIsAutoincrementBuilder = new BooleanArray.Builder();
+            var xdbcIsGeneratedcolumnBuilder = new BooleanArray.Builder();
+            var nullBitmapBuffer = new ArrowBuffer.BitmapBuilder();
+            int length = 0;
+
+            foreach (var column in columns)
+            {
+                columnNameBuilder.Append(column.Name);
+                ordinalPositionBuilder.Append(column.Position);
+                remarksBuilder.Append(column.Comment ?? column.TypeName);
+                xdbcDataTypeBuilder.AppendNull(); // XDBC type not available
+                xdbcTypeNameBuilder.Append(column.TypeName);
+                xdbcColumnSizeBuilder.AppendNull(); // Size not available
+                xdbcDecimalDigitsBuilder.AppendNull(); // Precision not available
+                xdbcNumPrecRadixBuilder.AppendNull();
+                xdbcNullableBuilder.Append((short)(column.Nullable ? 1 : 0));
+                xdbcColumnDefBuilder.AppendNull();
+                xdbcSqlDataTypeBuilder.AppendNull();
+                xdbcDatetimeSubBuilder.AppendNull();
+                xdbcCharOctetLengthBuilder.AppendNull();
+                xdbcIsNullableBuilder.Append(column.Nullable ? "YES" : "NO");
+                xdbcScopeCatalogBuilder.AppendNull();
+                xdbcScopeSchemaBuilder.AppendNull();
+                xdbcScopeTableBuilder.AppendNull();
+                xdbcIsAutoincrementBuilder.Append(false); // Auto-increment not available
+                xdbcIsGeneratedcolumnBuilder.Append(false); // Generated column not available
+                nullBitmapBuffer.Append(true);
+                length++;
+            }
+
+            var schema = StandardSchemas.ColumnSchema;
+            var dataArrays = schema.Validate(new List<IArrowArray>
+            {
+                columnNameBuilder.Build(),
+                ordinalPositionBuilder.Build(),
+                remarksBuilder.Build(),
+                xdbcDataTypeBuilder.Build(),
+                xdbcTypeNameBuilder.Build(),
+                xdbcColumnSizeBuilder.Build(),
+                xdbcDecimalDigitsBuilder.Build(),
+                xdbcNumPrecRadixBuilder.Build(),
+                xdbcNullableBuilder.Build(),
+                xdbcColumnDefBuilder.Build(),
+                xdbcSqlDataTypeBuilder.Build(),
+                xdbcDatetimeSubBuilder.Build(),
+                xdbcCharOctetLengthBuilder.Build(),
+                xdbcIsNullableBuilder.Build(),
+                xdbcScopeCatalogBuilder.Build(),
+                xdbcScopeSchemaBuilder.Build(),
+                xdbcScopeTableBuilder.Build(),
+                xdbcIsAutoincrementBuilder.Build(),
+                xdbcIsGeneratedcolumnBuilder.Build()
+            });
+
+            return new StructArray(
+                new StructType(schema),
+                length,
+                dataArrays,
+                nullBitmapBuffer.Build());
         }
 
         private struct ColumnInfo
