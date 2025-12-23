@@ -391,8 +391,30 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Gets objects (metadata) from the database using SQL-based commands.
-        /// Supports Catalogs, DbSchemas, Tables, and All depth levels.
+        /// Uses SHOW CATALOGS, SHOW SCHEMAS, SHOW TABLES SQL commands for metadata retrieval.
         /// </summary>
+        /// <param name="depth">The depth of metadata to retrieve (Catalogs, DbSchemas, Tables, or All)</param>
+        /// <param name="catalogPattern">Pattern to filter catalog names (supports SQL LIKE wildcards: %, _). Null means all catalogs.</param>
+        /// <param name="schemaPattern">Pattern to filter schema names (supports SQL LIKE wildcards: %, _). Null means all schemas.</param>
+        /// <param name="tableNamePattern">Pattern to filter table names (supports SQL LIKE wildcards: %, _). Null means all tables.</param>
+        /// <param name="tableTypes">List of table types to include (e.g., "TABLE", "VIEW", "LOCAL TEMPORARY"). Null means all types.</param>
+        /// <param name="columnNamePattern">Pattern to filter column names (supports SQL LIKE wildcards: %, _). Null means all columns. Only used with All depth.</param>
+        /// <returns>Arrow stream containing metadata records with schema dependent on depth parameter</returns>
+        /// <remarks>
+        /// <para>Returned schema depends on depth:</para>
+        /// <list type="bullet">
+        /// <item><description>Catalogs: Returns (catalog_name)</description></item>
+        /// <item><description>DbSchemas: Returns (catalog_name, db_schema_name)</description></item>
+        /// <item><description>Tables: Returns (catalog_name, db_schema_name, table_name, table_type)</description></item>
+        /// <item><description>All: Returns simplified flat structure (full nested structure TODO)</description></item>
+        /// </list>
+        /// <para>Pattern matching uses SQL LIKE syntax:</para>
+        /// <list type="bullet">
+        /// <item><description>% - matches any sequence of characters</description></item>
+        /// <item><description>_ - matches any single character</description></item>
+        /// </list>
+        /// <para>Example: "main%" matches all catalogs starting with "main"</para>
+        /// </remarks>
         public override IArrowArrayStream GetObjects(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
         {
             return GetObjectsAsync(depth, catalogPattern, schemaPattern, tableNamePattern, tableTypes, columnNamePattern).GetAwaiter().GetResult();
@@ -732,8 +754,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Gets table types from the database.
+        /// Gets all supported table types in the database.
+        /// Statement Execution API returns TABLE, VIEW, and LOCAL TEMPORARY.
         /// </summary>
+        /// <returns>Arrow stream with single column 'table_type' containing supported table type names</returns>
+        /// <remarks>
+        /// <para>Returns 3 table types:</para>
+        /// <list type="bullet">
+        /// <item><description>TABLE - Regular persistent tables</description></item>
+        /// <item><description>VIEW - Database views</description></item>
+        /// <item><description>LOCAL TEMPORARY - Temporary tables (detected via isTemporary column in SHOW TABLES)</description></item>
+        /// </list>
+        /// <para>Note: Thrift protocol returns only TABLE and VIEW (2 types). REST/Statement Execution API includes LOCAL TEMPORARY detection.</para>
+        /// </remarks>
         public override IArrowArrayStream GetTableTypes()
         {
             var tableTypesBuilder = new StringArray.Builder();
@@ -748,8 +781,40 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Gets the schema for a specific table using DESCRIBE TABLE SQL command.
+        /// Gets the Arrow schema for a specific table using DESCRIBE TABLE SQL command.
+        /// Returns column names, types, and metadata (comments) from the table definition.
         /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog from connection properties.</param>
+        /// <param name="dbSchema">Schema name. If null, uses session schema from connection properties.</param>
+        /// <param name="tableName">Table name (required)</param>
+        /// <returns>Arrow Schema object with field definitions matching the table structure</returns>
+        /// <exception cref="AdbcException">Thrown when table does not exist or cannot be described</exception>
+        /// <remarks>
+        /// <para>Uses SQL command: DESCRIBE TABLE `catalog`.`schema`.`table`</para>
+        /// <para>Databricks data types are mapped to Arrow types:</para>
+        /// <list type="bullet">
+        /// <item><description>INT → Int32Type</description></item>
+        /// <item><description>BIGINT → Int64Type</description></item>
+        /// <item><description>FLOAT → FloatType</description></item>
+        /// <item><description>DOUBLE → DoubleType</description></item>
+        /// <item><description>STRING → StringType</description></item>
+        /// <item><description>BOOLEAN → BooleanType</description></item>
+        /// <item><description>DATE → Date32Type</description></item>
+        /// <item><description>TIMESTAMP → TimestampType(Microsecond)</description></item>
+        /// <item><description>DECIMAL(p,s) → Decimal128Type</description></item>
+        /// </list>
+        /// <para>Column comments are preserved in field metadata.</para>
+        /// </remarks>
+        /// <example>
+        /// <code>
+        /// using var connection = database.Connect(parameters);
+        /// var schema = connection.GetTableSchema("main", "default", "my_table");
+        /// foreach (var field in schema.FieldsList)
+        /// {
+        ///     Console.WriteLine($"{field.Name}: {field.DataType}");
+        /// }
+        /// </code>
+        /// </example>
         public override Schema GetTableSchema(string? catalog, string? dbSchema, string tableName)
         {
             return GetTableSchemaAsync(catalog, dbSchema, tableName).GetAwaiter().GetResult();
