@@ -302,9 +302,65 @@ The driver provides comprehensive database metadata operations following the ADB
 
 #### Supported Metadata Operations
 
+- **GetInfo()**: Get driver and database metadata (version, name, capabilities)
 - **GetTableTypes()**: Get all supported table types (TABLE, VIEW, LOCAL TEMPORARY)
 - **GetObjects()**: Retrieve catalogs, schemas, tables, and columns with filtering
 - **GetTableSchema()**: Get the Arrow schema for a specific table
+
+#### Get Info
+
+Retrieve driver and database metadata information:
+
+```csharp
+using var connection = database.Connect();
+
+// Get all supported info codes
+using var stream = connection.GetInfo(Array.Empty<AdbcInfoCode>());
+var schema = stream.Schema;  // Columns: info_name (uint32), info_value (union)
+
+while (true)
+{
+    using var batch = stream.ReadNextRecordBatchAsync().Result;
+    if (batch == null) break;
+
+    var infoNameArray = batch.Column("info_name") as UInt32Array;
+    var infoValueUnion = batch.Column("info_value") as DenseUnionArray;
+
+    for (int i = 0; i < batch.Length; i++)
+    {
+        var code = (AdbcInfoCode)infoNameArray.GetValue(i);
+
+        // Extract value based on type
+        switch (code)
+        {
+            case AdbcInfoCode.VendorName:
+            case AdbcInfoCode.DriverName:
+            case AdbcInfoCode.DriverVersion:
+                var stringArray = infoValueUnion.Fields[0] as StringArray;
+                Console.WriteLine($"{code}: {stringArray.GetString(i)}");
+                break;
+            case AdbcInfoCode.VendorSql:
+                var boolArray = infoValueUnion.Fields[1] as BooleanArray;
+                Console.WriteLine($"{code}: {boolArray.GetValue(i)}");
+                break;
+        }
+    }
+}
+
+// Get specific info codes
+var requestedCodes = new[] { AdbcInfoCode.VendorName, AdbcInfoCode.DriverVersion };
+using var stream2 = connection.GetInfo(requestedCodes);
+// Processes only the requested codes...
+```
+
+**Supported Info Codes:**
+- `VendorName`: "Databricks"
+- `VendorVersion`: Databricks server version (or "Unknown")
+- `VendorArrowVersion`: Apache Arrow version (e.g., "17.0.0")
+- `VendorSql`: false (Databricks uses Spark SQL, not standard SQL)
+- `DriverName`: "ADBC Databricks Driver (Statement Execution API)" or "ADBC Databricks Driver (Thrift Protocol)"
+- `DriverVersion`: Driver assembly version (e.g., "1.0.0")
+- `DriverArrowVersion`: Apache Arrow version used by driver (e.g., "17.0.0")
 
 #### Get Table Types
 

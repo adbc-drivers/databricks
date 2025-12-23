@@ -499,5 +499,107 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 }
             }
         }
+
+        [SkippableFact]
+        public void CanGetInfo()
+        {
+            SkipIfNotConfigured();
+
+            using var connection = CreateRestConnection();
+
+            // Test with all codes (null/empty array)
+            using var streamAll = connection.GetInfo(System.Array.Empty<AdbcInfoCode>());
+            Assert.NotNull(streamAll);
+            Assert.NotNull(streamAll.Schema);
+
+            // Verify schema has correct structure (info_name: uint32, info_value: union)
+            Assert.Equal(2, streamAll.Schema.FieldsList.Count);
+            Assert.Equal("info_name", streamAll.Schema.FieldsList[0].Name);
+            Assert.Equal("info_value", streamAll.Schema.FieldsList[1].Name);
+            Assert.IsType<UInt32Type>(streamAll.Schema.FieldsList[0].DataType);
+            Assert.IsType<UnionType>(streamAll.Schema.FieldsList[1].DataType);
+
+            // Read the batch
+            var batchAll = streamAll.ReadNextRecordBatchAsync().Result;
+            Assert.NotNull(batchAll);
+            Assert.True(batchAll.Length >= 7); // Should have at least 7 supported codes
+
+            OutputHelper?.WriteLine($"✓ GetInfo() returned {batchAll.Length} info codes");
+
+            // Test specific info codes
+            var requestedCodes = new[]
+            {
+                AdbcInfoCode.VendorName,
+                AdbcInfoCode.DriverName,
+                AdbcInfoCode.DriverVersion,
+                AdbcInfoCode.VendorSql
+            };
+
+            using var stream = connection.GetInfo(requestedCodes);
+            using var batch = stream.ReadNextRecordBatchAsync().Result;
+
+            Assert.NotNull(batch);
+            Assert.Equal(4, batch.Length);
+
+            var infoNameArray = batch.Column("info_name") as UInt32Array;
+            var infoValueUnion = batch.Column("info_value") as DenseUnionArray;
+            Assert.NotNull(infoNameArray);
+            Assert.NotNull(infoValueUnion);
+
+            // Verify VendorName = "Databricks"
+            var vendorNameIndex = FindInfoCodeIndex(infoNameArray, AdbcInfoCode.VendorName);
+            Assert.True(vendorNameIndex >= 0, "VendorName not found");
+            var vendorNameValue = GetStringValueFromUnion(infoValueUnion, vendorNameIndex);
+            Assert.Equal("Databricks", vendorNameValue);
+            OutputHelper?.WriteLine($"✓ VendorName = {vendorNameValue}");
+
+            // Verify DriverName contains "ADBC Databricks Driver"
+            var driverNameIndex = FindInfoCodeIndex(infoNameArray, AdbcInfoCode.DriverName);
+            Assert.True(driverNameIndex >= 0, "DriverName not found");
+            var driverNameValue = GetStringValueFromUnion(infoValueUnion, driverNameIndex);
+            Assert.Contains("ADBC Databricks Driver", driverNameValue);
+            OutputHelper?.WriteLine($"✓ DriverName = {driverNameValue}");
+
+            // Verify DriverVersion is a valid version string
+            var driverVersionIndex = FindInfoCodeIndex(infoNameArray, AdbcInfoCode.DriverVersion);
+            Assert.True(driverVersionIndex >= 0, "DriverVersion not found");
+            var driverVersionValue = GetStringValueFromUnion(infoValueUnion, driverVersionIndex);
+            Assert.NotEmpty(driverVersionValue);
+            Assert.Matches(@"^\d+\.\d+\.\d+", driverVersionValue);
+            OutputHelper?.WriteLine($"✓ DriverVersion = {driverVersionValue}");
+
+            // Verify VendorSql = false (Databricks uses Spark SQL, not standard SQL)
+            var vendorSqlIndex = FindInfoCodeIndex(infoNameArray, AdbcInfoCode.VendorSql);
+            Assert.True(vendorSqlIndex >= 0, "VendorSql not found");
+            var vendorSqlValue = GetBoolValueFromUnion(infoValueUnion, vendorSqlIndex);
+            Assert.False(vendorSqlValue);
+            OutputHelper?.WriteLine($"✓ VendorSql = {vendorSqlValue} (uses Spark SQL)");
+
+            OutputHelper?.WriteLine("✓ GetInfo() E2E test passed");
+        }
+
+        private int FindInfoCodeIndex(UInt32Array infoNameArray, AdbcInfoCode code)
+        {
+            for (int i = 0; i < infoNameArray.Length; i++)
+            {
+                if ((AdbcInfoCode)infoNameArray.GetValue(i) == code)
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        private string GetStringValueFromUnion(DenseUnionArray unionArray, int index)
+        {
+            var stringArray = unionArray.Fields[0] as StringArray;
+            return stringArray!.GetString(index);
+        }
+
+        private bool GetBoolValueFromUnion(DenseUnionArray unionArray, int index)
+        {
+            var boolArray = unionArray.Fields[1] as BooleanArray;
+            return boolArray!.GetValue(index);
+        }
     }
 }

@@ -1,11 +1,11 @@
 # Statement Execution API Metadata - Task Status
 
-**Last Updated**: December 24, 2025
+**Last Updated**: December 24, 2025 (GetInfo implementation complete)
 **Branch**: `feature/sea-metadata-implementation`
 
 ---
 
-## ✅ Completed Tasks (18/26)
+## ✅ Completed Tasks (19/27)
 
 ### Phase 1: Core Infrastructure (3/3) ✅
 - ✅ **TASK_001**: ExecuteMetadataQueryAsync - `ExecuteSqlQueryAsync()` implemented
@@ -25,15 +25,16 @@
 - ✅ **TASK_011**: GetObjectsTables - Returns catalog + schema + table + type
 - ✅ **TASK_012**: GetObjectsAll - **Full nested structure** (commit ace455e - BuildDbSchemasStruct, BuildTablesStruct, BuildColumnsStruct)
 
-### Phase 4: Additional Methods (2/4) ⚠️
+### Phase 4: Additional Methods (3/5) ⚠️
 - ✅ **TASK_013**: GetTableTypes - Returns 3 types (TABLE, VIEW, LOCAL TEMPORARY)
 - ✅ **TASK_014**: GetTableSchema - Uses `DESCRIBE TABLE` for schema introspection
+- ✅ **TASK_027**: GetInfo - **Returns driver/database metadata** (VendorName, DriverName, DriverVersion, VendorSql, etc.) - 7 info codes supported
 - ❌ **TASK_015**: GetPrimaryKeys - **Not implemented** (not in ADBC spec)
 - ❌ **TASK_016**: GetImportedKeys - **Not implemented** (not in ADBC spec)
 
 ---
 
-## ❌ Remaining Tasks (12/26)
+## ❌ Remaining Tasks (8/27)
 
 ### Phase 5: Optimization & Caching (3 tasks) 🟡 **MEDIUM PRIORITY**
 - ❌ **TASK_017**: MetadataCacheInterface - Design caching interface
@@ -62,12 +63,12 @@
 | Core Infrastructure | 3 | 3 | 100% ✅ |
 | Fetcher Methods | 4 | 4 | 100% ✅ |
 | Public API Methods | 5 | 5 | 100% ✅ |
-| Additional Methods | 2 | 4 | 50% ⚠️ |
+| Additional Methods | 3 | 5 | 60% ⚠️ |
 | Optimization & Caching | 0 | 3 | 0% ❌ |
 | Performance & Reliability | 0 | 3 | 0% ❌ |
 | Production Readiness | 1 | 2 | 50% ⚠️ |
 | Testing & Documentation | 2 | 2 | 100% ✅ |
-| **TOTAL** | **17** | **26** | **65%** |
+| **TOTAL** | **19** | **27** | **70%** |
 
 ---
 

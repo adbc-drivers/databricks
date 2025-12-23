@@ -1235,6 +1235,221 @@ namespace AdbcDrivers.Databricks.StatementExecution
         #endregion
 
         /// <summary>
+        /// Gets information about the driver and database.
+        /// Returns standardized metadata including driver name, version, vendor information, and capabilities.
+        /// </summary>
+        /// <param name="codes">List of info codes to retrieve. If empty, returns all supported info codes.</param>
+        /// <returns>Arrow stream with info_name (uint32) and info_value (union) columns per ADBC spec</returns>
+        /// <remarks>
+        /// <para>Returns metadata as Arrow stream with DenseUnionType for info_value column.</para>
+        /// <para>Supported info codes:</para>
+        /// <list type="bullet">
+        /// <item><description>VendorName: "Databricks"</description></item>
+        /// <item><description>VendorVersion: Databricks server version (if available)</description></item>
+        /// <item><description>VendorArrowVersion: Apache Arrow version</description></item>
+        /// <item><description>VendorSql: false (uses Spark SQL, not standard SQL)</description></item>
+        /// <item><description>DriverName: "ADBC Databricks Driver (Statement Execution API)"</description></item>
+        /// <item><description>DriverVersion: Driver assembly version</description></item>
+        /// <item><description>DriverArrowVersion: Apache Arrow version used by driver</description></item>
+        /// </list>
+        /// </remarks>
+        /// <example>
+        /// <code>
+        /// using var connection = database.Connect();
+        /// using var stream = connection.GetInfo(new[] { AdbcInfoCode.DriverName, AdbcInfoCode.DriverVersion });
+        ///
+        /// while (true)
+        /// {
+        ///     using var batch = stream.ReadNextRecordBatchAsync().Result;
+        ///     if (batch == null) break;
+        ///
+        ///     var infoNameArray = batch.Column("info_name") as UInt32Array;
+        ///     var infoValueArray = batch.Column("info_value") as DenseUnionArray;
+        ///
+        ///     for (int i = 0; i &lt; batch.Length; i++)
+        ///     {
+        ///         var code = (AdbcInfoCode)infoNameArray.GetValue(i);
+        ///         // Extract value from union based on type
+        ///     }
+        /// }
+        /// </code>
+        /// </example>
+        public override IArrowArrayStream GetInfo(IReadOnlyList<AdbcInfoCode> codes)
+        {
+            // Info value type IDs for DenseUnionType
+            const int strValTypeID = 0;
+            const int boolValTypeId = 1;
+
+            // Supported info codes for Statement Execution API
+            var supportedCodes = new[]
+            {
+                AdbcInfoCode.VendorName,
+                AdbcInfoCode.VendorVersion,
+                AdbcInfoCode.VendorArrowVersion,
+                AdbcInfoCode.VendorSql,
+                AdbcInfoCode.DriverName,
+                AdbcInfoCode.DriverVersion,
+                AdbcInfoCode.DriverArrowVersion
+            };
+
+            // If no codes specified, return all supported codes
+            if (codes == null || codes.Count == 0)
+            {
+                codes = supportedCodes;
+            }
+
+            // Build info arrays
+            var infoNameBuilder = new UInt32Array.Builder();
+            var typeBuilder = new ArrowBuffer.Builder<byte>();
+            var offsetBuilder = new ArrowBuffer.Builder<int>();
+            var stringInfoBuilder = new StringArray.Builder();
+            var booleanInfoBuilder = new BooleanArray.Builder();
+
+            int nullCount = 0;
+            int arrayLength = codes.Count;
+            int offset = 0;
+
+            // Populate info values
+            foreach (var code in codes)
+            {
+                switch (code)
+                {
+                    case AdbcInfoCode.VendorName:
+                        infoNameBuilder.Append((uint)code);
+                        typeBuilder.Append(strValTypeID);
+                        offsetBuilder.Append(offset++);
+                        stringInfoBuilder.Append("Databricks");
+                        booleanInfoBuilder.AppendNull();
+                        break;
+
+                    case AdbcInfoCode.VendorVersion:
+                        infoNameBuilder.Append((uint)code);
+                        typeBuilder.Append(strValTypeID);
+                        offsetBuilder.Append(offset++);
+                        // Try to get warehouse version from properties, otherwise use "Unknown"
+                        string vendorVersion = PropertyHelper.GetStringProperty(_properties, "adbc.databricks.warehouse_version", "Unknown");
+                        stringInfoBuilder.Append(vendorVersion);
+                        booleanInfoBuilder.AppendNull();
+                        break;
+
+                    case AdbcInfoCode.VendorArrowVersion:
+                        infoNameBuilder.Append((uint)code);
+                        typeBuilder.Append(strValTypeID);
+                        offsetBuilder.Append(offset++);
+                        stringInfoBuilder.Append("17.0.0"); // Apache Arrow version
+                        booleanInfoBuilder.AppendNull();
+                        break;
+
+                    case AdbcInfoCode.VendorSql:
+                        infoNameBuilder.Append((uint)code);
+                        typeBuilder.Append(boolValTypeId);
+                        offsetBuilder.Append(offset++);
+                        stringInfoBuilder.AppendNull();
+                        booleanInfoBuilder.Append(false); // Databricks uses Spark SQL, not standard SQL
+                        break;
+
+                    case AdbcInfoCode.DriverName:
+                        infoNameBuilder.Append((uint)code);
+                        typeBuilder.Append(strValTypeID);
+                        offsetBuilder.Append(offset++);
+                        stringInfoBuilder.Append("ADBC Databricks Driver (Statement Execution API)");
+                        booleanInfoBuilder.AppendNull();
+                        break;
+
+                    case AdbcInfoCode.DriverVersion:
+                        infoNameBuilder.Append((uint)code);
+                        typeBuilder.Append(strValTypeID);
+                        offsetBuilder.Append(offset++);
+                        stringInfoBuilder.Append(AssemblyVersion);
+                        booleanInfoBuilder.AppendNull();
+                        break;
+
+                    case AdbcInfoCode.DriverArrowVersion:
+                        infoNameBuilder.Append((uint)code);
+                        typeBuilder.Append(strValTypeID);
+                        offsetBuilder.Append(offset++);
+                        stringInfoBuilder.Append("17.0.0"); // Apache Arrow version used by driver
+                        booleanInfoBuilder.AppendNull();
+                        break;
+
+                    default:
+                        // Unsupported code - return null
+                        infoNameBuilder.Append((uint)code);
+                        typeBuilder.Append(strValTypeID);
+                        offsetBuilder.Append(offset++);
+                        stringInfoBuilder.AppendNull();
+                        booleanInfoBuilder.AppendNull();
+                        nullCount++;
+                        break;
+                }
+            }
+
+            // Build empty arrays for unused union types
+            var int64Array = new Int64Array.Builder().Build();
+            var int32Array = new Int32Array.Builder().Build();
+            var stringListArray = new ListArray.Builder(StringType.Default).Build();
+
+            // Build empty struct array for int32_to_int32_list_map
+            var entryType = new StructType(new[]
+            {
+                new Field("key", Int32Type.Default, false),
+                new Field("value", Int32Type.Default, true)
+            });
+            var entriesDataArray = new StructArray(
+                entryType,
+                0,
+                new[] { new Int32Array.Builder().Build(), new Int32Array.Builder().Build() },
+                new ArrowBuffer.BitmapBuilder().Build());
+            var mapArray = new List<IArrowArray?> { entriesDataArray }.BuildListArrayForType(entryType);
+
+            // Build DenseUnionArray for info_value
+            var childrenArrays = new IArrowArray[]
+            {
+                stringInfoBuilder.Build(),
+                booleanInfoBuilder.Build(),
+                int64Array,
+                int32Array,
+                stringListArray,
+                mapArray
+            };
+
+            var infoUnionType = new UnionType(
+                new[]
+                {
+                    new Field("string_value", StringType.Default, true),
+                    new Field("bool_value", BooleanType.Default, true),
+                    new Field("int64_value", Int64Type.Default, true),
+                    new Field("int32_bitmask", Int32Type.Default, true),
+                    new Field("string_list", new ListType(new Field("item", StringType.Default, true)), false),
+                    new Field("int32_to_int32_list_map", new ListType(new Field("entries", entryType, false)), true)
+                },
+                new[] { 0, 1, 2, 3, 4, 5 },
+                UnionMode.Dense);
+
+            var infoValue = new DenseUnionArray(
+                infoUnionType,
+                arrayLength,
+                childrenArrays,
+                typeBuilder.Build(),
+                offsetBuilder.Build(),
+                nullCount);
+
+            // Build final arrays
+            var dataArrays = new IArrowArray[]
+            {
+                infoNameBuilder.Build(),
+                infoValue
+            };
+
+            // Validate against standard schema
+            StandardSchemas.GetInfoSchema.Validate(dataArrays);
+
+            // Return as Arrow stream
+            var schema = StandardSchemas.GetInfoSchema;
+            return new SimpleArrowArrayStream(schema, dataArrays);
+        }
+
+        /// <summary>
         /// Disposes the connection and deletes the session if it exists.
         /// </summary>
         public override void Dispose()
