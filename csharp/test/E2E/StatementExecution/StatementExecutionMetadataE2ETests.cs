@@ -18,9 +18,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using AdbcDrivers.Databricks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using Apache.Arrow.Adbc.Tests;
 using Apache.Arrow.Types;
 using Xunit;
 using Xunit.Abstractions;
@@ -31,36 +32,66 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
     /// E2E tests for Statement Execution API (REST) metadata operations.
     /// Tests GetTableTypes(), GetObjects(), and GetTableSchema() implementations.
     /// </summary>
-    public class StatementExecutionMetadataE2ETests : IDisposable
+    public class StatementExecutionMetadataE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
-        private readonly ITestOutputHelper _output;
-        private readonly DatabricksDriver _driver;
-        private readonly AdbcDatabase _database;
-        private readonly AdbcConnection _connection;
-        private readonly DatabricksTestConfiguration _testConfiguration;
-
-        public StatementExecutionMetadataE2ETests(ITestOutputHelper output)
+        public StatementExecutionMetadataE2ETests(ITestOutputHelper? outputHelper)
+            : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
-            _output = output;
-            _testConfiguration = DatabricksTestingUtils.TestConfiguration;
+        }
 
-            // Force Statement Execution API (REST protocol)
-            var parameters = new Dictionary<string, string>(_testConfiguration.ToDictionary())
+        private void SkipIfNotConfigured()
+        {
+            Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
+        }
+
+        private AdbcConnection CreateRestConnection()
+        {
+            var properties = new Dictionary<string, string>
             {
-                [DatabricksParameters.Protocol] = "rest"
+                [DatabricksParameters.Protocol] = "rest",
             };
 
-            _driver = new DatabricksDriver();
-            _database = _driver.Open(parameters);
-            _connection = _database.Connect(parameters);
+            if (!string.IsNullOrEmpty(TestConfiguration.Uri))
+            {
+                properties[AdbcOptions.Uri] = TestConfiguration.Uri;
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(TestConfiguration.HostName))
+                {
+                    properties[SparkParameters.HostName] = TestConfiguration.HostName;
+                }
+                if (!string.IsNullOrEmpty(TestConfiguration.Path))
+                {
+                    properties[SparkParameters.Path] = TestConfiguration.Path;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(TestConfiguration.Token))
+            {
+                properties[SparkParameters.Token] = TestConfiguration.Token;
+            }
+            if (!string.IsNullOrEmpty(TestConfiguration.AccessToken))
+            {
+                properties[SparkParameters.AccessToken] = TestConfiguration.AccessToken;
+            }
+
+            if (!string.IsNullOrEmpty(TestConfiguration.AuthType))
+            {
+                properties[SparkParameters.AuthType] = TestConfiguration.AuthType;
+            }
+
+            var database = NewDriver.Open(properties);
+            return database.Connect(properties);
         }
 
         [SkippableFact]
         public void CanGetTableTypes()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            using var stream = _connection.GetTableTypes();
+            using var connection = CreateRestConnection();
+            using var stream = connection.GetTableTypes();
             var schema = stream.Schema;
 
             // Verify schema
@@ -94,21 +125,18 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.Contains("LOCAL TEMPORARY", tableTypes);
             Assert.Equal(3, tableTypes.Count);
 
-            _output.WriteLine($"✓ GetTableTypes returned {tableTypes.Count} types: {string.Join(", ", tableTypes)}");
+            OutputHelper?.WriteLine($"✓ GetTableTypes returned {tableTypes.Count} types: {string.Join(", ", tableTypes)}");
         }
 
         [SkippableFact]
         public void CanGetObjectsCatalogs()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            using var stream = _connection.GetObjects(
+            using var connection = CreateRestConnection();
+            using var stream = connection.GetObjects(
                 AdbcConnection.GetObjectsDepth.Catalogs,
-                catalogPattern: null,
-                schemaPattern: null,
-                tableNamePattern: null,
-                tableTypes: null,
-                columnNamePattern: null);
+                null, null, null, null, null);
 
             var schema = stream.Schema;
             Assert.NotNull(schema);
@@ -134,23 +162,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             }
 
             Assert.NotEmpty(catalogs);
-            _output.WriteLine($"✓ GetObjects(Catalogs) returned {catalogs.Count} catalogs");
+            OutputHelper?.WriteLine($"✓ GetObjects(Catalogs) returned {catalogs.Count} catalogs");
         }
 
         [SkippableFact]
         public void CanGetObjectsDbSchemas()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            var testCatalog = _testConfiguration.Metadata.Catalog ?? "main";
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
 
-            using var stream = _connection.GetObjects(
+            using var connection = CreateRestConnection();
+            using var stream = connection.GetObjects(
                 AdbcConnection.GetObjectsDepth.DbSchemas,
-                catalogPattern: testCatalog,
-                schemaPattern: null,
-                tableNamePattern: null,
-                tableTypes: null,
-                columnNamePattern: null);
+                testCatalog, null, null, null, null);
 
             var schema = stream.Schema;
             Assert.NotNull(schema);
@@ -177,24 +202,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             }
 
             Assert.NotEmpty(schemaNames);
-            _output.WriteLine($"✓ GetObjects(DbSchemas) returned {schemaNames.Count} schemas in catalog '{testCatalog}'");
+            OutputHelper?.WriteLine($"✓ GetObjects(DbSchemas) returned {schemaNames.Count} schemas in catalog '{testCatalog}'");
         }
 
         [SkippableFact]
         public void CanGetObjectsTables()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            var testCatalog = _testConfiguration.Metadata.Catalog ?? "main";
-            var testSchema = _testConfiguration.Metadata.Schema ?? "default";
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
 
-            using var stream = _connection.GetObjects(
+            using var connection = CreateRestConnection();
+            using var stream = connection.GetObjects(
                 AdbcConnection.GetObjectsDepth.Tables,
-                catalogPattern: testCatalog,
-                schemaPattern: testSchema,
-                tableNamePattern: null,
-                tableTypes: null,
-                columnNamePattern: null);
+                testCatalog, testSchema, null, null, null);
 
             var schema = stream.Schema;
             Assert.NotNull(schema);
@@ -230,24 +252,19 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 }
             }
 
-            _output.WriteLine($"✓ GetObjects(Tables) returned {tables.Count} tables in {testCatalog}.{testSchema}");
+            OutputHelper?.WriteLine($"✓ GetObjects(Tables) returned {tables.Count} tables in {testCatalog}.{testSchema}");
         }
 
         [SkippableFact]
         public void CanGetObjectsWithPatternMatching()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            var testCatalog = _testConfiguration.Metadata.Catalog ?? "main";
-
+            using var connection = CreateRestConnection();
             // Test catalog pattern with %
-            using var stream = _connection.GetObjects(
+            using var stream = connection.GetObjects(
                 AdbcConnection.GetObjectsDepth.Catalogs,
-                catalogPattern: "m%",  // Should match 'main' and others starting with 'm'
-                schemaPattern: null,
-                tableNamePattern: null,
-                tableTypes: null,
-                columnNamePattern: null);
+                "m%", null, null, null, null);  // Should match 'main' and others starting with 'm'
 
             var catalogs = new List<string>();
             while (true)
@@ -269,74 +286,75 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             }
 
             Assert.NotEmpty(catalogs);
-            _output.WriteLine($"✓ Pattern matching 'm%' returned {catalogs.Count} catalogs: {string.Join(", ", catalogs)}");
+            OutputHelper?.WriteLine($"✓ Pattern matching 'm%' returned {catalogs.Count} catalogs: {string.Join(", ", catalogs)}");
         }
 
         [SkippableFact]
         public void CanGetTableSchema()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
-            Skip.If(string.IsNullOrEmpty(_testConfiguration.Metadata.Table), "Test table not configured");
+            SkipIfNotConfigured();
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Metadata?.Table), "Test table not configured");
 
-            var testCatalog = _testConfiguration.Metadata.Catalog ?? "main";
-            var testSchema = _testConfiguration.Metadata.Schema ?? "default";
-            var testTable = _testConfiguration.Metadata.Table;
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
+            var testTable = TestConfiguration.Metadata!.Table;
 
-            var schema = _connection.GetTableSchema(testCatalog, testSchema, testTable);
+            using var connection = CreateRestConnection();
+            var schema = connection.GetTableSchema(testCatalog, testSchema, testTable);
 
             Assert.NotNull(schema);
             Assert.NotEmpty(schema.FieldsList);
 
-            _output.WriteLine($"✓ GetTableSchema returned schema for {testCatalog}.{testSchema}.{testTable}:");
+            OutputHelper?.WriteLine($"✓ GetTableSchema returned schema for {testCatalog}.{testSchema}.{testTable}:");
             foreach (var field in schema.FieldsList)
             {
-                _output.WriteLine($"  - {field.Name}: {field.DataType}");
+                OutputHelper?.WriteLine($"  - {field.Name}: {field.DataType}");
             }
         }
 
         [SkippableFact]
         public void GetTableSchemaThrowsForNonExistentTable()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            var testCatalog = _testConfiguration.Metadata.Catalog ?? "main";
-            var testSchema = _testConfiguration.Metadata.Schema ?? "default";
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
 
+            using var connection = CreateRestConnection();
             var exception = Assert.Throws<AdbcException>(() =>
             {
-                _connection.GetTableSchema(testCatalog, testSchema, "nonexistent_table_12345");
+                connection.GetTableSchema(testCatalog, testSchema, "nonexistent_table_12345");
             });
 
             Assert.Contains("Failed to describe table", exception.Message);
-            _output.WriteLine($"✓ GetTableSchema correctly threw exception for non-existent table");
+            OutputHelper?.WriteLine($"✓ GetTableSchema correctly threw exception for non-existent table");
         }
 
         [SkippableFact]
         public async Task CanGetObjectsWithTableTypeFilter()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            var testCatalog = _testConfiguration.Metadata.Catalog ?? "main";
-            var testSchema = _testConfiguration.Metadata.Schema ?? "default";
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
 
             // First, create a test view
             var viewName = $"adbc_test_view_{Guid.NewGuid():N}";
+            using var connection = CreateRestConnection();
+
             try
             {
-                using (var stmt = _connection.CreateStatement())
+                using (var stmt = connection.CreateStatement())
                 {
                     stmt.SqlQuery = $"CREATE OR REPLACE VIEW {testCatalog}.{testSchema}.{viewName} AS SELECT 1 as id";
                     await stmt.ExecuteUpdateAsync();
                 }
 
                 // Query for VIEWs only
-                using var stream = _connection.GetObjects(
+                using var stream = connection.GetObjects(
                     AdbcConnection.GetObjectsDepth.Tables,
-                    catalogPattern: testCatalog,
-                    schemaPattern: testSchema,
-                    tableNamePattern: viewName,
-                    tableTypes: new[] { "VIEW" },
-                    columnNamePattern: null);
+                    testCatalog, testSchema, viewName,
+                    new[] { "VIEW" }, null);
 
                 var views = new List<string>();
                 while (true)
@@ -362,20 +380,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 }
 
                 Assert.Contains(viewName, views);
-                _output.WriteLine($"✓ Table type filter returned {views.Count} views including '{viewName}'");
+                OutputHelper?.WriteLine($"✓ Table type filter returned {views.Count} views including '{viewName}'");
             }
             finally
             {
                 // Cleanup
                 try
                 {
-                    using var stmt = _connection.CreateStatement();
+                    using var stmt = connection.CreateStatement();
                     stmt.SqlQuery = $"DROP VIEW IF EXISTS {testCatalog}.{testSchema}.{viewName}";
                     await stmt.ExecuteUpdateAsync();
                 }
                 catch (Exception ex)
                 {
-                    _output.WriteLine($"⚠ Cleanup failed: {ex.Message}");
+                    OutputHelper?.WriteLine($"⚠ Cleanup failed: {ex.Message}");
                 }
             }
         }
@@ -383,17 +401,14 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public void CanGetObjectsAll()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            var testCatalog = _testConfiguration.Metadata.Catalog ?? "main";
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
 
-            using var stream = _connection.GetObjects(
+            using var connection = CreateRestConnection();
+            using var stream = connection.GetObjects(
                 AdbcConnection.GetObjectsDepth.All,
-                catalogPattern: testCatalog,
-                schemaPattern: null,
-                tableNamePattern: null,
-                tableTypes: null,
-                columnNamePattern: null);
+                testCatalog, null, null, null, null);
 
             var schema = stream.Schema;
             Assert.NotNull(schema);
@@ -408,22 +423,24 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 totalBatches++;
             }
 
-            _output.WriteLine($"✓ GetObjects(All) returned {totalBatches} batches (simplified structure)");
+            OutputHelper?.WriteLine($"✓ GetObjects(All) returned {totalBatches} batches (simplified structure)");
         }
 
         [SkippableFact]
         public async Task MetadataOperationsWorkWithDifferentDataTypes()
         {
-            Skip.If(!_testConfiguration.ShouldRunTests());
+            SkipIfNotConfigured();
 
-            var testCatalog = _testConfiguration.Metadata.Catalog ?? "main";
-            var testSchema = _testConfiguration.Metadata.Schema ?? "default";
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
             var tableName = $"adbc_test_types_{Guid.NewGuid():N}";
+
+            using var connection = CreateRestConnection();
 
             try
             {
                 // Create table with various data types
-                using (var stmt = _connection.CreateStatement())
+                using (var stmt = connection.CreateStatement())
                 {
                     stmt.SqlQuery = $@"
                         CREATE OR REPLACE TABLE {testCatalog}.{testSchema}.{tableName} (
@@ -441,7 +458,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 }
 
                 // Get table schema
-                var schema = _connection.GetTableSchema(testCatalog, testSchema, tableName);
+                var schema = connection.GetTableSchema(testCatalog, testSchema, tableName);
 
                 Assert.NotNull(schema);
                 Assert.Equal(9, schema.FieldsList.Count);
@@ -465,29 +482,22 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 var stringField = schema.FieldsList.First(f => f.Name == "string_col");
                 Assert.IsType<StringType>(stringField.DataType);
 
-                _output.WriteLine($"✓ Metadata operations work correctly with {schema.FieldsList.Count} different data types");
+                OutputHelper?.WriteLine($"✓ Metadata operations work correctly with {schema.FieldsList.Count} different data types");
             }
             finally
             {
                 // Cleanup
                 try
                 {
-                    using var stmt = _connection.CreateStatement();
+                    using var stmt = connection.CreateStatement();
                     stmt.SqlQuery = $"DROP TABLE IF EXISTS {testCatalog}.{testSchema}.{tableName}";
                     await stmt.ExecuteUpdateAsync();
                 }
                 catch (Exception ex)
                 {
-                    _output.WriteLine($"⚠ Cleanup failed: {ex.Message}");
+                    OutputHelper?.WriteLine($"⚠ Cleanup failed: {ex.Message}");
                 }
             }
-        }
-
-        public void Dispose()
-        {
-            _connection?.Dispose();
-            _database?.Dispose();
-            _driver?.Dispose();
         }
     }
 }
