@@ -478,15 +478,16 @@ columnNamePattern: "id"
 | GetObjects(Catalogs) | ✅ Supported | ✅ Supported |
 | GetObjects(DbSchemas) | ✅ Supported | ✅ Supported |
 | GetObjects(Tables) | ✅ Supported | ✅ Supported |
-| GetObjects(All) | ⚠️ Simplified structure | ✅ Full nested structure |
+| GetObjects(All) | ✅ Full nested structure | ✅ Full nested structure |
 | GetTableSchema() | ✅ Supported | ✅ Supported |
 | Implementation | SQL-based (SHOW commands) | Native Thrift calls |
 | Performance | Good for most use cases | Optimized for metadata |
 
-**Note on GetObjects(All):**
-- REST protocol currently returns a simplified flat structure for `GetObjectsDepth.All`
-- Full ADBC nested ListArray/StructArray structure is planned for a future release
-- For most use cases, use specific depths (Catalogs, DbSchemas, Tables) which are fully supported
+**Implementation Details:**
+- REST protocol now returns full ADBC-compliant nested structure for `GetObjectsDepth.All`
+- Hierarchical catalog→schema→table→column structure using ListArray and StructArray
+- Follows ADBC StandardSchemas for full spec compliance
+- All metadata depths are fully supported and tested
 
 #### Implementation Details
 
