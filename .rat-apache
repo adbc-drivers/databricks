@@ -13,6 +13,7 @@
 # limitations under the License.
 
 .github/workflows/csharp.yml
+.github/workflows/dev_issues.yaml
 ci/scripts/csharp_build.sh
 ci/scripts/csharp_test.sh
 csharp/Benchmarks/CloudFetchBenchmarkRunner.cs
