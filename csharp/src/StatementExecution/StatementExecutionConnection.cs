@@ -67,6 +67,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string _traceParentHeaderName;
         private readonly bool _traceStateEnabled;
 
+        // Metadata caching
+        private readonly MetadataCache _metadataCache;
+
         // Authentication support
         private HttpClient? _authHttpClient;
         private readonly string? _identityFederationClientId;
@@ -204,6 +207,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
             _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
             _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
+
+            // Metadata caching configuration
+            bool cacheEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.MetadataCacheEnabled, false);
+            int catalogTtl = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.MetadataCacheCatalogTtl, 300);
+            int schemaTtl = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.MetadataCacheSchemaTtl, 120);
+            int tableTtl = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.MetadataCacheTableTtl, 60);
+            int columnTtl = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.MetadataCacheColumnTtl, 30);
+            _metadataCache = new MetadataCache(cacheEnabled, catalogTtl, schemaTtl, tableTtl, columnTtl);
 
             // Authentication configuration
             if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
@@ -508,6 +519,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private async Task<List<string>> GetCatalogsAsync(string? catalogPattern)
         {
+            // Check cache first
+            if (_metadataCache.TryGetCatalogs(catalogPattern, out var cachedCatalogs))
+            {
+                return cachedCatalogs!;
+            }
+
             var sql = "SHOW CATALOGS";
             if (!string.IsNullOrEmpty(catalogPattern))
             {
@@ -545,11 +562,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
 
+            // Cache the result
+            _metadataCache.PutCatalogs(catalogPattern, catalogs);
+
             return catalogs;
         }
 
         private async Task<List<string>> GetSchemasAsync(string catalog, string? schemaPattern)
         {
+            // Check cache first
+            if (_metadataCache.TryGetSchemas(catalog, schemaPattern, out var cachedSchemas))
+            {
+                return cachedSchemas!;
+            }
+
             var sql = $"SHOW SCHEMAS IN {QuoteIdentifier(catalog)}";
             if (!string.IsNullOrEmpty(schemaPattern))
             {
@@ -592,11 +618,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
 
+            // Cache the result
+            _metadataCache.PutSchemas(catalog, schemaPattern, schemas);
+
             return schemas;
         }
 
         private async Task<List<(string tableName, string tableType)>> GetTablesAsync(string catalog, string schema, string? tableNamePattern, IReadOnlyList<string>? tableTypes)
         {
+            // Check cache first
+            if (_metadataCache.TryGetTables(catalog, schema, tableNamePattern, tableTypes, out var cachedTables))
+            {
+                return cachedTables!;
+            }
+
             var sql = $"SHOW TABLES IN {QuoteIdentifier(catalog)}.{QuoteIdentifier(schema)}";
             if (!string.IsNullOrEmpty(tableNamePattern))
             {
@@ -653,6 +688,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     tables.Add((tableName, tableType));
                 }
             }
+
+            // Cache the result
+            _metadataCache.PutTables(catalog, schema, tableNamePattern, tableTypes, tables);
 
             return tables;
         }

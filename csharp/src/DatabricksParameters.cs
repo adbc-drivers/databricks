@@ -350,6 +350,37 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         public const string EnableSessionManagement = "adbc.databricks.rest.enable_session_management";
 
+        // Metadata caching configuration parameters
+        /// <summary>
+        /// Whether to enable metadata caching for GetObjects operations.
+        /// Default value is false (disabled) to avoid stale data.
+        /// </summary>
+        public const string MetadataCacheEnabled = "adbc.databricks.metadata_cache.enabled";
+
+        /// <summary>
+        /// TTL in seconds for cached catalog lists.
+        /// Default value is 300 (5 minutes).
+        /// </summary>
+        public const string MetadataCacheCatalogTtl = "adbc.databricks.metadata_cache.catalog_ttl_seconds";
+
+        /// <summary>
+        /// TTL in seconds for cached schema lists.
+        /// Default value is 120 (2 minutes).
+        /// </summary>
+        public const string MetadataCacheSchemaTtl = "adbc.databricks.metadata_cache.schema_ttl_seconds";
+
+        /// <summary>
+        /// TTL in seconds for cached table lists.
+        /// Default value is 60 (1 minute).
+        /// </summary>
+        public const string MetadataCacheTableTtl = "adbc.databricks.metadata_cache.table_ttl_seconds";
+
+        /// <summary>
+        /// TTL in seconds for cached column lists.
+        /// Default value is 30 seconds.
+        /// </summary>
+        public const string MetadataCacheColumnTtl = "adbc.databricks.metadata_cache.column_ttl_seconds";
+
     }
 
     /// <summary>
