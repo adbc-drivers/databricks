@@ -514,7 +514,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 sql += $" LIKE '{EscapeSqlPattern(catalogPattern)}'";
             }
 
-            var batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Return empty list on permission denied or other errors
+                // This allows BI tools to show "Access Denied" instead of crashing
+                return new List<string>();
+            }
+
             var catalogs = new List<string>();
 
             foreach (var batch in batches)
@@ -545,7 +556,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 sql += $" LIKE '{EscapeSqlPattern(schemaPattern)}'";
             }
 
-            var batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Return empty list on permission denied or other errors
+                // This allows BI tools to show "Access Denied" for this catalog
+                return new List<string>();
+            }
+
             var schemas = new List<string>();
 
             foreach (var batch in batches)
@@ -581,7 +603,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 sql += $" LIKE '{EscapeSqlPattern(tableNamePattern)}'";
             }
 
-            var batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Return empty list on permission denied or other errors
+                // This allows BI tools to show "Access Denied" for this schema
+                return new List<(string, string)>();
+            }
+
             var tables = new List<(string, string)>();
 
             foreach (var batch in batches)
