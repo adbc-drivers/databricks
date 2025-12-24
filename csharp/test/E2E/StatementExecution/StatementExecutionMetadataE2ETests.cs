@@ -25,6 +25,7 @@ using Apache.Arrow.Adbc.Tests;
 using Apache.Arrow.Types;
 using Xunit;
 using Xunit.Abstractions;
+using AdbcDrivers.Databricks.StatementExecution;
 
 namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 {
@@ -600,6 +601,331 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         {
             var boolArray = unionArray.Fields[1] as BooleanArray;
             return boolArray!.GetValue(index) ?? false; // Handle nullable bool
+        }
+
+        [SkippableFact]
+        public async Task CanGetPrimaryKeysForTableWithKeys()
+        {
+            SkipIfNotConfigured();
+
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
+            var tableName = $"adbc_test_pk_{Guid.NewGuid():N}";
+
+            using var connection = CreateRestConnection();
+
+            try
+            {
+                // Create table with primary key
+                using (var stmt = connection.CreateStatement())
+                {
+                    stmt.SqlQuery = $@"
+                        CREATE OR REPLACE TABLE {testCatalog}.{testSchema}.{tableName} (
+                            id INT NOT NULL,
+                            name STRING,
+                            CONSTRAINT pk_test PRIMARY KEY (id)
+                        )";
+                    await stmt.ExecuteUpdateAsync();
+                }
+
+                // Get primary keys
+                using var stream = ((StatementExecutionConnection)connection).GetPrimaryKeys(testCatalog, testSchema, tableName);
+                var schema = stream.Schema;
+
+                // Verify schema
+                Assert.NotNull(schema);
+                Assert.Equal(5, schema.FieldsList.Count);
+                Assert.Equal("catalog_name", schema.FieldsList[0].Name);
+                Assert.Equal("db_schema_name", schema.FieldsList[1].Name);
+                Assert.Equal("table_name", schema.FieldsList[2].Name);
+                Assert.Equal("column_name", schema.FieldsList[3].Name);
+                Assert.Equal("key_sequence", schema.FieldsList[4].Name);
+
+                var primaryKeys = new List<(string catalog, string schema, string table, string column, int sequence)>();
+                while (true)
+                {
+                    using var batch = stream.ReadNextRecordBatchAsync().Result;
+                    if (batch == null) break;
+
+                    var catalogArray = batch.Column("catalog_name") as StringArray;
+                    var schemaArray = batch.Column("db_schema_name") as StringArray;
+                    var tableArray = batch.Column("table_name") as StringArray;
+                    var columnArray = batch.Column("column_name") as StringArray;
+                    var sequenceArray = batch.Column("key_sequence") as Int32Array;
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        primaryKeys.Add((
+                            catalogArray!.GetString(i),
+                            schemaArray!.GetString(i),
+                            tableArray!.GetString(i),
+                            columnArray!.GetString(i),
+                            sequenceArray!.GetValue(i) ?? 0
+                        ));
+                    }
+                }
+
+                // Verify primary key was returned
+                Assert.Single(primaryKeys);
+                Assert.Equal(testCatalog, primaryKeys[0].catalog);
+                Assert.Equal(testSchema, primaryKeys[0].schema);
+                Assert.Equal(tableName, primaryKeys[0].table);
+                Assert.Equal("id", primaryKeys[0].column);
+                Assert.Equal(1, primaryKeys[0].sequence);
+
+                OutputHelper?.WriteLine($"✓ GetPrimaryKeys returned 1 primary key: {primaryKeys[0].column}");
+            }
+            finally
+            {
+                // Cleanup
+                try
+                {
+                    using var stmt = connection.CreateStatement();
+                    stmt.SqlQuery = $"DROP TABLE IF EXISTS {testCatalog}.{testSchema}.{tableName}";
+                    await stmt.ExecuteUpdateAsync();
+                }
+                catch (Exception ex)
+                {
+                    OutputHelper?.WriteLine($"⚠ Cleanup failed: {ex.Message}");
+                }
+            }
+        }
+
+        [SkippableFact]
+        public void CanGetPrimaryKeysForTableWithoutKeys()
+        {
+            SkipIfNotConfigured();
+
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
+            var tableName = $"adbc_test_no_pk_{Guid.NewGuid():N}";
+
+            using var connection = CreateRestConnection();
+
+            try
+            {
+                // Create table without primary key
+                using (var stmt = connection.CreateStatement())
+                {
+                    stmt.SqlQuery = $@"
+                        CREATE OR REPLACE TABLE {testCatalog}.{testSchema}.{tableName} (
+                            id INT,
+                            name STRING
+                        )";
+                    stmt.ExecuteUpdate();
+                }
+
+                // Get primary keys
+                using var stream = ((StatementExecutionConnection)connection).GetPrimaryKeys(testCatalog, testSchema, tableName);
+
+                var primaryKeys = new List<string>();
+                while (true)
+                {
+                    using var batch = stream.ReadNextRecordBatchAsync().Result;
+                    if (batch == null) break;
+
+                    var columnArray = batch.Column("column_name") as StringArray;
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        primaryKeys.Add(columnArray!.GetString(i));
+                    }
+                }
+
+                // Should return empty result
+                Assert.Empty(primaryKeys);
+                OutputHelper?.WriteLine("✓ GetPrimaryKeys returned empty result for table without primary key");
+            }
+            finally
+            {
+                // Cleanup
+                try
+                {
+                    using var stmt = connection.CreateStatement();
+                    stmt.SqlQuery = $"DROP TABLE IF EXISTS {testCatalog}.{testSchema}.{tableName}";
+                    stmt.ExecuteUpdate();
+                }
+                catch (Exception ex)
+                {
+                    OutputHelper?.WriteLine($"⚠ Cleanup failed: {ex.Message}");
+                }
+            }
+        }
+
+        [SkippableFact]
+        public async Task CanGetImportedKeysForTableWithForeignKeys()
+        {
+            SkipIfNotConfigured();
+
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
+            var parentTable = $"adbc_test_parent_{Guid.NewGuid():N}";
+            var childTable = $"adbc_test_child_{Guid.NewGuid():N}";
+
+            using var connection = CreateRestConnection();
+
+            try
+            {
+                // Create parent table with primary key
+                using (var stmt = connection.CreateStatement())
+                {
+                    stmt.SqlQuery = $@"
+                        CREATE OR REPLACE TABLE {testCatalog}.{testSchema}.{parentTable} (
+                            parent_id INT NOT NULL,
+                            parent_name STRING,
+                            CONSTRAINT pk_parent PRIMARY KEY (parent_id)
+                        )";
+                    await stmt.ExecuteUpdateAsync();
+                }
+
+                // Create child table with foreign key
+                using (var stmt = connection.CreateStatement())
+                {
+                    stmt.SqlQuery = $@"
+                        CREATE OR REPLACE TABLE {testCatalog}.{testSchema}.{childTable} (
+                            child_id INT NOT NULL,
+                            parent_ref INT,
+                            child_name STRING,
+                            CONSTRAINT pk_child PRIMARY KEY (child_id),
+                            CONSTRAINT fk_parent FOREIGN KEY (parent_ref) REFERENCES {testCatalog}.{testSchema}.{parentTable}(parent_id)
+                        )";
+                    await stmt.ExecuteUpdateAsync();
+                }
+
+                // Get imported keys (foreign keys)
+                using var stream = ((StatementExecutionConnection)connection).GetImportedKeys(testCatalog, testSchema, childTable);
+                var schema = stream.Schema;
+
+                // Verify schema (13 fields per ADBC spec)
+                Assert.NotNull(schema);
+                Assert.Equal(13, schema.FieldsList.Count);
+                Assert.Equal("pk_catalog_name", schema.FieldsList[0].Name);
+                Assert.Equal("pk_db_schema_name", schema.FieldsList[1].Name);
+                Assert.Equal("pk_table_name", schema.FieldsList[2].Name);
+                Assert.Equal("pk_column_name", schema.FieldsList[3].Name);
+                Assert.Equal("fk_catalog_name", schema.FieldsList[4].Name);
+                Assert.Equal("fk_db_schema_name", schema.FieldsList[5].Name);
+                Assert.Equal("fk_table_name", schema.FieldsList[6].Name);
+                Assert.Equal("fk_column_name", schema.FieldsList[7].Name);
+                Assert.Equal("key_sequence", schema.FieldsList[8].Name);
+                Assert.Equal("fk_constraint_name", schema.FieldsList[9].Name);
+
+                var foreignKeys = new List<(string pkTable, string pkColumn, string fkColumn, string? constraintName)>();
+                while (true)
+                {
+                    using var batch = stream.ReadNextRecordBatchAsync().Result;
+                    if (batch == null) break;
+
+                    var pkTableArray = batch.Column("pk_table_name") as StringArray;
+                    var pkColumnArray = batch.Column("pk_column_name") as StringArray;
+                    var fkColumnArray = batch.Column("fk_column_name") as StringArray;
+                    var fkConstraintArray = batch.Column("fk_constraint_name") as StringArray;
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        foreignKeys.Add((
+                            pkTableArray!.GetString(i),
+                            pkColumnArray!.GetString(i),
+                            fkColumnArray!.GetString(i),
+                            fkConstraintArray!.IsNull(i) ? null : fkConstraintArray.GetString(i)
+                        ));
+                    }
+                }
+
+                // Verify foreign key was returned
+                Assert.Single(foreignKeys);
+                Assert.Equal(parentTable, foreignKeys[0].pkTable);
+                Assert.Equal("parent_id", foreignKeys[0].pkColumn);
+                Assert.Equal("parent_ref", foreignKeys[0].fkColumn);
+                Assert.Equal("fk_parent", foreignKeys[0].constraintName);
+
+                OutputHelper?.WriteLine($"✓ GetImportedKeys returned 1 foreign key: {foreignKeys[0].fkColumn} -> {foreignKeys[0].pkTable}.{foreignKeys[0].pkColumn}");
+            }
+            finally
+            {
+                // Cleanup (order matters - child first due to FK constraint)
+                try
+                {
+                    using var stmt = connection.CreateStatement();
+                    stmt.SqlQuery = $"DROP TABLE IF EXISTS {testCatalog}.{testSchema}.{childTable}";
+                    await stmt.ExecuteUpdateAsync();
+                }
+                catch (Exception ex)
+                {
+                    OutputHelper?.WriteLine($"⚠ Child cleanup failed: {ex.Message}");
+                }
+
+                try
+                {
+                    using var stmt = connection.CreateStatement();
+                    stmt.SqlQuery = $"DROP TABLE IF EXISTS {testCatalog}.{testSchema}.{parentTable}";
+                    await stmt.ExecuteUpdateAsync();
+                }
+                catch (Exception ex)
+                {
+                    OutputHelper?.WriteLine($"⚠ Parent cleanup failed: {ex.Message}");
+                }
+            }
+        }
+
+        [SkippableFact]
+        public void CanGetImportedKeysForTableWithoutForeignKeys()
+        {
+            SkipIfNotConfigured();
+
+            var testCatalog = TestConfiguration.Metadata?.Catalog ?? "main";
+            var testSchema = TestConfiguration.Metadata?.Schema ?? "default";
+            var tableName = $"adbc_test_no_fk_{Guid.NewGuid():N}";
+
+            using var connection = CreateRestConnection();
+
+            try
+            {
+                // Create table without foreign keys
+                using (var stmt = connection.CreateStatement())
+                {
+                    stmt.SqlQuery = $@"
+                        CREATE OR REPLACE TABLE {testCatalog}.{testSchema}.{tableName} (
+                            id INT NOT NULL,
+                            name STRING,
+                            CONSTRAINT pk_test PRIMARY KEY (id)
+                        )";
+                    stmt.ExecuteUpdate();
+                }
+
+                // Get imported keys
+                using var stream = ((StatementExecutionConnection)connection).GetImportedKeys(testCatalog, testSchema, tableName);
+
+                var foreignKeys = new List<string>();
+                while (true)
+                {
+                    using var batch = stream.ReadNextRecordBatchAsync().Result;
+                    if (batch == null) break;
+
+                    var fkColumnArray = batch.Column("fk_column_name") as StringArray;
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        foreignKeys.Add(fkColumnArray!.GetString(i));
+                    }
+                }
+
+                // Should return empty result
+                Assert.Empty(foreignKeys);
+                OutputHelper?.WriteLine("✓ GetImportedKeys returned empty result for table without foreign keys");
+            }
+            finally
+            {
+                // Cleanup
+                try
+                {
+                    using var stmt = connection.CreateStatement();
+                    stmt.SqlQuery = $"DROP TABLE IF EXISTS {testCatalog}.{testSchema}.{tableName}";
+                    stmt.ExecuteUpdate();
+                }
+                catch (Exception ex)
+                {
+                    OutputHelper?.WriteLine($"⚠ Cleanup failed: {ex.Message}");
+                }
+            }
         }
     }
 }
