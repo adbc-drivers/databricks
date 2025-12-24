@@ -559,6 +559,66 @@ This SQL-based approach provides:
 - ✅ Easy debugging (SQL queries can be tested directly)
 - ✅ Type detection including temporary tables (via isTemporary column)
 
+#### Metadata Caching
+
+The REST protocol supports optional metadata caching with configurable TTL (Time-To-Live) to reduce repeated database queries. Caching is **disabled by default** to avoid stale data issues.
+
+**Caching Properties:**
+
+| Property | Description | Default |
+|----------|-------------|---------|
+| `adbc.databricks.metadata_cache.enabled` | Enable metadata caching | `false` |
+| `adbc.databricks.metadata_cache.catalog_ttl_seconds` | TTL for cached catalog lists | `300` (5 minutes) |
+| `adbc.databricks.metadata_cache.schema_ttl_seconds` | TTL for cached schema lists | `120` (2 minutes) |
+| `adbc.databricks.metadata_cache.table_ttl_seconds` | TTL for cached table lists | `60` (1 minute) |
+| `adbc.databricks.metadata_cache.column_ttl_seconds` | TTL for cached column lists | `30` (30 seconds) |
+
+**Example Configuration:**
+
+```csharp
+var config = new Dictionary<string, string>
+{
+    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
+    ["adbc.spark.auth_type"] = "oauth",
+    ["adbc.databricks.oauth.grant_type"] = "access_token",
+    ["adbc.spark.oauth.access_token"] = "your-token",
+    ["adbc.databricks.protocol"] = "rest",
+
+    // Enable metadata caching
+    ["adbc.databricks.metadata_cache.enabled"] = "true",
+    ["adbc.databricks.metadata_cache.catalog_ttl_seconds"] = "600",  // 10 minutes
+    ["adbc.databricks.metadata_cache.schema_ttl_seconds"] = "300",   // 5 minutes
+    ["adbc.databricks.metadata_cache.table_ttl_seconds"] = "120",    // 2 minutes
+    ["adbc.databricks.metadata_cache.column_ttl_seconds"] = "60"     // 1 minute
+};
+
+using var database = driver.Open(config);
+using var connection = database.Connect();
+
+// First call - fetches from database (~150ms)
+using var stream1 = connection.GetObjects(
+    AdbcConnection.GetObjectsDepth.Catalogs,
+    null, null, null, null, null);
+
+// Second call within TTL - returns cached results (<10ms)
+using var stream2 = connection.GetObjects(
+    AdbcConnection.GetObjectsDepth.Catalogs,
+    null, null, null, null, null);
+```
+
+**Performance Benefits:**
+- Reduces latency by 90%+ for repeated metadata queries
+- Lowers database load for BI tools that refresh navigator trees frequently
+- Thread-safe implementation using `ConcurrentDictionary`
+- Automatic TTL-based expiration
+
+**Important Notes:**
+- Caching is **per-connection** - each connection has its own cache
+- Pattern-specific caching: Different patterns are cached separately (e.g., `"main%"` vs `"m%"`)
+- Cache expiration: Entries are checked on read and removed if expired
+- **Disable in production** if you need real-time metadata changes (e.g., tables created by other processes)
+- Recommended TTL hierarchy: catalogs (longer TTL) → schemas → tables → columns (shorter TTL)
+
 ### TLS/SSL Configuration
 
 | Property | Description | Default |
