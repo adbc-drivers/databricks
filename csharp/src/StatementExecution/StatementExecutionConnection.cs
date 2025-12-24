@@ -1544,6 +1544,432 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
+        /// Gets primary keys for a specific table using SHOW KEYS SQL command.
+        /// Only Unity Catalog tables support primary keys. Hive metastore tables will return empty results.
+        /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog.</param>
+        /// <param name="dbSchema">Schema name. If null, uses session schema.</param>
+        /// <param name="tableName">Table name (required)</param>
+        /// <returns>Arrow stream with primary key information (catalog_name, db_schema_name, table_name, column_name, key_sequence)</returns>
+        /// <exception cref="ArgumentNullException">Thrown when tableName is null or empty</exception>
+        /// <remarks>
+        /// <para>Uses SQL command: SHOW KEYS IN catalog.schema.table</para>
+        /// <para>Returns columns:</para>
+        /// <list type="bullet">
+        /// <item><description>catalog_name (string, nullable): Catalog name</description></item>
+        /// <item><description>db_schema_name (string, nullable): Schema name</description></item>
+        /// <item><description>table_name (string): Table name</description></item>
+        /// <item><description>column_name (string): Column name</description></item>
+        /// <item><description>key_sequence (int32): Position in key (1-based)</description></item>
+        /// </list>
+        /// <para>Only Unity Catalog tables support primary keys. Returns empty results for Hive metastore tables or on permission errors.</para>
+        /// </remarks>
+        /// <example>
+        /// <code>
+        /// using var connection = database.Connect();
+        /// using var stream = connection.GetPrimaryKeys("main", "default", "customers");
+        ///
+        /// while (true)
+        /// {
+        ///     using var batch = stream.ReadNextRecordBatchAsync().Result;
+        ///     if (batch == null) break;
+        ///
+        ///     var columnArray = batch.Column("column_name") as StringArray;
+        ///     var sequenceArray = batch.Column("key_sequence") as Int32Array;
+        ///
+        ///     for (int i = 0; i < batch.Length; i++)
+        ///     {
+        ///         Console.WriteLine($"PK Column: {columnArray.GetString(i)}, Sequence: {sequenceArray.GetValue(i)}");
+        ///     }
+        /// }
+        /// </code>
+        /// </example>
+        public IArrowArrayStream GetPrimaryKeys(string? catalog, string? dbSchema, string tableName)
+        {
+            return GetPrimaryKeysAsync(catalog, dbSchema, tableName).GetAwaiter().GetResult();
+        }
+
+        private async Task<IArrowArrayStream> GetPrimaryKeysAsync(string? catalog, string? dbSchema, string tableName)
+        {
+            if (string.IsNullOrEmpty(tableName))
+            {
+                throw new ArgumentNullException(nameof(tableName), "Table name is required");
+            }
+
+            // Use session catalog/schema if not provided
+            catalog = catalog ?? _catalog;
+            dbSchema = dbSchema ?? _schema;
+
+            // Build SHOW KEYS query
+            var qualifiedTableName = BuildQualifiedTableName(catalog, dbSchema, tableName);
+            var sql = $"SHOW KEYS IN {qualifiedTableName}";
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // SHOW KEYS not supported (Hive metastore) or permission denied
+                // Return empty result gracefully
+                return BuildPrimaryKeysResult(new List<PrimaryKeyInfo>(), catalog, dbSchema, tableName);
+            }
+
+            var primaryKeys = new List<PrimaryKeyInfo>();
+            int keySequence = 1;
+
+            foreach (var batch in batches)
+            {
+                // SHOW KEYS returns: col_name, constraint_name, constraint_type
+                var colNameArray = batch.Column("col_name") as StringArray;
+                var constraintTypeArray = batch.Column("constraint_type") as StringArray;
+
+                if (colNameArray == null || constraintTypeArray == null)
+                    continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (!colNameArray.IsNull(i) && !constraintTypeArray.IsNull(i))
+                    {
+                        var constraintType = constraintTypeArray.GetString(i);
+
+                        // Only include PRIMARY KEY constraints
+                        if (constraintType.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase))
+                        {
+                            primaryKeys.Add(new PrimaryKeyInfo
+                            {
+                                CatalogName = catalog,
+                                SchemaName = dbSchema,
+                                TableName = tableName,
+                                ColumnName = colNameArray.GetString(i),
+                                KeySequence = keySequence++
+                            });
+                        }
+                    }
+                }
+            }
+
+            return BuildPrimaryKeysResult(primaryKeys, catalog, dbSchema, tableName);
+        }
+
+        private IArrowArrayStream BuildPrimaryKeysResult(List<PrimaryKeyInfo> primaryKeys, string? catalog, string? schema, string table)
+        {
+            var catalogBuilder = new StringArray.Builder();
+            var schemaBuilder = new StringArray.Builder();
+            var tableBuilder = new StringArray.Builder();
+            var columnBuilder = new StringArray.Builder();
+            var sequenceBuilder = new Int32Array.Builder();
+
+            foreach (var pk in primaryKeys)
+            {
+                if (pk.CatalogName != null)
+                    catalogBuilder.Append(pk.CatalogName);
+                else
+                    catalogBuilder.AppendNull();
+
+                if (pk.SchemaName != null)
+                    schemaBuilder.Append(pk.SchemaName);
+                else
+                    schemaBuilder.AppendNull();
+
+                tableBuilder.Append(pk.TableName);
+                columnBuilder.Append(pk.ColumnName);
+                sequenceBuilder.Append(pk.KeySequence);
+            }
+
+            var resultSchema = new Schema(new[]
+            {
+                new Field("catalog_name", StringType.Default, nullable: true),
+                new Field("db_schema_name", StringType.Default, nullable: true),
+                new Field("table_name", StringType.Default, nullable: false),
+                new Field("column_name", StringType.Default, nullable: false),
+                new Field("key_sequence", Int32Type.Default, nullable: false)
+            }, null);
+
+            var data = new List<IArrowArray>
+            {
+                catalogBuilder.Build(),
+                schemaBuilder.Build(),
+                tableBuilder.Build(),
+                columnBuilder.Build(),
+                sequenceBuilder.Build()
+            };
+
+            return new SimpleArrowArrayStream(resultSchema, data);
+        }
+
+        /// <summary>
+        /// Gets foreign keys (imported keys) for a specific table using SHOW FOREIGN KEYS SQL command.
+        /// Only Unity Catalog tables support foreign keys. Hive metastore tables will return empty results.
+        /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog.</param>
+        /// <param name="dbSchema">Schema name. If null, uses session schema.</param>
+        /// <param name="tableName">Table name (required)</param>
+        /// <returns>Arrow stream with foreign key information</returns>
+        /// <exception cref="ArgumentNullException">Thrown when tableName is null or empty</exception>
+        /// <remarks>
+        /// <para>Uses SQL command: SHOW FOREIGN KEYS IN catalog.schema.table</para>
+        /// <para>Returns columns (ADBC spec):</para>
+        /// <list type="bullet">
+        /// <item><description>pk_catalog_name (string, nullable): Referenced table's catalog</description></item>
+        /// <item><description>pk_db_schema_name (string, nullable): Referenced table's schema</description></item>
+        /// <item><description>pk_table_name (string): Referenced table</description></item>
+        /// <item><description>pk_column_name (string): Referenced column</description></item>
+        /// <item><description>fk_catalog_name (string, nullable): Foreign key table's catalog</description></item>
+        /// <item><description>fk_db_schema_name (string, nullable): Foreign key table's schema</description></item>
+        /// <item><description>fk_table_name (string): Foreign key table</description></item>
+        /// <item><description>fk_column_name (string): Foreign key column</description></item>
+        /// <item><description>key_sequence (int32): Position in key (1-based)</description></item>
+        /// <item><description>fk_constraint_name (string, nullable): Constraint name</description></item>
+        /// <item><description>pk_key_name (string, nullable): Primary key name</description></item>
+        /// <item><description>update_rule (uint8, nullable): ON UPDATE rule</description></item>
+        /// <item><description>delete_rule (uint8, nullable): ON DELETE rule</description></item>
+        /// </list>
+        /// <para>Referential action codes: 0=CASCADE, 1=RESTRICT, 2=SET NULL, 3=NO ACTION, 4=SET DEFAULT</para>
+        /// <para>Only Unity Catalog tables support foreign keys. Returns empty results for Hive metastore tables or on permission errors.</para>
+        /// </remarks>
+        /// <example>
+        /// <code>
+        /// using var connection = database.Connect();
+        /// using var stream = connection.GetImportedKeys("main", "default", "orders");
+        ///
+        /// while (true)
+        /// {
+        ///     using var batch = stream.ReadNextRecordBatchAsync().Result;
+        ///     if (batch == null) break;
+        ///
+        ///     var fkColumnArray = batch.Column("fk_column_name") as StringArray;
+        ///     var pkTableArray = batch.Column("pk_table_name") as StringArray;
+        ///     var pkColumnArray = batch.Column("pk_column_name") as StringArray;
+        ///
+        ///     for (int i = 0; i < batch.Length; i++)
+        ///     {
+        ///         Console.WriteLine($"FK: {fkColumnArray.GetString(i)} -> {pkTableArray.GetString(i)}.{pkColumnArray.GetString(i)}");
+        ///     }
+        /// }
+        /// </code>
+        /// </example>
+        public IArrowArrayStream GetImportedKeys(string? catalog, string? dbSchema, string tableName)
+        {
+            return GetImportedKeysAsync(catalog, dbSchema, tableName).GetAwaiter().GetResult();
+        }
+
+        private async Task<IArrowArrayStream> GetImportedKeysAsync(string? catalog, string? dbSchema, string tableName)
+        {
+            if (string.IsNullOrEmpty(tableName))
+            {
+                throw new ArgumentNullException(nameof(tableName), "Table name is required");
+            }
+
+            // Use session catalog/schema if not provided
+            catalog = catalog ?? _catalog;
+            dbSchema = dbSchema ?? _schema;
+
+            // Build SHOW FOREIGN KEYS query
+            var qualifiedTableName = BuildQualifiedTableName(catalog, dbSchema, tableName);
+            var sql = $"SHOW FOREIGN KEYS IN {qualifiedTableName}";
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // SHOW FOREIGN KEYS not supported (Hive metastore) or permission denied
+                // Return empty result gracefully
+                return BuildImportedKeysResult(new List<ForeignKeyInfo>());
+            }
+
+            var foreignKeys = new List<ForeignKeyInfo>();
+            var keySequences = new Dictionary<string, int>();
+
+            foreach (var batch in batches)
+            {
+                // SHOW FOREIGN KEYS returns: constraint_name, fk_col_name, pk_catalog, pk_schema, pk_table, pk_col_name, update_rule, delete_rule
+                var constraintNameArray = batch.Column("constraint_name") as StringArray;
+                var fkColNameArray = batch.Column("fk_col_name") as StringArray;
+                var pkCatalogArray = batch.Column("pk_catalog") as StringArray;
+                var pkSchemaArray = batch.Column("pk_schema") as StringArray;
+                var pkTableArray = batch.Column("pk_table") as StringArray;
+                var pkColNameArray = batch.Column("pk_col_name") as StringArray;
+                var updateRuleArray = batch.Column("update_rule") as StringArray;
+                var deleteRuleArray = batch.Column("delete_rule") as StringArray;
+
+                if (fkColNameArray == null || pkColNameArray == null)
+                    continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (!fkColNameArray.IsNull(i) && !pkColNameArray.IsNull(i))
+                    {
+                        var constraintName = constraintNameArray != null && !constraintNameArray.IsNull(i)
+                            ? constraintNameArray.GetString(i)
+                            : null;
+
+                        // Track key sequence per constraint
+                        if (constraintName != null)
+                        {
+                            if (!keySequences.ContainsKey(constraintName))
+                            {
+                                keySequences[constraintName] = 1;
+                            }
+                        }
+
+                        foreignKeys.Add(new ForeignKeyInfo
+                        {
+                            PkCatalogName = pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : null,
+                            PkSchemaName = pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : null,
+                            PkTableName = pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : string.Empty,
+                            PkColumnName = pkColNameArray.GetString(i),
+                            FkCatalogName = catalog,
+                            FkSchemaName = dbSchema,
+                            FkTableName = tableName,
+                            FkColumnName = fkColNameArray.GetString(i),
+                            KeySequence = constraintName != null ? keySequences[constraintName]++ : 1,
+                            FkConstraintName = constraintName,
+                            UpdateRule = ParseReferentialAction(updateRuleArray != null && !updateRuleArray.IsNull(i) ? updateRuleArray.GetString(i) : null),
+                            DeleteRule = ParseReferentialAction(deleteRuleArray != null && !deleteRuleArray.IsNull(i) ? deleteRuleArray.GetString(i) : null)
+                        });
+                    }
+                }
+            }
+
+            return BuildImportedKeysResult(foreignKeys);
+        }
+
+        private byte? ParseReferentialAction(string? action)
+        {
+            if (string.IsNullOrEmpty(action))
+                return null;
+
+            return action.ToUpperInvariant() switch
+            {
+                "CASCADE" => 0,
+                "RESTRICT" => 1,
+                "SET NULL" => 2,
+                "NO ACTION" => 3,
+                "SET DEFAULT" => 4,
+                _ => null
+            };
+        }
+
+        private IArrowArrayStream BuildImportedKeysResult(List<ForeignKeyInfo> foreignKeys)
+        {
+            var pkCatalogBuilder = new StringArray.Builder();
+            var pkSchemaBuilder = new StringArray.Builder();
+            var pkTableBuilder = new StringArray.Builder();
+            var pkColumnBuilder = new StringArray.Builder();
+            var fkCatalogBuilder = new StringArray.Builder();
+            var fkSchemaBuilder = new StringArray.Builder();
+            var fkTableBuilder = new StringArray.Builder();
+            var fkColumnBuilder = new StringArray.Builder();
+            var sequenceBuilder = new Int32Array.Builder();
+            var fkNameBuilder = new StringArray.Builder();
+            var pkNameBuilder = new StringArray.Builder();
+            var updateRuleBuilder = new UInt8Array.Builder();
+            var deleteRuleBuilder = new UInt8Array.Builder();
+
+            foreach (var fk in foreignKeys)
+            {
+                AppendNullableString(pkCatalogBuilder, fk.PkCatalogName);
+                AppendNullableString(pkSchemaBuilder, fk.PkSchemaName);
+                pkTableBuilder.Append(fk.PkTableName);
+                pkColumnBuilder.Append(fk.PkColumnName);
+
+                AppendNullableString(fkCatalogBuilder, fk.FkCatalogName);
+                AppendNullableString(fkSchemaBuilder, fk.FkSchemaName);
+                fkTableBuilder.Append(fk.FkTableName);
+                fkColumnBuilder.Append(fk.FkColumnName);
+
+                sequenceBuilder.Append(fk.KeySequence);
+                AppendNullableString(fkNameBuilder, fk.FkConstraintName);
+                AppendNullableString(pkNameBuilder, fk.PkKeyName);
+
+                if (fk.UpdateRule.HasValue)
+                    updateRuleBuilder.Append(fk.UpdateRule.Value);
+                else
+                    updateRuleBuilder.AppendNull();
+
+                if (fk.DeleteRule.HasValue)
+                    deleteRuleBuilder.Append(fk.DeleteRule.Value);
+                else
+                    deleteRuleBuilder.AppendNull();
+            }
+
+            var resultSchema = new Schema(new[]
+            {
+                new Field("pk_catalog_name", StringType.Default, nullable: true),
+                new Field("pk_db_schema_name", StringType.Default, nullable: true),
+                new Field("pk_table_name", StringType.Default, nullable: false),
+                new Field("pk_column_name", StringType.Default, nullable: false),
+                new Field("fk_catalog_name", StringType.Default, nullable: true),
+                new Field("fk_db_schema_name", StringType.Default, nullable: true),
+                new Field("fk_table_name", StringType.Default, nullable: false),
+                new Field("fk_column_name", StringType.Default, nullable: false),
+                new Field("key_sequence", Int32Type.Default, nullable: false),
+                new Field("fk_constraint_name", StringType.Default, nullable: true),
+                new Field("pk_key_name", StringType.Default, nullable: true),
+                new Field("update_rule", UInt8Type.Default, nullable: true),
+                new Field("delete_rule", UInt8Type.Default, nullable: true)
+            }, null);
+
+            var data = new List<IArrowArray>
+            {
+                pkCatalogBuilder.Build(),
+                pkSchemaBuilder.Build(),
+                pkTableBuilder.Build(),
+                pkColumnBuilder.Build(),
+                fkCatalogBuilder.Build(),
+                fkSchemaBuilder.Build(),
+                fkTableBuilder.Build(),
+                fkColumnBuilder.Build(),
+                sequenceBuilder.Build(),
+                fkNameBuilder.Build(),
+                pkNameBuilder.Build(),
+                updateRuleBuilder.Build(),
+                deleteRuleBuilder.Build()
+            };
+
+            return new SimpleArrowArrayStream(resultSchema, data);
+        }
+
+        private void AppendNullableString(StringArray.Builder builder, string? value)
+        {
+            if (value != null)
+                builder.Append(value);
+            else
+                builder.AppendNull();
+        }
+
+        private struct PrimaryKeyInfo
+        {
+            public string? CatalogName { get; set; }
+            public string? SchemaName { get; set; }
+            public string TableName { get; set; }
+            public string ColumnName { get; set; }
+            public int KeySequence { get; set; }
+        }
+
+        private struct ForeignKeyInfo
+        {
+            public string? PkCatalogName { get; set; }
+            public string? PkSchemaName { get; set; }
+            public string PkTableName { get; set; }
+            public string PkColumnName { get; set; }
+            public string? FkCatalogName { get; set; }
+            public string? FkSchemaName { get; set; }
+            public string FkTableName { get; set; }
+            public string FkColumnName { get; set; }
+            public int KeySequence { get; set; }
+            public string? FkConstraintName { get; set; }
+            public string? PkKeyName { get; set; }
+            public byte? UpdateRule { get; set; }
+            public byte? DeleteRule { get; set; }
+        }
+
+        /// <summary>
         /// Disposes the connection and deletes the session if it exists.
         /// </summary>
         public override void Dispose()
