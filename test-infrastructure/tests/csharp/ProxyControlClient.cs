@@ -57,6 +57,13 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             _loggerFactory = NullLoggerFactory.Instance;
             var logger = _loggerFactory.CreateLogger<DefaultApi>();
             var jsonOptions = new System.Text.Json.JsonSerializerOptions();
+
+            // Register custom JSON converters for proper serialization
+            jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftVerificationRequestJsonConverter());
+            jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftVerificationResultJsonConverter());
+            jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftCallHistoryJsonConverter());
+            jsonOptions.Converters.Add(new ProxyControlApi.Model.ThriftCallHistoryCallsInnerJsonConverter());
+
             var jsonProvider = new JsonSerializerOptionsProvider(jsonOptions);
             var events = new DefaultApiEvents();
 
@@ -144,6 +151,85 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                     await DisableScenarioAsync(scenario.Name, cancellationToken);
                 }
             }
+        }
+
+        /// <summary>
+        /// Gets the history of Thrift method calls tracked by the proxy.
+        /// Returns method name, timestamp, message type, and sequence ID for each call.
+        /// Note: Call history is automatically reset when a scenario is enabled.
+        /// </summary>
+        public async Task<ProxyControlApi.Model.ThriftCallHistory?> GetThriftCallsAsync(CancellationToken cancellationToken = default)
+        {
+            var response = await _api.GetThriftCallsAsync(cancellationToken);
+
+            if (!response.IsOk)
+            {
+                throw new InvalidOperationException($"Failed to get Thrift calls. Status: {response.StatusCode}");
+            }
+
+            return response.Ok();
+        }
+
+        /// <summary>
+        /// Manually resets the Thrift call history.
+        /// Note: Call history is automatically reset when a scenario is enabled.
+        /// </summary>
+        public async Task ResetThriftCallsAsync(CancellationToken cancellationToken = default)
+        {
+            var response = await _api.ResetThriftCallsAsync(cancellationToken);
+
+            if (!response.IsOk)
+            {
+                throw new InvalidOperationException($"Failed to reset Thrift calls. Status: {response.StatusCode}");
+            }
+        }
+
+        /// <summary>
+        /// Verifies that Thrift method calls match expected patterns.
+        /// </summary>
+        /// <param name="type">Verification type: exact_sequence, contains_sequence, method_count, method_exists</param>
+        /// <param name="methods">Expected method sequence (for sequence verifications)</param>
+        /// <param name="method">Method name (for method_count/method_exists)</param>
+        /// <param name="count">Expected count (for method_count)</param>
+        public async Task<ProxyControlApi.Model.ThriftVerificationResult?> VerifyThriftCallsAsync(
+            string type,
+            List<string>? methods = null,
+            string? method = null,
+            int? count = null,
+            CancellationToken cancellationToken = default)
+        {
+            var typeEnum = ProxyControlApi.Model.ThriftVerificationRequest.TypeEnumFromString(type);
+            var request = new ProxyControlApi.Model.ThriftVerificationRequest(typeEnum);
+
+            // Only set optional properties if they're not null
+            if (methods != null)
+            {
+                request.Methods = methods;
+            }
+            if (method != null)
+            {
+                request.Method = method;
+            }
+            if (count.HasValue)
+            {
+                request.Count = count.Value;
+            }
+
+            var response = await _api.VerifyThriftCallsAsync(request, cancellationToken);
+
+            // TODO: Fix BadRequest deserialization issue
+            // if (response.IsBadRequest)
+            // {
+            //     var error = response.BadRequest();
+            //     throw new ArgumentException($"Verification request invalid: {error?.Error}");
+            // }
+
+            if (!response.IsOk)
+            {
+                throw new InvalidOperationException($"Failed to verify Thrift calls. Status: {response.StatusCode}, RawContent: {response.RawContent}");
+            }
+
+            return response.Ok();
         }
 
         public void Dispose()

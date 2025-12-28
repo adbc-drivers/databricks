@@ -188,6 +188,26 @@ namespace ProxyControlApi.Client
     /// An interface for responses of type
     /// </summary>
     /// <typeparam name="TType"></typeparam>
+    public interface IBadRequest<TType> : IApiResponse
+    {
+        /// <summary>
+        /// Deserializes the response if the response is BadRequest
+        /// </summary>
+        /// <returns></returns>
+        TType BadRequest();
+
+        /// <summary>
+        /// Returns true if the response is BadRequest and the deserialized response is not null
+        /// </summary>
+        /// <param name="result"></param>
+        /// <returns></returns>
+        bool TryBadRequest([NotNullWhen(true)]out TType? result);
+    }
+
+    /// <summary>
+    /// An interface for responses of type
+    /// </summary>
+    /// <typeparam name="TType"></typeparam>
     public interface IOk<TType> : IApiResponse
     {
         /// <summary>

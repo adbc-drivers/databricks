@@ -111,6 +111,8 @@ namespace ProxyControlApi.Client
                 return boolean
                     ? "true"
                     : "false";
+            if (obj is ThriftVerificationRequest.TypeEnum thriftVerificationRequestTypeEnum)
+                return ThriftVerificationRequest.TypeEnumToJsonValue(thriftVerificationRequestTypeEnum);
             if (obj is ICollection collection)
             {
                 List<string?> entries = new();

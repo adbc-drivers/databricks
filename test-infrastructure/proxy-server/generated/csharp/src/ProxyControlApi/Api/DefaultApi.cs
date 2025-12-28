@@ -82,6 +82,27 @@ namespace ProxyControlApi.Api
         Task<IEnableScenarioApiResponse?> EnableScenarioOrDefaultAsync(string name, System.Threading.CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Get Thrift method call history
+        /// </summary>
+        /// <remarks>
+        /// Returns the history of Thrift method calls tracked by the proxy. Includes method name, timestamp, message type, and sequence ID.  **Note:** Call history is automatically reset when a scenario is enabled.
+        /// </remarks>
+        /// <exception cref="ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IGetThriftCallsApiResponse"/>&gt;</returns>
+        Task<IGetThriftCallsApiResponse> GetThriftCallsAsync(System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Get Thrift method call history
+        /// </summary>
+        /// <remarks>
+        /// Returns the history of Thrift method calls tracked by the proxy. Includes method name, timestamp, message type, and sequence ID.  **Note:** Call history is automatically reset when a scenario is enabled.
+        /// </remarks>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IGetThriftCallsApiResponse"/>?&gt;</returns>
+        Task<IGetThriftCallsApiResponse?> GetThriftCallsOrDefaultAsync(System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// List all available failure scenarios
         /// </summary>
         /// <remarks>
@@ -101,6 +122,50 @@ namespace ProxyControlApi.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns><see cref="Task"/>&lt;<see cref="IListScenariosApiResponse"/>?&gt;</returns>
         Task<IListScenariosApiResponse?> ListScenariosOrDefaultAsync(System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Reset Thrift call history
+        /// </summary>
+        /// <remarks>
+        /// Manually resets the Thrift call history to empty.  **Note:** Call history is automatically reset when a scenario is enabled, so manual reset is typically not needed.
+        /// </remarks>
+        /// <exception cref="ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IResetThriftCallsApiResponse"/>&gt;</returns>
+        Task<IResetThriftCallsApiResponse> ResetThriftCallsAsync(System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Reset Thrift call history
+        /// </summary>
+        /// <remarks>
+        /// Manually resets the Thrift call history to empty.  **Note:** Call history is automatically reset when a scenario is enabled, so manual reset is typically not needed.
+        /// </remarks>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IResetThriftCallsApiResponse"/>?&gt;</returns>
+        Task<IResetThriftCallsApiResponse?> ResetThriftCallsOrDefaultAsync(System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Verify Thrift call sequence
+        /// </summary>
+        /// <remarks>
+        /// Verifies that Thrift method calls match expected patterns.  Supports four verification types: - **exact_sequence**: Exact match of method sequence - **contains_sequence**: Methods appear in order (not necessarily consecutive) - **method_count**: Verify specific method called N times - **method_exists**: Verify method was called at least once
+        /// </remarks>
+        /// <exception cref="ApiException">Thrown when fails to make API call</exception>
+        /// <param name="thriftVerificationRequest"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IVerifyThriftCallsApiResponse"/>&gt;</returns>
+        Task<IVerifyThriftCallsApiResponse> VerifyThriftCallsAsync(ThriftVerificationRequest thriftVerificationRequest, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Verify Thrift call sequence
+        /// </summary>
+        /// <remarks>
+        /// Verifies that Thrift method calls match expected patterns.  Supports four verification types: - **exact_sequence**: Exact match of method sequence - **contains_sequence**: Methods appear in order (not necessarily consecutive) - **method_count**: Verify specific method called N times - **method_exists**: Verify method was called at least once
+        /// </remarks>
+        /// <param name="thriftVerificationRequest"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IVerifyThriftCallsApiResponse"/>?&gt;</returns>
+        Task<IVerifyThriftCallsApiResponse?> VerifyThriftCallsOrDefaultAsync(ThriftVerificationRequest thriftVerificationRequest, System.Threading.CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -140,6 +205,18 @@ namespace ProxyControlApi.Api
     }
 
     /// <summary>
+    /// The <see cref="IGetThriftCallsApiResponse"/>
+    /// </summary>
+    public interface IGetThriftCallsApiResponse : ProxyControlApi.Client.IApiResponse, IOk<ProxyControlApi.Model.ThriftCallHistory?>
+    {
+        /// <summary>
+        /// Returns true if the response is 200 Ok
+        /// </summary>
+        /// <returns></returns>
+        bool IsOk { get; }
+    }
+
+    /// <summary>
     /// The <see cref="IListScenariosApiResponse"/>
     /// </summary>
     public interface IListScenariosApiResponse : ProxyControlApi.Client.IApiResponse, IOk<ProxyControlApi.Model.ScenarioList?>
@@ -149,6 +226,36 @@ namespace ProxyControlApi.Api
         /// </summary>
         /// <returns></returns>
         bool IsOk { get; }
+    }
+
+    /// <summary>
+    /// The <see cref="IResetThriftCallsApiResponse"/>
+    /// </summary>
+    public interface IResetThriftCallsApiResponse : ProxyControlApi.Client.IApiResponse, IOk<ProxyControlApi.Model.ResetThriftCalls200Response?>
+    {
+        /// <summary>
+        /// Returns true if the response is 200 Ok
+        /// </summary>
+        /// <returns></returns>
+        bool IsOk { get; }
+    }
+
+    /// <summary>
+    /// The <see cref="IVerifyThriftCallsApiResponse"/>
+    /// </summary>
+    public interface IVerifyThriftCallsApiResponse : ProxyControlApi.Client.IApiResponse, IOk<ProxyControlApi.Model.ThriftVerificationResult?>, IBadRequest<ProxyControlApi.Model.VerifyThriftCalls400Response?>
+    {
+        /// <summary>
+        /// Returns true if the response is 200 Ok
+        /// </summary>
+        /// <returns></returns>
+        bool IsOk { get; }
+
+        /// <summary>
+        /// Returns true if the response is 400 BadRequest
+        /// </summary>
+        /// <returns></returns>
+        bool IsBadRequest { get; }
     }
 
     /// <summary>
@@ -199,6 +306,26 @@ namespace ProxyControlApi.Api
         /// <summary>
         /// The event raised after the server response
         /// </summary>
+        public event EventHandler<ApiResponseEventArgs>? OnGetThriftCalls;
+
+        /// <summary>
+        /// The event raised after an error querying the server
+        /// </summary>
+        public event EventHandler<ExceptionEventArgs>? OnErrorGetThriftCalls;
+
+        internal void ExecuteOnGetThriftCalls(DefaultApi.GetThriftCallsApiResponse apiResponse)
+        {
+            OnGetThriftCalls?.Invoke(this, new ApiResponseEventArgs(apiResponse));
+        }
+
+        internal void ExecuteOnErrorGetThriftCalls(Exception exception)
+        {
+            OnErrorGetThriftCalls?.Invoke(this, new ExceptionEventArgs(exception));
+        }
+
+        /// <summary>
+        /// The event raised after the server response
+        /// </summary>
         public event EventHandler<ApiResponseEventArgs>? OnListScenarios;
 
         /// <summary>
@@ -214,6 +341,46 @@ namespace ProxyControlApi.Api
         internal void ExecuteOnErrorListScenarios(Exception exception)
         {
             OnErrorListScenarios?.Invoke(this, new ExceptionEventArgs(exception));
+        }
+
+        /// <summary>
+        /// The event raised after the server response
+        /// </summary>
+        public event EventHandler<ApiResponseEventArgs>? OnResetThriftCalls;
+
+        /// <summary>
+        /// The event raised after an error querying the server
+        /// </summary>
+        public event EventHandler<ExceptionEventArgs>? OnErrorResetThriftCalls;
+
+        internal void ExecuteOnResetThriftCalls(DefaultApi.ResetThriftCallsApiResponse apiResponse)
+        {
+            OnResetThriftCalls?.Invoke(this, new ApiResponseEventArgs(apiResponse));
+        }
+
+        internal void ExecuteOnErrorResetThriftCalls(Exception exception)
+        {
+            OnErrorResetThriftCalls?.Invoke(this, new ExceptionEventArgs(exception));
+        }
+
+        /// <summary>
+        /// The event raised after the server response
+        /// </summary>
+        public event EventHandler<ApiResponseEventArgs>? OnVerifyThriftCalls;
+
+        /// <summary>
+        /// The event raised after an error querying the server
+        /// </summary>
+        public event EventHandler<ExceptionEventArgs>? OnErrorVerifyThriftCalls;
+
+        internal void ExecuteOnVerifyThriftCalls(DefaultApi.VerifyThriftCallsApiResponse apiResponse)
+        {
+            OnVerifyThriftCalls?.Invoke(this, new ApiResponseEventArgs(apiResponse));
+        }
+
+        internal void ExecuteOnErrorVerifyThriftCalls(Exception exception)
+        {
+            OnErrorVerifyThriftCalls?.Invoke(this, new ExceptionEventArgs(exception));
         }
     }
 
@@ -823,6 +990,224 @@ namespace ProxyControlApi.Api
         /// Processes the server response
         /// </summary>
         /// <param name="apiResponseLocalVar"></param>
+        private void AfterGetThriftCallsDefaultImplementation(IGetThriftCallsApiResponse apiResponseLocalVar)
+        {
+            bool suppressDefaultLog = false;
+            AfterGetThriftCalls(ref suppressDefaultLog, apiResponseLocalVar);
+            if (!suppressDefaultLog)
+                Logger.LogInformation("{0,-9} | {1} | {3}", (apiResponseLocalVar.DownloadedAt - apiResponseLocalVar.RequestedAt).TotalSeconds, apiResponseLocalVar.StatusCode, apiResponseLocalVar.Path);
+        }
+
+        /// <summary>
+        /// Processes the server response
+        /// </summary>
+        /// <param name="suppressDefaultLog"></param>
+        /// <param name="apiResponseLocalVar"></param>
+        partial void AfterGetThriftCalls(ref bool suppressDefaultLog, IGetThriftCallsApiResponse apiResponseLocalVar);
+
+        /// <summary>
+        /// Logs exceptions that occur while retrieving the server response
+        /// </summary>
+        /// <param name="exceptionLocalVar"></param>
+        /// <param name="pathFormatLocalVar"></param>
+        /// <param name="pathLocalVar"></param>
+        private void OnErrorGetThriftCallsDefaultImplementation(Exception exceptionLocalVar, string pathFormatLocalVar, string pathLocalVar)
+        {
+            bool suppressDefaultLogLocalVar = false;
+            OnErrorGetThriftCalls(ref suppressDefaultLogLocalVar, exceptionLocalVar, pathFormatLocalVar, pathLocalVar);
+            if (!suppressDefaultLogLocalVar)
+                Logger.LogError(exceptionLocalVar, "An error occurred while sending the request to the server.");
+        }
+
+        /// <summary>
+        /// A partial method that gives developers a way to provide customized exception handling
+        /// </summary>
+        /// <param name="suppressDefaultLogLocalVar"></param>
+        /// <param name="exceptionLocalVar"></param>
+        /// <param name="pathFormatLocalVar"></param>
+        /// <param name="pathLocalVar"></param>
+        partial void OnErrorGetThriftCalls(ref bool suppressDefaultLogLocalVar, Exception exceptionLocalVar, string pathFormatLocalVar, string pathLocalVar);
+
+        /// <summary>
+        /// Get Thrift method call history Returns the history of Thrift method calls tracked by the proxy. Includes method name, timestamp, message type, and sequence ID.  **Note:** Call history is automatically reset when a scenario is enabled.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IGetThriftCallsApiResponse"/>&gt;</returns>
+        public async Task<IGetThriftCallsApiResponse?> GetThriftCallsOrDefaultAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                return await GetThriftCallsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Get Thrift method call history Returns the history of Thrift method calls tracked by the proxy. Includes method name, timestamp, message type, and sequence ID.  **Note:** Call history is automatically reset when a scenario is enabled.
+        /// </summary>
+        /// <exception cref="ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IGetThriftCallsApiResponse"/>&gt;</returns>
+        public async Task<IGetThriftCallsApiResponse> GetThriftCallsAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+            UriBuilder uriBuilderLocalVar = new UriBuilder();
+
+            try
+            {
+                using (HttpRequestMessage httpRequestMessageLocalVar = new HttpRequestMessage())
+                {
+                    uriBuilderLocalVar.Host = HttpClient.BaseAddress!.Host;
+                    uriBuilderLocalVar.Port = HttpClient.BaseAddress.Port;
+                    uriBuilderLocalVar.Scheme = HttpClient.BaseAddress.Scheme;
+                    uriBuilderLocalVar.Path = HttpClient.BaseAddress.AbsolutePath == "/"
+                        ? "/thrift/calls"
+                        : string.Concat(HttpClient.BaseAddress.AbsolutePath, "/thrift/calls");
+
+                    httpRequestMessageLocalVar.RequestUri = uriBuilderLocalVar.Uri;
+
+                    string[] acceptLocalVars = new string[] {
+                        "application/json"
+                    };
+
+                    string? acceptLocalVar = ClientUtils.SelectHeaderAccept(acceptLocalVars);
+
+                    if (acceptLocalVar != null)
+                        httpRequestMessageLocalVar.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(acceptLocalVar));
+
+                    httpRequestMessageLocalVar.Method = HttpMethod.Get;
+
+                    DateTime requestedAtLocalVar = DateTime.UtcNow;
+
+                    using (HttpResponseMessage httpResponseMessageLocalVar = await HttpClient.SendAsync(httpRequestMessageLocalVar, cancellationToken).ConfigureAwait(false))
+                    {
+                        ILogger<GetThriftCallsApiResponse> apiResponseLoggerLocalVar = LoggerFactory.CreateLogger<GetThriftCallsApiResponse>();
+                        GetThriftCallsApiResponse apiResponseLocalVar;
+
+                        switch ((int)httpResponseMessageLocalVar.StatusCode) {
+                            default: {
+                                string responseContentLocalVar = await httpResponseMessageLocalVar.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                                apiResponseLocalVar = new(apiResponseLoggerLocalVar, httpRequestMessageLocalVar, httpResponseMessageLocalVar, responseContentLocalVar, "/thrift/calls", requestedAtLocalVar, _jsonSerializerOptions);
+
+                                break;
+                            }
+                        }
+
+                        AfterGetThriftCallsDefaultImplementation(apiResponseLocalVar);
+
+                        Events.ExecuteOnGetThriftCalls(apiResponseLocalVar);
+
+                        return apiResponseLocalVar;
+                    }
+                }
+            }
+            catch(Exception e)
+            {
+                OnErrorGetThriftCallsDefaultImplementation(e, "/thrift/calls", uriBuilderLocalVar.Path);
+                Events.ExecuteOnErrorGetThriftCalls(e);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// The <see cref="GetThriftCallsApiResponse"/>
+        /// </summary>
+        public partial class GetThriftCallsApiResponse : ProxyControlApi.Client.ApiResponse, IGetThriftCallsApiResponse
+        {
+            /// <summary>
+            /// The logger
+            /// </summary>
+            public ILogger<GetThriftCallsApiResponse> Logger { get; }
+
+            /// <summary>
+            /// The <see cref="GetThriftCallsApiResponse"/>
+            /// </summary>
+            /// <param name="logger"></param>
+            /// <param name="httpRequestMessage"></param>
+            /// <param name="httpResponseMessage"></param>
+            /// <param name="rawContent"></param>
+            /// <param name="path"></param>
+            /// <param name="requestedAt"></param>
+            /// <param name="jsonSerializerOptions"></param>
+            public GetThriftCallsApiResponse(ILogger<GetThriftCallsApiResponse> logger, System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage, string rawContent, string path, DateTime requestedAt, System.Text.Json.JsonSerializerOptions jsonSerializerOptions) : base(httpRequestMessage, httpResponseMessage, rawContent, path, requestedAt, jsonSerializerOptions)
+            {
+                Logger = logger;
+                OnCreated(httpRequestMessage, httpResponseMessage);
+            }
+
+            /// <summary>
+            /// The <see cref="GetThriftCallsApiResponse"/>
+            /// </summary>
+            /// <param name="logger"></param>
+            /// <param name="httpRequestMessage"></param>
+            /// <param name="httpResponseMessage"></param>
+            /// <param name="contentStream"></param>
+            /// <param name="path"></param>
+            /// <param name="requestedAt"></param>
+            /// <param name="jsonSerializerOptions"></param>
+            public GetThriftCallsApiResponse(ILogger<GetThriftCallsApiResponse> logger, System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage, System.IO.Stream contentStream, string path, DateTime requestedAt, System.Text.Json.JsonSerializerOptions jsonSerializerOptions) : base(httpRequestMessage, httpResponseMessage, contentStream, path, requestedAt, jsonSerializerOptions)
+            {
+                Logger = logger;
+                OnCreated(httpRequestMessage, httpResponseMessage);
+            }
+
+            partial void OnCreated(global::System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage);
+
+            /// <summary>
+            /// Returns true if the response is 200 Ok
+            /// </summary>
+            /// <returns></returns>
+            public bool IsOk => 200 == (int)StatusCode;
+
+            /// <summary>
+            /// Deserializes the response if the response is 200 Ok
+            /// </summary>
+            /// <returns></returns>
+            public ProxyControlApi.Model.ThriftCallHistory? Ok()
+            {
+                // This logic may be modified with the AsModel.mustache template
+                return IsOk
+                    ? System.Text.Json.JsonSerializer.Deserialize<ProxyControlApi.Model.ThriftCallHistory>(RawContent, _jsonSerializerOptions)
+                    : null;
+            }
+
+            /// <summary>
+            /// Returns true if the response is 200 Ok and the deserialized response is not null
+            /// </summary>
+            /// <param name="result"></param>
+            /// <returns></returns>
+            public bool TryOk([NotNullWhen(true)]out ProxyControlApi.Model.ThriftCallHistory? result)
+            {
+                result = null;
+
+                try
+                {
+                    result = Ok();
+                } catch (Exception e)
+                {
+                    OnDeserializationErrorDefaultImplementation(e, (HttpStatusCode)200);
+                }
+
+                return result != null;
+            }
+
+            private void OnDeserializationErrorDefaultImplementation(Exception exception, HttpStatusCode httpStatusCode)
+            {
+                bool suppressDefaultLog = false;
+                OnDeserializationError(ref suppressDefaultLog, exception, httpStatusCode);
+                if (!suppressDefaultLog)
+                    Logger.LogError(exception, "An error occurred while deserializing the {code} response.", httpStatusCode);
+            }
+
+            partial void OnDeserializationError(ref bool suppressDefaultLog, Exception exception, HttpStatusCode httpStatusCode);
+        }
+
+        /// <summary>
+        /// Processes the server response
+        /// </summary>
+        /// <param name="apiResponseLocalVar"></param>
         private void AfterListScenariosDefaultImplementation(IListScenariosApiResponse apiResponseLocalVar)
         {
             bool suppressDefaultLog = false;
@@ -1021,6 +1406,516 @@ namespace ProxyControlApi.Api
                 } catch (Exception e)
                 {
                     OnDeserializationErrorDefaultImplementation(e, (HttpStatusCode)200);
+                }
+
+                return result != null;
+            }
+
+            private void OnDeserializationErrorDefaultImplementation(Exception exception, HttpStatusCode httpStatusCode)
+            {
+                bool suppressDefaultLog = false;
+                OnDeserializationError(ref suppressDefaultLog, exception, httpStatusCode);
+                if (!suppressDefaultLog)
+                    Logger.LogError(exception, "An error occurred while deserializing the {code} response.", httpStatusCode);
+            }
+
+            partial void OnDeserializationError(ref bool suppressDefaultLog, Exception exception, HttpStatusCode httpStatusCode);
+        }
+
+        /// <summary>
+        /// Processes the server response
+        /// </summary>
+        /// <param name="apiResponseLocalVar"></param>
+        private void AfterResetThriftCallsDefaultImplementation(IResetThriftCallsApiResponse apiResponseLocalVar)
+        {
+            bool suppressDefaultLog = false;
+            AfterResetThriftCalls(ref suppressDefaultLog, apiResponseLocalVar);
+            if (!suppressDefaultLog)
+                Logger.LogInformation("{0,-9} | {1} | {3}", (apiResponseLocalVar.DownloadedAt - apiResponseLocalVar.RequestedAt).TotalSeconds, apiResponseLocalVar.StatusCode, apiResponseLocalVar.Path);
+        }
+
+        /// <summary>
+        /// Processes the server response
+        /// </summary>
+        /// <param name="suppressDefaultLog"></param>
+        /// <param name="apiResponseLocalVar"></param>
+        partial void AfterResetThriftCalls(ref bool suppressDefaultLog, IResetThriftCallsApiResponse apiResponseLocalVar);
+
+        /// <summary>
+        /// Logs exceptions that occur while retrieving the server response
+        /// </summary>
+        /// <param name="exceptionLocalVar"></param>
+        /// <param name="pathFormatLocalVar"></param>
+        /// <param name="pathLocalVar"></param>
+        private void OnErrorResetThriftCallsDefaultImplementation(Exception exceptionLocalVar, string pathFormatLocalVar, string pathLocalVar)
+        {
+            bool suppressDefaultLogLocalVar = false;
+            OnErrorResetThriftCalls(ref suppressDefaultLogLocalVar, exceptionLocalVar, pathFormatLocalVar, pathLocalVar);
+            if (!suppressDefaultLogLocalVar)
+                Logger.LogError(exceptionLocalVar, "An error occurred while sending the request to the server.");
+        }
+
+        /// <summary>
+        /// A partial method that gives developers a way to provide customized exception handling
+        /// </summary>
+        /// <param name="suppressDefaultLogLocalVar"></param>
+        /// <param name="exceptionLocalVar"></param>
+        /// <param name="pathFormatLocalVar"></param>
+        /// <param name="pathLocalVar"></param>
+        partial void OnErrorResetThriftCalls(ref bool suppressDefaultLogLocalVar, Exception exceptionLocalVar, string pathFormatLocalVar, string pathLocalVar);
+
+        /// <summary>
+        /// Reset Thrift call history Manually resets the Thrift call history to empty.  **Note:** Call history is automatically reset when a scenario is enabled, so manual reset is typically not needed.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IResetThriftCallsApiResponse"/>&gt;</returns>
+        public async Task<IResetThriftCallsApiResponse?> ResetThriftCallsOrDefaultAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                return await ResetThriftCallsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Reset Thrift call history Manually resets the Thrift call history to empty.  **Note:** Call history is automatically reset when a scenario is enabled, so manual reset is typically not needed.
+        /// </summary>
+        /// <exception cref="ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IResetThriftCallsApiResponse"/>&gt;</returns>
+        public async Task<IResetThriftCallsApiResponse> ResetThriftCallsAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+            UriBuilder uriBuilderLocalVar = new UriBuilder();
+
+            try
+            {
+                using (HttpRequestMessage httpRequestMessageLocalVar = new HttpRequestMessage())
+                {
+                    uriBuilderLocalVar.Host = HttpClient.BaseAddress!.Host;
+                    uriBuilderLocalVar.Port = HttpClient.BaseAddress.Port;
+                    uriBuilderLocalVar.Scheme = HttpClient.BaseAddress.Scheme;
+                    uriBuilderLocalVar.Path = HttpClient.BaseAddress.AbsolutePath == "/"
+                        ? "/thrift/calls/reset"
+                        : string.Concat(HttpClient.BaseAddress.AbsolutePath, "/thrift/calls/reset");
+
+                    httpRequestMessageLocalVar.RequestUri = uriBuilderLocalVar.Uri;
+
+                    string[] acceptLocalVars = new string[] {
+                        "application/json"
+                    };
+
+                    string? acceptLocalVar = ClientUtils.SelectHeaderAccept(acceptLocalVars);
+
+                    if (acceptLocalVar != null)
+                        httpRequestMessageLocalVar.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(acceptLocalVar));
+
+                    httpRequestMessageLocalVar.Method = HttpMethod.Post;
+
+                    DateTime requestedAtLocalVar = DateTime.UtcNow;
+
+                    using (HttpResponseMessage httpResponseMessageLocalVar = await HttpClient.SendAsync(httpRequestMessageLocalVar, cancellationToken).ConfigureAwait(false))
+                    {
+                        ILogger<ResetThriftCallsApiResponse> apiResponseLoggerLocalVar = LoggerFactory.CreateLogger<ResetThriftCallsApiResponse>();
+                        ResetThriftCallsApiResponse apiResponseLocalVar;
+
+                        switch ((int)httpResponseMessageLocalVar.StatusCode) {
+                            default: {
+                                string responseContentLocalVar = await httpResponseMessageLocalVar.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                                apiResponseLocalVar = new(apiResponseLoggerLocalVar, httpRequestMessageLocalVar, httpResponseMessageLocalVar, responseContentLocalVar, "/thrift/calls/reset", requestedAtLocalVar, _jsonSerializerOptions);
+
+                                break;
+                            }
+                        }
+
+                        AfterResetThriftCallsDefaultImplementation(apiResponseLocalVar);
+
+                        Events.ExecuteOnResetThriftCalls(apiResponseLocalVar);
+
+                        return apiResponseLocalVar;
+                    }
+                }
+            }
+            catch(Exception e)
+            {
+                OnErrorResetThriftCallsDefaultImplementation(e, "/thrift/calls/reset", uriBuilderLocalVar.Path);
+                Events.ExecuteOnErrorResetThriftCalls(e);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// The <see cref="ResetThriftCallsApiResponse"/>
+        /// </summary>
+        public partial class ResetThriftCallsApiResponse : ProxyControlApi.Client.ApiResponse, IResetThriftCallsApiResponse
+        {
+            /// <summary>
+            /// The logger
+            /// </summary>
+            public ILogger<ResetThriftCallsApiResponse> Logger { get; }
+
+            /// <summary>
+            /// The <see cref="ResetThriftCallsApiResponse"/>
+            /// </summary>
+            /// <param name="logger"></param>
+            /// <param name="httpRequestMessage"></param>
+            /// <param name="httpResponseMessage"></param>
+            /// <param name="rawContent"></param>
+            /// <param name="path"></param>
+            /// <param name="requestedAt"></param>
+            /// <param name="jsonSerializerOptions"></param>
+            public ResetThriftCallsApiResponse(ILogger<ResetThriftCallsApiResponse> logger, System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage, string rawContent, string path, DateTime requestedAt, System.Text.Json.JsonSerializerOptions jsonSerializerOptions) : base(httpRequestMessage, httpResponseMessage, rawContent, path, requestedAt, jsonSerializerOptions)
+            {
+                Logger = logger;
+                OnCreated(httpRequestMessage, httpResponseMessage);
+            }
+
+            /// <summary>
+            /// The <see cref="ResetThriftCallsApiResponse"/>
+            /// </summary>
+            /// <param name="logger"></param>
+            /// <param name="httpRequestMessage"></param>
+            /// <param name="httpResponseMessage"></param>
+            /// <param name="contentStream"></param>
+            /// <param name="path"></param>
+            /// <param name="requestedAt"></param>
+            /// <param name="jsonSerializerOptions"></param>
+            public ResetThriftCallsApiResponse(ILogger<ResetThriftCallsApiResponse> logger, System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage, System.IO.Stream contentStream, string path, DateTime requestedAt, System.Text.Json.JsonSerializerOptions jsonSerializerOptions) : base(httpRequestMessage, httpResponseMessage, contentStream, path, requestedAt, jsonSerializerOptions)
+            {
+                Logger = logger;
+                OnCreated(httpRequestMessage, httpResponseMessage);
+            }
+
+            partial void OnCreated(global::System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage);
+
+            /// <summary>
+            /// Returns true if the response is 200 Ok
+            /// </summary>
+            /// <returns></returns>
+            public bool IsOk => 200 == (int)StatusCode;
+
+            /// <summary>
+            /// Deserializes the response if the response is 200 Ok
+            /// </summary>
+            /// <returns></returns>
+            public ProxyControlApi.Model.ResetThriftCalls200Response? Ok()
+            {
+                // This logic may be modified with the AsModel.mustache template
+                return IsOk
+                    ? System.Text.Json.JsonSerializer.Deserialize<ProxyControlApi.Model.ResetThriftCalls200Response>(RawContent, _jsonSerializerOptions)
+                    : null;
+            }
+
+            /// <summary>
+            /// Returns true if the response is 200 Ok and the deserialized response is not null
+            /// </summary>
+            /// <param name="result"></param>
+            /// <returns></returns>
+            public bool TryOk([NotNullWhen(true)]out ProxyControlApi.Model.ResetThriftCalls200Response? result)
+            {
+                result = null;
+
+                try
+                {
+                    result = Ok();
+                } catch (Exception e)
+                {
+                    OnDeserializationErrorDefaultImplementation(e, (HttpStatusCode)200);
+                }
+
+                return result != null;
+            }
+
+            private void OnDeserializationErrorDefaultImplementation(Exception exception, HttpStatusCode httpStatusCode)
+            {
+                bool suppressDefaultLog = false;
+                OnDeserializationError(ref suppressDefaultLog, exception, httpStatusCode);
+                if (!suppressDefaultLog)
+                    Logger.LogError(exception, "An error occurred while deserializing the {code} response.", httpStatusCode);
+            }
+
+            partial void OnDeserializationError(ref bool suppressDefaultLog, Exception exception, HttpStatusCode httpStatusCode);
+        }
+
+        partial void FormatVerifyThriftCalls(ThriftVerificationRequest thriftVerificationRequest);
+
+        /// <summary>
+        /// Validates the request parameters
+        /// </summary>
+        /// <param name="thriftVerificationRequest"></param>
+        /// <returns></returns>
+        private void ValidateVerifyThriftCalls(ThriftVerificationRequest thriftVerificationRequest)
+        {
+            if (thriftVerificationRequest == null)
+                throw new ArgumentNullException(nameof(thriftVerificationRequest));
+        }
+
+        /// <summary>
+        /// Processes the server response
+        /// </summary>
+        /// <param name="apiResponseLocalVar"></param>
+        /// <param name="thriftVerificationRequest"></param>
+        private void AfterVerifyThriftCallsDefaultImplementation(IVerifyThriftCallsApiResponse apiResponseLocalVar, ThriftVerificationRequest thriftVerificationRequest)
+        {
+            bool suppressDefaultLog = false;
+            AfterVerifyThriftCalls(ref suppressDefaultLog, apiResponseLocalVar, thriftVerificationRequest);
+            if (!suppressDefaultLog)
+                Logger.LogInformation("{0,-9} | {1} | {3}", (apiResponseLocalVar.DownloadedAt - apiResponseLocalVar.RequestedAt).TotalSeconds, apiResponseLocalVar.StatusCode, apiResponseLocalVar.Path);
+        }
+
+        /// <summary>
+        /// Processes the server response
+        /// </summary>
+        /// <param name="suppressDefaultLog"></param>
+        /// <param name="apiResponseLocalVar"></param>
+        /// <param name="thriftVerificationRequest"></param>
+        partial void AfterVerifyThriftCalls(ref bool suppressDefaultLog, IVerifyThriftCallsApiResponse apiResponseLocalVar, ThriftVerificationRequest thriftVerificationRequest);
+
+        /// <summary>
+        /// Logs exceptions that occur while retrieving the server response
+        /// </summary>
+        /// <param name="exceptionLocalVar"></param>
+        /// <param name="pathFormatLocalVar"></param>
+        /// <param name="pathLocalVar"></param>
+        /// <param name="thriftVerificationRequest"></param>
+        private void OnErrorVerifyThriftCallsDefaultImplementation(Exception exceptionLocalVar, string pathFormatLocalVar, string pathLocalVar, ThriftVerificationRequest thriftVerificationRequest)
+        {
+            bool suppressDefaultLogLocalVar = false;
+            OnErrorVerifyThriftCalls(ref suppressDefaultLogLocalVar, exceptionLocalVar, pathFormatLocalVar, pathLocalVar, thriftVerificationRequest);
+            if (!suppressDefaultLogLocalVar)
+                Logger.LogError(exceptionLocalVar, "An error occurred while sending the request to the server.");
+        }
+
+        /// <summary>
+        /// A partial method that gives developers a way to provide customized exception handling
+        /// </summary>
+        /// <param name="suppressDefaultLogLocalVar"></param>
+        /// <param name="exceptionLocalVar"></param>
+        /// <param name="pathFormatLocalVar"></param>
+        /// <param name="pathLocalVar"></param>
+        /// <param name="thriftVerificationRequest"></param>
+        partial void OnErrorVerifyThriftCalls(ref bool suppressDefaultLogLocalVar, Exception exceptionLocalVar, string pathFormatLocalVar, string pathLocalVar, ThriftVerificationRequest thriftVerificationRequest);
+
+        /// <summary>
+        /// Verify Thrift call sequence Verifies that Thrift method calls match expected patterns.  Supports four verification types: - **exact_sequence**: Exact match of method sequence - **contains_sequence**: Methods appear in order (not necessarily consecutive) - **method_count**: Verify specific method called N times - **method_exists**: Verify method was called at least once
+        /// </summary>
+        /// <param name="thriftVerificationRequest"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IVerifyThriftCallsApiResponse"/>&gt;</returns>
+        public async Task<IVerifyThriftCallsApiResponse?> VerifyThriftCallsOrDefaultAsync(ThriftVerificationRequest thriftVerificationRequest, System.Threading.CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                return await VerifyThriftCallsAsync(thriftVerificationRequest, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Verify Thrift call sequence Verifies that Thrift method calls match expected patterns.  Supports four verification types: - **exact_sequence**: Exact match of method sequence - **contains_sequence**: Methods appear in order (not necessarily consecutive) - **method_count**: Verify specific method called N times - **method_exists**: Verify method was called at least once
+        /// </summary>
+        /// <exception cref="ApiException">Thrown when fails to make API call</exception>
+        /// <param name="thriftVerificationRequest"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns><see cref="Task"/>&lt;<see cref="IVerifyThriftCallsApiResponse"/>&gt;</returns>
+        public async Task<IVerifyThriftCallsApiResponse> VerifyThriftCallsAsync(ThriftVerificationRequest thriftVerificationRequest, System.Threading.CancellationToken cancellationToken = default)
+        {
+            UriBuilder uriBuilderLocalVar = new UriBuilder();
+
+            try
+            {
+                ValidateVerifyThriftCalls(thriftVerificationRequest);
+
+                FormatVerifyThriftCalls(thriftVerificationRequest);
+
+                using (HttpRequestMessage httpRequestMessageLocalVar = new HttpRequestMessage())
+                {
+                    uriBuilderLocalVar.Host = HttpClient.BaseAddress!.Host;
+                    uriBuilderLocalVar.Port = HttpClient.BaseAddress.Port;
+                    uriBuilderLocalVar.Scheme = HttpClient.BaseAddress.Scheme;
+                    uriBuilderLocalVar.Path = HttpClient.BaseAddress.AbsolutePath == "/"
+                        ? "/thrift/calls/verify"
+                        : string.Concat(HttpClient.BaseAddress.AbsolutePath, "/thrift/calls/verify");
+
+                    httpRequestMessageLocalVar.Content = (thriftVerificationRequest as object) is System.IO.Stream stream
+                        ? httpRequestMessageLocalVar.Content = new StreamContent(stream)
+                        : httpRequestMessageLocalVar.Content = new StringContent(JsonSerializer.Serialize(thriftVerificationRequest, _jsonSerializerOptions));
+
+                    httpRequestMessageLocalVar.RequestUri = uriBuilderLocalVar.Uri;
+
+                    string[] contentTypes = new string[] {
+                        "application/json"
+                    };
+
+                    string? contentTypeLocalVar = ClientUtils.SelectHeaderContentType(contentTypes);
+
+                    if (contentTypeLocalVar != null && httpRequestMessageLocalVar.Content != null)
+                        httpRequestMessageLocalVar.Content.Headers.ContentType = new MediaTypeHeaderValue(contentTypeLocalVar);
+
+                    string[] acceptLocalVars = new string[] {
+                        "application/json"
+                    };
+
+                    string? acceptLocalVar = ClientUtils.SelectHeaderAccept(acceptLocalVars);
+
+                    if (acceptLocalVar != null)
+                        httpRequestMessageLocalVar.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(acceptLocalVar));
+
+                    httpRequestMessageLocalVar.Method = HttpMethod.Post;
+
+                    DateTime requestedAtLocalVar = DateTime.UtcNow;
+
+                    using (HttpResponseMessage httpResponseMessageLocalVar = await HttpClient.SendAsync(httpRequestMessageLocalVar, cancellationToken).ConfigureAwait(false))
+                    {
+                        ILogger<VerifyThriftCallsApiResponse> apiResponseLoggerLocalVar = LoggerFactory.CreateLogger<VerifyThriftCallsApiResponse>();
+                        VerifyThriftCallsApiResponse apiResponseLocalVar;
+
+                        switch ((int)httpResponseMessageLocalVar.StatusCode) {
+                            default: {
+                                string responseContentLocalVar = await httpResponseMessageLocalVar.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                                apiResponseLocalVar = new(apiResponseLoggerLocalVar, httpRequestMessageLocalVar, httpResponseMessageLocalVar, responseContentLocalVar, "/thrift/calls/verify", requestedAtLocalVar, _jsonSerializerOptions);
+
+                                break;
+                            }
+                        }
+
+                        AfterVerifyThriftCallsDefaultImplementation(apiResponseLocalVar, thriftVerificationRequest);
+
+                        Events.ExecuteOnVerifyThriftCalls(apiResponseLocalVar);
+
+                        return apiResponseLocalVar;
+                    }
+                }
+            }
+            catch(Exception e)
+            {
+                OnErrorVerifyThriftCallsDefaultImplementation(e, "/thrift/calls/verify", uriBuilderLocalVar.Path, thriftVerificationRequest);
+                Events.ExecuteOnErrorVerifyThriftCalls(e);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// The <see cref="VerifyThriftCallsApiResponse"/>
+        /// </summary>
+        public partial class VerifyThriftCallsApiResponse : ProxyControlApi.Client.ApiResponse, IVerifyThriftCallsApiResponse
+        {
+            /// <summary>
+            /// The logger
+            /// </summary>
+            public ILogger<VerifyThriftCallsApiResponse> Logger { get; }
+
+            /// <summary>
+            /// The <see cref="VerifyThriftCallsApiResponse"/>
+            /// </summary>
+            /// <param name="logger"></param>
+            /// <param name="httpRequestMessage"></param>
+            /// <param name="httpResponseMessage"></param>
+            /// <param name="rawContent"></param>
+            /// <param name="path"></param>
+            /// <param name="requestedAt"></param>
+            /// <param name="jsonSerializerOptions"></param>
+            public VerifyThriftCallsApiResponse(ILogger<VerifyThriftCallsApiResponse> logger, System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage, string rawContent, string path, DateTime requestedAt, System.Text.Json.JsonSerializerOptions jsonSerializerOptions) : base(httpRequestMessage, httpResponseMessage, rawContent, path, requestedAt, jsonSerializerOptions)
+            {
+                Logger = logger;
+                OnCreated(httpRequestMessage, httpResponseMessage);
+            }
+
+            /// <summary>
+            /// The <see cref="VerifyThriftCallsApiResponse"/>
+            /// </summary>
+            /// <param name="logger"></param>
+            /// <param name="httpRequestMessage"></param>
+            /// <param name="httpResponseMessage"></param>
+            /// <param name="contentStream"></param>
+            /// <param name="path"></param>
+            /// <param name="requestedAt"></param>
+            /// <param name="jsonSerializerOptions"></param>
+            public VerifyThriftCallsApiResponse(ILogger<VerifyThriftCallsApiResponse> logger, System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage, System.IO.Stream contentStream, string path, DateTime requestedAt, System.Text.Json.JsonSerializerOptions jsonSerializerOptions) : base(httpRequestMessage, httpResponseMessage, contentStream, path, requestedAt, jsonSerializerOptions)
+            {
+                Logger = logger;
+                OnCreated(httpRequestMessage, httpResponseMessage);
+            }
+
+            partial void OnCreated(global::System.Net.Http.HttpRequestMessage httpRequestMessage, System.Net.Http.HttpResponseMessage httpResponseMessage);
+
+            /// <summary>
+            /// Returns true if the response is 200 Ok
+            /// </summary>
+            /// <returns></returns>
+            public bool IsOk => 200 == (int)StatusCode;
+
+            /// <summary>
+            /// Deserializes the response if the response is 200 Ok
+            /// </summary>
+            /// <returns></returns>
+            public ProxyControlApi.Model.ThriftVerificationResult? Ok()
+            {
+                // This logic may be modified with the AsModel.mustache template
+                return IsOk
+                    ? System.Text.Json.JsonSerializer.Deserialize<ProxyControlApi.Model.ThriftVerificationResult>(RawContent, _jsonSerializerOptions)
+                    : null;
+            }
+
+            /// <summary>
+            /// Returns true if the response is 200 Ok and the deserialized response is not null
+            /// </summary>
+            /// <param name="result"></param>
+            /// <returns></returns>
+            public bool TryOk([NotNullWhen(true)]out ProxyControlApi.Model.ThriftVerificationResult? result)
+            {
+                result = null;
+
+                try
+                {
+                    result = Ok();
+                } catch (Exception e)
+                {
+                    OnDeserializationErrorDefaultImplementation(e, (HttpStatusCode)200);
+                }
+
+                return result != null;
+            }
+
+            /// <summary>
+            /// Returns true if the response is 400 BadRequest
+            /// </summary>
+            /// <returns></returns>
+            public bool IsBadRequest => 400 == (int)StatusCode;
+
+            /// <summary>
+            /// Deserializes the response if the response is 400 BadRequest
+            /// </summary>
+            /// <returns></returns>
+            public ProxyControlApi.Model.VerifyThriftCalls400Response? BadRequest()
+            {
+                // This logic may be modified with the AsModel.mustache template
+                return IsBadRequest
+                    ? System.Text.Json.JsonSerializer.Deserialize<ProxyControlApi.Model.VerifyThriftCalls400Response>(RawContent, _jsonSerializerOptions)
+                    : null;
+            }
+
+            /// <summary>
+            /// Returns true if the response is 400 BadRequest and the deserialized response is not null
+            /// </summary>
+            /// <param name="result"></param>
+            /// <returns></returns>
+            public bool TryBadRequest([NotNullWhen(true)]out ProxyControlApi.Model.VerifyThriftCalls400Response? result)
+            {
+                result = null;
+
+                try
+                {
+                    result = BadRequest();
+                } catch (Exception e)
+                {
+                    OnDeserializationErrorDefaultImplementation(e, (HttpStatusCode)400);
                 }
 
                 return result != null;

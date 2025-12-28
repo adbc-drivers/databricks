@@ -43,9 +43,15 @@ namespace ProxyControlApi.Client
             _jsonOptions.Converters.Add(new DateTimeNullableJsonConverter());
             _jsonOptions.Converters.Add(new DateOnlyJsonConverter());
             _jsonOptions.Converters.Add(new DateOnlyNullableJsonConverter());
+            _jsonOptions.Converters.Add(new ResetThriftCalls200ResponseJsonConverter());
             _jsonOptions.Converters.Add(new ScenarioJsonConverter());
             _jsonOptions.Converters.Add(new ScenarioListJsonConverter());
             _jsonOptions.Converters.Add(new ScenarioStatusJsonConverter());
+            _jsonOptions.Converters.Add(new ThriftCallHistoryJsonConverter());
+            _jsonOptions.Converters.Add(new ThriftCallHistoryCallsInnerJsonConverter());
+            _jsonOptions.Converters.Add(new ThriftVerificationRequestJsonConverter());
+            _jsonOptions.Converters.Add(new ThriftVerificationResultJsonConverter());
+            _jsonOptions.Converters.Add(new VerifyThriftCalls400ResponseJsonConverter());
             JsonSerializerOptionsProvider jsonSerializerOptionsProvider = new(_jsonOptions);
             _services.AddSingleton(jsonSerializerOptionsProvider);
             _services.AddSingleton<IApiFactory, ApiFactory>();
