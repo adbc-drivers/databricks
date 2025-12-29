@@ -20,12 +20,14 @@ using Apache.Arrow.Types;
 namespace AdbcDrivers.Databricks
 {
     /// <summary>
-    /// Shared helper class for standard column metadata schemas.
+    /// Shared helper class for standard metadata schemas.
     /// Used by both Thrift and Statement Execution API protocols to ensure consistent metadata structure.
-    /// Provides standard 24-column format for GetColumns metadata queries.
+    /// Provides schemas for GetCatalogs, GetSchemas, GetTables, GetColumns, GetPrimaryKeys, GetCrossReference.
     /// </summary>
     internal static class ColumnMetadataSchemas
     {
+        #region GetColumns Schema (24 columns)
+
         /// <summary>
         /// Creates the standard GetColumns schema (24 columns).
         /// This schema follows the standard flat table format for column metadata.
@@ -98,5 +100,213 @@ namespace AdbcDrivers.Databricks
                 new StringArray.Builder().Build()  // BASE_TYPE_NAME
             ];
         }
+
+        #endregion
+
+        #region GetCatalogs Schema (1 column)
+
+        /// <summary>
+        /// Creates the standard GetCatalogs schema (1 column: TABLE_CAT).
+        /// Follows JDBC DatabaseMetaData.getCatalogs() convention.
+        /// </summary>
+        /// <returns>Schema with TABLE_CAT column</returns>
+        public static Schema CreateCatalogsSchema()
+        {
+            var fields = new[]
+            {
+                new Field("TABLE_CAT", StringType.Default, true)
+            };
+            return new Schema(fields, null);
+        }
+
+        /// <summary>
+        /// Creates empty Arrow arrays for GetCatalogs schema.
+        /// </summary>
+        /// <returns>Array of empty Arrow arrays (1 column)</returns>
+        public static IArrowArray[] CreateCatalogsEmptyArray()
+        {
+            return
+            [
+                new StringArray.Builder().Build() // TABLE_CAT
+            ];
+        }
+
+        #endregion
+
+        #region GetSchemas Schema (2 columns)
+
+        /// <summary>
+        /// Creates the standard GetSchemas schema (2 columns: TABLE_SCHEM, TABLE_CATALOG).
+        /// Follows JDBC DatabaseMetaData.getSchemas() convention.
+        /// </summary>
+        /// <returns>Schema with TABLE_SCHEM and TABLE_CATALOG columns</returns>
+        public static Schema CreateSchemasSchema()
+        {
+            var fields = new[]
+            {
+                new Field("TABLE_SCHEM", StringType.Default, true),
+                new Field("TABLE_CATALOG", StringType.Default, true)
+            };
+            return new Schema(fields, null);
+        }
+
+        /// <summary>
+        /// Creates empty Arrow arrays for GetSchemas schema.
+        /// </summary>
+        /// <returns>Array of empty Arrow arrays (2 columns)</returns>
+        public static IArrowArray[] CreateSchemasEmptyArray()
+        {
+            return
+            [
+                new StringArray.Builder().Build(), // TABLE_SCHEM
+                new StringArray.Builder().Build()  // TABLE_CATALOG
+            ];
+        }
+
+        #endregion
+
+        #region GetTables Schema (10 columns)
+
+        /// <summary>
+        /// Creates the standard GetTables schema (10 columns).
+        /// Follows JDBC DatabaseMetaData.getTables() convention.
+        /// </summary>
+        /// <returns>Schema with 10 table metadata columns</returns>
+        public static Schema CreateTablesSchema()
+        {
+            var fields = new[]
+            {
+                new Field("TABLE_CAT", StringType.Default, true),
+                new Field("TABLE_SCHEM", StringType.Default, true),
+                new Field("TABLE_NAME", StringType.Default, true),
+                new Field("TABLE_TYPE", StringType.Default, true),
+                new Field("REMARKS", StringType.Default, true),
+                new Field("TYPE_CAT", StringType.Default, true),
+                new Field("TYPE_SCHEM", StringType.Default, true),
+                new Field("TYPE_NAME", StringType.Default, true),
+                new Field("SELF_REFERENCING_COL_NAME", StringType.Default, true),
+                new Field("REF_GENERATION", StringType.Default, true)
+            };
+            return new Schema(fields, null);
+        }
+
+        /// <summary>
+        /// Creates empty Arrow arrays for GetTables schema.
+        /// </summary>
+        /// <returns>Array of empty Arrow arrays (10 columns)</returns>
+        public static IArrowArray[] CreateTablesEmptyArray()
+        {
+            return
+            [
+                new StringArray.Builder().Build(), // TABLE_CAT
+                new StringArray.Builder().Build(), // TABLE_SCHEM
+                new StringArray.Builder().Build(), // TABLE_NAME
+                new StringArray.Builder().Build(), // TABLE_TYPE
+                new StringArray.Builder().Build(), // REMARKS
+                new StringArray.Builder().Build(), // TYPE_CAT
+                new StringArray.Builder().Build(), // TYPE_SCHEM
+                new StringArray.Builder().Build(), // TYPE_NAME
+                new StringArray.Builder().Build(), // SELF_REFERENCING_COL_NAME
+                new StringArray.Builder().Build()  // REF_GENERATION
+            ];
+        }
+
+        #endregion
+
+        #region GetPrimaryKeys Schema (6 columns)
+
+        /// <summary>
+        /// Creates the standard GetPrimaryKeys schema (6 columns).
+        /// Follows JDBC DatabaseMetaData.getPrimaryKeys() convention.
+        /// </summary>
+        /// <returns>Schema with 6 primary key metadata columns</returns>
+        public static Schema CreatePrimaryKeySchema()
+        {
+            var fields = new[]
+            {
+                new Field("TABLE_CAT", StringType.Default, true),
+                new Field("TABLE_SCHEM", StringType.Default, true),
+                new Field("TABLE_NAME", StringType.Default, true),
+                new Field("COLUMN_NAME", StringType.Default, true),
+                new Field("KEQ_SEQ", Int32Type.Default, true),
+                new Field("PK_NAME", StringType.Default, true)
+            };
+            return new Schema(fields, null);
+        }
+
+        /// <summary>
+        /// Creates empty Arrow arrays for GetPrimaryKeys schema.
+        /// </summary>
+        /// <returns>Array of empty Arrow arrays (6 columns)</returns>
+        public static IArrowArray[] CreatePrimaryKeyEmptyArray()
+        {
+            return
+            [
+                new StringArray.Builder().Build(), // TABLE_CAT
+                new StringArray.Builder().Build(), // TABLE_SCHEM
+                new StringArray.Builder().Build(), // TABLE_NAME
+                new StringArray.Builder().Build(), // COLUMN_NAME
+                new Int32Array.Builder().Build(),  // KEQ_SEQ
+                new StringArray.Builder().Build()  // PK_NAME
+            ];
+        }
+
+        #endregion
+
+        #region GetCrossReference (Foreign Keys) Schema (14 columns)
+
+        /// <summary>
+        /// Creates the standard GetCrossReference schema (14 columns).
+        /// Follows JDBC DatabaseMetaData.getCrossReference() and getImportedKeys() convention.
+        /// </summary>
+        /// <returns>Schema with 14 foreign key metadata columns</returns>
+        public static Schema CreateForeignKeySchema()
+        {
+            var fields = new[]
+            {
+                new Field("PKTABLE_CAT", StringType.Default, true),
+                new Field("PKTABLE_SCHEM", StringType.Default, true),
+                new Field("PKTABLE_NAME", StringType.Default, true),
+                new Field("PKCOLUMN_NAME", StringType.Default, true),
+                new Field("FKTABLE_CAT", StringType.Default, true),
+                new Field("FKTABLE_SCHEM", StringType.Default, true),
+                new Field("FKTABLE_NAME", StringType.Default, true),
+                new Field("FKCOLUMN_NAME", StringType.Default, true),
+                new Field("KEQ_SEQ", Int32Type.Default, true),
+                new Field("UPDATE_RULE", Int32Type.Default, true),
+                new Field("DELETE_RULE", Int32Type.Default, true),
+                new Field("FK_NAME", StringType.Default, true),
+                new Field("PK_NAME", StringType.Default, true),
+                new Field("DEFERRABILITY", Int32Type.Default, true)
+            };
+            return new Schema(fields, null);
+        }
+
+        /// <summary>
+        /// Creates empty Arrow arrays for GetCrossReference schema.
+        /// </summary>
+        /// <returns>Array of empty Arrow arrays (14 columns)</returns>
+        public static IArrowArray[] CreateForeignKeyEmptyArray()
+        {
+            return
+            [
+                new StringArray.Builder().Build(), // PKTABLE_CAT
+                new StringArray.Builder().Build(), // PKTABLE_SCHEM
+                new StringArray.Builder().Build(), // PKTABLE_NAME
+                new StringArray.Builder().Build(), // PKCOLUMN_NAME
+                new StringArray.Builder().Build(), // FKTABLE_CAT
+                new StringArray.Builder().Build(), // FKTABLE_SCHEM
+                new StringArray.Builder().Build(), // FKTABLE_NAME
+                new StringArray.Builder().Build(), // FKCOLUMN_NAME
+                new Int32Array.Builder().Build(),  // KEQ_SEQ
+                new Int32Array.Builder().Build(),  // UPDATE_RULE
+                new Int32Array.Builder().Build(),  // DELETE_RULE
+                new StringArray.Builder().Build(), // FK_NAME
+                new StringArray.Builder().Build(), // PK_NAME
+                new Int32Array.Builder().Build()   // DEFERRABILITY
+            ];
+        }
+
+        #endregion
     }
 }

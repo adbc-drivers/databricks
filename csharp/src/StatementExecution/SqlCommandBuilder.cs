@@ -201,13 +201,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             var effectiveCatalog = catalogOverride ?? _catalog;
 
+            var sql = new StringBuilder(ShowColumns);
+
             if (string.IsNullOrEmpty(effectiveCatalog))
             {
-                throw new NotSupportedException("SHOW COLUMNS requires a catalog");
+                sql.Append(InAllCatalogs);
             }
-
-            var sql = new StringBuilder(ShowColumns);
-            sql.Append(string.Format(InCatalogFormat, _quoter(effectiveCatalog)));
+            else
+            {
+                sql.Append(string.Format(InCatalogFormat, _quoter(effectiveCatalog)));
+            }
 
             var schemaFilter = _schema ?? _schemaPattern;
             if (!string.IsNullOrEmpty(schemaFilter))

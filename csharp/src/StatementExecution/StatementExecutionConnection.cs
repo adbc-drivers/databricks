@@ -21,6 +21,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.Databricks.Metadata;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
@@ -540,7 +541,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog_pattern", catalogPattern ?? "(all)");
+                activity?.SetTag("catalog_pattern", catalogPattern ?? "null");
 
                 // Use SqlCommandBuilder for efficient SQL generation
                 var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
@@ -558,7 +559,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetCatalogs"),
+                        new("catalog_pattern", catalogPattern ?? "(all)")
+                    ]);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // Return empty list on permission denied or other errors
                     // This allows BI tools to show "Access Denied" instead of crashing
@@ -798,33 +803,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("table", tableName ?? "(all)");
                 activity?.SetTag("column_pattern", columnNamePattern ?? "(all)");
 
-                if (string.IsNullOrEmpty(catalog))
-                {
-                    var catalogs = await GetCatalogsAsync(null).ConfigureAwait(false);
-                    activity?.SetTag("catalog_count", catalogs.Count);
-                    activity?.SetTag("parallel_execution", true);
-
-                    var columnTasks = catalogs.Select(cat => GetColumnsForCatalogAsync(cat, schema, tableName, columnNamePattern));
-                    var columnResults = await Task.WhenAll(columnTasks).ConfigureAwait(false);
-                    var allColumns = columnResults.SelectMany(c => c).ToList();
-
-                    activity?.SetTag("result_count", allColumns.Count);
-                    activity?.SetTag("unique_tables", allColumns.Select(c => $"{c.Catalog}.{c.Schema}.{c.Table}").Distinct().Count());
-                    return allColumns;
-                }
-
-                activity?.SetTag("parallel_execution", false);
+                // Now that SHOW COLUMNS IN ALL CATALOGS is supported, we can call directly
+                // without iterating over catalogs
                 var result = await GetColumnsForCatalogAsync(catalog, schema, tableName, columnNamePattern).ConfigureAwait(false);
                 activity?.SetTag("result_count", result.Count);
+                if (!string.IsNullOrEmpty(catalog))
+                {
+                    activity?.SetTag("unique_tables", result.Select(c => $"{c.Catalog}.{c.Schema}.{c.Table}").Distinct().Count());
+                }
                 return result;
             });
         }
 
-        private async Task<List<ColumnInfo>> GetColumnsForCatalogAsync(string catalog, string? schema, string? tableName, string? columnNamePattern)
+        private async Task<List<ColumnInfo>> GetColumnsForCatalogAsync(string? catalog, string? schema, string? tableName, string? columnNamePattern)
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", catalog);
+                activity?.SetTag("catalog", catalog ?? "(all)");
                 activity?.SetTag("schema", schema ?? "(all)");
                 activity?.SetTag("table", tableName ?? "(all)");
                 activity?.SetTag("column_pattern", columnNamePattern ?? "(all)");
@@ -843,19 +838,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 commandBuilder.WithColumnPattern(columnNamePattern);
 
-                string sql;
-                try
-                {
-                    sql = commandBuilder.BuildShowColumns(catalog);
-                    activity?.SetTag("sql_query", sql);
-                }
-                catch (NotSupportedException ex)
-                {
-                    activity?.SetTag("error", "SQL build failed: " + ex.Message);
-                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
-                    // This should not happen since we're providing a catalog
-                    return new List<ColumnInfo>();
-                }
+                string sql = commandBuilder.BuildShowColumns(catalog);
+                activity?.SetTag("sql_query", sql);
 
                 List<RecordBatch> batches;
                 try
@@ -877,6 +861,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 foreach (var batch in batches)
                 {
+                    // When using "IN ALL CATALOGS", results include catalog column
+                    StringArray? catalogArray = null;
+                    if (string.IsNullOrEmpty(catalog))
+                    {
+                        catalogArray = batch.Column("catalog") as StringArray;
+                    }
+
                     var tableNameArray = batch.Column("tableName") as StringArray;
                     var colNameArray = batch.Column("col_name") as StringArray;
                     var columnTypeArray = batch.Column("columnType") as StringArray;
@@ -912,6 +903,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         var dataType = columnTypeArray.GetString(i);
                         var currentTableName = tableNameArray.GetString(i);
 
+                        // Get catalog from result when using "IN ALL CATALOGS"
+                        string? currentCatalogName;
+                        if (string.IsNullOrEmpty(catalog))
+                        {
+                            // Using "IN ALL CATALOGS" - get catalog from result
+                            if (catalogArray == null || catalogArray.IsNull(i))
+                                continue;
+                            currentCatalogName = catalogArray.GetString(i);
+                        }
+                        else
+                        {
+                            currentCatalogName = catalog;
+                        }
+
                         var currentSchemaName = schemaArray != null && !schemaArray.IsNull(i)
                             ? schemaArray.GetString(i)
                             : schema;
@@ -922,7 +927,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             continue;
                         }
 
-                        var tableKey = $"{catalog}.{currentSchemaName}.{currentTableName}";
+                        var tableKey = $"{currentCatalogName}.{currentSchemaName}.{currentTableName}";
                         if (!tablePositions.ContainsKey(tableKey))
                         {
                             tablePositions[tableKey] = 1;
@@ -942,7 +947,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                         columns.Add(new ColumnInfo
                         {
-                            Catalog = catalog,
+                            Catalog = currentCatalogName,
                             Schema = currentSchemaName ?? "",
                             Table = currentTableName,
                             Name = colName,
@@ -1747,7 +1752,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     tableBuilder.Append(currentTableName);
                     columnBuilder.Append(colName);
                     ordinalBuilder.Append(position);
-                    AppendNullableString(remarksBuilder, comment);
+                    MetadataUtilities.AppendNullableString(remarksBuilder, comment);
                 }
             }
 
@@ -2043,17 +2048,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private string BuildQualifiedTableName(string? catalog, string? schema, string tableName)
         {
-            var parts = new List<string>();
-
-            if (!string.IsNullOrEmpty(catalog))
-                parts.Add(QuoteIdentifier(catalog));
-
-            if (!string.IsNullOrEmpty(schema))
-                parts.Add(QuoteIdentifier(schema));
-
-            parts.Add(QuoteIdentifier(tableName));
-
-            return string.Join(".", parts);
+            return MetadataUtilities.BuildQualifiedTableName(catalog, schema, tableName) ?? tableName;
         }
 
         private bool PatternMatches(string value, string pattern)
@@ -2751,7 +2746,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 tableBuilder.Append(pk.TableName);
                 columnBuilder.Append(pk.ColumnName);
                 sequenceBuilder.Append(pk.KeySequence);
-                AppendNullableString(constraintNameBuilder, pk.ConstraintName);
+                MetadataUtilities.AppendNullableString(constraintNameBuilder, pk.ConstraintName);
             }
 
             var resultSchema = new Schema(new[]
@@ -2795,7 +2790,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var schemaBuilder = new StringArray.Builder();
             var tableBuilder = new StringArray.Builder();
             var columnBuilder = new StringArray.Builder();
-            var sequenceBuilder = new Int16Array.Builder();
+            var sequenceBuilder = new Int32Array.Builder();
             var pkNameBuilder = new StringArray.Builder();
 
             using (var reader = stream)
@@ -2841,9 +2836,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             else
                                 columnBuilder.AppendNull();
 
-                            // KEQ_SEQ (convert from Int32 to Int16)
+                            // KEQ_SEQ
                             if (sequenceArray != null && !sequenceArray.IsNull(i))
-                                sequenceBuilder.Append((short)sequenceArray.GetValue(i).Value);
+                                sequenceBuilder.Append(sequenceArray.GetValue(i).Value);
                             else
                                 sequenceBuilder.AppendNull();
 
@@ -2858,15 +2853,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // Create result with Thrift protocol column names
-            var resultSchema = new Schema(new[]
-            {
-                new Field("TABLE_CAT", StringType.Default, nullable: true),
-                new Field("TABLE_SCHEM", StringType.Default, nullable: true),
-                new Field("TABLE_NAME", StringType.Default, nullable: false),
-                new Field("COLUMN_NAME", StringType.Default, nullable: false),
-                new Field("KEQ_SEQ", Int16Type.Default, nullable: false),
-                new Field("PK_NAME", StringType.Default, nullable: true)
-            }, null);
+            var resultSchema = ColumnMetadataSchemas.CreatePrimaryKeySchema();
 
             var data = new List<IArrowArray>
             {
@@ -3080,19 +3067,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             foreach (var fk in foreignKeys)
             {
-                AppendNullableString(pkCatalogBuilder, fk.PkCatalogName);
-                AppendNullableString(pkSchemaBuilder, fk.PkSchemaName);
+                MetadataUtilities.AppendNullableString(pkCatalogBuilder, fk.PkCatalogName);
+                MetadataUtilities.AppendNullableString(pkSchemaBuilder, fk.PkSchemaName);
                 pkTableBuilder.Append(fk.PkTableName);
                 pkColumnBuilder.Append(fk.PkColumnName);
 
-                AppendNullableString(fkCatalogBuilder, fk.FkCatalogName);
-                AppendNullableString(fkSchemaBuilder, fk.FkSchemaName);
+                MetadataUtilities.AppendNullableString(fkCatalogBuilder, fk.FkCatalogName);
+                MetadataUtilities.AppendNullableString(fkSchemaBuilder, fk.FkSchemaName);
                 fkTableBuilder.Append(fk.FkTableName);
                 fkColumnBuilder.Append(fk.FkColumnName);
 
                 sequenceBuilder.Append(fk.KeySequence);
-                AppendNullableString(fkNameBuilder, fk.FkConstraintName);
-                AppendNullableString(pkNameBuilder, fk.PkKeyName);
+                MetadataUtilities.AppendNullableString(fkNameBuilder, fk.FkConstraintName);
+                MetadataUtilities.AppendNullableString(pkNameBuilder, fk.PkKeyName);
 
                 if (fk.UpdateRule.HasValue)
                     updateRuleBuilder.Append(fk.UpdateRule.Value);
@@ -3216,7 +3203,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var fkSchemaBuilder = new StringArray.Builder();
             var fkTableBuilder = new StringArray.Builder();
             var fkColumnBuilder = new StringArray.Builder();
-            var keySeqBuilder = new Int16Array.Builder();
+            var keySeqBuilder = new Int32Array.Builder();
             var updateRuleBuilder = new Int16Array.Builder();
             var deleteRuleBuilder = new Int16Array.Builder();
             var fkNameBuilder = new StringArray.Builder();
@@ -3298,9 +3285,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             else
                                 fkColumnBuilder.AppendNull();
 
-                            // KEQ_SEQ (convert from Int32 to Int16)
+                            // KEQ_SEQ
                             if (keySeqArray != null && !keySeqArray.IsNull(i))
-                                keySeqBuilder.Append((short)keySeqArray.GetValue(i).Value);
+                                keySeqBuilder.Append(keySeqArray.GetValue(i).Value);
                             else
                                 keySeqBuilder.AppendNull();
 
@@ -3349,12 +3336,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 new Field("FKTABLE_SCHEM", StringType.Default, nullable: true),
                 new Field("FKTABLE_NAME", StringType.Default, nullable: false),
                 new Field("FKCOLUMN_NAME", StringType.Default, nullable: false),
-                new Field("KEQ_SEQ", Int16Type.Default, nullable: false),
-                new Field("UPDATE_RULE", Int16Type.Default, nullable: true),
-                new Field("DELETE_RULE", Int16Type.Default, nullable: true),
+                new Field("KEQ_SEQ", Int32Type.Default, nullable: false),  // Int32 to match Thrift
+                new Field("UPDATE_RULE", Int16Type.Default, nullable: true),  // SEA-specific field, not in Thrift
+                new Field("DELETE_RULE", Int16Type.Default, nullable: true),  // SEA-specific field, not in Thrift
                 new Field("FK_NAME", StringType.Default, nullable: true),
                 new Field("PK_NAME", StringType.Default, nullable: true),
-                new Field("DEFERRABILITY", Int16Type.Default, nullable: false)
+                new Field("DEFERRABILITY", Int16Type.Default, nullable: false)  // SEA-specific field, not in Thrift
             }, null);
 
             var data = new List<IArrowArray>
@@ -3491,13 +3478,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         });
         }
 
-        private void AppendNullableString(StringArray.Builder builder, string? value)
-        {
-            if (value != null)
-                builder.Append(value);
-            else
-                builder.AppendNull();
-        }
 
         private struct PrimaryKeyInfo
         {
