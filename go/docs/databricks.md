@@ -60,10 +60,10 @@ Databricks's URI syntax supports three primary forms:
 
    Components:
    - `scheme`: `databricks://` (required)
-   - `<personal-access-token>`: (required) Databricks personal access token from the requirements.
-   - `<server-hostname>`: (required) Server Hostname value from the requirements.
-   - `port-number`: (required) Port value from the requirements, which is typically 443.
-   - `http-path`: (required) HTTP Path value from the requirements.
+   - `<personal-access-token>`: (required) Databricks personal access token.
+   - `<server-hostname>`: (required) Server Hostname value.
+   - `port-number`: (required) Port value, which is typically 443.
+   - `http-path`: (required) HTTP Path value.
    - Query params: Databricks connection attributes. For complete list of optional parameters, see [Databricks Optional Parameters](https://docs.databricks.com/aws/en/dev-tools/go-sql-driver#optional-parameters)
 
 
@@ -75,9 +75,9 @@ Databricks's URI syntax supports three primary forms:
 
    Components:
    - `scheme`: `databricks://` (required)
-   - `<server-hostname>`: (required) Server Hostname value from the requirements.
-   - `port-number`: (required) Port value from the requirements, which is typically 443.
-   - `http-path`: (required) HTTP Path value from the requirements.
+   - `<server-hostname>`: (required) Server Hostname value.
+   - `port-number`: (required) Port value, which is typically 443.
+   - `http-path`: (required) HTTP Path value.
    - `authType=OauthU2M`: (required) Specifies OAuth user-to-machine authentication.
    - Query params: Additional Databricks connection attributes. For complete list of optional parameters, see [Databricks Optional Parameters](https://docs.databricks.com/aws/en/dev-tools/go-sql-driver#optional-parameters)
 
@@ -89,9 +89,9 @@ Databricks's URI syntax supports three primary forms:
 
    Components:
    - `scheme`: `databricks://` (required)
-   - `<server-hostname>`: (required) Server Hostname value from the requirements.
-   - `port-number`: (required) Port value from the requirements, which is typically 443.
-   - `http-path`: (required) HTTP Path value from the requirements.
+   - `<server-hostname>`: (required) Server Hostname value.
+   - `port-number`: (required) Port value, which is typically 443.
+   - `http-path`: (required) HTTP Path value.
    - `authType=OAuthM2M`: (required) Specifies OAuth machine-to-machine authentication.
    - `<client-id>`: (required) Service principal's UUID or Application ID value.
    - `<client-secret>`: (required) Secret value for the service principal's OAuth secret.
