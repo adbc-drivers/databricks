@@ -152,7 +152,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             var sql = new StringBuilder(ShowSchemas);
 
-            if (string.IsNullOrEmpty(_catalog))
+            if (_catalog == null)
             {
                 sql.Append(InAllCatalogs);
             }
@@ -174,7 +174,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             var sql = new StringBuilder(ShowTables);
 
-            if (string.IsNullOrEmpty(_catalog))
+            if (_catalog == null)
             {
                 sql.Append(InAllCatalogs);
             }

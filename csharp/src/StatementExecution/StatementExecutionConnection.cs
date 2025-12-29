@@ -541,6 +541,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
+                activity?.AddEvent("metadata.get_catalogs.start");
                 activity?.SetTag("catalog_pattern", catalogPattern ?? "null");
 
                 // Use SqlCommandBuilder for efficient SQL generation
@@ -549,6 +550,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 var sql = commandBuilder.BuildShowCatalogs();
                 activity?.SetTag("sql_query", sql);
+                activity?.AddEvent("metadata.get_catalogs.executing_query", [
+                    new("sql_length", sql.Length)
+                ]);
 
                 List<RecordBatch> batches;
                 try
@@ -589,6 +593,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
 
                 activity?.SetTag("result_count", catalogs.Count);
+                activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, catalogs.Count);
+                activity?.AddEvent("metadata.get_catalogs.complete");
                 return catalogs;
             });
         }
@@ -620,7 +626,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetSchemas"),
+                        new("catalog", catalog ?? "(all)"),
+                        new("schema_pattern", schemaPattern ?? "(all)")
+                    ]);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // Return empty list on permission denied or other errors
                     // This allows BI tools to show "Access Denied"
@@ -633,17 +644,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     // When using "IN ALL CATALOGS", results include catalog column
                     StringArray? catalogArray = null;
-                    if (string.IsNullOrEmpty(catalog))
+                    if (catalog == null)
                     {
                         catalogArray = batch.Column("catalog") as StringArray;
                     }
 
                     // Result columns are typically 'databaseName' or 'namespace' depending on DBR version
                     StringArray? schemaArray = batch.Column("databaseName") as StringArray;
-                    if (schemaArray == null)
-                    {
-                        schemaArray = batch.Column("namespace") as StringArray;
-                    }
                     if (schemaArray == null) continue;
 
                     for (int i = 0; i < batch.Length; i++)
@@ -651,10 +658,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         if (!schemaArray.IsNull(i))
                         {
                             var schemaName = schemaArray.GetString(i);
-                            // Pattern matching is already done by SQL LIKE clause, no need to check again
-
                             string catalogName;
-                            if (string.IsNullOrEmpty(catalog))
+                            if (catalog == null)
                             {
                                 // Get catalog from result when using "IN ALL CATALOGS"
                                 if (catalogArray == null || catalogArray.IsNull(i))
@@ -708,7 +713,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetTables"),
+                        new("catalog", catalog ?? "(all)"),
+                        new("schema", schema ?? "(all)"),
+                        new("table_pattern", tableNamePattern ?? "(all)")
+                    ]);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // Return empty list on permission denied or other errors
                     // This allows BI tools to show "Access Denied"
@@ -722,7 +733,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     // When using "IN ALL CATALOGS", results include catalog and schema columns
                     StringArray? catalogArray = null;
                     StringArray? schemaArray = null;
-                    if (string.IsNullOrEmpty(catalog))
+                    if (catalog == null)
                     {
                         catalogArray = batch.Column("catalog") as StringArray;
                         schemaArray = batch.Column("database") as StringArray;
@@ -745,7 +756,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         // Get catalog and schema from results when using "IN ALL CATALOGS"
                         string catalogName;
                         string schemaName;
-                        if (string.IsNullOrEmpty(catalog))
+                        if (catalog == null)
                         {
                             if (catalogArray == null || catalogArray.IsNull(i))
                                 continue;
@@ -807,7 +818,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // without iterating over catalogs
                 var result = await GetColumnsForCatalogAsync(catalog, schema, tableName, columnNamePattern).ConfigureAwait(false);
                 activity?.SetTag("result_count", result.Count);
-                if (!string.IsNullOrEmpty(catalog))
+                if (catalog != null)
                 {
                     activity?.SetTag("unique_tables", result.Select(c => $"{c.Catalog}.{c.Schema}.{c.Table}").Distinct().Count());
                 }
@@ -850,7 +861,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetColumnsForCatalog"),
+                        new("catalog", catalog ?? "(all)"),
+                        new("schema", schema ?? "(all)"),
+                        new("table", tableName ?? "(all)"),
+                        new("column_pattern", columnNamePattern ?? "(all)")
+                    ]);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // If SHOW COLUMNS fails (e.g., permission denied), return empty list
                     return new List<ColumnInfo>();
@@ -863,9 +881,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     // When using "IN ALL CATALOGS", results include catalog column
                     StringArray? catalogArray = null;
-                    if (string.IsNullOrEmpty(catalog))
+                    if (catalog == null)
                     {
-                        catalogArray = batch.Column("catalog") as StringArray;
+                        catalogArray = batch.Column("catalogName") as StringArray;
                     }
 
                     var tableNameArray = batch.Column("tableName") as StringArray;
@@ -905,7 +923,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                         // Get catalog from result when using "IN ALL CATALOGS"
                         string? currentCatalogName;
-                        if (string.IsNullOrEmpty(catalog))
+                        if (catalog == null)
                         {
                             // Using "IN ALL CATALOGS" - get catalog from result
                             if (catalogArray == null || catalogArray.IsNull(i))
@@ -921,8 +939,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             ? schemaArray.GetString(i)
                             : schema;
 
-                        if (string.IsNullOrEmpty(colName) || colName.StartsWith("#") ||
-                            dataType.Contains("Partition Information") || dataType.Contains("# col_name"))
+                        if (string.IsNullOrEmpty(colName))
                         {
                             continue;
                         }
@@ -1202,7 +1219,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetCatalogsMetadata"),
+                        new("catalog_pattern", catalogPattern ?? "(all)")
+                    ]);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // Return empty result on permission denied or other errors
                     var emptySchema = new Schema(new[] { new Field("catalog_name", StringType.Default, nullable: false) }, null);
@@ -1297,7 +1318,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 activity?.SetTag("catalog", catalog ?? "(all)");
                 activity?.SetTag("schema_pattern", schemaPattern ?? "(all)");
-                activity?.SetTag("show_all_catalogs", string.IsNullOrEmpty(catalog));
+                activity?.SetTag("show_all_catalogs", catalog == null);
 
                 // Use SqlCommandBuilder for efficient SQL generation
                 var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
@@ -1306,7 +1327,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 var sql = commandBuilder.BuildShowSchemas();
                 activity?.SetTag("sql_query", sql);
-                bool showAllCatalogs = string.IsNullOrEmpty(catalog);
+                bool showAllCatalogs = catalog == null;
 
                 List<RecordBatch> batches;
                 try
@@ -1317,7 +1338,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetSchemasMetadata"),
+                        new("catalog", catalog ?? "(all)"),
+                        new("schema_pattern", schemaPattern ?? "(all)")
+                    ]);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // Return empty result on permission denied or other errors
                     var emptySchema = new Schema(new[]
@@ -1659,7 +1685,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetColumnsMetadata"),
+                        new("catalog", catalog ?? "(all)"),
+                        new("db_schema", dbSchema ?? "(all)"),
+                        new("table_pattern", tablePattern ?? "(all)"),
+                        new("column_pattern", columnPattern ?? "(all)")
+                    ]);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // Return empty result on permission denied or other errors
                     var emptySchema = new Schema(new[]
@@ -1881,7 +1914,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetTableSchema"),
+                        new("catalog", catalog ?? "(unspecified)"),
+                        new("schema", dbSchema ?? "(unspecified)"),
+                        new("table", tableName),
+                        new("qualified_table_name", qualifiedTableName)
+                    ]);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     throw new AdbcException($"Failed to describe table {qualifiedTableName}: {ex.Message}", ex);
                 }
@@ -2669,8 +2709,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
-                    activity?.SetTag("note", "SHOW KEYS not supported or permission denied");
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetPrimaryKeys"),
+                        new("catalog", catalog ?? "(session)"),
+                        new("db_schema", dbSchema ?? "(session)"),
+                        new("table_name", tableName),
+                        new("note", "SHOW KEYS not supported or permission denied")
+                    ]);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // SHOW KEYS not supported (Hive metastore) or permission denied
                     // Return empty result gracefully
                     return BuildPrimaryKeysResult(new List<PrimaryKeyInfo>(), catalog, dbSchema, tableName);
@@ -2962,8 +3009,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (Exception ex)
                 {
-                    activity?.SetTag("error", ex.Message);
-                    activity?.SetTag("note", "SHOW FOREIGN KEYS not supported or permission denied");
+                    activity?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "GetImportedKeys"),
+                        new("catalog", catalog ?? "(session)"),
+                        new("db_schema", dbSchema ?? "(session)"),
+                        new("table_name", tableName),
+                        new("note", "SHOW FOREIGN KEYS not supported or permission denied")
+                    ]);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                     // SHOW FOREIGN KEYS not supported (Hive metastore) or permission denied
                     // Return empty result gracefully
                     return BuildImportedKeysResult(new List<ForeignKeyInfo>());
@@ -3521,16 +3575,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     try
                     {
-                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.start"));
+                        activity?.AddEvent("session.delete.start");
                         // Delete session synchronously during dispose
                         _client.DeleteSessionAsync(_sessionId, _warehouseId, CancellationToken.None).GetAwaiter().GetResult();
-                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.success"));
+                        activity?.AddEvent("session.delete.success");
                     }
                     catch (Exception ex)
                     {
                         // Best effort - ignore errors during dispose but trace them
-                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.error",
-                            tags: new System.Diagnostics.ActivityTagsCollection { { "error", ex.Message } }));
+                        activity?.AddEvent("session.delete.error", [
+                            new("error", ex.Message)
+                        ]);
                     }
                     finally
                     {

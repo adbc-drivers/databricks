@@ -221,26 +221,46 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (state == "FAILED")
             {
                 var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                var exception = new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                Activity.Current?.AddException(exception, [
+                    new("error.type", "StatementExecutionFailed"),
+                    new("statement_id", _currentStatementId ?? "(null)"),
+                    new("error_code", error?.ErrorCode ?? "(unknown)"),
+                    new("state", state ?? "(unknown)")
+                ]);
+                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                throw exception;
             }
             if (state == "CANCELED")
             {
-                throw new AdbcException("Statement execution was canceled");
+                var exception = new AdbcException("Statement execution was canceled");
+                Activity.Current?.AddException(exception, [
+                    new("error.type", "StatementExecutionCanceled"),
+                    new("statement_id", _currentStatementId ?? "(null)"),
+                    new("state", state ?? "(unknown)")
+                ]);
+                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                throw exception;
             }
             if (state == "CLOSED")
             {
-                throw new AdbcException("Statement was closed before results could be retrieved");
+                var exception = new AdbcException("Statement was closed before results could be retrieved");
+                Activity.Current?.AddException(exception, [
+                    new("error.type", "StatementExecutionClosed"),
+                    new("statement_id", _currentStatementId ?? "(null)"),
+                    new("state", state ?? "(unknown)")
+                ]);
+                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                throw exception;
             }
 
             // Check for truncated results warning
             if (response.Manifest?.Truncated == true)
             {
-                Activity.Current?.AddEvent(new ActivityEvent("statement.results_truncated",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "total_row_count", response.Manifest.TotalRowCount },
-                        { "total_byte_count", response.Manifest.TotalByteCount }
-                    }));
+                Activity.Current?.AddEvent("statement.results_truncated", [
+                    new("total_row_count", response.Manifest.TotalRowCount),
+                    new("total_byte_count", response.Manifest.TotalByteCount)
+                ]);
             }
 
             // Create appropriate reader based on result disposition
@@ -492,15 +512,37 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (state == "FAILED")
             {
                 var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                var exception = new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                Activity.Current?.AddException(exception, [
+                    new("error.type", "StatementExecutionFailed"),
+                    new("statement_id", _currentStatementId ?? "(null)"),
+                    new("error_code", error?.ErrorCode ?? "(unknown)"),
+                    new("state", state ?? "(unknown)")
+                ]);
+                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                throw exception;
             }
             if (state == "CANCELED")
             {
-                throw new AdbcException("Statement execution was canceled");
+                var exception = new AdbcException("Statement execution was canceled");
+                Activity.Current?.AddException(exception, [
+                    new("error.type", "StatementExecutionCanceled"),
+                    new("statement_id", _currentStatementId ?? "(null)"),
+                    new("state", state ?? "(unknown)")
+                ]);
+                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                throw exception;
             }
             if (state == "CLOSED")
             {
-                throw new AdbcException("Statement was closed before results could be retrieved");
+                var exception = new AdbcException("Statement was closed before results could be retrieved");
+                Activity.Current?.AddException(exception, [
+                    new("error.type", "StatementExecutionClosed"),
+                    new("statement_id", _currentStatementId ?? "(null)"),
+                    new("state", state ?? "(unknown)")
+                ]);
+                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                throw exception;
             }
 
             // For updates, we don't need to read the results - just return the row count
@@ -616,21 +658,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 try
                 {
                     // Close statement synchronously during dispose
-                    Activity.Current?.AddEvent(new ActivityEvent("statement.dispose",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "statement_id", _currentStatementId }
-                        }));
+                    Activity.Current?.AddEvent("statement.dispose", [
+                        new("statement_id", _currentStatementId)
+                    ]);
                     _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
                     // Best effort - ignore errors during dispose
-                    Activity.Current?.AddEvent(new ActivityEvent("statement.dispose.error",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "error", ex.Message }
-                        }));
+                    Activity.Current?.AddException(ex, [
+                        new("error.type", ex.GetType().Name),
+                        new("operation", "Dispose"),
+                        new("statement_id", _currentStatementId ?? "(null)")
+                    ]);
+                    Activity.Current?.AddEvent("statement.dispose.error", [
+                        new("error.type", ex.GetType().Name)
+                    ]);
                 }
                 finally
                 {
