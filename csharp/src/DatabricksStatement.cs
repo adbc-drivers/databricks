@@ -878,71 +878,20 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Creates the schema for the column metadata result set.
         /// This schema is used for the GetColumns metadata query.
+        /// Delegates to shared helper to ensure consistency across protocols.
         /// </summary>
         private static Schema CreateColumnMetadataSchema()
         {
-            var fields = new[]
-            {
-                new Field("TABLE_CAT", StringType.Default, true),
-                new Field("TABLE_SCHEM", StringType.Default, true),
-                new Field("TABLE_NAME", StringType.Default, true),
-                new Field("COLUMN_NAME", StringType.Default, true),
-                new Field("DATA_TYPE", Int32Type.Default, true),
-                new Field("TYPE_NAME", StringType.Default, true),
-                new Field("COLUMN_SIZE", Int32Type.Default, true),
-                new Field("BUFFER_LENGTH", Int8Type.Default, true),
-                new Field("DECIMAL_DIGITS", Int32Type.Default, true),
-                new Field("NUM_PREC_RADIX", Int32Type.Default, true),
-                new Field("NULLABLE", Int32Type.Default, true),
-                new Field("REMARKS", StringType.Default, true),
-                new Field("COLUMN_DEF", StringType.Default, true),
-                new Field("SQL_DATA_TYPE", Int32Type.Default, true),
-                new Field("SQL_DATETIME_SUB", Int32Type.Default, true),
-                new Field("CHAR_OCTET_LENGTH", Int32Type.Default, true),
-                new Field("ORDINAL_POSITION", Int32Type.Default, true),
-                new Field("IS_NULLABLE", StringType.Default, true),
-                new Field("SCOPE_CATALOG", StringType.Default, true),
-                new Field("SCOPE_SCHEMA", StringType.Default, true),
-                new Field("SCOPE_TABLE", StringType.Default, true),
-                new Field("SOURCE_DATA_TYPE", Int16Type.Default, true),
-                new Field("IS_AUTO_INCREMENT", StringType.Default, true),
-                new Field("BASE_TYPE_NAME", StringType.Default, true)
-            };
-            return new Schema(fields, null);
+            return ColumnMetadataSchemas.CreateColumnMetadataSchema();
         }
 
         /// <summary>
         /// Creates an empty array for each column in the column metadata schema.
+        /// Delegates to shared helper to ensure consistency across protocols.
         /// </summary>
         private static IArrowArray[] CreateColumnMetadataEmptyArray()
         {
-            return
-            [
-                new StringArray.Builder().Build(), // TABLE_CAT
-                new StringArray.Builder().Build(), // TABLE_SCHEM
-                new StringArray.Builder().Build(), // TABLE_NAME
-                new StringArray.Builder().Build(), // COLUMN_NAME
-                new Int32Array.Builder().Build(),  // DATA_TYPE
-                new StringArray.Builder().Build(), // TYPE_NAME
-                new Int32Array.Builder().Build(),  // COLUMN_SIZE
-                new Int8Array.Builder().Build(),   // BUFFER_LENGTH
-                new Int32Array.Builder().Build(),  // DECIMAL_DIGITS
-                new Int32Array.Builder().Build(),  // NUM_PREC_RADIX
-                new Int32Array.Builder().Build(),  // NULLABLE
-                new StringArray.Builder().Build(), // REMARKS
-                new StringArray.Builder().Build(), // COLUMN_DEF
-                new Int32Array.Builder().Build(),  // SQL_DATA_TYPE
-                new Int32Array.Builder().Build(),  // SQL_DATETIME_SUB
-                new Int32Array.Builder().Build(),  // CHAR_OCTET_LENGTH
-                new Int32Array.Builder().Build(),  // ORDINAL_POSITION
-                new StringArray.Builder().Build(), // IS_NULLABLE
-                new StringArray.Builder().Build(), // SCOPE_CATALOG
-                new StringArray.Builder().Build(), // SCOPE_SCHEMA
-                new StringArray.Builder().Build(), // SCOPE_TABLE
-                new Int16Array.Builder().Build(),  // SOURCE_DATA_TYPE
-                new StringArray.Builder().Build(), // IS_AUTO_INCREMENT
-                new StringArray.Builder().Build()  // BASE_TYPE_NAME
-            ];
+            return ColumnMetadataSchemas.CreateColumnMetadataEmptyArray();
         }
 
         private QueryResult CreateExtendedColumnsResult(Schema columnMetadataSchema, DescTableExtendedResult descResult)

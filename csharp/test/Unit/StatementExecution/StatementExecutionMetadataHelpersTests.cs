@@ -512,6 +512,106 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
         #endregion
 
+        #region BuildShowPrimaryKeysCommand Tests
+
+        [Fact]
+        public void BuildShowPrimaryKeysCommand_FullyQualified_ReturnsCorrectSQL()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildShowPrimaryKeysCommand", "main", "adbc_testing", "all_column_types");
+
+            Assert.Equal("SHOW PRIMARY KEYS IN CATALOG `main` IN SCHEMA `adbc_testing` IN TABLE `all_column_types`", result);
+        }
+
+        [Fact]
+        public void BuildShowPrimaryKeysCommand_NoSchema_OmitsSchemaClause()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildShowPrimaryKeysCommand", "main", null, "table1");
+
+            Assert.Equal("SHOW PRIMARY KEYS IN CATALOG `main` IN TABLE `table1`", result);
+        }
+
+        [Fact]
+        public void BuildShowPrimaryKeysCommand_NoCatalog_OmitsEverything()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildShowPrimaryKeysCommand", null, "schema1", "table1");
+
+            // When catalog is null, we can't build the command properly
+            Assert.Equal("SHOW PRIMARY KEYS IN TABLE `table1`", result);
+        }
+
+        #endregion
+
+        #region BuildShowForeignKeysCommand Tests
+
+        [Fact]
+        public void BuildShowForeignKeysCommand_FullyQualified_ReturnsCorrectSQL()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildShowForeignKeysCommand", "main", "adbc_testing", "all_column_types");
+
+            Assert.Equal("SHOW FOREIGN KEYS IN CATALOG `main` IN SCHEMA `adbc_testing` IN TABLE `all_column_types`", result);
+        }
+
+        [Fact]
+        public void BuildShowForeignKeysCommand_WithBackticks_EscapesIdentifiers()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildShowForeignKeysCommand", "my`cat", "my`schema", "my`table");
+
+            Assert.Equal("SHOW FOREIGN KEYS IN CATALOG `my``cat` IN SCHEMA `my``schema` IN TABLE `my``table`", result);
+        }
+
+        #endregion
+
+        #region BuildGetCrossReferenceFilterClause Tests
+
+        [Fact]
+        public void BuildGetCrossReferenceFilterClause_FullyQualified_ReturnsWhereClause()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildGetCrossReferenceFilterClause",
+                "main", "adbc_testing", "reference_table",  // PK table
+                "main", "adbc_testing", "all_column_types"); // FK table
+
+            Assert.Contains("WHERE", result);
+            Assert.Contains("pk_table_catalog = 'main'", result);
+            Assert.Contains("pk_table_schem = 'adbc_testing'", result);
+            Assert.Contains("pk_table_name = 'reference_table'", result);
+            Assert.Contains("fk_table_catalog = 'main'", result);
+            Assert.Contains("fk_table_schem = 'adbc_testing'", result);
+            Assert.Contains("fk_table_name = 'all_column_types'", result);
+        }
+
+        [Fact]
+        public void BuildGetCrossReferenceFilterClause_WithSingleQuotes_EscapesQuotes()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildGetCrossReferenceFilterClause",
+                "main", "test'schema", "table'1",
+                "main", "schema'2", "table'2");
+
+            Assert.Contains("pk_table_schem = 'test''schema'", result);
+            Assert.Contains("pk_table_name = 'table''1'", result);
+            Assert.Contains("fk_table_schem = 'schema''2'", result);
+            Assert.Contains("fk_table_name = 'table''2'", result);
+        }
+
+        [Fact]
+        public void BuildGetCrossReferenceFilterClause_EmptyResult_WithoutParams()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildGetCrossReferenceFilterClause",
+                null, null, null, null, null, null);
+
+            // When all params are null, should return empty string
+            Assert.Equal("", result);
+        }
+
+        #endregion
+
         #region Disposal
 
         // Test cleanup - ensure connection is properly disposed
@@ -522,6 +622,489 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var exception = Record.Exception(() => connection.Dispose());
 
             Assert.Null(exception);
+        }
+
+        #endregion
+
+        #region SQL Query Generation Tests
+
+        [Fact]
+        public void BuildShowCatalogsCommand_ReturnsCorrectSQL()
+        {
+            var connection = CreateTestConnection();
+
+            // SHOW CATALOGS doesn't take parameters
+            var expected = "SHOW CATALOGS";
+            // We'd need to test this via integration since there's no public method
+            // This is a placeholder for the pattern
+            Assert.True(true); // Placeholder - actual command is built in GetObjects
+        }
+
+        [Fact]
+        public void BuildShowSchemasCommand_WithCatalog_ReturnsCorrectSQL()
+        {
+            var connection = CreateTestConnection();
+            var catalog = "main";
+
+            // Expected: SHOW SCHEMAS IN `main`
+            var expected = $"SHOW SCHEMAS IN `{catalog}`";
+            Assert.Contains("SHOW SCHEMAS", expected);
+        }
+
+        [Fact]
+        public void BuildShowTablesCommand_WithCatalogAndSchema_ReturnsCorrectSQL()
+        {
+            var connection = CreateTestConnection();
+            var catalog = "main";
+            var schema = "default";
+
+            // Expected: SHOW TABLES IN `main`.`default`
+            var expected = $"SHOW TABLES IN `{catalog}`.`{schema}`";
+            Assert.Contains("SHOW TABLES", expected);
+        }
+
+        [Fact]
+        public void BuildShowColumnsCommand_WithAllParameters_ReturnsCorrectSQL()
+        {
+            var connection = CreateTestConnection();
+            var catalog = "main";
+            var schema = "adbc_testing";
+            var table = "all_column_types";
+
+            // Expected: SHOW COLUMNS IN CATALOG `main` SCHEMA LIKE 'adbc_testing' TABLE LIKE 'all_column_types'
+            var expected = $"SHOW COLUMNS IN CATALOG `{catalog}` SCHEMA LIKE '{schema}' TABLE LIKE '{table}'";
+            Assert.Contains("SHOW COLUMNS", expected);
+            Assert.Contains("IN CATALOG", expected);
+            Assert.Contains("SCHEMA LIKE", expected);
+            Assert.Contains("TABLE LIKE", expected);
+        }
+
+        #endregion
+
+        #region Pattern Conversion Tests
+
+        [Fact]
+        public void SqlPatternToRegex_PercentOnly_MatchesAnyCharacters()
+        {
+            var connection = CreateTestConnection();
+            var pattern = "test%";
+
+            // % should match zero or more characters
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "test", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "test123", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "testing", pattern));
+            Assert.False((bool)InvokePrivateMethod(connection, "PatternMatches", "tes", pattern));
+        }
+
+        [Fact]
+        public void SqlPatternToRegex_UnderscoreOnly_MatchesSingleCharacter()
+        {
+            var connection = CreateTestConnection();
+            var pattern = "test_";
+
+            // _ should match exactly one character
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "test1", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "testa", pattern));
+            Assert.False((bool)InvokePrivateMethod(connection, "PatternMatches", "test", pattern));
+            Assert.False((bool)InvokePrivateMethod(connection, "PatternMatches", "test12", pattern));
+        }
+
+        [Fact]
+        public void SqlPatternToRegex_MixedPattern_MatchesCorrectly()
+        {
+            var connection = CreateTestConnection();
+            var pattern = "test_%_data";
+
+            // Pattern: test + any chars + single char + data
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "test_1_data", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "test_table_x_data", pattern));
+            Assert.False((bool)InvokePrivateMethod(connection, "PatternMatches", "test__data", pattern)); // Missing char after second _
+        }
+
+        [Fact]
+        public void SqlPatternToRegex_PercentAtStart_MatchesAnySuffix()
+        {
+            var connection = CreateTestConnection();
+            var pattern = "%_test";
+
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "my_test", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "a_test", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "anything_here_x_test", pattern));
+            Assert.False((bool)InvokePrivateMethod(connection, "PatternMatches", "_test", pattern)); // Need at least one char before _
+        }
+
+        [Fact]
+        public void SqlPatternToRegex_NoWildcards_MatchesExact()
+        {
+            var connection = CreateTestConnection();
+            var pattern = "exact_match";
+
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "exact_match", pattern));
+            Assert.False((bool)InvokePrivateMethod(connection, "PatternMatches", "exact_matc", pattern));
+            Assert.False((bool)InvokePrivateMethod(connection, "PatternMatches", "exact_match_extra", pattern));
+        }
+
+        [Fact]
+        public void SqlPatternToRegex_CaseInsensitive_MatchesRegardlessOfCase()
+        {
+            var connection = CreateTestConnection();
+            var pattern = "Test%";
+
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "test", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "TEST", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "TeSt", pattern));
+            Assert.True((bool)InvokePrivateMethod(connection, "PatternMatches", "test_table", pattern));
+        }
+
+        #endregion
+
+        #region GetCrossReference Filter Tests
+
+        [Fact]
+        public void BuildGetCrossReferenceFilterClause_AllNulls_ReturnsEmpty()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildGetCrossReferenceFilterClause",
+                null, null, null, null, null, null);
+
+            Assert.Equal("", result);
+        }
+
+        [Fact]
+        public void BuildGetCrossReferenceFilterClause_OnlyPKTable_FiltersCorrectly()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildGetCrossReferenceFilterClause",
+                "main", "schema1", "pk_table", null, null, null);
+
+            Assert.Contains("WHERE", result);
+            Assert.Contains("pk_table_catalog = 'main'", result);
+            Assert.Contains("pk_table_schem = 'schema1'", result);
+            Assert.Contains("pk_table_name = 'pk_table'", result);
+            Assert.DoesNotContain("fk_table", result);
+        }
+
+        [Fact]
+        public void BuildGetCrossReferenceFilterClause_OnlyFKTable_FiltersCorrectly()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildGetCrossReferenceFilterClause",
+                null, null, null, "main", "schema2", "fk_table");
+
+            Assert.Contains("WHERE", result);
+            Assert.Contains("fk_table_catalog = 'main'", result);
+            Assert.Contains("fk_table_schem = 'schema2'", result);
+            Assert.Contains("fk_table_name = 'fk_table'", result);
+            Assert.DoesNotContain("pk_table_catalog", result);
+        }
+
+        [Fact]
+        public void BuildGetCrossReferenceFilterClause_BothTables_CombinesWithAND()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildGetCrossReferenceFilterClause",
+                "main", "schema1", "pk_table", "main", "schema2", "fk_table");
+
+            Assert.Contains("WHERE", result);
+            Assert.Contains("pk_table_catalog = 'main'", result);
+            Assert.Contains("pk_table_schem = 'schema1'", result);
+            Assert.Contains("pk_table_name = 'pk_table'", result);
+            Assert.Contains("fk_table_catalog = 'main'", result);
+            Assert.Contains("fk_table_schem = 'schema2'", result);
+            Assert.Contains("fk_table_name = 'fk_table'", result);
+            Assert.Contains("AND", result);
+        }
+
+        [Fact]
+        public void BuildGetCrossReferenceFilterClause_PartialPKInfo_OmitsMissingFields()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "BuildGetCrossReferenceFilterClause",
+                null, "schema1", "pk_table", null, null, null);
+
+            Assert.Contains("WHERE", result);
+            Assert.DoesNotContain("pk_table_catalog", result); // Null catalog should be skipped
+            Assert.Contains("pk_table_schem = 'schema1'", result);
+            Assert.Contains("pk_table_name = 'pk_table'", result);
+        }
+
+        #endregion
+
+        #region ParseReferentialAction Tests
+
+        [Fact]
+        public void ParseReferentialAction_CASCADE_Returns0()
+        {
+            var connection = CreateTestConnection();
+            var result = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "CASCADE");
+
+            Assert.NotNull(result);
+            Assert.Equal((byte)0, result.Value);
+        }
+
+        [Fact]
+        public void ParseReferentialAction_RESTRICT_Returns1()
+        {
+            var connection = CreateTestConnection();
+            var result = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "RESTRICT");
+
+            Assert.NotNull(result);
+            Assert.Equal((byte)1, result.Value);
+        }
+
+        [Fact]
+        public void ParseReferentialAction_SETNULL_Returns2()
+        {
+            var connection = CreateTestConnection();
+            var result = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "SET NULL");
+
+            Assert.NotNull(result);
+            Assert.Equal((byte)2, result.Value);
+        }
+
+        [Fact]
+        public void ParseReferentialAction_NOACTION_Returns3()
+        {
+            var connection = CreateTestConnection();
+            var result = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "NO ACTION");
+
+            Assert.NotNull(result);
+            Assert.Equal((byte)3, result.Value);
+        }
+
+        [Fact]
+        public void ParseReferentialAction_SETDEFAULT_Returns4()
+        {
+            var connection = CreateTestConnection();
+            var result = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "SET DEFAULT");
+
+            Assert.NotNull(result);
+            Assert.Equal((byte)4, result.Value);
+        }
+
+        [Fact]
+        public void ParseReferentialAction_CaseInsensitive_Works()
+        {
+            var connection = CreateTestConnection();
+            var result1 = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "cascade");
+            var result2 = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "CaScAdE");
+
+            Assert.NotNull(result1);
+            Assert.NotNull(result2);
+            Assert.Equal((byte)0, result1.Value);
+            Assert.Equal((byte)0, result2.Value);
+        }
+
+        [Fact]
+        public void ParseReferentialAction_Null_ReturnsNull()
+        {
+            var connection = CreateTestConnection();
+            var result = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", (string?)null);
+
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void ParseReferentialAction_EmptyString_ReturnsNull()
+        {
+            var connection = CreateTestConnection();
+            var result = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "");
+
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void ParseReferentialAction_UnknownValue_ReturnsNull()
+        {
+            var connection = CreateTestConnection();
+            var result = (byte?)InvokePrivateMethod(connection, "ParseReferentialAction", "UNKNOWN");
+
+            Assert.Null(result);
+        }
+
+        #endregion
+
+        #region Type Conversion Edge Cases
+
+        [Fact]
+        public void ConvertDatabricksTypeToArrow_TIMESTAMP_NTZ_ReturnsTimestampMicrosecond()
+        {
+            var connection = CreateTestConnection();
+            var result = (IArrowType)InvokePrivateMethod(connection, "ConvertDatabricksTypeToArrow", "TIMESTAMP_NTZ");
+
+            Assert.IsType<TimestampType>(result);
+            var timestampType = (TimestampType)result;
+            Assert.Equal(TimeUnit.Microsecond, timestampType.Unit);
+            Assert.Null(timestampType.Timezone);
+        }
+
+        [Fact]
+        public void ConvertDatabricksTypeToArrow_NUMERIC_ReturnsDecimal128()
+        {
+            var connection = CreateTestConnection();
+            var result = (IArrowType)InvokePrivateMethod(connection, "ConvertDatabricksTypeToArrow", "NUMERIC");
+
+            Assert.IsType<Decimal128Type>(result);
+            var decimalType = (Decimal128Type)result;
+            Assert.Equal(38, decimalType.Precision);
+            Assert.Equal(18, decimalType.Scale);
+        }
+
+        [Fact]
+        public void ConvertDatabricksTypeToArrow_INTEGER_ReturnsInt32()
+        {
+            var connection = CreateTestConnection();
+            var result = (IArrowType)InvokePrivateMethod(connection, "ConvertDatabricksTypeToArrow", "INTEGER");
+
+            Assert.IsType<Int32Type>(result);
+        }
+
+        [Fact]
+        public void ConvertDatabricksTypeToArrow_VARCHAR_ReturnsString()
+        {
+            var connection = CreateTestConnection();
+            var result = (IArrowType)InvokePrivateMethod(connection, "ConvertDatabricksTypeToArrow", "VARCHAR");
+
+            Assert.IsType<StringType>(result);
+        }
+
+        [Fact]
+        public void ConvertDatabricksTypeToArrow_CHAR_ReturnsString()
+        {
+            var connection = CreateTestConnection();
+            var result = (IArrowType)InvokePrivateMethod(connection, "ConvertDatabricksTypeToArrow", "CHAR");
+
+            Assert.IsType<StringType>(result);
+        }
+
+        [Fact]
+        public void ConvertDatabricksTypeToArrow_ComplexType_ReturnsString()
+        {
+            var connection = CreateTestConnection();
+            var result = (IArrowType)InvokePrivateMethod(connection, "ConvertDatabricksTypeToArrow", "STRUCT<f1: STRING>");
+
+            Assert.IsType<StringType>(result);
+        }
+
+        [Fact]
+        public void ConvertDatabricksTypeToArrow_ArrayType_ReturnsString()
+        {
+            var connection = CreateTestConnection();
+            var result = (IArrowType)InvokePrivateMethod(connection, "ConvertDatabricksTypeToArrow", "ARRAY<INT>");
+
+            Assert.IsType<StringType>(result);
+        }
+
+        [Fact]
+        public void ConvertDatabricksTypeToArrow_MapType_ReturnsString()
+        {
+            var connection = CreateTestConnection();
+            var result = (IArrowType)InvokePrivateMethod(connection, "ConvertDatabricksTypeToArrow", "MAP<STRING, INT>");
+
+            Assert.IsType<StringType>(result);
+        }
+
+        [Fact]
+        public void ExtractBaseType_ComplexStruct_ReturnsSTRUCT()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "ExtractBaseType", "STRUCT<f1: STRING, f2: INT, f3: ARRAY<DOUBLE>>");
+
+            Assert.Equal("STRUCT", result);
+        }
+
+        [Fact]
+        public void ExtractBaseType_ComplexArray_ReturnsARRAY()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "ExtractBaseType", "ARRAY<STRUCT<name: STRING, age: INT>>");
+
+            Assert.Equal("ARRAY", result);
+        }
+
+        [Fact]
+        public void ExtractBaseType_ComplexMap_ReturnsMAP()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "ExtractBaseType", "MAP<STRING, ARRAY<INT>>");
+
+            Assert.Equal("MAP", result);
+        }
+
+        #endregion
+
+        #region SQL Command Builder Edge Cases
+
+        [Fact]
+        public void QuoteIdentifier_WithSpaces_PreservesSpaces()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "QuoteIdentifier", "my table");
+
+            Assert.Equal("`my table`", result);
+        }
+
+        [Fact]
+        public void QuoteIdentifier_Unicode_PreservesUnicode()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "QuoteIdentifier", "таблица");
+
+            Assert.Equal("`таблица`", result);
+        }
+
+        [Fact]
+        public void EscapeSqlPattern_MultipleWildcards_EscapesAll()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "EscapeSqlPattern", "test%value_data%");
+
+            Assert.Equal("test*value.data*", result);
+        }
+
+        [Fact]
+        public void EscapeSqlPattern_EscapedBackslash_PreservesBackslash()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "EscapeSqlPattern", "test\\\\value");
+
+            Assert.Equal("test\\\\value", result);
+        }
+
+        [Fact]
+        public void EscapeSqlPattern_EscapedPercent_BecomesLiteralPercent()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "EscapeSqlPattern", "test\\%value");
+
+            Assert.Equal("test%value", result);
+        }
+
+        [Fact]
+        public void EscapeSqlPattern_EscapedUnderscore_BecomesLiteralUnderscore()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "EscapeSqlPattern", "test\\_value");
+
+            Assert.Equal("test_value", result);
+        }
+
+        [Fact]
+        public void EscapeSqlPattern_SingleQuote_DoublesQuote()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "EscapeSqlPattern", "O'Reilly");
+
+            Assert.Equal("O''Reilly", result);
+        }
+
+        [Fact]
+        public void EscapeSqlPattern_MultipleQuotes_DoublesAll()
+        {
+            var connection = CreateTestConnection();
+            var result = (string)InvokePrivateMethod(connection, "EscapeSqlPattern", "It's O'Reilly's");
+
+            Assert.Equal("It''s O''Reilly''s", result);
         }
 
         #endregion

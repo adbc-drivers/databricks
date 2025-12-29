@@ -67,9 +67,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string _traceParentHeaderName;
         private readonly bool _traceStateEnabled;
 
-        // Metadata caching
-        private readonly MetadataCache _metadataCache;
-
         // Authentication support
         private HttpClient? _authHttpClient;
         private readonly string? _identityFederationClientId;
@@ -207,14 +204,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
             _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
             _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
-
-            // Metadata caching configuration
-            bool cacheEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.MetadataCacheEnabled, false);
-            int catalogTtl = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.MetadataCacheCatalogTtl, 300);
-            int schemaTtl = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.MetadataCacheSchemaTtl, 120);
-            int tableTtl = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.MetadataCacheTableTtl, 60);
-            int columnTtl = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.MetadataCacheColumnTtl, 30);
-            _metadataCache = new MetadataCache(cacheEnabled, catalogTtl, schemaTtl, tableTtl, columnTtl);
 
             // Authentication configuration
             if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
@@ -434,304 +423,1307 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private async Task<IArrowArrayStream> GetObjectsAsync(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
         {
-            // Fetch data based on depth
-            var catalogs = new List<string>();
-            var catalogSchemas = new Dictionary<string, List<string>>();
-            var catalogSchemaTables = new Dictionary<string, Dictionary<string, List<(string tableName, string tableType)>>>();
-            var catalogSchemaTableColumns = new Dictionary<string, Dictionary<string, Dictionary<string, List<ColumnInfo>>>>();
-
-            // Fetch catalogs
-            if (depth >= GetObjectsDepth.Catalogs)
+            return await this.TraceActivityAsync(async activity =>
             {
-                catalogs = await GetCatalogsAsync(catalogPattern).ConfigureAwait(false);
+                // Add tracing tags for input parameters
+                activity?.SetTag("depth", depth.ToString());
+                activity?.SetTag("catalog_pattern", catalogPattern ?? "(all)");
+                activity?.SetTag("schema_pattern", schemaPattern ?? "(all)");
+                activity?.SetTag("table_pattern", tableNamePattern ?? "(all)");
+                activity?.SetTag("column_pattern", columnNamePattern ?? "(all)");
+                activity?.SetTag("table_types", tableTypes != null ? string.Join(",", tableTypes) : "(all)");
 
-                // Fetch schemas in parallel
-                if (depth >= GetObjectsDepth.DbSchemas)
+                // Per ADBC spec: catalogPattern is a catalog NAME (exact match, not a pattern), or null for all catalogs
+                // Only schemaPattern, tableNamePattern, and columnNamePattern support LIKE pattern matching
+                // The server-side SHOW commands handle pattern matching - no client-side iteration needed
+
+                // Single unified structure: catalog → schema → table → (tableType, columns)
+                // This matches the Thrift HiveServer2 pattern for consistency
+                var catalogMap = new Dictionary<string, Dictionary<string, Dictionary<string, (string tableType, List<ColumnInfo> columns)>>>();
+
+                // Fetch catalogs
+                if (depth == GetObjectsDepth.All || depth >= GetObjectsDepth.Catalogs)
                 {
-                    var schemaTasks = catalogs.Select(async catalog =>
-                    {
-                        var schemas = await GetSchemasAsync(catalog, schemaPattern).ConfigureAwait(false);
-                        return (catalog, schemas);
-                    }).ToList();
+                    // GetCatalogsAsync will return empty list if catalog doesn't exist
+                    var catalogs = await GetCatalogsAsync(catalogPattern).ConfigureAwait(false);
+                    activity?.SetTag("fetched_catalogs", catalogs.Count);
 
-                    var schemaResults = await Task.WhenAll(schemaTasks).ConfigureAwait(false);
-
-                    foreach (var (catalog, schemas) in schemaResults)
+                    // Handle servers that don't support 'catalog' in the namespace
+                    // (matches Thrift HiveServer2 behavior)
+                    if (catalogs.Count == 0 && string.IsNullOrEmpty(catalogPattern))
                     {
-                        catalogSchemas[catalog] = schemas;
+                        catalogs.Add(string.Empty);
                     }
 
-                    // Fetch tables in parallel
-                    if (depth >= GetObjectsDepth.Tables)
+                    // Initialize catalogMap with fetched catalogs
+                    foreach (var catalog in catalogs)
                     {
-                        var tableTasks = schemaResults.SelectMany(result =>
-                            result.schemas.Select(async schema =>
-                            {
-                                var tables = await GetTablesAsync(result.catalog, schema, tableNamePattern, tableTypes).ConfigureAwait(false);
-                                return (catalog: result.catalog, schema, tables);
-                            })
-                        ).ToList();
+                        catalogMap.Add(catalog, new Dictionary<string, Dictionary<string, (string, List<ColumnInfo>)>>());
+                    }
 
-                        var tableResults = await Task.WhenAll(tableTasks).ConfigureAwait(false);
+                    // Fetch schemas (needed for DbSchemas and deeper depths)
+                    if (depth == GetObjectsDepth.All || depth >= GetObjectsDepth.DbSchemas)
+                    {
+                        // Get schemas - the underlying GetSchemasAsync handles null catalog with "IN ALL CATALOGS"
+                        var allSchemas = await GetSchemasAsync(catalogPattern, schemaPattern).ConfigureAwait(false);
+                        activity?.SetTag("fetched_schemas", allSchemas.Count);
 
-                        foreach (var (catalog, schema, tables) in tableResults)
+                        // Add schemas to catalogMap using null-safe access
+                        // This handles Spark edge cases where catalog might be empty string for temporary tables
+                        foreach (var (catalog, schema) in allSchemas)
                         {
-                            if (!catalogSchemaTables.ContainsKey(catalog))
+                            if (catalogMap.TryGetValue(catalog, out var schemaDict))
                             {
-                                catalogSchemaTables[catalog] = new Dictionary<string, List<(string, string)>>();
+                                if (!schemaDict.ContainsKey(schema))
+                                {
+                                    schemaDict.Add(schema, new Dictionary<string, (string, List<ColumnInfo>)>());
+                                }
                             }
-                            catalogSchemaTables[catalog][schema] = tables;
+                        }
+                    }
+
+                    // Fetch tables (needed for Tables and All depths)
+                    if (depth == GetObjectsDepth.All || depth >= GetObjectsDepth.Tables)
+                    {
+                        // Get tables - server handles pattern matching for schema and table names
+                        var allTables = await GetTablesAsync(catalogPattern, schemaPattern, tableNamePattern, tableTypes).ConfigureAwait(false);
+                        activity?.SetTag("fetched_tables", allTables.Count);
+
+                        // Add tables to catalogMap using null-safe 2-level access
+                        foreach (var (catalog, schema, tableName, tableType, _) in allTables)
+                        {
+                            if (catalogMap.TryGetValue(catalog, out var schemaDict) &&
+                                schemaDict.TryGetValue(schema, out var tableDict))
+                            {
+                                if (!tableDict.ContainsKey(tableName))
+                                {
+                                    tableDict.Add(tableName, (tableType, new List<ColumnInfo>()));
+                                }
+                            }
                         }
 
-                        // Fetch columns in parallel (only for All depth)
+                        // Fetch columns (only for All depth)
                         if (depth == GetObjectsDepth.All)
                         {
-                            var columnTasks = tableResults.SelectMany(result =>
-                                result.tables.Select(async table =>
-                                {
-                                    var columns = await GetColumnsAsync(result.catalog, result.schema, table.tableName, columnNamePattern).ConfigureAwait(false);
-                                    return (catalog: result.catalog, schema: result.schema, tableName: table.tableName, columns);
-                                })
-                            ).ToList();
+                            // Get columns - server handles all pattern matching
+                            var allColumns = await GetColumnsAsync(catalogPattern, schemaPattern, tableNamePattern, columnNamePattern).ConfigureAwait(false);
+                            activity?.SetTag("fetched_columns", allColumns.Count);
 
-                            var columnResults = await Task.WhenAll(columnTasks).ConfigureAwait(false);
-
-                            foreach (var (catalog, schema, tableName, columns) in columnResults)
+                            // Add columns to catalogMap using null-safe 3-level access
+                            foreach (var column in allColumns)
                             {
-                                if (!catalogSchemaTableColumns.ContainsKey(catalog))
+                                if (catalogMap.TryGetValue(column.Catalog, out var schemaDict) &&
+                                    schemaDict.TryGetValue(column.Schema, out var tableDict) &&
+                                    tableDict.TryGetValue(column.Table, out var tableEntry))
                                 {
-                                    catalogSchemaTableColumns[catalog] = new Dictionary<string, Dictionary<string, List<ColumnInfo>>>();
+                                    tableEntry.columns.Add(column);
                                 }
-                                if (!catalogSchemaTableColumns[catalog].ContainsKey(schema))
-                                {
-                                    catalogSchemaTableColumns[catalog][schema] = new Dictionary<string, List<ColumnInfo>>();
-                                }
-                                catalogSchemaTableColumns[catalog][schema][tableName] = columns;
                             }
                         }
                     }
                 }
-            }
 
-            // Build and return result
-            return BuildGetObjectsResult(depth, catalogs, catalogSchemas, catalogSchemaTables, catalogSchemaTableColumns);
+                // Add result metrics
+                activity?.SetTag("result_catalogs", catalogMap.Count);
+                activity?.SetTag("result_schemas", catalogMap.Values.Sum(s => s.Count));
+                activity?.SetTag("result_tables", catalogMap.Values.SelectMany(s => s.Values).Sum(t => t.Count));
+
+                // Build and return result from unified catalogMap
+                return BuildGetObjectsResult(depth, catalogMap);
+            });
         }
 
+        /// <summary>
+        /// Gets list of catalogs matching the optional pattern.
+        /// </summary>
         private async Task<List<string>> GetCatalogsAsync(string? catalogPattern)
         {
-            // Check cache first
-            if (_metadataCache.TryGetCatalogs(catalogPattern, out var cachedCatalogs))
+            return await this.TraceActivityAsync(async activity =>
             {
-                return cachedCatalogs!;
-            }
+                activity?.SetTag("catalog_pattern", catalogPattern ?? "(all)");
 
-            var sql = "SHOW CATALOGS";
-            if (!string.IsNullOrEmpty(catalogPattern))
-            {
-                sql += $" LIKE '{EscapeSqlPattern(catalogPattern)}'";
-            }
+                // Use SqlCommandBuilder for efficient SQL generation
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalogPattern(catalogPattern);
 
-            List<RecordBatch> batches;
-            try
-            {
-                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // Return empty list on permission denied or other errors
-                // This allows BI tools to show "Access Denied" instead of crashing
-                return new List<string>();
-            }
+                var sql = commandBuilder.BuildShowCatalogs();
+                activity?.SetTag("sql_query", sql);
 
-            var catalogs = new List<string>();
-
-            foreach (var batch in batches)
-            {
-                var catalogArray = batch.Column("catalog") as StringArray;
-                if (catalogArray == null) continue;
-
-                for (int i = 0; i < batch.Length; i++)
+                List<RecordBatch> batches;
+                try
                 {
-                    if (!catalogArray.IsNull(i))
-                    {
-                        var catalog = catalogArray.GetString(i);
-                        if (!string.IsNullOrEmpty(catalogPattern) && !PatternMatches(catalog, catalogPattern))
-                            continue;
-                        catalogs.Add(catalog);
-                    }
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
                 }
-            }
-
-            // Cache the result
-            _metadataCache.PutCatalogs(catalogPattern, catalogs);
-
-            return catalogs;
-        }
-
-        private async Task<List<string>> GetSchemasAsync(string catalog, string? schemaPattern)
-        {
-            // Check cache first
-            if (_metadataCache.TryGetSchemas(catalog, schemaPattern, out var cachedSchemas))
-            {
-                return cachedSchemas!;
-            }
-
-            var sql = $"SHOW SCHEMAS IN {QuoteIdentifier(catalog)}";
-            if (!string.IsNullOrEmpty(schemaPattern))
-            {
-                sql += $" LIKE '{EscapeSqlPattern(schemaPattern)}'";
-            }
-
-            List<RecordBatch> batches;
-            try
-            {
-                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // Return empty list on permission denied or other errors
-                // This allows BI tools to show "Access Denied" for this catalog
-                return new List<string>();
-            }
-
-            var schemas = new List<string>();
-
-            foreach (var batch in batches)
-            {
-                // Result columns are typically 'databaseName' or 'namespace' depending on DBR version
-                StringArray? schemaArray = batch.Column("databaseName") as StringArray;
-                if (schemaArray == null)
+                catch (Exception ex)
                 {
-                    schemaArray = batch.Column("namespace") as StringArray;
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    // Return empty list on permission denied or other errors
+                    // This allows BI tools to show "Access Denied" instead of crashing
+                    return new List<string>();
                 }
-                if (schemaArray == null) continue;
 
-                for (int i = 0; i < batch.Length; i++)
+                var catalogs = new List<string>();
+
+                foreach (var batch in batches)
                 {
-                    if (!schemaArray.IsNull(i))
+                    var catalogArray = batch.Column("catalog") as StringArray;
+                    if (catalogArray == null) continue;
+
+                    for (int i = 0; i < batch.Length; i++)
                     {
-                        var schema = schemaArray.GetString(i);
-                        if (!string.IsNullOrEmpty(schemaPattern) && !PatternMatches(schema, schemaPattern))
-                            continue;
-                        schemas.Add(schema);
-                    }
-                }
-            }
-
-            // Cache the result
-            _metadataCache.PutSchemas(catalog, schemaPattern, schemas);
-
-            return schemas;
-        }
-
-        private async Task<List<(string tableName, string tableType)>> GetTablesAsync(string catalog, string schema, string? tableNamePattern, IReadOnlyList<string>? tableTypes)
-        {
-            // Check cache first
-            if (_metadataCache.TryGetTables(catalog, schema, tableNamePattern, tableTypes, out var cachedTables))
-            {
-                return cachedTables!;
-            }
-
-            var sql = $"SHOW TABLES IN {QuoteIdentifier(catalog)}.{QuoteIdentifier(schema)}";
-            if (!string.IsNullOrEmpty(tableNamePattern))
-            {
-                sql += $" LIKE '{EscapeSqlPattern(tableNamePattern)}'";
-            }
-
-            List<RecordBatch> batches;
-            try
-            {
-                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // Return empty list on permission denied or other errors
-                // This allows BI tools to show "Access Denied" for this schema
-                return new List<(string, string)>();
-            }
-
-            var tables = new List<(string, string)>();
-
-            foreach (var batch in batches)
-            {
-                var tableNameArray = batch.Column("tableName") as StringArray;
-                var isTemporaryArray = batch.Column("isTemporary") as BooleanArray;
-
-                if (tableNameArray == null) continue;
-
-                for (int i = 0; i < batch.Length; i++)
-                {
-                    if (tableNameArray.IsNull(i))
-                        continue;
-
-                    var tableName = tableNameArray.GetString(i);
-
-                    // Determine table type
-                    string tableType = "TABLE";
-                    if (isTemporaryArray != null && !isTemporaryArray.IsNull(i))
-                    {
-                        var isTemporary = isTemporaryArray.GetValue(i);
-                        if (isTemporary == true)
+                        if (!catalogArray.IsNull(i))
                         {
-                            tableType = "LOCAL TEMPORARY";
+                            var catalog = catalogArray.GetString(i);
+                            // Pattern matching is already done by SQL LIKE clause, no need to check again
+                            catalogs.Add(catalog);
+                        }
+                    }
+                }
+
+                activity?.SetTag("result_count", catalogs.Count);
+                return catalogs;
+            });
+        }
+
+        /// <summary>
+        /// Gets list of schemas matching the optional pattern.
+        /// </summary>
+        private async Task<List<(string catalog, string schema)>> GetSchemasAsync(string? catalog, string? schemaPattern)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                activity?.SetTag("catalog", catalog ?? "(all)");
+                activity?.SetTag("schema_pattern", schemaPattern ?? "(all)");
+
+                // Use SqlCommandBuilder for efficient SQL generation
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalog(catalog)
+                    .WithSchemaPattern(schemaPattern);
+
+                var sql = commandBuilder.BuildShowSchemas();
+                activity?.SetTag("sql_query", sql);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    // Return empty list on permission denied or other errors
+                    // This allows BI tools to show "Access Denied"
+                    return new List<(string, string)>();
+                }
+
+                var schemas = new List<(string catalog, string schema)>();
+
+                foreach (var batch in batches)
+                {
+                    // When using "IN ALL CATALOGS", results include catalog column
+                    StringArray? catalogArray = null;
+                    if (string.IsNullOrEmpty(catalog))
+                    {
+                        catalogArray = batch.Column("catalog") as StringArray;
+                    }
+
+                    // Result columns are typically 'databaseName' or 'namespace' depending on DBR version
+                    StringArray? schemaArray = batch.Column("databaseName") as StringArray;
+                    if (schemaArray == null)
+                    {
+                        schemaArray = batch.Column("namespace") as StringArray;
+                    }
+                    if (schemaArray == null) continue;
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (!schemaArray.IsNull(i))
+                        {
+                            var schemaName = schemaArray.GetString(i);
+                            // Pattern matching is already done by SQL LIKE clause, no need to check again
+
+                            string catalogName;
+                            if (string.IsNullOrEmpty(catalog))
+                            {
+                                // Get catalog from result when using "IN ALL CATALOGS"
+                                if (catalogArray == null || catalogArray.IsNull(i))
+                                    continue;
+                                catalogName = catalogArray.GetString(i);
+                            }
+                            else
+                            {
+                                catalogName = catalog;
+                            }
+
+                            schemas.Add((catalogName, schemaName));
+                        }
+                    }
+                }
+
+                activity?.SetTag("result_count", schemas.Count);
+                return schemas;
+            });
+        }
+
+        /// <summary>
+        /// Gets list of tables matching the optional patterns.
+        /// </summary>
+        private async Task<List<(string catalog, string schema, string tableName, string tableType, string remarks)>> GetTablesAsync(
+            string? catalog, string? schema, string? tableNamePattern, IReadOnlyList<string>? tableTypes)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                activity?.SetTag("catalog", catalog ?? "(all)");
+                activity?.SetTag("schema", schema ?? "(all)");
+                activity?.SetTag("table_pattern", tableNamePattern ?? "(all)");
+                activity?.SetTag("table_types", tableTypes != null ? string.Join(",", tableTypes) : "(all)");
+
+                // Use SqlCommandBuilder for efficient SQL generation
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalog(catalog)
+                    .WithSchema(schema)
+                    // Don't set schema pattern when we have an exact schema - this would create invalid SQL
+                    .WithTablePattern(tableNamePattern);
+
+                var sql = commandBuilder.BuildShowTables();
+                activity?.SetTag("sql_query", sql);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    // Return empty list on permission denied or other errors
+                    // This allows BI tools to show "Access Denied"
+                    return new List<(string, string, string, string, string)>();
+                }
+
+                var tables = new List<(string catalog, string schema, string tableName, string tableType, string remarks)>();
+
+                foreach (var batch in batches)
+                {
+                    // When using "IN ALL CATALOGS", results include catalog and schema columns
+                    StringArray? catalogArray = null;
+                    StringArray? schemaArray = null;
+                    if (string.IsNullOrEmpty(catalog))
+                    {
+                        catalogArray = batch.Column("catalog") as StringArray;
+                        schemaArray = batch.Column("database") as StringArray;
+                        if (schemaArray == null) schemaArray = batch.Column("databaseName") as StringArray;
+                    }
+
+                    var tableNameArray = batch.Column("tableName") as StringArray;
+                    var isTemporaryArray = batch.Column("isTemporary") as BooleanArray;
+                    var remarksArray = batch.Column("remarks") as StringArray;
+
+                    if (tableNameArray == null) continue;
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (tableNameArray.IsNull(i))
+                            continue;
+
+                        var tableName = tableNameArray.GetString(i);
+
+                        // Get catalog and schema from results when using "IN ALL CATALOGS"
+                        string catalogName;
+                        string schemaName;
+                        if (string.IsNullOrEmpty(catalog))
+                        {
+                            if (catalogArray == null || catalogArray.IsNull(i))
+                                continue;
+                            catalogName = catalogArray.GetString(i);
+
+                            if (schemaArray == null || schemaArray.IsNull(i))
+                                continue;
+                            schemaName = schemaArray.GetString(i);
+                        }
+                        else
+                        {
+                            catalogName = catalog;
+                            schemaName = schema ?? "";
+                        }
+
+                        // Determine table type
+                        string tableType = "TABLE";
+                        if (isTemporaryArray != null && !isTemporaryArray.IsNull(i))
+                        {
+                            var isTemporary = isTemporaryArray.GetValue(i);
+                            if (isTemporary == true)
+                            {
+                                tableType = "LOCAL TEMPORARY";
+                            }
+                        }
+
+                        // Pattern matching is already done by SQL LIKE clause, no need to check again
+                        // Apply table type filter if specified
+                        if (tableTypes != null && tableTypes.Count > 0 && !tableTypes.Contains(tableType))
+                            continue;
+
+                        // Get remarks from server response, use empty string if null/empty
+                        string remarks = "";
+                        if (remarksArray != null && !remarksArray.IsNull(i))
+                        {
+                            var remarksValue = remarksArray.GetString(i);
+                            remarks = remarksValue ?? "";
+                        }
+
+                        tables.Add((catalogName, schemaName, tableName, tableType, remarks));
+                    }
+                }
+
+                activity?.SetTag("result_count", tables.Count);
+                return tables;
+            });
+        }
+
+        private async Task<List<ColumnInfo>> GetColumnsAsync(string? catalog, string? schema, string? tableName, string? columnNamePattern)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                activity?.SetTag("catalog", catalog ?? "(all)");
+                activity?.SetTag("schema", schema ?? "(all)");
+                activity?.SetTag("table", tableName ?? "(all)");
+                activity?.SetTag("column_pattern", columnNamePattern ?? "(all)");
+
+                if (string.IsNullOrEmpty(catalog))
+                {
+                    var catalogs = await GetCatalogsAsync(null).ConfigureAwait(false);
+                    activity?.SetTag("catalog_count", catalogs.Count);
+                    activity?.SetTag("parallel_execution", true);
+
+                    var columnTasks = catalogs.Select(cat => GetColumnsForCatalogAsync(cat, schema, tableName, columnNamePattern));
+                    var columnResults = await Task.WhenAll(columnTasks).ConfigureAwait(false);
+                    var allColumns = columnResults.SelectMany(c => c).ToList();
+
+                    activity?.SetTag("result_count", allColumns.Count);
+                    activity?.SetTag("unique_tables", allColumns.Select(c => $"{c.Catalog}.{c.Schema}.{c.Table}").Distinct().Count());
+                    return allColumns;
+                }
+
+                activity?.SetTag("parallel_execution", false);
+                var result = await GetColumnsForCatalogAsync(catalog, schema, tableName, columnNamePattern).ConfigureAwait(false);
+                activity?.SetTag("result_count", result.Count);
+                return result;
+            });
+        }
+
+        private async Task<List<ColumnInfo>> GetColumnsForCatalogAsync(string catalog, string? schema, string? tableName, string? columnNamePattern)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                activity?.SetTag("catalog", catalog);
+                activity?.SetTag("schema", schema ?? "(all)");
+                activity?.SetTag("table", tableName ?? "(all)");
+                activity?.SetTag("column_pattern", columnNamePattern ?? "(all)");
+
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalog(catalog);
+
+                if (!string.IsNullOrEmpty(schema))
+                {
+                    commandBuilder.WithSchema(schema);
+                }
+                if (!string.IsNullOrEmpty(tableName))
+                {
+                    commandBuilder.WithTable(tableName);
+                }
+
+                commandBuilder.WithColumnPattern(columnNamePattern);
+
+                string sql;
+                try
+                {
+                    sql = commandBuilder.BuildShowColumns(catalog);
+                    activity?.SetTag("sql_query", sql);
+                }
+                catch (NotSupportedException ex)
+                {
+                    activity?.SetTag("error", "SQL build failed: " + ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    // This should not happen since we're providing a catalog
+                    return new List<ColumnInfo>();
+                }
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    // If SHOW COLUMNS fails (e.g., permission denied), return empty list
+                    return new List<ColumnInfo>();
+                }
+
+                var columns = new List<ColumnInfo>();
+                var tablePositions = new Dictionary<string, int>();
+
+                foreach (var batch in batches)
+                {
+                    var tableNameArray = batch.Column("tableName") as StringArray;
+                    var colNameArray = batch.Column("col_name") as StringArray;
+                    var columnTypeArray = batch.Column("columnType") as StringArray;
+                    var isNullableArray = batch.Column("isNullable") as StringArray;
+
+                    StringArray? schemaArray = null;
+                    try
+                    {
+                        schemaArray = batch.Column("database") as StringArray ?? batch.Column("databaseName") as StringArray;
+                    }
+                    catch { }
+
+                    StringArray? commentArray = null;
+                    try
+                    {
+                        commentArray = batch.Column("comment") as StringArray;
+                    }
+                    catch { }
+
+                    if (colNameArray == null || columnTypeArray == null || tableNameArray == null)
+                    {
+                        continue;
+                    }
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (colNameArray.IsNull(i) || columnTypeArray.IsNull(i) || tableNameArray.IsNull(i))
+                        {
+                            continue;
+                        }
+
+                        var colName = colNameArray.GetString(i);
+                        var dataType = columnTypeArray.GetString(i);
+                        var currentTableName = tableNameArray.GetString(i);
+
+                        var currentSchemaName = schemaArray != null && !schemaArray.IsNull(i)
+                            ? schemaArray.GetString(i)
+                            : schema;
+
+                        if (string.IsNullOrEmpty(colName) || colName.StartsWith("#") ||
+                            dataType.Contains("Partition Information") || dataType.Contains("# col_name"))
+                        {
+                            continue;
+                        }
+
+                        var tableKey = $"{catalog}.{currentSchemaName}.{currentTableName}";
+                        if (!tablePositions.ContainsKey(tableKey))
+                        {
+                            tablePositions[tableKey] = 1;
+                        }
+                        int position = tablePositions[tableKey]++;
+
+                        var comment = commentArray != null && !commentArray.IsNull(i) ? commentArray.GetString(i) : null;
+                        bool isNullable = true; // Default to nullable
+                        if (isNullableArray != null && !isNullableArray.IsNull(i))
+                        {
+                            var nullableStr = isNullableArray.GetString(i);
+                            isNullable = string.IsNullOrEmpty(nullableStr) || !nullableStr.Equals("false", StringComparison.OrdinalIgnoreCase);
+                        }
+
+                        var xdbcDataType = DatabricksTypeMapper.GetXdbcDataType(dataType);
+                        var baseType = DatabricksTypeMapper.StripBaseTypeName(dataType);
+
+                        columns.Add(new ColumnInfo
+                        {
+                            Catalog = catalog,
+                            Schema = currentSchemaName ?? "",
+                            Table = currentTableName,
+                            Name = colName,
+                            TypeName = dataType,
+                            Position = position,
+                            Nullable = isNullable,
+                            Comment = comment,
+                            XdbcDataType = xdbcDataType,
+                            XdbcTypeName = baseType,
+                            XdbcColumnSize = DatabricksTypeMapper.GetColumnSize(dataType),
+                            XdbcDecimalDigits = DatabricksTypeMapper.GetDecimalDigits(dataType),
+                            XdbcNumPrecRadix = DatabricksTypeMapper.GetNumPrecRadix(dataType),
+                            XdbcBufferLength = DatabricksTypeMapper.GetBufferLength(dataType),
+                            XdbcCharOctetLength = DatabricksTypeMapper.GetCharOctetLength(dataType),
+                            XdbcSqlDataType = DatabricksTypeMapper.GetSqlDataType(dataType),
+                            XdbcDatetimeSub = DatabricksTypeMapper.GetSqlDatetimeSub(dataType)
+                        });
+                    }
+                }
+
+                activity?.SetTag("result_count", columns.Count);
+                activity?.SetTag("unique_tables", tablePositions.Count);
+                activity?.SetTag("skipped_partition_cols", batches.Sum(b => b.Length) - columns.Count);
+                return columns;
+            });
+        }
+
+        internal IArrowArrayStream GetColumnsFlat(string? catalog, string? dbSchema, string? tableName, string? columnName)
+        {
+            catalog = catalog ?? _catalog;
+            dbSchema = dbSchema ?? _schema;
+
+            if (string.IsNullOrEmpty(catalog) || string.IsNullOrEmpty(dbSchema))
+            {
+                return BuildFlatColumnsResult(catalog, dbSchema, tableName, new List<ColumnInfo>());
+            }
+
+            var columns = GetColumnsAsync(catalog, dbSchema, tableName, columnName).GetAwaiter().GetResult();
+            return BuildFlatColumnsResult(catalog, dbSchema, tableName, columns);
+        }
+
+        /// <summary>
+        /// Builds a flat structure (24 columns) from ColumnInfo list matching Thrift HiveServer2 GetColumns format.
+        /// </summary>
+        private IArrowArrayStream BuildFlatColumnsResult(string? catalog, string? dbSchema, string? tableName, List<ColumnInfo> columns)
+        {
+            var schema = ColumnMetadataSchemas.CreateColumnMetadataSchema();
+            var tableCatBuilder = new StringArray.Builder();
+            var tableSchemaBuilder = new StringArray.Builder();
+            var tableNameBuilder = new StringArray.Builder();
+            var columnNameBuilder = new StringArray.Builder();
+            var dataTypeBuilder = new Int32Array.Builder();
+            var typeNameBuilder = new StringArray.Builder();
+            var columnSizeBuilder = new Int32Array.Builder();
+            var bufferLengthBuilder = new Int32Array.Builder();
+            var decimalDigitsBuilder = new Int32Array.Builder();
+            var numPrecRadixBuilder = new Int32Array.Builder();
+            var nullableBuilder = new Int32Array.Builder();
+            var remarksBuilder = new StringArray.Builder();
+            var columnDefBuilder = new StringArray.Builder();
+            var sqlDataTypeBuilder = new Int32Array.Builder();
+            var sqlDatetimeSubBuilder = new Int32Array.Builder();
+            var charOctetLengthBuilder = new Int32Array.Builder();
+            var ordinalPositionBuilder = new Int32Array.Builder();
+            var isNullableBuilder = new StringArray.Builder();
+            var scopeCatalogBuilder = new StringArray.Builder();
+            var scopeSchemaBuilder = new StringArray.Builder();
+            var scopeTableBuilder = new StringArray.Builder();
+            var sourceDataTypeBuilder = new Int16Array.Builder();
+            var isAutoIncrementBuilder = new StringArray.Builder();
+            var baseTypeNameBuilder = new StringArray.Builder();
+
+            foreach (var column in columns)
+            {
+                tableCatBuilder.Append(catalog);
+                tableSchemaBuilder.Append(dbSchema);
+                tableNameBuilder.Append(tableName);
+                columnNameBuilder.Append(column.Name);
+
+                if (column.XdbcDataType.HasValue)
+                    dataTypeBuilder.Append((int)column.XdbcDataType.Value);
+                else
+                    dataTypeBuilder.AppendNull();
+
+                // Preserve original casing from server (e.g., "STRUCT<f1: STRING>" not "STRUCT<F1: STRING>")
+                typeNameBuilder.Append(column.TypeName);
+
+                if (column.XdbcColumnSize.HasValue)
+                    columnSizeBuilder.Append(column.XdbcColumnSize.Value);
+                else
+                    columnSizeBuilder.AppendNull();
+
+                if (column.XdbcBufferLength.HasValue)
+                    bufferLengthBuilder.Append(column.XdbcBufferLength.Value);
+                else
+                    bufferLengthBuilder.AppendNull();
+
+                if (column.XdbcDecimalDigits.HasValue)
+                    decimalDigitsBuilder.Append(column.XdbcDecimalDigits.Value);
+                else
+                    decimalDigitsBuilder.AppendNull();
+
+                if (column.XdbcNumPrecRadix.HasValue)
+                    numPrecRadixBuilder.Append((int)column.XdbcNumPrecRadix.Value);
+                else
+                    numPrecRadixBuilder.AppendNull();
+
+                nullableBuilder.Append(column.Nullable ? 1 : 0);
+                remarksBuilder.Append(column.Comment ?? "");
+                columnDefBuilder.AppendNull();
+
+                if (column.XdbcSqlDataType.HasValue)
+                    sqlDataTypeBuilder.Append((int)column.XdbcSqlDataType.Value);
+                else
+                    sqlDataTypeBuilder.AppendNull();
+
+                if (column.XdbcDatetimeSub.HasValue)
+                    sqlDatetimeSubBuilder.Append((int)column.XdbcDatetimeSub.Value);
+                else
+                    sqlDatetimeSubBuilder.AppendNull();
+
+                if (column.XdbcCharOctetLength.HasValue)
+                    charOctetLengthBuilder.Append(column.XdbcCharOctetLength.Value);
+                else
+                    charOctetLengthBuilder.AppendNull();
+
+                ordinalPositionBuilder.Append(column.Position - 1);
+                isNullableBuilder.Append(column.Nullable ? "YES" : "NO");
+                scopeCatalogBuilder.AppendNull();
+                scopeSchemaBuilder.AppendNull();
+                scopeTableBuilder.AppendNull();
+                sourceDataTypeBuilder.AppendNull();
+                isAutoIncrementBuilder.Append("NO");
+                baseTypeNameBuilder.Append(column.XdbcTypeName ?? string.Empty);
+            }
+
+            // Build the result arrays
+            var dataArrays = new List<IArrowArray>
+            {
+                tableCatBuilder.Build(),
+                tableSchemaBuilder.Build(),
+                tableNameBuilder.Build(),
+                columnNameBuilder.Build(),
+                dataTypeBuilder.Build(),
+                typeNameBuilder.Build(),
+                columnSizeBuilder.Build(),
+                bufferLengthBuilder.Build(),
+                decimalDigitsBuilder.Build(),
+                numPrecRadixBuilder.Build(),
+                nullableBuilder.Build(),
+                remarksBuilder.Build(),
+                columnDefBuilder.Build(),
+                sqlDataTypeBuilder.Build(),
+                sqlDatetimeSubBuilder.Build(),
+                charOctetLengthBuilder.Build(),
+                ordinalPositionBuilder.Build(),
+                isNullableBuilder.Build(),
+                scopeCatalogBuilder.Build(),
+                scopeSchemaBuilder.Build(),
+                scopeTableBuilder.Build(),
+                sourceDataTypeBuilder.Build(),
+                isAutoIncrementBuilder.Build(),
+                baseTypeNameBuilder.Build()
+            };
+
+            // Create a single record batch with all the data
+            var recordBatch = new RecordBatch(schema, dataArrays, columns.Count);
+
+            // Return as a simple array stream
+            return new StatementExecInfoArrowStream(schema, new[] { recordBatch });
+        }
+
+        private IArrowArrayStream BuildGetObjectsResult(
+            GetObjectsDepth depth,
+            Dictionary<string, Dictionary<string, Dictionary<string, (string tableType, List<ColumnInfo> columns)>>> catalogMap)
+        {
+            // Build full ADBC-compliant nested structure for ALL depth levels
+            // The nested structure (catalog_name, catalog_db_schemas) is consistent with Thrift HiveServer2 implementation
+            // and follows the ADBC standard: https://arrow.apache.org/adbc/current/format/specification.html#getobjects
+            //
+            // The depth parameter controls how deep the nesting goes:
+            // - GetObjectsDepth.Catalogs: Only catalog_name populated, catalog_db_schemas contains nulls
+            // - GetObjectsDepth.DbSchemas: catalog_name + schema names, tables are null
+            // - GetObjectsDepth.Tables: catalog_name + schema names + table names, columns are null
+            // - GetObjectsDepth.All: Full hierarchy with all metadata populated
+
+            var catalogNameBuilder = new StringArray.Builder();
+            var catalogDbSchemasValues = new List<IArrowArray?>();
+
+            // Iterate over unified catalogMap structure (matches Thrift pattern)
+            foreach (var catalogEntry in catalogMap)
+            {
+                catalogNameBuilder.Append(catalogEntry.Key);
+
+                if (depth == GetObjectsDepth.Catalogs)
+                {
+                    // For Catalogs depth: just catalog names, no nested schemas
+                    catalogDbSchemasValues.Add(null);
+                }
+                else
+                {
+                    // For DbSchemas, Tables, and All depths: build nested schemas structure
+                    catalogDbSchemasValues.Add(BuildDbSchemasStruct(depth, catalogEntry.Value));
+                }
+            }
+
+            // Build and return the standardized GetObjects schema
+            var resultSchema = StandardSchemas.GetObjectsSchema;
+            var dataArrays = resultSchema.Validate(new List<IArrowArray>
+            {
+                catalogNameBuilder.Build(),
+                catalogDbSchemasValues.BuildListArrayForType(new StructType(StandardSchemas.DbSchemaSchema))
+            });
+
+            return new StatementExecInfoArrowStream(resultSchema, dataArrays);
+        }
+
+        /// <summary>
+        /// Gets all supported table types in the database.
+        /// Statement Execution API returns TABLE, VIEW, and LOCAL TEMPORARY.
+        /// </summary>
+        /// <returns>Arrow stream with single column 'table_type' containing supported table type names</returns>
+        /// <summary>
+        /// Gets a list of catalogs (databases) available in the system.
+        /// </summary>
+        /// <param name="catalogPattern">Catalog name pattern (SQL LIKE syntax). If null, returns all catalogs.</param>
+        /// <returns>Arrow stream with catalog_name column</returns>
+        internal IArrowArrayStream GetCatalogs(string? catalogPattern)
+        {
+            return GetCatalogsMetadataAsync(catalogPattern).GetAwaiter().GetResult();
+        }
+
+        private async Task<IArrowArrayStream> GetCatalogsMetadataAsync(string? catalogPattern)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                activity?.SetTag("catalog_pattern", catalogPattern ?? "(all)");
+
+                // Use SqlCommandBuilder for efficient SQL generation
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalogPattern(catalogPattern);
+
+                var sql = commandBuilder.BuildShowCatalogs();
+                activity?.SetTag("sql_query", sql);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    // Return empty result on permission denied or other errors
+                    var emptySchema = new Schema(new[] { new Field("catalog_name", StringType.Default, nullable: false) }, null);
+                    var emptyData = new List<IArrowArray> { new StringArray.Builder().Build() };
+                    return new StatementExecInfoArrowStream(emptySchema, emptyData);
+                }
+
+                // Build result: single column "catalog_name"
+                var catalogBuilder = new StringArray.Builder();
+                foreach (var batch in batches)
+                {
+                    var catalogArray = batch.Column("catalog") as StringArray;
+                    if (catalogArray == null) continue;
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (!catalogArray.IsNull(i))
+                        {
+                            catalogBuilder.Append(catalogArray.GetString(i));
+                        }
+                    }
+                }
+
+                var schema = new Schema(new[] { new Field("catalog_name", StringType.Default, nullable: false) }, null);
+                var data = new List<IArrowArray> { catalogBuilder.Build() };
+                var result = new StatementExecInfoArrowStream(schema, data);
+
+                activity?.SetTag("result_count", catalogBuilder.Length);
+                return result;
+            });
+        }
+
+        /// <summary>
+        /// Gets catalogs in flat structure with Thrift HiveServer2-compatible column naming for statement-based queries.
+        /// Reuses GetCatalogsMetadataAsync() and transforms column names to match Thrift protocol.
+        /// </summary>
+        /// <param name="catalogPattern">Catalog name pattern (SQL LIKE syntax). If null, returns all catalogs.</param>
+        /// <returns>Arrow stream with TABLE_CAT column (Thrift protocol naming)</returns>
+        internal IArrowArrayStream GetCatalogsFlat(string? catalogPattern)
+        {
+            // Reuse existing method to get data
+            var stream = GetCatalogsMetadataAsync(catalogPattern).GetAwaiter().GetResult();
+
+            // Read data from ADBC-style stream
+            var catalogBuilder = new StringArray.Builder();
+
+            using (var reader = stream)
+            {
+                while (true)
+                {
+                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+                    if (batch == null) break;
+
+                    // Extract catalog_name column
+                    var catalogArray = batch.Column("catalog_name") as StringArray;
+                    if (catalogArray != null)
+                    {
+                        for (int i = 0; i < catalogArray.Length; i++)
+                        {
+                            if (!catalogArray.IsNull(i))
+                                catalogBuilder.Append(catalogArray.GetString(i));
+                            else
+                                catalogBuilder.AppendNull();
+                        }
+                    }
+                }
+            }
+
+            // Create result with Thrift protocol column name
+            var resultSchema = new Schema(new[] { new Field("TABLE_CAT", StringType.Default, nullable: true) }, null);
+            var data = new List<IArrowArray> { catalogBuilder.Build() };
+
+            return new StatementExecInfoArrowStream(resultSchema, data);
+        }
+
+        /// <summary>
+        /// Gets a list of schemas in the specified catalog.
+        /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog or returns schemas from all catalogs.</param>
+        /// <param name="schemaPattern">Schema name pattern (SQL LIKE syntax). If null, returns all schemas.</param>
+        /// <returns>Arrow stream with catalog_name and db_schema_name columns</returns>
+        internal IArrowArrayStream GetSchemas(string? catalog, string? schemaPattern)
+        {
+            return GetSchemasMetadataAsync(catalog, schemaPattern).GetAwaiter().GetResult();
+        }
+
+        private async Task<IArrowArrayStream> GetSchemasMetadataAsync(string? catalog, string? schemaPattern)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                catalog = catalog ?? _catalog;
+
+                activity?.SetTag("catalog", catalog ?? "(all)");
+                activity?.SetTag("schema_pattern", schemaPattern ?? "(all)");
+                activity?.SetTag("show_all_catalogs", string.IsNullOrEmpty(catalog));
+
+                // Use SqlCommandBuilder for efficient SQL generation
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalog(catalog)
+                    .WithSchemaPattern(schemaPattern);
+
+                var sql = commandBuilder.BuildShowSchemas();
+                activity?.SetTag("sql_query", sql);
+                bool showAllCatalogs = string.IsNullOrEmpty(catalog);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    // Return empty result on permission denied or other errors
+                    var emptySchema = new Schema(new[]
+                    {
+                        new Field("catalog_name", StringType.Default, nullable: true),
+                        new Field("db_schema_name", StringType.Default, nullable: false)
+                    }, null);
+                    var emptyData = new List<IArrowArray> { new StringArray.Builder().Build(), new StringArray.Builder().Build() };
+                    return new StatementExecInfoArrowStream(emptySchema, emptyData);
+                }
+
+                // Build result: catalog_name, db_schema_name
+                var catalogBuilder = new StringArray.Builder();
+                var schemaBuilder = new StringArray.Builder();
+
+                foreach (var batch in batches)
+                {
+                    // SHOW SCHEMAS IN ALL CATALOGS returns: catalog_name, databaseName (or namespace)
+                    // SHOW SCHEMAS IN catalog returns: databaseName (or namespace)
+                    StringArray? catalogArray = null;
+                    StringArray? schemaArray = null;
+
+                    if (showAllCatalogs)
+                    {
+                        // When showing all catalogs, first column is catalog name
+                        catalogArray = batch.Column(0) as StringArray;
+                        schemaArray = batch.Column(1) as StringArray;
+                    }
+                    else
+                    {
+                        // When showing schemas in specific catalog, schema is in databaseName or namespace column
+                        schemaArray = batch.Column("databaseName") as StringArray;
+                        if (schemaArray == null)
+                        {
+                            schemaArray = batch.Column("namespace") as StringArray;
                         }
                     }
 
-                    // Apply table name pattern if specified
-                    if (!string.IsNullOrEmpty(tableNamePattern) && !PatternMatches(tableName, tableNamePattern))
-                        continue;
+                    if (schemaArray == null) continue;
 
-                    // Apply table type filter if specified
-                    if (tableTypes != null && tableTypes.Count > 0 && !tableTypes.Contains(tableType))
-                        continue;
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (!schemaArray.IsNull(i))
+                        {
+                            if (showAllCatalogs && catalogArray != null && !catalogArray.IsNull(i))
+                            {
+                                catalogBuilder.Append(catalogArray.GetString(i));
+                            }
+                            else
+                            {
+                                catalogBuilder.Append(catalog ?? "");
+                            }
+                            schemaBuilder.Append(schemaArray.GetString(i));
+                        }
+                    }
+                }
 
-                    tables.Add((tableName, tableType));
+            var resultSchema = new Schema(new[]
+            {
+                new Field("catalog_name", StringType.Default, nullable: true),
+                new Field("db_schema_name", StringType.Default, nullable: false)
+            }, null);
+
+            var data = new List<IArrowArray> { catalogBuilder.Build(), schemaBuilder.Build() };
+
+            activity?.SetTag("result_count", schemaBuilder.Length);
+            return new StatementExecInfoArrowStream(resultSchema, data);
+        });
+        }
+
+        /// <summary>
+        /// Gets schemas in flat structure with Thrift HiveServer2-compatible column naming for statement-based queries.
+        /// Reuses GetSchemasMetadataAsync() and transforms column names to match Thrift protocol.
+        /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog or returns schemas from all catalogs.</param>
+        /// <param name="schemaPattern">Schema name pattern (SQL LIKE syntax). If null, returns all schemas.</param>
+        /// <returns>Arrow stream with TABLE_SCHEM and TABLE_CATALOG columns (Thrift protocol naming)</returns>
+        internal IArrowArrayStream GetSchemasFlat(string? catalog, string? schemaPattern)
+        {
+            // Reuse existing method to get data
+            var stream = GetSchemasMetadataAsync(catalog, schemaPattern).GetAwaiter().GetResult();
+
+            // Read data from ADBC-style stream
+            var catalogBuilder = new StringArray.Builder();
+            var schemaBuilder = new StringArray.Builder();
+
+            using (var reader = stream)
+            {
+                while (true)
+                {
+                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+                    if (batch == null) break;
+
+                    // Extract catalog_name and db_schema_name columns
+                    var catalogArray = batch.Column("catalog_name") as StringArray;
+                    var schemaArray = batch.Column("db_schema_name") as StringArray;
+
+                    if (schemaArray != null)
+                    {
+                        for (int i = 0; i < schemaArray.Length; i++)
+                        {
+                            // TABLE_CATALOG
+                            if (catalogArray != null && !catalogArray.IsNull(i))
+                                catalogBuilder.Append(catalogArray.GetString(i));
+                            else
+                                catalogBuilder.AppendNull();
+
+                            // TABLE_SCHEM
+                            if (!schemaArray.IsNull(i))
+                                schemaBuilder.Append(schemaArray.GetString(i));
+                            else
+                                schemaBuilder.AppendNull();
+                        }
+                    }
                 }
             }
 
-            // Cache the result
-            _metadataCache.PutTables(catalog, schema, tableNamePattern, tableTypes, tables);
+            // Create result with Thrift protocol column names (note: TABLE_SCHEM comes first in HiveServer2 spec)
+            var resultSchema = new Schema(new[]
+            {
+                new Field("TABLE_SCHEM", StringType.Default, nullable: false),
+                new Field("TABLE_CATALOG", StringType.Default, nullable: true)
+            }, null);
 
-            return tables;
+            var data = new List<IArrowArray> { schemaBuilder.Build(), catalogBuilder.Build() };
+
+            return new StatementExecInfoArrowStream(resultSchema, data);
         }
 
-        private async Task<List<ColumnInfo>> GetColumnsAsync(string catalog, string schema, string tableName, string? columnNamePattern)
+        /// <summary>
+        /// Gets a list of tables in the specified catalog and schema.
+        /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog.</param>
+        /// <param name="dbSchema">Schema name. If null, uses session schema.</param>
+        /// <param name="tablePattern">Table name pattern (SQL LIKE syntax). If null, returns all tables.</param>
+        /// <param name="tableTypes">List of table types to include (TABLE, VIEW). If null, returns all types.</param>
+        /// <returns>Arrow stream with catalog_name, db_schema_name, table_name, table_type columns</returns>
+        internal IArrowArrayStream GetTables(string? catalog, string? dbSchema, string? tablePattern, List<string>? tableTypes)
         {
-            var qualifiedTableName = BuildQualifiedTableName(catalog, schema, tableName);
-            var sql = $"DESCRIBE TABLE {qualifiedTableName}";
+            return GetTablesAsync(catalog, dbSchema, tablePattern, tableTypes).GetAwaiter().GetResult();
+        }
 
-            List<RecordBatch> batches;
-            try
+        private async Task<IArrowArrayStream> GetTablesAsync(string? catalog, string? dbSchema, string? tablePattern, List<string>? tableTypes)
+        {
+            catalog = catalog ?? _catalog;
+            dbSchema = dbSchema ?? _schema;
+
+            if (string.IsNullOrEmpty(catalog) || string.IsNullOrEmpty(dbSchema))
             {
-                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
-            }
-            catch
-            {
-                // If DESCRIBE fails, return empty list
-                return new List<ColumnInfo>();
+                throw new ArgumentException("Catalog and schema are required for GetTables");
             }
 
-            var columns = new List<ColumnInfo>();
-            int position = 0;
+            var tables = await GetTablesAsync(catalog, dbSchema, tablePattern, (IReadOnlyList<string>?)tableTypes).ConfigureAwait(false);
+
+            var catalogBuilder = new StringArray.Builder();
+            var schemaBuilder = new StringArray.Builder();
+            var tableBuilder = new StringArray.Builder();
+            var typeBuilder = new StringArray.Builder();
+
+            foreach (var (catalogName, schemaName, tableName, tableType, _) in tables)
+            {
+                catalogBuilder.Append(catalogName);
+                schemaBuilder.Append(schemaName);
+                tableBuilder.Append(tableName);
+                typeBuilder.Append(tableType);
+            }
+
+            var resultSchema = new Schema(new[]
+            {
+                new Field("catalog_name", StringType.Default, nullable: true),
+                new Field("db_schema_name", StringType.Default, nullable: true),
+                new Field("table_name", StringType.Default, nullable: false),
+                new Field("table_type", StringType.Default, nullable: false)
+            }, null);
+
+            var data = new List<IArrowArray>
+            {
+                catalogBuilder.Build(),
+                schemaBuilder.Build(),
+                tableBuilder.Build(),
+                typeBuilder.Build()
+            };
+
+            return new StatementExecInfoArrowStream(resultSchema, data);
+        }
+
+        /// <summary>
+        /// Gets tables in flat structure with Thrift HiveServer2-compatible column naming for statement-based queries.
+        /// Reuses GetTablesAsync() and transforms column names to match Thrift protocol.
+        /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog.</param>
+        /// <param name="dbSchema">Schema name. If null, uses session schema.</param>
+        /// <param name="tablePattern">Table name pattern (SQL LIKE syntax). If null, returns all tables.</param>
+        /// <param name="tableTypes">List of table types to include (TABLE, VIEW). If null, returns all types.</param>
+        /// <returns>Arrow stream with TABLE_CAT, TABLE_SCHEM, TABLE_NAME, TABLE_TYPE columns (Thrift protocol naming)</returns>
+        internal IArrowArrayStream GetTablesFlat(string? catalog, string? dbSchema, string? tablePattern, List<string>? tableTypes)
+        {
+            catalog = catalog ?? _catalog;
+            dbSchema = dbSchema ?? _schema;
+
+            if (string.IsNullOrEmpty(catalog) || string.IsNullOrEmpty(dbSchema))
+            {
+                throw new ArgumentException("Catalog and schema are required for GetTablesFlat");
+            }
+
+            // Call private GetTablesAsync to get remarks data
+            var tables = GetTablesAsync(catalog, dbSchema, tablePattern, (IReadOnlyList<string>?)tableTypes).GetAwaiter().GetResult();
+
+            // Build Thrift HiveServer2-compatible result
+            var catalogBuilder = new StringArray.Builder();
+            var schemaBuilder = new StringArray.Builder();
+            var tableBuilder = new StringArray.Builder();
+            var typeBuilder = new StringArray.Builder();
+            var remarksBuilder = new StringArray.Builder();
+            var typeCatBuilder = new StringArray.Builder();
+            var typeSchemaBuilder = new StringArray.Builder();
+            var typeNameBuilder = new StringArray.Builder();
+            var selfRefColBuilder = new StringArray.Builder();
+            var refGenerationBuilder = new StringArray.Builder();
+
+            foreach (var (catalogName, schemaName, tableName, tableType, remarks) in tables)
+            {
+                // TABLE_CAT
+                if (!string.IsNullOrEmpty(catalogName))
+                    catalogBuilder.Append(catalogName);
+                else
+                    catalogBuilder.AppendNull();
+
+                // TABLE_SCHEM
+                if (!string.IsNullOrEmpty(schemaName))
+                    schemaBuilder.Append(schemaName);
+                else
+                    schemaBuilder.AppendNull();
+
+                // TABLE_NAME
+                tableBuilder.Append(tableName);
+
+                // TABLE_TYPE
+                typeBuilder.Append(tableType);
+
+                // REMARKS - use actual server value (already converted to "" if null/empty)
+                remarksBuilder.Append(remarks);
+
+                // TYPE_CAT, TYPE_SCHEM, TYPE_NAME - for structured types (not supported by Databricks)
+                typeCatBuilder.AppendNull();
+                typeSchemaBuilder.AppendNull();
+                typeNameBuilder.AppendNull();
+
+                // SELF_REFERENCING_COL_NAME - for self-referencing tables (not supported by Databricks)
+                selfRefColBuilder.AppendNull();
+
+                // REF_GENERATION - referential generation (not supported by Databricks)
+                refGenerationBuilder.AppendNull();
+            }
+
+            // Create result with Thrift protocol column names (10 columns total)
+            var resultSchema = new Schema(new[]
+            {
+                new Field("TABLE_CAT", StringType.Default, nullable: true),
+                new Field("TABLE_SCHEM", StringType.Default, nullable: true),
+                new Field("TABLE_NAME", StringType.Default, nullable: false),
+                new Field("TABLE_TYPE", StringType.Default, nullable: false),
+                new Field("REMARKS", StringType.Default, nullable: true),
+                new Field("TYPE_CAT", StringType.Default, nullable: true),
+                new Field("TYPE_SCHEM", StringType.Default, nullable: true),
+                new Field("TYPE_NAME", StringType.Default, nullable: true),
+                new Field("SELF_REFERENCING_COL_NAME", StringType.Default, nullable: true),
+                new Field("REF_GENERATION", StringType.Default, nullable: true)
+            }, null);
+
+            var data = new List<IArrowArray>
+            {
+                catalogBuilder.Build(),
+                schemaBuilder.Build(),
+                tableBuilder.Build(),
+                typeBuilder.Build(),
+                remarksBuilder.Build(),
+                typeCatBuilder.Build(),
+                typeSchemaBuilder.Build(),
+                typeNameBuilder.Build(),
+                selfRefColBuilder.Build(),
+                refGenerationBuilder.Build()
+            };
+
+            return new StatementExecInfoArrowStream(resultSchema, data);
+        }
+
+        /// <summary>
+        /// Gets a list of columns in the specified table.
+        /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog.</param>
+        /// <param name="dbSchema">Schema name. If null, uses session schema.</param>
+        /// <param name="tablePattern">Table name pattern (SQL LIKE syntax). If null, returns columns from all tables.</param>
+        /// <param name="columnPattern">Column name pattern (SQL LIKE syntax). If null, returns all columns.</param>
+        /// <returns>Arrow stream with catalog_name, db_schema_name, table_name, column_name, ordinal_position, remarks columns</returns>
+        internal IArrowArrayStream GetColumns(string? catalog, string? dbSchema, string? tablePattern, string? columnPattern)
+        {
+            return GetColumnsMetadataAsync(catalog, dbSchema, tablePattern, columnPattern).GetAwaiter().GetResult();
+        }
+
+        private async Task<IArrowArrayStream> GetColumnsMetadataAsync(string? catalog, string? dbSchema, string? tablePattern, string? columnPattern)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                catalog = catalog ?? _catalog;
+                dbSchema = dbSchema ?? _schema;
+
+                activity?.SetTag("catalog", catalog ?? "(all)");
+                activity?.SetTag("db_schema", dbSchema ?? "(all)");
+                activity?.SetTag("table_pattern", tablePattern ?? "(all)");
+                activity?.SetTag("column_pattern", columnPattern ?? "(all)");
+
+                if (string.IsNullOrEmpty(catalog) || string.IsNullOrEmpty(dbSchema))
+                {
+                    activity?.SetTag("error", "Catalog and schema are required");
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    throw new ArgumentException("Catalog and schema are required for GetColumns");
+                }
+
+                // Note: tablePattern can now be null - SHOW COLUMNS supports pattern matching across all tables in a single query
+                // This eliminates the N+1 query problem that existed with DESCRIBE TABLE
+
+                // Use SqlCommandBuilder for efficient SQL generation
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalog(catalog)
+                    .WithSchemaPattern(dbSchema)
+                    .WithTablePattern(tablePattern)
+                    .WithColumnPattern(columnPattern);
+
+                var sql = commandBuilder.BuildShowColumns(catalog);
+                activity?.SetTag("sql_query", sql);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    // Return empty result on permission denied or other errors
+                    var emptySchema = new Schema(new[]
+                    {
+                        new Field("catalog_name", StringType.Default, nullable: true),
+                        new Field("db_schema_name", StringType.Default, nullable: true),
+                        new Field("table_name", StringType.Default, nullable: false),
+                        new Field("column_name", StringType.Default, nullable: false),
+                        new Field("ordinal_position", Int32Type.Default, nullable: false),
+                        new Field("remarks", StringType.Default, nullable: true)
+                    }, null);
+                    var emptyData = new List<IArrowArray>
+                    {
+                        new StringArray.Builder().Build(),
+                        new StringArray.Builder().Build(),
+                        new StringArray.Builder().Build(),
+                        new StringArray.Builder().Build(),
+                        new Int32Array.Builder().Build(),
+                        new StringArray.Builder().Build()
+                    };
+                    return new StatementExecInfoArrowStream(emptySchema, emptyData);
+                }
+
+            // Build result: catalog_name, db_schema_name, table_name, column_name, ordinal_position, remarks
+            var catalogBuilder = new StringArray.Builder();
+            var schemaBuilder = new StringArray.Builder();
+            var tableBuilder = new StringArray.Builder();
+            var columnBuilder = new StringArray.Builder();
+            var ordinalBuilder = new Int32Array.Builder();
+            var remarksBuilder = new StringArray.Builder();
+
+            // Track ordinal position per table (since SHOW COLUMNS can return multiple tables)
+            var tablePositions = new Dictionary<string, int>();
 
             foreach (var batch in batches)
             {
+                // SHOW COLUMNS returns: tableName, col_name, dataType (int), columnType (string), nullable, SQLDataType, ordinal_position, isNullable
+                // Note: catalog and schema are NOT in the result - we use them from method parameters
+                var tableNameArray = batch.Column("tableName") as StringArray;
                 var colNameArray = batch.Column("col_name") as StringArray;
-                var dataTypeArray = batch.Column("data_type") as StringArray;
-                var commentArray = batch.Column("comment") as StringArray;
+                var columnTypeArray = batch.Column("columnType") as StringArray;
+                var isNullableArray = batch.Column("isNullable") as StringArray;
 
-                if (colNameArray == null || dataTypeArray == null)
+                // Try to get comment if it exists (may not be in all versions)
+                StringArray? commentArray = null;
+                try
+                {
+                    commentArray = batch.Column("comment") as StringArray;
+                }
+                catch
+                {
+                    // comment column doesn't exist - that's ok
+                }
+
+                if (colNameArray == null || columnTypeArray == null || tableNameArray == null)
                     continue;
 
                 for (int i = 0; i < batch.Length; i++)
                 {
-                    if (colNameArray.IsNull(i) || dataTypeArray.IsNull(i))
+                    if (colNameArray.IsNull(i) || columnTypeArray.IsNull(i) || tableNameArray.IsNull(i))
                         continue;
 
                     var colName = colNameArray.GetString(i);
-                    var dataType = dataTypeArray.GetString(i);
+                    var dataType = columnTypeArray.GetString(i);
+                    var currentTableName = tableNameArray.GetString(i);
+                    var currentCatalogName = catalog;
+                    var currentSchemaName = dbSchema;
 
-                    // Skip metadata rows
+                    // Skip metadata rows (SHOW COLUMNS shouldn't return these, but be defensive)
                     if (string.IsNullOrEmpty(colName) ||
                         colName.StartsWith("#") ||
                         dataType.Contains("Partition Information") ||
@@ -740,138 +1732,51 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         continue;
                     }
 
-                    // Apply column name pattern if specified
-                    if (!string.IsNullOrEmpty(columnNamePattern) && !PatternMatches(colName, columnNamePattern))
-                        continue;
+                    // Track ordinal position per table (not global)
+                    var tableKey = $"{currentCatalogName}.{currentSchemaName}.{currentTableName}";
+                    if (!tablePositions.ContainsKey(tableKey))
+                    {
+                        tablePositions[tableKey] = 1; // Start at 1 for ordinal position (1-based)
+                    }
+                    int position = tablePositions[tableKey]++;
 
                     var comment = commentArray != null && !commentArray.IsNull(i) ? commentArray.GetString(i) : null;
 
-                    columns.Add(new ColumnInfo
-                    {
-                        Name = colName,
-                        TypeName = dataType,
-                        Position = position++,
-                        Nullable = true,
-                        Comment = comment
-                    });
+                    catalogBuilder.Append(currentCatalogName);
+                    schemaBuilder.Append(currentSchemaName);
+                    tableBuilder.Append(currentTableName);
+                    columnBuilder.Append(colName);
+                    ordinalBuilder.Append(position);
+                    AppendNullableString(remarksBuilder, comment);
                 }
             }
 
-            return columns;
+            var resultSchema = new Schema(new[]
+            {
+                new Field("catalog_name", StringType.Default, nullable: true),
+                new Field("db_schema_name", StringType.Default, nullable: true),
+                new Field("table_name", StringType.Default, nullable: false),
+                new Field("column_name", StringType.Default, nullable: false),
+                new Field("ordinal_position", Int32Type.Default, nullable: false),
+                new Field("remarks", StringType.Default, nullable: true)
+            }, null);
+
+            var data = new List<IArrowArray>
+            {
+                catalogBuilder.Build(),
+                schemaBuilder.Build(),
+                tableBuilder.Build(),
+                columnBuilder.Build(),
+                ordinalBuilder.Build(),
+                remarksBuilder.Build()
+            };
+
+            activity?.SetTag("result_columns", columnBuilder.Length);
+            activity?.SetTag("unique_tables", tablePositions.Count);
+            return new StatementExecInfoArrowStream(resultSchema, data);
+        });
         }
 
-        private IArrowArrayStream BuildGetObjectsResult(
-            GetObjectsDepth depth,
-            List<string> catalogs,
-            Dictionary<string, List<string>> catalogSchemas,
-            Dictionary<string, Dictionary<string, List<(string tableName, string tableType)>>> catalogSchemaTables,
-            Dictionary<string, Dictionary<string, Dictionary<string, List<ColumnInfo>>>> catalogSchemaTableColumns)
-        {
-            // For now, return a simplified result structure
-            // TODO: Implement full nested ListArray/StructArray structure for All depth
-            // This matches the limitation documented in CURRENT_STATUS.md
-
-            if (depth == GetObjectsDepth.Catalogs)
-            {
-                var catalogBuilder = new StringArray.Builder();
-                foreach (var catalog in catalogs)
-                {
-                    catalogBuilder.Append(catalog);
-                }
-
-                var schema = new Schema(new[] { new Field("catalog_name", StringType.Default, nullable: true) }, null);
-                var data = new List<IArrowArray> { catalogBuilder.Build() };
-                return new SimpleArrowArrayStream(schema, data);
-            }
-            else if (depth == GetObjectsDepth.DbSchemas)
-            {
-                var catalogBuilder = new StringArray.Builder();
-                var schemaBuilder = new StringArray.Builder();
-
-                foreach (var kvp in catalogSchemas)
-                {
-                    foreach (var schema in kvp.Value)
-                    {
-                        catalogBuilder.Append(kvp.Key);
-                        schemaBuilder.Append(schema);
-                    }
-                }
-
-                var resultSchema = new Schema(new[]
-                {
-                    new Field("catalog_name", StringType.Default, nullable: true),
-                    new Field("db_schema_name", StringType.Default, nullable: true)
-                }, null);
-                var data = new List<IArrowArray> { catalogBuilder.Build(), schemaBuilder.Build() };
-                return new SimpleArrowArrayStream(resultSchema, data);
-            }
-            else if (depth == GetObjectsDepth.Tables)
-            {
-                var catalogBuilder = new StringArray.Builder();
-                var schemaBuilder = new StringArray.Builder();
-                var tableBuilder = new StringArray.Builder();
-                var typeBuilder = new StringArray.Builder();
-
-                foreach (var catKvp in catalogSchemaTables)
-                {
-                    foreach (var schemaKvp in catKvp.Value)
-                    {
-                        foreach (var (tableName, tableType) in schemaKvp.Value)
-                        {
-                            catalogBuilder.Append(catKvp.Key);
-                            schemaBuilder.Append(schemaKvp.Key);
-                            tableBuilder.Append(tableName);
-                            typeBuilder.Append(tableType);
-                        }
-                    }
-                }
-
-                var resultSchema = new Schema(new[]
-                {
-                    new Field("catalog_name", StringType.Default, nullable: true),
-                    new Field("db_schema_name", StringType.Default, nullable: true),
-                    new Field("table_name", StringType.Default, nullable: true),
-                    new Field("table_type", StringType.Default, nullable: true)
-                }, null);
-                var data = new List<IArrowArray> { catalogBuilder.Build(), schemaBuilder.Build(), tableBuilder.Build(), typeBuilder.Build() };
-                return new SimpleArrowArrayStream(resultSchema, data);
-            }
-            else // GetObjectsDepth.All
-            {
-                // Build full ADBC nested structure with catalog->schema->table->column hierarchy
-                var catalogNameBuilder = new StringArray.Builder();
-                var catalogDbSchemasValues = new List<IArrowArray?>();
-
-                foreach (var catalogEntry in catalogSchemaTables)
-                {
-                    catalogNameBuilder.Append(catalogEntry.Key);
-
-                    // Build db_schemas struct for this catalog
-                    var schemaMap = catalogEntry.Value;
-                    if (!catalogSchemaTableColumns.TryGetValue(catalogEntry.Key, out var schemaTableColumns))
-                    {
-                        schemaTableColumns = new Dictionary<string, Dictionary<string, List<ColumnInfo>>>();
-                    }
-
-                    catalogDbSchemasValues.Add(BuildDbSchemasStruct(depth, schemaMap, schemaTableColumns));
-                }
-
-                var resultSchema = StandardSchemas.GetObjectsSchema;
-                var dataArrays = resultSchema.Validate(new List<IArrowArray>
-                {
-                    catalogNameBuilder.Build(),
-                    catalogDbSchemasValues.BuildListArrayForType(new StructType(StandardSchemas.DbSchemaSchema))
-                });
-
-                return new SimpleArrowArrayStream(resultSchema, dataArrays);
-            }
-        }
-
-        /// <summary>
-        /// Gets all supported table types in the database.
-        /// Statement Execution API returns TABLE, VIEW, and LOCAL TEMPORARY.
-        /// </summary>
-        /// <returns>Arrow stream with single column 'table_type' containing supported table type names</returns>
         /// <remarks>
         /// <para>Returns 3 table types:</para>
         /// <list type="bullet">
@@ -883,15 +1788,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </remarks>
         public override IArrowArrayStream GetTableTypes()
         {
-            var tableTypesBuilder = new StringArray.Builder();
-            tableTypesBuilder.Append("TABLE");
-            tableTypesBuilder.Append("VIEW");
-            tableTypesBuilder.Append("LOCAL TEMPORARY");
+            return this.TraceActivity(activity =>
+            {
+                var tableTypesBuilder = new StringArray.Builder();
+                tableTypesBuilder.Append("TABLE");
+                tableTypesBuilder.Append("VIEW");
+                tableTypesBuilder.Append("LOCAL TEMPORARY");
 
-            var schema = new Schema(new[] { new Field("table_type", StringType.Default, nullable: false) }, null);
-            var data = new List<IArrowArray> { tableTypesBuilder.Build() };
+                var schema = new Schema(new[] { new Field("table_type", StringType.Default, nullable: false) }, null);
+                var data = new List<IArrowArray> { tableTypesBuilder.Build() };
 
-            return new SimpleArrowArrayStream(schema, data);
+                activity?.SetTag("result_count", tableTypesBuilder.Length);
+                return new StatementExecInfoArrowStream(schema, data);
+            });
         }
 
         /// <summary>
@@ -936,27 +1845,48 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private async Task<Schema> GetTableSchemaAsync(string? catalog, string? dbSchema, string tableName)
         {
-            // Use session catalog/schema if not provided
-            catalog = catalog ?? _catalog;
-            dbSchema = dbSchema ?? _schema;
-
-            var qualifiedTableName = BuildQualifiedTableName(catalog, dbSchema, tableName);
-            var sql = $"DESCRIBE TABLE {qualifiedTableName}";
-
-            List<RecordBatch> batches;
-            try
+            return await this.TraceActivityAsync(async activity =>
             {
-                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                throw new AdbcException($"Failed to describe table {qualifiedTableName}: {ex.Message}", ex);
-            }
+                // Use session catalog/schema if not provided
+                catalog = catalog ?? _catalog;
+                dbSchema = dbSchema ?? _schema;
 
-            if (batches == null || batches.Count == 0)
-            {
-                throw new AdbcException($"Table {qualifiedTableName} not found or has no schema information");
-            }
+                activity?.SetTag("catalog", catalog ?? "(session)");
+                activity?.SetTag("db_schema", dbSchema ?? "(session)");
+                activity?.SetTag("table_name", tableName);
+
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalog(catalog)
+                    .WithSchema(dbSchema)
+                    .WithTable(tableName);
+
+                var sql = commandBuilder.BuildDescribeTable();
+                activity?.SetTag("sql_query", sql);
+
+                // Build qualified name for error messages
+                var qualifiedTableName = BuildQualifiedTableName(catalog, dbSchema, tableName);
+                activity?.SetTag("qualified_table_name", qualifiedTableName);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    throw new AdbcException($"Failed to describe table {qualifiedTableName}: {ex.Message}", ex);
+                }
+
+                if (batches == null || batches.Count == 0)
+                {
+                    activity?.SetTag("error", "Table not found or has no schema information");
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    throw new AdbcException($"Table {qualifiedTableName} not found or has no schema information");
+                }
 
             var fields = new List<Field>();
 
@@ -1008,16 +1938,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             if (fields.Count == 0)
             {
+                activity?.SetTag("error", "Table has no columns");
+                activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
                 throw new AdbcException($"Table {qualifiedTableName} has no columns");
             }
 
+            activity?.SetTag("result_fields", fields.Count);
             return new Schema(fields, null);
+        });
         }
 
         #region Metadata Implementation Helpers
 
         private async Task<List<RecordBatch>> ExecuteSqlQueryAsync(string sql)
         {
+            // Log SQL command for debugging
+            Console.WriteLine($"[SEA SQL]: {sql}");
+
             using var statement = CreateStatement();
             (statement as StatementExecutionStatement)!.SqlQuery = sql;
 
@@ -1040,9 +1977,68 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return $"`{identifier.Replace("`", "``")}`";
         }
 
+        /// <summary>
+        /// Converts ADBC SQL patterns to Databricks glob patterns and escapes for SQL.
+        /// ADBC patterns: % (zero or more), _ (exactly one), \ (escape)
+        /// Databricks patterns: * (zero or more), . (exactly one)
+        /// </summary>
         private string EscapeSqlPattern(string pattern)
         {
-            return pattern.Replace("'", "''");
+            if (string.IsNullOrEmpty(pattern))
+                return pattern;
+
+            var result = new System.Text.StringBuilder(pattern.Length);
+            bool escapeNext = false;
+
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+
+                if (c == '\\')
+                {
+                    // Check if it's an escaped backslash (\\)
+                    if (i + 1 < pattern.Length && pattern[i + 1] == '\\')
+                    {
+                        result.Append("\\\\");  // Preserve both backslashes
+                        i++; // Skip the next backslash
+                    }
+                    else
+                    {
+                        escapeNext = !escapeNext;  // Toggle escape state for next character
+                    }
+                }
+                else if (escapeNext)
+                {
+                    // If the current character is escaped, add it directly (literal)
+                    result.Append(c);
+                    escapeNext = false;
+                }
+                else
+                {
+                    // Handle unescaped characters
+                    if (c == '%')
+                    {
+                        // ADBC wildcard % → Databricks wildcard *
+                        result.Append('*');
+                    }
+                    else if (c == '_')
+                    {
+                        // ADBC single char _ → Databricks single char .
+                        result.Append('.');
+                    }
+                    else if (c == '\'')
+                    {
+                        // SQL escape: ' → ''
+                        result.Append("''");
+                    }
+                    else
+                    {
+                        result.Append(c);
+                    }
+                }
+            }
+
+            return result.ToString();
         }
 
         private string BuildQualifiedTableName(string? catalog, string? schema, string tableName)
@@ -1106,8 +2102,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private static StructArray BuildDbSchemasStruct(
             GetObjectsDepth depth,
-            Dictionary<string, List<(string tableName, string tableType)>> schemaMap,
-            Dictionary<string, Dictionary<string, List<ColumnInfo>>> schemaTableColumns)
+            Dictionary<string, Dictionary<string, (string tableType, List<ColumnInfo> columns)>> schemaMap)
         {
             var dbSchemaNameBuilder = new StringArray.Builder();
             var dbSchemaTablesValues = new List<IArrowArray?>();
@@ -1126,13 +2121,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 else
                 {
-                    // Build tables struct for this schema
-                    var tableMap = schemaEntry.Value;
-                    if (!schemaTableColumns.TryGetValue(schemaEntry.Key, out var tableColumns))
-                    {
-                        tableColumns = new Dictionary<string, List<ColumnInfo>>();
-                    }
-                    dbSchemaTablesValues.Add(BuildTablesStruct(depth, tableMap, tableColumns));
+                    dbSchemaTablesValues.Add(BuildTablesStruct(depth, schemaEntry.Value));
                 }
             }
 
@@ -1156,8 +2145,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private static StructArray BuildTablesStruct(
             GetObjectsDepth depth,
-            List<(string tableName, string tableType)> tableMap,
-            Dictionary<string, List<ColumnInfo>> tableColumns)
+            Dictionary<string, (string tableType, List<ColumnInfo> columns)> tableMap)
         {
             var tableNameBuilder = new StringArray.Builder();
             var tableTypeBuilder = new StringArray.Builder();
@@ -1166,10 +2154,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var nullBitmapBuffer = new ArrowBuffer.BitmapBuilder();
             int length = 0;
 
-            foreach (var (tableName, tableType) in tableMap)
+            foreach (var tableEntry in tableMap)
             {
-                tableNameBuilder.Append(tableName);
-                tableTypeBuilder.Append(tableType);
+                tableNameBuilder.Append(tableEntry.Key);
+                tableTypeBuilder.Append(tableEntry.Value.tableType);
                 nullBitmapBuffer.Append(true);
                 length++;
 
@@ -1182,11 +2170,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 else
                 {
-                    if (!tableColumns.TryGetValue(tableName, out var columns))
-                    {
-                        columns = new List<ColumnInfo>();
-                    }
-                    tableColumnsValues.Add(BuildColumnsStruct(columns));
+                    tableColumnsValues.Add(BuildColumnsStruct(tableEntry.Value.columns));
                 }
             }
 
@@ -1238,23 +2222,55 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 columnNameBuilder.Append(column.Name);
                 ordinalPositionBuilder.Append(column.Position);
-                remarksBuilder.Append(column.Comment ?? column.TypeName);
-                xdbcDataTypeBuilder.AppendNull(); // XDBC type not available
-                xdbcTypeNameBuilder.Append(column.TypeName);
-                xdbcColumnSizeBuilder.AppendNull(); // Size not available
-                xdbcDecimalDigitsBuilder.AppendNull(); // Precision not available
-                xdbcNumPrecRadixBuilder.AppendNull();
+                // Preserve original casing from server (e.g., "STRUCT<f1: STRING>" not "STRUCT<F1: STRING>")
+                remarksBuilder.Append(column.TypeName);
+
+                if (column.XdbcDataType.HasValue)
+                    xdbcDataTypeBuilder.Append(column.XdbcDataType.Value);
+                else
+                    xdbcDataTypeBuilder.AppendNull();
+
+                xdbcTypeNameBuilder.Append(column.XdbcTypeName ?? string.Empty);
+
+                if (column.XdbcColumnSize.HasValue)
+                    xdbcColumnSizeBuilder.Append(column.XdbcColumnSize.Value);
+                else
+                    xdbcColumnSizeBuilder.AppendNull();
+
+                if (column.XdbcDecimalDigits.HasValue)
+                    xdbcDecimalDigitsBuilder.Append((short)column.XdbcDecimalDigits.Value);
+                else
+                    xdbcDecimalDigitsBuilder.AppendNull();
+
+                if (column.XdbcNumPrecRadix.HasValue)
+                    xdbcNumPrecRadixBuilder.Append(column.XdbcNumPrecRadix.Value);
+                else
+                    xdbcNumPrecRadixBuilder.AppendNull();
+
                 xdbcNullableBuilder.Append((short)(column.Nullable ? 1 : 0));
-                xdbcColumnDefBuilder.AppendNull();
-                xdbcSqlDataTypeBuilder.AppendNull();
-                xdbcDatetimeSubBuilder.AppendNull();
-                xdbcCharOctetLengthBuilder.AppendNull();
+                xdbcColumnDefBuilder.Append("");
+
+                if (column.XdbcSqlDataType.HasValue)
+                    xdbcSqlDataTypeBuilder.Append(column.XdbcSqlDataType.Value);
+                else
+                    xdbcSqlDataTypeBuilder.AppendNull();
+
+                if (column.XdbcDatetimeSub.HasValue)
+                    xdbcDatetimeSubBuilder.Append(column.XdbcDatetimeSub.Value);
+                else
+                    xdbcDatetimeSubBuilder.AppendNull();
+
+                if (column.XdbcCharOctetLength.HasValue)
+                    xdbcCharOctetLengthBuilder.Append(column.XdbcCharOctetLength.Value);
+                else
+                    xdbcCharOctetLengthBuilder.AppendNull();
+
                 xdbcIsNullableBuilder.Append(column.Nullable ? "YES" : "NO");
                 xdbcScopeCatalogBuilder.AppendNull();
                 xdbcScopeSchemaBuilder.AppendNull();
                 xdbcScopeTableBuilder.AppendNull();
-                xdbcIsAutoincrementBuilder.Append(false); // Auto-increment not available
-                xdbcIsGeneratedcolumnBuilder.Append(false); // Generated column not available
+                xdbcIsAutoincrementBuilder.Append(false);
+                xdbcIsGeneratedcolumnBuilder.Append(true);
                 nullBitmapBuffer.Append(true);
                 length++;
             }
@@ -1292,22 +2308,53 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private struct ColumnInfo
         {
+            // Context information
+            public string Catalog { get; set; }
+            public string Schema { get; set; }
+            public string Table { get; set; }
+
+            // Column information
             public string Name { get; set; }
             public string TypeName { get; set; }
             public int Position { get; set; }
             public bool Nullable { get; set; }
             public string? Comment { get; set; }
+
+            // Computed XDBC fields (populated using DatabricksTypeMapper)
+            public short? XdbcDataType { get; set; }
+            public string? XdbcTypeName { get; set; }
+            public int? XdbcColumnSize { get; set; }
+            public int? XdbcDecimalDigits { get; set; }
+            public short? XdbcNumPrecRadix { get; set; }
+            public int? XdbcBufferLength { get; set; }
+            public int? XdbcCharOctetLength { get; set; }
+            public short? XdbcSqlDataType { get; set; }
+            public short? XdbcDatetimeSub { get; set; }
         }
 
-        private class SimpleArrowArrayStream : IArrowArrayStream
+        /// <summary>
+        /// IArrowArrayStream adapter for Statement Execution API metadata queries.
+        /// Wraps pre-materialized (in-memory) data for GetObjects, GetTableTypes, GetInfo, etc.
+        ///
+        /// This is parallel to HiveInfoArrowStream in the Thrift protocol implementation.
+        /// Used when metadata is built entirely in memory before returning to the caller,
+        /// as opposed to streaming readers (CloudFetchReader) that fetch data incrementally.
+        /// </summary>
+        private class StatementExecInfoArrowStream : IArrowArrayStream
         {
             private Schema _schema;
             private RecordBatch? _batch;
 
-            public SimpleArrowArrayStream(Schema schema, IReadOnlyList<IArrowArray> data)
+            public StatementExecInfoArrowStream(Schema schema, IReadOnlyList<IArrowArray> data)
             {
                 _schema = schema;
                 _batch = new RecordBatch(schema, data, data[0].Length);
+            }
+
+            public StatementExecInfoArrowStream(Schema schema, RecordBatch[] batches)
+            {
+                _schema = schema;
+                _batch = batches.Length > 0 ? batches[0] : null;
             }
 
             public Schema Schema => _schema;
@@ -1370,27 +2417,32 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </example>
         public override IArrowArrayStream GetInfo(IReadOnlyList<AdbcInfoCode> codes)
         {
-            // Info value type IDs for DenseUnionType
-            const int strValTypeID = 0;
-            const int boolValTypeId = 1;
-
-            // Supported info codes for Statement Execution API
-            var supportedCodes = new[]
+            return this.TraceActivity(activity =>
             {
-                AdbcInfoCode.VendorName,
-                AdbcInfoCode.VendorVersion,
-                AdbcInfoCode.VendorArrowVersion,
-                AdbcInfoCode.VendorSql,
-                AdbcInfoCode.DriverName,
-                AdbcInfoCode.DriverVersion,
-                AdbcInfoCode.DriverArrowVersion
-            };
+                activity?.SetTag("requested_codes_count", codes?.Count ?? 0);
+                activity?.SetTag("requested_codes", codes != null && codes.Count > 0 ? string.Join(",", codes) : "(all)");
 
-            // If no codes specified, return all supported codes
-            if (codes == null || codes.Count == 0)
-            {
-                codes = supportedCodes;
-            }
+                // Info value type IDs for DenseUnionType
+                const int strValTypeID = 0;
+                const int boolValTypeId = 1;
+
+                // Supported info codes for Statement Execution API (matches Thrift implementation)
+                var supportedCodes = new[]
+                {
+                    AdbcInfoCode.VendorName,
+                    AdbcInfoCode.VendorVersion,
+                    AdbcInfoCode.VendorSql,
+                    AdbcInfoCode.DriverName,
+                    AdbcInfoCode.DriverVersion,
+                    AdbcInfoCode.DriverArrowVersion
+                };
+
+                // If no codes specified, return all supported codes
+                if (codes == null || codes.Count == 0)
+                {
+                    codes = supportedCodes;
+                    activity?.SetTag("using_all_supported_codes", true);
+                }
 
             // Build info arrays
             var infoNameBuilder = new UInt32Array.Builder();
@@ -1426,20 +2478,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         booleanInfoBuilder.AppendNull();
                         break;
 
-                    case AdbcInfoCode.VendorArrowVersion:
-                        infoNameBuilder.Append((uint)code);
-                        typeBuilder.Append(strValTypeID);
-                        offsetBuilder.Append(offset++);
-                        stringInfoBuilder.Append("17.0.0"); // Apache Arrow version
-                        booleanInfoBuilder.AppendNull();
-                        break;
-
                     case AdbcInfoCode.VendorSql:
                         infoNameBuilder.Append((uint)code);
                         typeBuilder.Append(boolValTypeId);
                         offsetBuilder.Append(offset++);
                         stringInfoBuilder.AppendNull();
-                        booleanInfoBuilder.Append(false); // Databricks uses Spark SQL, not standard SQL
+                        booleanInfoBuilder.Append(true); // Matches Thrift implementation for consistency
                         break;
 
                     case AdbcInfoCode.DriverName:
@@ -1462,7 +2506,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         infoNameBuilder.Append((uint)code);
                         typeBuilder.Append(strValTypeID);
                         offsetBuilder.Append(offset++);
-                        stringInfoBuilder.Append("17.0.0"); // Apache Arrow version used by driver
+                        stringInfoBuilder.Append("1.0.0"); // ADBC Arrow version (matches Thrift implementation)
                         booleanInfoBuilder.AppendNull();
                         break;
 
@@ -1540,7 +2584,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             // Return as Arrow stream
             var schema = StandardSchemas.GetInfoSchema;
-            return new SimpleArrowArrayStream(schema, dataArrays);
+            activity?.SetTag("result_count", arrayLength);
+            activity?.SetTag("null_count", nullCount);
+            return new StatementExecInfoArrowStream(schema, dataArrays);
+        });
         }
 
         /// <summary>
@@ -1584,46 +2631,66 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// }
         /// </code>
         /// </example>
-        public IArrowArrayStream GetPrimaryKeys(string? catalog, string? dbSchema, string tableName)
+        internal IArrowArrayStream GetPrimaryKeys(string? catalog, string? dbSchema, string tableName)
         {
             return GetPrimaryKeysAsync(catalog, dbSchema, tableName).GetAwaiter().GetResult();
         }
 
         private async Task<IArrowArrayStream> GetPrimaryKeysAsync(string? catalog, string? dbSchema, string tableName)
         {
-            if (string.IsNullOrEmpty(tableName))
+            return await this.TraceActivityAsync(async activity =>
             {
-                throw new ArgumentNullException(nameof(tableName), "Table name is required");
-            }
+                if (string.IsNullOrEmpty(tableName))
+                {
+                    activity?.SetTag("error", "Table name is required");
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    throw new ArgumentNullException(nameof(tableName), "Table name is required");
+                }
 
-            // Use session catalog/schema if not provided
-            catalog = catalog ?? _catalog;
-            dbSchema = dbSchema ?? _schema;
+                // Use session catalog/schema if not provided
+                catalog = catalog ?? _catalog;
+                dbSchema = dbSchema ?? _schema;
 
-            // Build SHOW KEYS query
-            var qualifiedTableName = BuildQualifiedTableName(catalog, dbSchema, tableName);
-            var sql = $"SHOW KEYS IN {qualifiedTableName}";
+                activity?.SetTag("catalog", catalog ?? "(session)");
+                activity?.SetTag("db_schema", dbSchema ?? "(session)");
+                activity?.SetTag("table_name", tableName);
 
-            List<RecordBatch> batches;
-            try
-            {
-                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // SHOW KEYS not supported (Hive metastore) or permission denied
-                // Return empty result gracefully
-                return BuildPrimaryKeysResult(new List<PrimaryKeyInfo>(), catalog, dbSchema, tableName);
-            }
+                // Build SHOW KEYS query using Unity Catalog syntax
+                // Format: SHOW KEYS IN CATALOG `catalog` IN SCHEMA `schema` IN TABLE `table`
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalog(catalog)
+                    .WithSchema(dbSchema)
+                    .WithTable(tableName);
+
+                var sql = commandBuilder.BuildShowPrimaryKeys();
+                activity?.SetTag("sql_query", sql);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetTag("note", "SHOW KEYS not supported or permission denied");
+                    // SHOW KEYS not supported (Hive metastore) or permission denied
+                    // Return empty result gracefully
+                    return BuildPrimaryKeysResult(new List<PrimaryKeyInfo>(), catalog, dbSchema, tableName);
+                }
 
             var primaryKeys = new List<PrimaryKeyInfo>();
             int keySequence = 1;
 
             foreach (var batch in batches)
             {
-                // SHOW KEYS returns: col_name, constraint_name, constraint_type
+                // SHOW KEYS returns columns with camelCase names in Unity Catalog
+                // Expected columns: col_name, constraintName, constraintType
                 var colNameArray = batch.Column("col_name") as StringArray;
-                var constraintTypeArray = batch.Column("constraint_type") as StringArray;
+                var constraintNameArray = batch.Column("constraintName") as StringArray;
+                var constraintTypeArray = batch.Column("constraintType") as StringArray;
 
                 if (colNameArray == null || constraintTypeArray == null)
                     continue;
@@ -1634,23 +2701,30 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     {
                         var constraintType = constraintTypeArray.GetString(i);
 
-                        // Only include PRIMARY KEY constraints
-                        if (constraintType.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase))
+                        // Only include PRIMARY constraints (Unity Catalog returns "PRIMARY" not "PRIMARY KEY")
+                        if (constraintType.Equals("PRIMARY", StringComparison.OrdinalIgnoreCase))
                         {
+                            var constraintName = constraintNameArray != null && !constraintNameArray.IsNull(i)
+                                ? constraintNameArray.GetString(i)
+                                : null;
+
                             primaryKeys.Add(new PrimaryKeyInfo
                             {
                                 CatalogName = catalog,
                                 SchemaName = dbSchema,
                                 TableName = tableName,
                                 ColumnName = colNameArray.GetString(i),
-                                KeySequence = keySequence++
+                                KeySequence = keySequence++,
+                                ConstraintName = constraintName
                             });
                         }
                     }
                 }
             }
 
+            activity?.SetTag("result_primary_keys", primaryKeys.Count);
             return BuildPrimaryKeysResult(primaryKeys, catalog, dbSchema, tableName);
+        });
         }
 
         private IArrowArrayStream BuildPrimaryKeysResult(List<PrimaryKeyInfo> primaryKeys, string? catalog, string? schema, string table)
@@ -1660,6 +2734,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var tableBuilder = new StringArray.Builder();
             var columnBuilder = new StringArray.Builder();
             var sequenceBuilder = new Int32Array.Builder();
+            var constraintNameBuilder = new StringArray.Builder();
 
             foreach (var pk in primaryKeys)
             {
@@ -1676,6 +2751,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 tableBuilder.Append(pk.TableName);
                 columnBuilder.Append(pk.ColumnName);
                 sequenceBuilder.Append(pk.KeySequence);
+                AppendNullableString(constraintNameBuilder, pk.ConstraintName);
             }
 
             var resultSchema = new Schema(new[]
@@ -1684,7 +2760,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 new Field("db_schema_name", StringType.Default, nullable: true),
                 new Field("table_name", StringType.Default, nullable: false),
                 new Field("column_name", StringType.Default, nullable: false),
-                new Field("key_sequence", Int32Type.Default, nullable: false)
+                new Field("key_sequence", Int32Type.Default, nullable: false),
+                new Field("constraint_name", StringType.Default, nullable: true)
             }, null);
 
             var data = new List<IArrowArray>
@@ -1693,10 +2770,115 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 schemaBuilder.Build(),
                 tableBuilder.Build(),
                 columnBuilder.Build(),
-                sequenceBuilder.Build()
+                sequenceBuilder.Build(),
+                constraintNameBuilder.Build()
             };
 
-            return new SimpleArrowArrayStream(resultSchema, data);
+            return new StatementExecInfoArrowStream(resultSchema, data);
+        }
+
+        /// <summary>
+        /// Gets primary keys in flat structure with Thrift HiveServer2-compatible column naming for statement-based queries.
+        /// Reuses GetPrimaryKeysAsync() and transforms column names to match Thrift protocol.
+        /// </summary>
+        /// <param name="catalog">Catalog name. If null, uses session catalog.</param>
+        /// <param name="dbSchema">Schema name. If null, uses session schema.</param>
+        /// <param name="tableName">Table name (required)</param>
+        /// <returns>Arrow stream with TABLE_CAT, TABLE_SCHEM, TABLE_NAME, COLUMN_NAME, KEQ_SEQ, PK_NAME columns (Thrift protocol naming)</returns>
+        internal IArrowArrayStream GetPrimaryKeysFlat(string? catalog, string? dbSchema, string tableName)
+        {
+            // Reuse existing method to get data
+            var stream = GetPrimaryKeysAsync(catalog, dbSchema, tableName).GetAwaiter().GetResult();
+
+            // Read data from ADBC-style stream
+            var catalogBuilder = new StringArray.Builder();
+            var schemaBuilder = new StringArray.Builder();
+            var tableBuilder = new StringArray.Builder();
+            var columnBuilder = new StringArray.Builder();
+            var sequenceBuilder = new Int16Array.Builder();
+            var pkNameBuilder = new StringArray.Builder();
+
+            using (var reader = stream)
+            {
+                while (true)
+                {
+                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+                    if (batch == null) break;
+
+                    // Extract columns
+                    var catalogArray = batch.Column("catalog_name") as StringArray;
+                    var schemaArray = batch.Column("db_schema_name") as StringArray;
+                    var tableArray = batch.Column("table_name") as StringArray;
+                    var columnArray = batch.Column("column_name") as StringArray;
+                    var sequenceArray = batch.Column("key_sequence") as Int32Array;
+                    var constraintNameArray = batch.Column("constraint_name") as StringArray;
+
+                    if (columnArray != null)
+                    {
+                        for (int i = 0; i < columnArray.Length; i++)
+                        {
+                            // TABLE_CAT
+                            if (catalogArray != null && !catalogArray.IsNull(i))
+                                catalogBuilder.Append(catalogArray.GetString(i));
+                            else
+                                catalogBuilder.AppendNull();
+
+                            // TABLE_SCHEM
+                            if (schemaArray != null && !schemaArray.IsNull(i))
+                                schemaBuilder.Append(schemaArray.GetString(i));
+                            else
+                                schemaBuilder.AppendNull();
+
+                            // TABLE_NAME
+                            if (tableArray != null && !tableArray.IsNull(i))
+                                tableBuilder.Append(tableArray.GetString(i));
+                            else
+                                tableBuilder.AppendNull();
+
+                            // COLUMN_NAME
+                            if (!columnArray.IsNull(i))
+                                columnBuilder.Append(columnArray.GetString(i));
+                            else
+                                columnBuilder.AppendNull();
+
+                            // KEQ_SEQ (convert from Int32 to Int16)
+                            if (sequenceArray != null && !sequenceArray.IsNull(i))
+                                sequenceBuilder.Append((short)sequenceArray.GetValue(i).Value);
+                            else
+                                sequenceBuilder.AppendNull();
+
+                            // PK_NAME (from constraint_name in ADBC stream)
+                            if (constraintNameArray != null && !constraintNameArray.IsNull(i))
+                                pkNameBuilder.Append(constraintNameArray.GetString(i));
+                            else
+                                pkNameBuilder.AppendNull();
+                        }
+                    }
+                }
+            }
+
+            // Create result with Thrift protocol column names
+            var resultSchema = new Schema(new[]
+            {
+                new Field("TABLE_CAT", StringType.Default, nullable: true),
+                new Field("TABLE_SCHEM", StringType.Default, nullable: true),
+                new Field("TABLE_NAME", StringType.Default, nullable: false),
+                new Field("COLUMN_NAME", StringType.Default, nullable: false),
+                new Field("KEQ_SEQ", Int16Type.Default, nullable: false),
+                new Field("PK_NAME", StringType.Default, nullable: true)
+            }, null);
+
+            var data = new List<IArrowArray>
+            {
+                catalogBuilder.Build(),
+                schemaBuilder.Build(),
+                tableBuilder.Build(),
+                columnBuilder.Build(),
+                sequenceBuilder.Build(),
+                pkNameBuilder.Build()
+            };
+
+            return new StatementExecInfoArrowStream(resultSchema, data);
         }
 
         /// <summary>
@@ -1750,52 +2932,72 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// }
         /// </code>
         /// </example>
-        public IArrowArrayStream GetImportedKeys(string? catalog, string? dbSchema, string tableName)
+        internal IArrowArrayStream GetImportedKeys(string? catalog, string? dbSchema, string tableName)
         {
             return GetImportedKeysAsync(catalog, dbSchema, tableName).GetAwaiter().GetResult();
         }
 
         private async Task<IArrowArrayStream> GetImportedKeysAsync(string? catalog, string? dbSchema, string tableName)
         {
-            if (string.IsNullOrEmpty(tableName))
+            return await this.TraceActivityAsync(async activity =>
             {
-                throw new ArgumentNullException(nameof(tableName), "Table name is required");
-            }
+                if (string.IsNullOrEmpty(tableName))
+                {
+                    activity?.SetTag("error", "Table name is required");
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    throw new ArgumentNullException(nameof(tableName), "Table name is required");
+                }
 
-            // Use session catalog/schema if not provided
-            catalog = catalog ?? _catalog;
-            dbSchema = dbSchema ?? _schema;
+                // Use session catalog/schema if not provided
+                catalog = catalog ?? _catalog;
+                dbSchema = dbSchema ?? _schema;
 
-            // Build SHOW FOREIGN KEYS query
-            var qualifiedTableName = BuildQualifiedTableName(catalog, dbSchema, tableName);
-            var sql = $"SHOW FOREIGN KEYS IN {qualifiedTableName}";
+                activity?.SetTag("catalog", catalog ?? "(session)");
+                activity?.SetTag("db_schema", dbSchema ?? "(session)");
+                activity?.SetTag("table_name", tableName);
 
-            List<RecordBatch> batches;
-            try
-            {
-                batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // SHOW FOREIGN KEYS not supported (Hive metastore) or permission denied
-                // Return empty result gracefully
-                return BuildImportedKeysResult(new List<ForeignKeyInfo>());
-            }
+                // Build SHOW FOREIGN KEYS query using Unity Catalog syntax
+                // Format: SHOW FOREIGN KEYS IN CATALOG `catalog` IN SCHEMA `schema` IN TABLE `table`
+                var commandBuilder = new SqlCommandBuilder(QuoteIdentifier, EscapeSqlPattern)
+                    .WithCatalog(catalog)
+                    .WithSchema(dbSchema)
+                    .WithTable(tableName);
+
+                var sql = commandBuilder.BuildShowForeignKeys();
+                activity?.SetTag("sql_query", sql);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await ExecuteSqlQueryAsync(sql).ConfigureAwait(false);
+                    activity?.SetTag("result_batches", batches.Count);
+                    activity?.SetTag("total_rows", batches.Sum(b => b.Length));
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag("error", ex.Message);
+                    activity?.SetTag("note", "SHOW FOREIGN KEYS not supported or permission denied");
+                    // SHOW FOREIGN KEYS not supported (Hive metastore) or permission denied
+                    // Return empty result gracefully
+                    return BuildImportedKeysResult(new List<ForeignKeyInfo>());
+                }
 
             var foreignKeys = new List<ForeignKeyInfo>();
             var keySequences = new Dictionary<string, int>();
 
             foreach (var batch in batches)
             {
-                // SHOW FOREIGN KEYS returns: constraint_name, fk_col_name, pk_catalog, pk_schema, pk_table, pk_col_name, update_rule, delete_rule
-                var constraintNameArray = batch.Column("constraint_name") as StringArray;
-                var fkColNameArray = batch.Column("fk_col_name") as StringArray;
-                var pkCatalogArray = batch.Column("pk_catalog") as StringArray;
-                var pkSchemaArray = batch.Column("pk_schema") as StringArray;
-                var pkTableArray = batch.Column("pk_table") as StringArray;
-                var pkColNameArray = batch.Column("pk_col_name") as StringArray;
-                var updateRuleArray = batch.Column("update_rule") as StringArray;
-                var deleteRuleArray = batch.Column("delete_rule") as StringArray;
+                // SHOW FOREIGN KEYS returns columns with camelCase names in Unity Catalog
+                // Expected columns: constraintName, parentCatalogName, parentNamespace, parentTableName, parentColName, updateRule, deleteRule, deferrability
+                var constraintNameArray = batch.Column("constraintName") as StringArray;
+                var fkColNameArray = batch.Column("col_name") as StringArray; // The FK column itself
+                var pkCatalogArray = batch.Column("parentCatalogName") as StringArray;
+                var pkSchemaArray = batch.Column("parentNamespace") as StringArray;
+                var pkTableArray = batch.Column("parentTableName") as StringArray;
+                var pkColNameArray = batch.Column("parentColName") as StringArray;
+                var updateRuleArray = batch.Column("updateRule") as StringArray;
+                var deleteRuleArray = batch.Column("deleteRule") as StringArray;
+                var deferrabilityArray = batch.Column("deferrability") as Int32Array;
 
                 if (fkColNameArray == null || pkColNameArray == null)
                     continue;
@@ -1830,13 +3032,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             KeySequence = constraintName != null ? keySequences[constraintName]++ : 1,
                             FkConstraintName = constraintName,
                             UpdateRule = ParseReferentialAction(updateRuleArray != null && !updateRuleArray.IsNull(i) ? updateRuleArray.GetString(i) : null),
-                            DeleteRule = ParseReferentialAction(deleteRuleArray != null && !deleteRuleArray.IsNull(i) ? deleteRuleArray.GetString(i) : null)
+                            DeleteRule = ParseReferentialAction(deleteRuleArray != null && !deleteRuleArray.IsNull(i) ? deleteRuleArray.GetString(i) : null),
+                            Deferrability = deferrabilityArray != null && !deferrabilityArray.IsNull(i) ? (short?)deferrabilityArray.GetValue(i) : null
                         });
                     }
                 }
             }
 
+            activity?.SetTag("result_foreign_keys", foreignKeys.Count);
+            activity?.SetTag("unique_constraints", keySequences.Count);
             return BuildImportedKeysResult(foreignKeys);
+        });
         }
 
         private byte? ParseReferentialAction(string? action)
@@ -1870,6 +3076,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var pkNameBuilder = new StringArray.Builder();
             var updateRuleBuilder = new UInt8Array.Builder();
             var deleteRuleBuilder = new UInt8Array.Builder();
+            var deferrabilityBuilder = new Int16Array.Builder();
 
             foreach (var fk in foreignKeys)
             {
@@ -1896,6 +3103,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     deleteRuleBuilder.Append(fk.DeleteRule.Value);
                 else
                     deleteRuleBuilder.AppendNull();
+
+                if (fk.Deferrability.HasValue)
+                    deferrabilityBuilder.Append(fk.Deferrability.Value);
+                else
+                    deferrabilityBuilder.AppendNull();
             }
 
             var resultSchema = new Schema(new[]
@@ -1912,7 +3124,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 new Field("fk_constraint_name", StringType.Default, nullable: true),
                 new Field("pk_key_name", StringType.Default, nullable: true),
                 new Field("update_rule", UInt8Type.Default, nullable: true),
-                new Field("delete_rule", UInt8Type.Default, nullable: true)
+                new Field("delete_rule", UInt8Type.Default, nullable: true),
+                new Field("deferrability", Int16Type.Default, nullable: true)
             }, null);
 
             var data = new List<IArrowArray>
@@ -1929,10 +3142,353 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 fkNameBuilder.Build(),
                 pkNameBuilder.Build(),
                 updateRuleBuilder.Build(),
-                deleteRuleBuilder.Build()
+                deleteRuleBuilder.Build(),
+                deferrabilityBuilder.Build()
             };
 
-            return new SimpleArrowArrayStream(resultSchema, data);
+            return new StatementExecInfoArrowStream(resultSchema, data);
+        }
+
+        /// <summary>
+        /// Gets foreign keys that reference a specific primary key (cross-reference between two tables).
+        /// Implementation approach: execute SHOW FOREIGN KEYS on the foreign (child) table,
+        /// then filter results by the parent table parameters.
+        /// </summary>
+        /// <param name="pkCatalog">Parent (primary key) table catalog. If null, uses session catalog.</param>
+        /// <param name="pkSchema">Parent (primary key) table schema. If null, uses session schema.</param>
+        /// <param name="pkTable">Parent (primary key) table name. Can be null to include all parent tables.</param>
+        /// <param name="fkCatalog">Foreign (child) table catalog. If null, uses session catalog.</param>
+        /// <param name="fkSchema">Foreign (child) table schema. If null, uses session schema.</param>
+        /// <param name="fkTable">Foreign (child) table name. Required.</param>
+        /// <returns>Arrow stream containing the cross-reference foreign key metadata.</returns>
+        /// <example>
+        /// // Find all foreign keys in "orders" table that reference "customers" table:
+        /// using var stream = connection.GetCrossReference(
+        ///     pkCatalog: "main",
+        ///     pkSchema: "default",
+        ///     pkTable: "customers",
+        ///     fkCatalog: "main",
+        ///     fkSchema: "default",
+        ///     fkTable: "orders"
+        /// );
+        /// </example>
+        internal IArrowArrayStream GetCrossReference(
+            string? pkCatalog,
+            string? pkSchema,
+            string? pkTable,
+            string? fkCatalog,
+            string? fkSchema,
+            string? fkTable)
+        {
+            return GetCrossReferenceAsync(pkCatalog, pkSchema, pkTable, fkCatalog, fkSchema, fkTable)
+                .GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Gets cross-reference (foreign key) information with Thrift/HiveServer2 column naming for statement-based queries.
+        /// Returns 14 columns matching JDBC DatabaseMetaData.getCrossReference() including DEFERRABILITY.
+        /// </summary>
+        /// <param name="pkCatalog">Primary key catalog name</param>
+        /// <param name="pkSchema">Primary key schema name</param>
+        /// <param name="pkTable">Primary key table name</param>
+        /// <param name="fkCatalog">Foreign key catalog name</param>
+        /// <param name="fkSchema">Foreign key schema name</param>
+        /// <param name="fkTable">Foreign key table name (required)</param>
+        /// <returns>Arrow stream with JDBC-style uppercase column names (14 columns)</returns>
+        internal IArrowArrayStream GetCrossReferenceFlat(
+            string? pkCatalog,
+            string? pkSchema,
+            string? pkTable,
+            string? fkCatalog,
+            string? fkSchema,
+            string? fkTable)
+        {
+            // Reuse existing method to get data
+            var stream = GetCrossReferenceAsync(pkCatalog, pkSchema, pkTable, fkCatalog, fkSchema, fkTable)
+                .GetAwaiter().GetResult();
+
+            // Read data from ADBC-style stream
+            var pkCatalogBuilder = new StringArray.Builder();
+            var pkSchemaBuilder = new StringArray.Builder();
+            var pkTableBuilder = new StringArray.Builder();
+            var pkColumnBuilder = new StringArray.Builder();
+            var fkCatalogBuilder = new StringArray.Builder();
+            var fkSchemaBuilder = new StringArray.Builder();
+            var fkTableBuilder = new StringArray.Builder();
+            var fkColumnBuilder = new StringArray.Builder();
+            var keySeqBuilder = new Int16Array.Builder();
+            var updateRuleBuilder = new Int16Array.Builder();
+            var deleteRuleBuilder = new Int16Array.Builder();
+            var fkNameBuilder = new StringArray.Builder();
+            var pkNameBuilder = new StringArray.Builder();
+            var deferrabilityBuilder = new Int16Array.Builder();
+
+            using (var reader = stream)
+            {
+                while (true)
+                {
+                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+                    if (batch == null) break;
+
+                    // Extract columns from ADBC schema
+                    var pkCatalogArray = batch.Column("pk_catalog_name") as StringArray;
+                    var pkSchemaArray = batch.Column("pk_db_schema_name") as StringArray;
+                    var pkTableArray = batch.Column("pk_table_name") as StringArray;
+                    var pkColumnArray = batch.Column("pk_column_name") as StringArray;
+                    var fkCatalogArray = batch.Column("fk_catalog_name") as StringArray;
+                    var fkSchemaArray = batch.Column("fk_db_schema_name") as StringArray;
+                    var fkTableArray = batch.Column("fk_table_name") as StringArray;
+                    var fkColumnArray = batch.Column("fk_column_name") as StringArray;
+                    var keySeqArray = batch.Column("key_sequence") as Int32Array;
+                    var updateRuleArray = batch.Column("update_rule") as UInt8Array;
+                    var deleteRuleArray = batch.Column("delete_rule") as UInt8Array;
+                    var fkNameArray = batch.Column("fk_constraint_name") as StringArray;
+                    var pkNameArray = batch.Column("pk_key_name") as StringArray;
+                    var deferrabilityArray = batch.Column("deferrability") as Int16Array;
+
+                    if (fkColumnArray != null)
+                    {
+                        for (int i = 0; i < fkColumnArray.Length; i++)
+                        {
+                            // PKTABLE_CAT
+                            if (pkCatalogArray != null && !pkCatalogArray.IsNull(i))
+                                pkCatalogBuilder.Append(pkCatalogArray.GetString(i));
+                            else
+                                pkCatalogBuilder.AppendNull();
+
+                            // PKTABLE_SCHEM
+                            if (pkSchemaArray != null && !pkSchemaArray.IsNull(i))
+                                pkSchemaBuilder.Append(pkSchemaArray.GetString(i));
+                            else
+                                pkSchemaBuilder.AppendNull();
+
+                            // PKTABLE_NAME
+                            if (pkTableArray != null && !pkTableArray.IsNull(i))
+                                pkTableBuilder.Append(pkTableArray.GetString(i));
+                            else
+                                pkTableBuilder.AppendNull();
+
+                            // PKCOLUMN_NAME
+                            if (pkColumnArray != null && !pkColumnArray.IsNull(i))
+                                pkColumnBuilder.Append(pkColumnArray.GetString(i));
+                            else
+                                pkColumnBuilder.AppendNull();
+
+                            // FKTABLE_CAT
+                            if (fkCatalogArray != null && !fkCatalogArray.IsNull(i))
+                                fkCatalogBuilder.Append(fkCatalogArray.GetString(i));
+                            else
+                                fkCatalogBuilder.AppendNull();
+
+                            // FKTABLE_SCHEM
+                            if (fkSchemaArray != null && !fkSchemaArray.IsNull(i))
+                                fkSchemaBuilder.Append(fkSchemaArray.GetString(i));
+                            else
+                                fkSchemaBuilder.AppendNull();
+
+                            // FKTABLE_NAME
+                            if (fkTableArray != null && !fkTableArray.IsNull(i))
+                                fkTableBuilder.Append(fkTableArray.GetString(i));
+                            else
+                                fkTableBuilder.AppendNull();
+
+                            // FKCOLUMN_NAME
+                            if (!fkColumnArray.IsNull(i))
+                                fkColumnBuilder.Append(fkColumnArray.GetString(i));
+                            else
+                                fkColumnBuilder.AppendNull();
+
+                            // KEQ_SEQ (convert from Int32 to Int16)
+                            if (keySeqArray != null && !keySeqArray.IsNull(i))
+                                keySeqBuilder.Append((short)keySeqArray.GetValue(i).Value);
+                            else
+                                keySeqBuilder.AppendNull();
+
+                            // UPDATE_RULE (convert from UInt8 to Int16)
+                            if (updateRuleArray != null && !updateRuleArray.IsNull(i))
+                                updateRuleBuilder.Append((short)updateRuleArray.GetValue(i).Value);
+                            else
+                                updateRuleBuilder.AppendNull();
+
+                            // DELETE_RULE (convert from UInt8 to Int16)
+                            if (deleteRuleArray != null && !deleteRuleArray.IsNull(i))
+                                deleteRuleBuilder.Append((short)deleteRuleArray.GetValue(i).Value);
+                            else
+                                deleteRuleBuilder.AppendNull();
+
+                            // FK_NAME
+                            if (fkNameArray != null && !fkNameArray.IsNull(i))
+                                fkNameBuilder.Append(fkNameArray.GetString(i));
+                            else
+                                fkNameBuilder.AppendNull();
+
+                            // PK_NAME
+                            if (pkNameArray != null && !pkNameArray.IsNull(i))
+                                pkNameBuilder.Append(pkNameArray.GetString(i));
+                            else
+                                pkNameBuilder.AppendNull();
+
+                            // DEFERRABILITY (read actual value from database)
+                            if (deferrabilityArray != null && !deferrabilityArray.IsNull(i))
+                                deferrabilityBuilder.Append(deferrabilityArray.GetValue(i).Value);
+                            else
+                                deferrabilityBuilder.AppendNull();
+                        }
+                    }
+                }
+            }
+
+            // Create result with Thrift protocol column names (14 columns matching JDBC spec)
+            var resultSchema = new Schema(new[]
+            {
+                new Field("PKTABLE_CAT", StringType.Default, nullable: true),
+                new Field("PKTABLE_SCHEM", StringType.Default, nullable: true),
+                new Field("PKTABLE_NAME", StringType.Default, nullable: false),
+                new Field("PKCOLUMN_NAME", StringType.Default, nullable: false),
+                new Field("FKTABLE_CAT", StringType.Default, nullable: true),
+                new Field("FKTABLE_SCHEM", StringType.Default, nullable: true),
+                new Field("FKTABLE_NAME", StringType.Default, nullable: false),
+                new Field("FKCOLUMN_NAME", StringType.Default, nullable: false),
+                new Field("KEQ_SEQ", Int16Type.Default, nullable: false),
+                new Field("UPDATE_RULE", Int16Type.Default, nullable: true),
+                new Field("DELETE_RULE", Int16Type.Default, nullable: true),
+                new Field("FK_NAME", StringType.Default, nullable: true),
+                new Field("PK_NAME", StringType.Default, nullable: true),
+                new Field("DEFERRABILITY", Int16Type.Default, nullable: false)
+            }, null);
+
+            var data = new List<IArrowArray>
+            {
+                pkCatalogBuilder.Build(),
+                pkSchemaBuilder.Build(),
+                pkTableBuilder.Build(),
+                pkColumnBuilder.Build(),
+                fkCatalogBuilder.Build(),
+                fkSchemaBuilder.Build(),
+                fkTableBuilder.Build(),
+                fkColumnBuilder.Build(),
+                keySeqBuilder.Build(),
+                updateRuleBuilder.Build(),
+                deleteRuleBuilder.Build(),
+                fkNameBuilder.Build(),
+                pkNameBuilder.Build(),
+                deferrabilityBuilder.Build()
+            };
+
+            return new StatementExecInfoArrowStream(resultSchema, data);
+        }
+
+        private async Task<IArrowArrayStream> GetCrossReferenceAsync(
+            string? pkCatalog,
+            string? pkSchema,
+            string? pkTable,
+            string? fkCatalog,
+            string? fkSchema,
+            string? fkTable)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                if (string.IsNullOrEmpty(fkTable))
+                {
+                    activity?.SetTag("error", "Foreign table name is required");
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+                    throw new ArgumentNullException(nameof(fkTable), "Foreign table name is required for GetCrossReference");
+                }
+
+                // Use session defaults for foreign table if not provided
+                fkCatalog = fkCatalog ?? _catalog;
+                fkSchema = fkSchema ?? _schema;
+
+                activity?.SetTag("pk_catalog", pkCatalog ?? "(all)");
+                activity?.SetTag("pk_schema", pkSchema ?? "(all)");
+                activity?.SetTag("pk_table", pkTable ?? "(all)");
+                activity?.SetTag("fk_catalog", fkCatalog ?? "(session)");
+                activity?.SetTag("fk_schema", fkSchema ?? "(session)");
+                activity?.SetTag("fk_table", fkTable);
+
+                // Execute SHOW FOREIGN KEYS for the CHILD (foreign) table
+                // This returns all foreign keys from the child table
+                var allForeignKeys = await GetImportedKeysAsync(fkCatalog, fkSchema, fkTable).ConfigureAwait(false);
+
+                // Filter results by parent table parameters (if specified)
+                // If parent parameters are null, return all foreign keys from the child table
+                bool needsFiltering = !string.IsNullOrEmpty(pkCatalog) || !string.IsNullOrEmpty(pkSchema) || !string.IsNullOrEmpty(pkTable);
+                activity?.SetTag("needs_filtering", needsFiltering);
+
+                if (!needsFiltering)
+                {
+                    // No parent filter specified - return all foreign keys
+                    activity?.SetTag("note", "No parent filter - returning all foreign keys");
+                    return allForeignKeys;
+                }
+
+            // Need to filter by parent table
+            // Read all foreign keys from the stream
+            var foreignKeysList = new List<ForeignKeyInfo>();
+            var schema = allForeignKeys.Schema;
+
+            while (true)
+            {
+                using var batch = await allForeignKeys.ReadNextRecordBatchAsync().ConfigureAwait(false);
+                if (batch == null) break;
+
+                // Read the foreign key data from the batch
+                var pkCatalogArray = batch.Column("pk_catalog_name") as StringArray;
+                var pkSchemaArray = batch.Column("pk_db_schema_name") as StringArray;
+                var pkTableArray = batch.Column("pk_table_name") as StringArray;
+                var pkColumnArray = batch.Column("pk_column_name") as StringArray;
+                var fkCatalogArray = batch.Column("fk_catalog_name") as StringArray;
+                var fkSchemaArray = batch.Column("fk_db_schema_name") as StringArray;
+                var fkTableArray = batch.Column("fk_table_name") as StringArray;
+                var fkColumnArray = batch.Column("fk_column_name") as StringArray;
+                var sequenceArray = batch.Column("key_sequence") as Int32Array;
+                var fkNameArray = batch.Column("fk_constraint_name") as StringArray;
+                var pkNameArray = batch.Column("pk_key_name") as StringArray;
+                var updateRuleArray = batch.Column("update_rule") as UInt8Array;
+                var deleteRuleArray = batch.Column("delete_rule") as UInt8Array;
+                var deferrabilityArray = batch.Column("deferrability") as Int16Array;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    // Extract values
+                    var rowPkCatalog = pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : null;
+                    var rowPkSchema = pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : null;
+                    var rowPkTable = pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : string.Empty;
+
+                    // Apply parent table filter
+                    bool catalogMatches = string.IsNullOrEmpty(pkCatalog) || string.Equals(rowPkCatalog, pkCatalog, StringComparison.OrdinalIgnoreCase);
+                    bool schemaMatches = string.IsNullOrEmpty(pkSchema) || string.Equals(rowPkSchema, pkSchema, StringComparison.OrdinalIgnoreCase);
+                    bool tableMatches = string.IsNullOrEmpty(pkTable) || string.Equals(rowPkTable, pkTable, StringComparison.OrdinalIgnoreCase);
+
+                    if (catalogMatches && schemaMatches && tableMatches)
+                    {
+                        // This row matches the parent table filter - include it
+                        foreignKeysList.Add(new ForeignKeyInfo
+                        {
+                            PkCatalogName = rowPkCatalog,
+                            PkSchemaName = rowPkSchema,
+                            PkTableName = rowPkTable,
+                            PkColumnName = pkColumnArray != null && !pkColumnArray.IsNull(i) ? pkColumnArray.GetString(i) : string.Empty,
+                            FkCatalogName = fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : null,
+                            FkSchemaName = fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : null,
+                            FkTableName = fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : string.Empty,
+                            FkColumnName = fkColumnArray != null && !fkColumnArray.IsNull(i) ? fkColumnArray.GetString(i) : string.Empty,
+                            KeySequence = sequenceArray != null && !sequenceArray.IsNull(i) ? sequenceArray.GetValue(i).GetValueOrDefault(1) : 1,
+                            FkConstraintName = fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : null,
+                            PkKeyName = pkNameArray != null && !pkNameArray.IsNull(i) ? pkNameArray.GetString(i) : null,
+                            UpdateRule = updateRuleArray != null && !updateRuleArray.IsNull(i) ? updateRuleArray.GetValue(i) : null,
+                            DeleteRule = deleteRuleArray != null && !deleteRuleArray.IsNull(i) ? deleteRuleArray.GetValue(i) : null,
+                            Deferrability = deferrabilityArray != null && !deferrabilityArray.IsNull(i) ? deferrabilityArray.GetValue(i) : null
+                        });
+                    }
+                }
+            }
+
+            // Build and return filtered result
+            activity?.SetTag("filtered_foreign_keys", foreignKeysList.Count);
+            activity?.SetTag("note", "Applied parent table filter");
+            return BuildImportedKeysResult(foreignKeysList);
+        });
         }
 
         private void AppendNullableString(StringArray.Builder builder, string? value)
@@ -1950,6 +3506,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             public string TableName { get; set; }
             public string ColumnName { get; set; }
             public int KeySequence { get; set; }
+            public string? ConstraintName { get; set; }
         }
 
         private struct ForeignKeyInfo
@@ -1967,6 +3524,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             public string? PkKeyName { get; set; }
             public byte? UpdateRule { get; set; }
             public byte? DeleteRule { get; set; }
+            public short? Deferrability { get; set; }
         }
 
         /// <summary>
