@@ -1154,7 +1154,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             nullableBuilder.Append(nullableArray != null && !nullableArray.IsNull(i) ? (nullableArray.GetValue(i)!.Value ? 1 : 0) : 2);
 
                             // REMARKS
-                            _ = remarksArray != null && !remarksArray.IsNull(i) ? remarksBuilder.Append(remarksArray.GetString(i)) : remarksBuilder.AppendNull();
+                            _ = remarksArray != null && !remarksArray.IsNull(i) ? remarksBuilder.Append(remarksArray.GetString(i)) : remarksBuilder.Append("");
 
                             // COLUMN_DEF (default value - not supported)
                             columnDefBuilder.AppendNull();
@@ -2201,12 +2201,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("table_name", tableName);
 
                 var commandBuilder = new SqlCommandBuilder()
-                    .WithCatalog(catalog)
-                    .WithSchema(dbSchema)
-                    .WithTable(tableName);
+                    .WithCatalogPattern(catalog)
+                    .WithSchemaPattern(dbSchema)
+                    .WithTablePattern(tableName);
 
                 // Use SHOW COLUMNS instead of DESCRIBE TABLE for accurate nullable information
-                var sql = commandBuilder.BuildShowColumns(catalog);
+                var sql = commandBuilder.BuildShowColumns();
                 activity?.SetTag("sql_query", sql);
 
                 // Build qualified name for error messages
