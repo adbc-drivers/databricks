@@ -180,7 +180,7 @@ namespace AdbcDrivers.Databricks
             if (string.IsNullOrEmpty(pattern))
                 return pattern;
 
-            var result = new StringBuilder(pattern.Length);
+            var result = new StringBuilder(pattern!.Length);
             bool escapeNext = false;
 
             for (int i = 0; i < pattern.Length; i++)
@@ -260,4 +260,3 @@ namespace AdbcDrivers.Databricks
         #endregion
     }
 }
-

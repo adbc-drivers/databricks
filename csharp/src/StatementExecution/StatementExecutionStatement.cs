@@ -186,7 +186,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
             {
-                Statement = _sqlQuery,
+                Statement = _sqlQuery!,
                 WarehouseId = _warehouseId,
                 SessionId = _sessionId,
                 Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
@@ -383,7 +383,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var fields = new List<Field>();
             foreach (var column in manifest.Schema.Columns)
             {
-                var arrowType = MapDatabricksTypeToArrowType(column.TypeName);
+                var arrowType = MapDatabricksTypeToArrowType(column.TypeName!);
                 fields.Add(new Field(column.Name, arrowType, true));
             }
 
@@ -463,7 +463,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
             {
-                Statement = _sqlQuery,
+                Statement = _sqlQuery!,
                 WarehouseId = _warehouseId,
                 SessionId = _sessionId,
                 Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
@@ -608,7 +608,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentNullException(nameof(_metadataTableName), "Table name is required for GetColumnsExtended");
             }
 
-            var stream = await Task.Run(() => _connection.GetColumnsExtendedFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName), cancellationToken).ConfigureAwait(false);
+            var stream = await Task.Run(() => _connection.GetColumnsExtendedFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName!), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -620,7 +620,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing primary key information</returns>
         protected virtual async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken = default)
         {
-            var stream = await Task.Run(() => _connection.GetPrimaryKeysFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName), cancellationToken).ConfigureAwait(false);
+            var stream = await Task.Run(() => _connection.GetPrimaryKeysFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName!), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -632,7 +632,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing imported key information</returns>
         protected virtual async Task<QueryResult> GetImportedKeysAsync(CancellationToken cancellationToken = default)
         {
-            var stream = await Task.Run(() => _connection.GetImportedKeys(_metadataCatalogName, _metadataSchemaName, _metadataTableName), cancellationToken).ConfigureAwait(false);
+            var stream = await Task.Run(() => _connection.GetImportedKeys(_metadataCatalogName, _metadataSchemaName, _metadataTableName!), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 

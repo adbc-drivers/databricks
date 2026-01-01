@@ -736,8 +736,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                                         Table = tableArray.GetString(i),
                                         Name = columnNameArray.GetString(i),
                                         TypeName = typeNameArray.GetString(i),
-                                        Position = positionArray.GetValue(i).Value,
-                                        Nullable = nullableArray.GetValue(i).Value,
+                                        Position = positionArray.GetValue(i)!.Value,
+                                        Nullable = nullableArray.GetValue(i)!.Value,
                                         Comment = remarksArray != null && !remarksArray.IsNull(i) ? remarksArray.GetString(i) : null,
                                         XdbcDataType = xdbcDataTypeArray != null && !xdbcDataTypeArray.IsNull(i) ? xdbcDataTypeArray.GetValue(i) : null,
                                         XdbcTypeName = xdbcTypeNameArray != null && !xdbcTypeNameArray.IsNull(i) ? xdbcTypeNameArray.GetString(i) : null,
@@ -1151,7 +1151,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             _ = xdbcNumPrecRadixArray != null && !xdbcNumPrecRadixArray.IsNull(i) ? numPrecRadixBuilder.Append(xdbcNumPrecRadixArray.GetValue(i)) : numPrecRadixBuilder.AppendNull();
 
                             // NULLABLE (Int32: 0=no nulls, 1=nullable, 2=unknown)
-                            nullableBuilder.Append(nullableArray != null && !nullableArray.IsNull(i) ? (nullableArray.GetValue(i).Value ? 1 : 0) : 2);
+                            nullableBuilder.Append(nullableArray != null && !nullableArray.IsNull(i) ? (nullableArray.GetValue(i)!.Value ? 1 : 0) : 2);
 
                             // REMARKS
                             _ = remarksArray != null && !remarksArray.IsNull(i) ? remarksBuilder.Append(remarksArray.GetString(i)) : remarksBuilder.AppendNull();
@@ -1172,7 +1172,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             _ = positionArray != null && !positionArray.IsNull(i) ? ordinalPositionBuilder.Append(positionArray.GetValue(i)) : ordinalPositionBuilder.AppendNull();
 
                             // IS_NULLABLE (string: "YES", "NO", or "")
-                            isNullableBuilder.Append(nullableArray != null && !nullableArray.IsNull(i) ? (nullableArray.GetValue(i).Value ? "YES" : "NO") : "");
+                            isNullableBuilder.Append(nullableArray != null && !nullableArray.IsNull(i) ? (nullableArray.GetValue(i)!.Value ? "YES" : "NO") : "");
 
                             // SCOPE_CATALOG, SCOPE_SCHEMA, SCOPE_TABLE - for REF types (not supported)
                             scopeCatalogBuilder.AppendNull();
@@ -2076,7 +2076,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             else
                                 remarksBuilder.Append("");
 
-                            // TYPE_CAT, TYPE_SCHEM, TYPE_NAME - for structured types 
+                            // TYPE_CAT, TYPE_SCHEM, TYPE_NAME - for structured types
                             typeCatBuilder.AppendNull();
                             typeSchemaBuilder.AppendNull();
                             typeNameBuilder.AppendNull();
@@ -2084,7 +2084,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             // SELF_REFERENCING_COL_NAME - for self-referencing tables
                             selfRefColBuilder.AppendNull();
 
-                            // REF_GENERATION - referential generation 
+                            // REF_GENERATION - referential generation
                             refGenerationBuilder.AppendNull();
                         }
                     }
@@ -2333,7 +2333,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             while (true)
             {
-                var batch = await queryResult.Stream.ReadNextRecordBatchAsync().ConfigureAwait(false);
+                var batch = await queryResult.Stream!.ReadNextRecordBatchAsync().ConfigureAwait(false);
                 if (batch == null)
                     break;
                 batches.Add(batch);
@@ -3045,7 +3045,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                             // KEQ_SEQ
                             if (sequenceArray != null && !sequenceArray.IsNull(i))
-                                sequenceBuilder.Append(sequenceArray.GetValue(i).Value);
+                                sequenceBuilder.Append(sequenceArray.GetValue(i)!.Value);
                             else
                                 sequenceBuilder.AppendNull();
 
@@ -3242,7 +3242,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (string.IsNullOrEmpty(action))
                 return null;
 
-            return action.ToUpperInvariant() switch
+            return action!.ToUpperInvariant() switch
             {
                 "CASCADE" => 0,
                 "RESTRICT" => 1,
@@ -3420,13 +3420,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             _ = !fkColumnArray.IsNull(i) ? fkColumnBuilder.Append(fkColumnArray.GetString(i)) : fkColumnBuilder.AppendNull();
 
                             // KEQ_SEQ
-                            _ = keySeqArray != null && !keySeqArray.IsNull(i) ? keySeqBuilder.Append(keySeqArray.GetValue(i).Value) : keySeqBuilder.AppendNull();
+                            _ = keySeqArray != null && !keySeqArray.IsNull(i) ? keySeqBuilder.Append(keySeqArray.GetValue(i)!.Value) : keySeqBuilder.AppendNull();
 
                             // UPDATE_RULE (convert from UInt8 to Int16)
-                            _ = updateRuleArray != null && !updateRuleArray.IsNull(i) ? updateRuleBuilder.Append((short)updateRuleArray.GetValue(i).Value) : updateRuleBuilder.AppendNull();
+                            _ = updateRuleArray != null && !updateRuleArray.IsNull(i) ? updateRuleBuilder.Append((short)updateRuleArray.GetValue(i)!.Value) : updateRuleBuilder.AppendNull();
 
                             // DELETE_RULE (convert from UInt8 to Int16)
-                            _ = deleteRuleArray != null && !deleteRuleArray.IsNull(i) ? deleteRuleBuilder.Append((short)deleteRuleArray.GetValue(i).Value) : deleteRuleBuilder.AppendNull();
+                            _ = deleteRuleArray != null && !deleteRuleArray.IsNull(i) ? deleteRuleBuilder.Append((short)deleteRuleArray.GetValue(i)!.Value) : deleteRuleBuilder.AppendNull();
 
                             // FK_NAME
                             _ = fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameBuilder.Append(fkNameArray.GetString(i)) : fkNameBuilder.AppendNull();
@@ -3435,7 +3435,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             _ = pkNameArray != null && !pkNameArray.IsNull(i) ? pkNameBuilder.Append(pkNameArray.GetString(i)) : pkNameBuilder.AppendNull();
 
                             // DEFERRABILITY (read actual value from database)
-                            _ = deferrabilityArray != null && !deferrabilityArray.IsNull(i) ? deferrabilityBuilder.Append(deferrabilityArray.GetValue(i).Value) : deferrabilityBuilder.AppendNull();
+                            _ = deferrabilityArray != null && !deferrabilityArray.IsNull(i) ? deferrabilityBuilder.Append(deferrabilityArray.GetValue(i)!.Value) : deferrabilityBuilder.AppendNull();
                         }
                     }
                 }
@@ -3510,7 +3510,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 // Execute SHOW FOREIGN KEYS for the CHILD (foreign) table
                 // This returns all foreign keys from the child table
-                var allForeignKeys = await GetImportedKeysAsync(fkCatalog, fkSchema, fkTable).ConfigureAwait(false);
+                var allForeignKeys = await GetImportedKeysAsync(fkCatalog, fkSchema, fkTable!).ConfigureAwait(false);
 
                 // Filter results by parent table parameters (if specified)
                 // If parent parameters are null, return all foreign keys from the child table

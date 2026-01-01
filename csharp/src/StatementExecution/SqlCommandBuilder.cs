@@ -277,9 +277,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             var sql = new StringBuilder(ShowKeys);
-            sql.Append(string.Format(InCatalogFormat, MetadataUtilities.QuoteIdentifier(_catalog)));
-            sql.Append(string.Format(InSchemaFormat, MetadataUtilities.QuoteIdentifier(_schema)));
-            sql.Append(string.Format(InTableFormat, MetadataUtilities.QuoteIdentifier(_table)));
+            sql.Append(string.Format(InCatalogFormat, MetadataUtilities.QuoteIdentifier(_catalog!)));
+            sql.Append(string.Format(InSchemaFormat, MetadataUtilities.QuoteIdentifier(_schema!)));
+            sql.Append(string.Format(InTableFormat, MetadataUtilities.QuoteIdentifier(_table!)));
 
             return sql.ToString();
         }
@@ -299,9 +299,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             var sql = new StringBuilder(ShowForeignKeys);
-            sql.Append(string.Format(InCatalogFormat, MetadataUtilities.QuoteIdentifier(_catalog)));
-            sql.Append(string.Format(InSchemaFormat, MetadataUtilities.QuoteIdentifier(_schema)));
-            sql.Append(string.Format(InTableFormat, MetadataUtilities.QuoteIdentifier(_table)));
+            sql.Append(string.Format(InCatalogFormat, MetadataUtilities.QuoteIdentifier(_catalog!)));
+            sql.Append(string.Format(InSchemaFormat, MetadataUtilities.QuoteIdentifier(_schema!)));
+            sql.Append(string.Format(InTableFormat, MetadataUtilities.QuoteIdentifier(_table!)));
 
             return sql.ToString();
         }

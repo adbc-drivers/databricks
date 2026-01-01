@@ -271,11 +271,11 @@ namespace AdbcDrivers.Databricks
                 new Field("FKTABLE_NAME", StringType.Default, true),
                 new Field("FKCOLUMN_NAME", StringType.Default, true),
                 new Field("KEQ_SEQ", Int32Type.Default, true),
-                new Field("UPDATE_RULE", Int16Type.Default, true),  
-                new Field("DELETE_RULE", Int16Type.Default, true),  
+                new Field("UPDATE_RULE", Int16Type.Default, true),
+                new Field("DELETE_RULE", Int16Type.Default, true),
                 new Field("FK_NAME", StringType.Default, true),
                 new Field("PK_NAME", StringType.Default, true),
-                new Field("DEFERRABILITY", Int16Type.Default, true)  
+                new Field("DEFERRABILITY", Int16Type.Default, true)
             };
             return new Schema(fields, null);
         }
@@ -297,8 +297,8 @@ namespace AdbcDrivers.Databricks
                 new StringArray.Builder().Build(), // FKTABLE_NAME
                 new StringArray.Builder().Build(), // FKCOLUMN_NAME
                 new Int32Array.Builder().Build(),  // KEQ_SEQ
-                new Int16Array.Builder().Build(),  // UPDATE_RULE 
-                new Int16Array.Builder().Build(),  // DELETE_RULE 
+                new Int16Array.Builder().Build(),  // UPDATE_RULE
+                new Int16Array.Builder().Build(),  // DELETE_RULE
                 new StringArray.Builder().Build(), // FK_NAME
                 new StringArray.Builder().Build(), // PK_NAME
                 new Int16Array.Builder().Build()   // DEFERRABILITY
