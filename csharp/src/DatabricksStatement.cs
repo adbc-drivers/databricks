@@ -27,7 +27,6 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using AdbcDrivers.Databricks.Metadata;
 using AdbcDrivers.Databricks.Result;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;

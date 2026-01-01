@@ -21,7 +21,10 @@ using Apache.Arrow.Adbc;
 namespace AdbcDrivers.Databricks.StatementExecution
 {
     /// <summary>
-    /// SQL command builder for efficient metadata queries using Unity Catalog syntax.
+    /// SQL command builder for metadata queries.
+    /// Handles two types of queries:
+    /// 1. Pattern-based queries (SHOW SCHEMAS/TABLES/COLUMNS) - use LIKE with glob patterns
+    /// 2. Exact-identifier queries (SHOW KEYS/FOREIGN KEYS) - use IN SCHEMA/IN TABLE syntax
     /// </summary>
     public class SqlCommandBuilder
     {
@@ -35,7 +38,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private const string ShowTableTypes = "SHOW TABLE_TYPES";
         private const string DescribeTable = "DESCRIBE TABLE";
 
-        // Building blocks for Unity Catalog syntax
         private const string InCatalogFormat = " IN CATALOG {0}";
         private const string InSchemaFormat = " IN SCHEMA {0}";
         private const string InTableFormat = " IN TABLE {0}";
@@ -46,27 +48,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private const string SchemaLikeFormat = " SCHEMA" + LikeFormat;
         private const string TableLikeFormat = " TABLE" + LikeFormat;
 
+        // Exact identifiers (for keys-related queries using IN syntax)
         private string? _catalog;
         private string? _schema;
         private string? _table;
+
+        // Patterns (for SHOW queries using LIKE syntax)
         private string? _catalogPattern;
         private string? _schemaPattern;
         private string? _tablePattern;
         private string? _columnPattern;
-        private readonly Func<string, string> _quoter;
-        private readonly Func<string, string> _patternEscaper;
 
         /// <summary>
         /// Initializes a new instance of the SqlCommandBuilder class.
+        /// Uses MetadataUtilities for identifier quoting and pattern conversion.
         /// </summary>
-        /// <param name="quoter">Function to quote identifiers (default: backtick quoting)</param>
-        /// <param name="patternEscaper">Function to escape SQL patterns (default: no escaping)</param>
-        public SqlCommandBuilder(
-            Func<string, string>? quoter = null,
-            Func<string, string>? patternEscaper = null)
+        public SqlCommandBuilder()
         {
-            _quoter = quoter ?? (s => $"`{s}`");
-            _patternEscaper = patternEscaper ?? (s => s);
         }
 
         /// <summary>
@@ -79,7 +77,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Sets the schema for the SQL command.
+        /// Sets the exact schema identifier for the SQL command.
+        /// Use this for exact-match queries like SHOW KEYS, SHOW FOREIGN KEYS.
+        /// For pattern-based queries, use WithSchemaPattern instead.
         /// </summary>
         public SqlCommandBuilder WithSchema(string? schema)
         {
@@ -88,7 +88,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Sets the table for the SQL command.
+        /// Sets the exact table identifier for the SQL command.
+        /// Use this for exact-match queries like SHOW KEYS, SHOW FOREIGN KEYS.
+        /// For pattern-based queries, use WithTablePattern instead.
         /// </summary>
         public SqlCommandBuilder WithTable(string? table)
         {
@@ -133,100 +135,128 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Builds SHOW CATALOGS command.
+        /// Builds SHOW CATALOGS command with optional pattern.
+        /// Uses LIKE syntax for pattern matching.
         /// </summary>
         /// <returns>SQL command string</returns>
         public string BuildShowCatalogs()
         {
             var sql = new StringBuilder(ShowCatalogs);
 
-            if (!string.IsNullOrEmpty(_catalogPattern))
+            if (_catalogPattern != null)
             {
-                sql.Append(string.Format(LikeFormat, _patternEscaper(_catalogPattern)));
+                var escapedPattern = MetadataUtilities.ConvertAdbcPatternToDatabricksGlob(_catalogPattern);
+                sql.Append(string.Format(LikeFormat, escapedPattern));
             }
 
             return sql.ToString();
         }
 
+        /// <summary>
+        /// Builds SHOW SCHEMAS command.
+        /// Uses patterns with LIKE syntax, supports IN ALL CATALOGS.
+        /// </summary>
+        /// <returns>SQL command string</returns>
         public string BuildShowSchemas()
         {
             var sql = new StringBuilder(ShowSchemas);
 
+            // Handle catalog scope
             if (_catalog == null)
             {
                 sql.Append(InAllCatalogs);
             }
             else
             {
-                sql.Append($" IN {_quoter(_catalog)}");
+                sql.Append($" IN {MetadataUtilities.QuoteIdentifier(_catalog)}");
             }
 
-            var schemaFilter = _schema ?? _schemaPattern;
-            if (!string.IsNullOrEmpty(schemaFilter))
+            // Apply schema pattern filter
+            if (_schemaPattern != null)
             {
-                sql.Append(string.Format(LikeFormat, _patternEscaper(schemaFilter)));
+                var escapedPattern = MetadataUtilities.ConvertAdbcPatternToDatabricksGlob(_schemaPattern);
+                sql.Append(string.Format(LikeFormat, escapedPattern));
             }
 
             return sql.ToString();
         }
 
+        /// <summary>
+        /// Builds SHOW TABLES command.
+        /// Uses patterns with LIKE syntax for schema and table filtering.
+        /// </summary>
+        /// <returns>SQL command string</returns>
         public string BuildShowTables()
         {
             var sql = new StringBuilder(ShowTables);
 
+            // Handle catalog scope
             if (_catalog == null)
             {
                 sql.Append(InAllCatalogs);
             }
             else
             {
-                sql.Append(string.Format(InCatalogFormat, _quoter(_catalog)));
+                sql.Append(string.Format(InCatalogFormat, MetadataUtilities.QuoteIdentifier(_catalog)));
             }
 
-            var schemaFilter = _schema ?? _schemaPattern;
-            if (!string.IsNullOrEmpty(schemaFilter))
+            // Apply schema pattern
+            if (_schemaPattern != null)
             {
-                sql.Append(string.Format(SchemaLikeFormat, _patternEscaper(schemaFilter)));
+                var escapedPattern = MetadataUtilities.ConvertAdbcPatternToDatabricksGlob(_schemaPattern);
+                sql.Append(string.Format(SchemaLikeFormat, escapedPattern));
             }
 
-            if (!string.IsNullOrEmpty(_tablePattern))
+            // Apply table pattern
+            if (_tablePattern != null)
             {
-                sql.Append(string.Format(LikeFormat, _patternEscaper(_tablePattern)));
+                var escapedPattern = MetadataUtilities.ConvertAdbcPatternToDatabricksGlob(_tablePattern);
+                sql.Append(string.Format(LikeFormat, escapedPattern));
             }
 
             return sql.ToString();
         }
 
+        /// <summary>
+        /// Builds SHOW COLUMNS command.
+        /// Uses patterns with LIKE syntax for schema, table, and column filtering.
+        /// </summary>
+        /// <param name="catalogOverride">Optional catalog override</param>
+        /// <returns>SQL command string</returns>
         public string BuildShowColumns(string? catalogOverride = null)
         {
-            var effectiveCatalog = catalogOverride ?? _catalog;
-
+            var effectiveCatalog = catalogOverride ?? _catalogPattern;
             var sql = new StringBuilder(ShowColumns);
 
-            if (string.IsNullOrEmpty(effectiveCatalog))
+            // Handle catalog scope
+            if (effectiveCatalog == null)
             {
                 sql.Append(InAllCatalogs);
             }
             else
             {
-                sql.Append(string.Format(InCatalogFormat, _quoter(effectiveCatalog)));
+                sql.Append(string.Format(InCatalogFormat, MetadataUtilities.QuoteIdentifier(effectiveCatalog)));
             }
 
-            var schemaFilter = _schema ?? _schemaPattern;
-            if (!string.IsNullOrEmpty(schemaFilter))
+            // Apply schema pattern
+            if (_schemaPattern != null)
             {
-                sql.Append(string.Format(SchemaLikeFormat, _patternEscaper(schemaFilter)));
+                var escapedPattern = MetadataUtilities.ConvertAdbcPatternToDatabricksGlob(_schemaPattern);
+                sql.Append(string.Format(SchemaLikeFormat, escapedPattern));
             }
 
-            var tableFilter = _table ?? _tablePattern;
-            if (!string.IsNullOrEmpty(tableFilter))
+            // Apply table pattern
+            if (_tablePattern != null)
             {
-                sql.Append(string.Format(TableLikeFormat, _patternEscaper(tableFilter)));
+                var escapedPattern = MetadataUtilities.ConvertAdbcPatternToDatabricksGlob(_tablePattern);
+                sql.Append(string.Format(TableLikeFormat, escapedPattern));
             }
 
-            if (!string.IsNullOrEmpty(_columnPattern) && _columnPattern != "%")
+            // Apply column pattern (skip wildcard-only pattern)
+            if (_columnPattern != null && _columnPattern != "%")
             {
-                sql.Append(string.Format(LikeFormat, _patternEscaper(_columnPattern)));
+                var escapedPattern = MetadataUtilities.ConvertAdbcPatternToDatabricksGlob(_columnPattern);
+                sql.Append(string.Format(LikeFormat, escapedPattern));
             }
 
             return sql.ToString();
@@ -234,65 +264,46 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Builds SHOW KEYS command for primary keys.
+        /// Uses exact identifiers with IN CATALOG/IN SCHEMA/IN TABLE syntax.
+        /// DOES NOT support patterns - keys queries require exact identifiers.
         /// </summary>
         /// <returns>SQL command string</returns>
+        /// <exception cref="ArgumentException">Thrown when catalog, schema, or table is not set</exception>
         public string BuildShowPrimaryKeys()
         {
             if (string.IsNullOrEmpty(_catalog) || string.IsNullOrEmpty(_schema) || string.IsNullOrEmpty(_table))
             {
-                throw new ArgumentException("SHOW KEYS requires catalog, schema, and table");
+                throw new ArgumentException("SHOW KEYS requires exact catalog, schema, and table (no patterns supported)");
             }
 
             var sql = new StringBuilder(ShowKeys);
-            sql.Append(string.Format(InCatalogFormat, _quoter(_catalog)));
-            sql.Append(string.Format(InSchemaFormat, _quoter(_schema)));
-            sql.Append(string.Format(InTableFormat, _quoter(_table)));
+            sql.Append(string.Format(InCatalogFormat, MetadataUtilities.QuoteIdentifier(_catalog)));
+            sql.Append(string.Format(InSchemaFormat, MetadataUtilities.QuoteIdentifier(_schema)));
+            sql.Append(string.Format(InTableFormat, MetadataUtilities.QuoteIdentifier(_table)));
 
             return sql.ToString();
         }
 
         /// <summary>
         /// Builds SHOW FOREIGN KEYS command.
+        /// Uses exact identifiers with IN CATALOG/IN SCHEMA/IN TABLE syntax.
+        /// DOES NOT support patterns - keys queries require exact identifiers.
         /// </summary>
         /// <returns>SQL command string</returns>
+        /// <exception cref="ArgumentException">Thrown when catalog, schema, or table is not set</exception>
         public string BuildShowForeignKeys()
         {
             if (string.IsNullOrEmpty(_catalog) || string.IsNullOrEmpty(_schema) || string.IsNullOrEmpty(_table))
             {
-                throw new ArgumentException("SHOW FOREIGN KEYS requires catalog, schema, and table");
+                throw new ArgumentException("SHOW FOREIGN KEYS requires exact catalog, schema, and table (no patterns supported)");
             }
 
             var sql = new StringBuilder(ShowForeignKeys);
-            sql.Append(string.Format(InCatalogFormat, _quoter(_catalog)));
-            sql.Append(string.Format(InSchemaFormat, _quoter(_schema)));
-            sql.Append(string.Format(InTableFormat, _quoter(_table)));
+            sql.Append(string.Format(InCatalogFormat, MetadataUtilities.QuoteIdentifier(_catalog)));
+            sql.Append(string.Format(InSchemaFormat, MetadataUtilities.QuoteIdentifier(_schema)));
+            sql.Append(string.Format(InTableFormat, MetadataUtilities.QuoteIdentifier(_table)));
 
             return sql.ToString();
         }
-
-        /// <summary>
-        /// Builds DESCRIBE TABLE command.
-        /// </summary>
-        /// <returns>SQL command string</returns>
-        public string BuildDescribeTable()
-        {
-            if (string.IsNullOrEmpty(_table))
-            {
-                throw new ArgumentException("DESCRIBE TABLE requires a table name");
-            }
-
-            var parts = new System.Collections.Generic.List<string>();
-
-            if (!string.IsNullOrEmpty(_catalog))
-                parts.Add(_quoter(_catalog));
-
-            if (!string.IsNullOrEmpty(_schema))
-                parts.Add(_quoter(_schema));
-
-            parts.Add(_quoter(_table));
-
-            return $"{DescribeTable} {string.Join(".", parts)}";
-        }
-
     }
 }

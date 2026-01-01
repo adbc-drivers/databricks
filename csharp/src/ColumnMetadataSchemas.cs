@@ -29,7 +29,7 @@ namespace AdbcDrivers.Databricks
         #region GetColumns Schema (24 columns)
 
         /// <summary>
-        /// Creates the standard GetColumns schema (24 columns).
+        /// Creates the standard GetColumns schema.
         /// This schema follows the standard flat table format for column metadata.
         /// </summary>
         /// <returns>Schema with 24 column definitions</returns>
@@ -69,7 +69,7 @@ namespace AdbcDrivers.Databricks
         /// Creates empty Arrow arrays for each column in the column metadata schema.
         /// Useful for returning empty results from metadata queries.
         /// </summary>
-        /// <returns>Array of empty Arrow arrays (24 columns)</returns>
+        /// <returns>Array of empty Arrow arrays</returns>
         public static IArrowArray[] CreateColumnMetadataEmptyArray()
         {
             return
@@ -217,7 +217,6 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Creates the standard GetPrimaryKeys schema (6 columns).
-        /// Follows JDBC DatabaseMetaData.getPrimaryKeys() convention.
         /// </summary>
         /// <returns>Schema with 6 primary key metadata columns</returns>
         public static Schema CreatePrimaryKeySchema()
@@ -257,7 +256,6 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Creates the standard GetCrossReference schema (14 columns).
-        /// Follows JDBC DatabaseMetaData.getCrossReference() and getImportedKeys() convention.
         /// </summary>
         /// <returns>Schema with 14 foreign key metadata columns</returns>
         public static Schema CreateForeignKeySchema()
@@ -273,11 +271,11 @@ namespace AdbcDrivers.Databricks
                 new Field("FKTABLE_NAME", StringType.Default, true),
                 new Field("FKCOLUMN_NAME", StringType.Default, true),
                 new Field("KEQ_SEQ", Int32Type.Default, true),
-                new Field("UPDATE_RULE", Int32Type.Default, true),
-                new Field("DELETE_RULE", Int32Type.Default, true),
+                new Field("UPDATE_RULE", Int16Type.Default, true),  
+                new Field("DELETE_RULE", Int16Type.Default, true),  
                 new Field("FK_NAME", StringType.Default, true),
                 new Field("PK_NAME", StringType.Default, true),
-                new Field("DEFERRABILITY", Int32Type.Default, true)
+                new Field("DEFERRABILITY", Int16Type.Default, true)  
             };
             return new Schema(fields, null);
         }
@@ -299,11 +297,11 @@ namespace AdbcDrivers.Databricks
                 new StringArray.Builder().Build(), // FKTABLE_NAME
                 new StringArray.Builder().Build(), // FKCOLUMN_NAME
                 new Int32Array.Builder().Build(),  // KEQ_SEQ
-                new Int32Array.Builder().Build(),  // UPDATE_RULE
-                new Int32Array.Builder().Build(),  // DELETE_RULE
+                new Int16Array.Builder().Build(),  // UPDATE_RULE 
+                new Int16Array.Builder().Build(),  // DELETE_RULE 
                 new StringArray.Builder().Build(), // FK_NAME
                 new StringArray.Builder().Build(), // PK_NAME
-                new Int32Array.Builder().Build()   // DEFERRABILITY
+                new Int16Array.Builder().Build()   // DEFERRABILITY
             ];
         }
 

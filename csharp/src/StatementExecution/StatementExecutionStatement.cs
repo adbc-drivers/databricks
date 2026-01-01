@@ -33,7 +33,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// <summary>
     /// Statement implementation using the Databricks Statement Execution REST API.
     /// Handles query execution, polling, and result retrieval.
-    /// Extends TracingStatement for consistent tracing support with Thrift protocol.
     /// </summary>
     internal class StatementExecutionStatement : TracingStatement
     {
@@ -93,7 +92,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             System.Buffers.ArrayPool<byte> lz4BufferPool,
             HttpClient httpClient,
             StatementExecutionConnection connection)
-            : base(connection) // Initialize TracingStatement base class with TracingConnection
+            : base(connection)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _sessionId = sessionId;
@@ -221,46 +220,26 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (state == "FAILED")
             {
                 var error = response.Status?.Error;
-                var exception = new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
-                Activity.Current?.AddException(exception, [
-                    new("error.type", "StatementExecutionFailed"),
-                    new("statement_id", _currentStatementId ?? "(null)"),
-                    new("error_code", error?.ErrorCode ?? "(unknown)"),
-                    new("state", state ?? "(unknown)")
-                ]);
-                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
-                throw exception;
+                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
             }
             if (state == "CANCELED")
             {
-                var exception = new AdbcException("Statement execution was canceled");
-                Activity.Current?.AddException(exception, [
-                    new("error.type", "StatementExecutionCanceled"),
-                    new("statement_id", _currentStatementId ?? "(null)"),
-                    new("state", state ?? "(unknown)")
-                ]);
-                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
-                throw exception;
+                throw new AdbcException("Statement execution was canceled");
             }
             if (state == "CLOSED")
             {
-                var exception = new AdbcException("Statement was closed before results could be retrieved");
-                Activity.Current?.AddException(exception, [
-                    new("error.type", "StatementExecutionClosed"),
-                    new("statement_id", _currentStatementId ?? "(null)"),
-                    new("state", state ?? "(unknown)")
-                ]);
-                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
-                throw exception;
+                throw new AdbcException("Statement was closed before results could be retrieved");
             }
 
             // Check for truncated results warning
             if (response.Manifest?.Truncated == true)
             {
-                Activity.Current?.AddEvent("statement.results_truncated", [
-                    new("total_row_count", response.Manifest.TotalRowCount),
-                    new("total_byte_count", response.Manifest.TotalByteCount)
-                ]);
+                Activity.Current?.AddEvent(new ActivityEvent("statement.results_truncated",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "total_row_count", response.Manifest.TotalRowCount },
+                        { "total_byte_count", response.Manifest.TotalByteCount }
+                    }));
             }
 
             // Create appropriate reader based on result disposition
@@ -512,37 +491,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (state == "FAILED")
             {
                 var error = response.Status?.Error;
-                var exception = new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
-                Activity.Current?.AddException(exception, [
-                    new("error.type", "StatementExecutionFailed"),
-                    new("statement_id", _currentStatementId ?? "(null)"),
-                    new("error_code", error?.ErrorCode ?? "(unknown)"),
-                    new("state", state ?? "(unknown)")
-                ]);
-                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
-                throw exception;
+                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
             }
             if (state == "CANCELED")
             {
-                var exception = new AdbcException("Statement execution was canceled");
-                Activity.Current?.AddException(exception, [
-                    new("error.type", "StatementExecutionCanceled"),
-                    new("statement_id", _currentStatementId ?? "(null)"),
-                    new("state", state ?? "(unknown)")
-                ]);
-                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
-                throw exception;
+                throw new AdbcException("Statement execution was canceled");
             }
             if (state == "CLOSED")
             {
-                var exception = new AdbcException("Statement was closed before results could be retrieved");
-                Activity.Current?.AddException(exception, [
-                    new("error.type", "StatementExecutionClosed"),
-                    new("statement_id", _currentStatementId ?? "(null)"),
-                    new("state", state ?? "(unknown)")
-                ]);
-                Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
-                throw exception;
+                throw new AdbcException("Statement was closed before results could be retrieved");
             }
 
             // For updates, we don't need to read the results - just return the row count
@@ -556,82 +513,137 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private async Task<QueryResult> ExecuteMetadataCommandQuery(CancellationToken cancellationToken)
         {
-            const string GetCatalogsCommandName = "getcatalogs";
-            const string GetSchemasCommandName = "getschemas";
-            const string GetTablesCommandName = "gettables";
-            const string GetColumnsCommandName = "getcolumns";
-            const string GetPrimaryKeysCommandName = "getprimarykeys";
-            const string GetImportedKeysCommandName = "getimportedkeys";
-            const string GetCrossReferenceCommandName = "getcrossreference";
-            const string GetTableTypesCommandName = "gettabletypes";
-
-            const string SupportedMetadataCommands = "GetCatalogs, GetSchemas, GetTables, GetColumns, GetPrimaryKeys, GetImportedKeys, GetCrossReference, GetTableTypes";
-
-            return SqlQuery?.ToLowerInvariant() switch
+            return await this.TraceActivityAsync(async activity =>
             {
-                GetCatalogsCommandName => await GetCatalogsAsync(cancellationToken).ConfigureAwait(false),
-                GetSchemasCommandName => await GetSchemasAsync(cancellationToken).ConfigureAwait(false),
-                GetTablesCommandName => await GetTablesAsync(cancellationToken).ConfigureAwait(false),
-                GetColumnsCommandName => await GetColumnsAsync(cancellationToken).ConfigureAwait(false),
-                GetPrimaryKeysCommandName => await GetPrimaryKeysAsync(cancellationToken).ConfigureAwait(false),
-                GetImportedKeysCommandName => await GetImportedKeysAsync(cancellationToken).ConfigureAwait(false),
-                GetCrossReferenceCommandName => await GetCrossReferenceAsync(cancellationToken).ConfigureAwait(false),
-                GetTableTypesCommandName => await GetTableTypesAsync(cancellationToken).ConfigureAwait(false),
-                null or "" => throw new ArgumentNullException(nameof(SqlQuery), $"Metadata command for property 'SqlQuery' must not be empty or null. Supported metadata commands: {SupportedMetadataCommands}"),
-                _ => throw new NotSupportedException($"Metadata command '{SqlQuery}' is not supported. Supported metadata commands: {SupportedMetadataCommands}"),
-            };
+                const string GetCatalogsCommandName = "getcatalogs";
+                const string GetSchemasCommandName = "getschemas";
+                const string GetTablesCommandName = "gettables";
+                const string GetColumnsCommandName = "getcolumns";
+                const string GetColumnsExtendedCommandName = "getcolumnsextended";
+                const string GetPrimaryKeysCommandName = "getprimarykeys";
+                const string GetImportedKeysCommandName = "getimportedkeys";
+                const string GetCrossReferenceCommandName = "getcrossreference";
+                const string GetTableTypesCommandName = "gettabletypes";
+
+                const string SupportedMetadataCommands = "GetCatalogs, GetSchemas, GetTables, GetColumns, GetColumnsExtended, GetPrimaryKeys, GetImportedKeys, GetCrossReference, GetTableTypes";
+
+                var command = SqlQuery?.ToLowerInvariant();
+                activity?.SetTag("metadata_command", command ?? "(null)");
+
+                return command switch
+                {
+                    GetCatalogsCommandName => await GetCatalogsAsync(cancellationToken).ConfigureAwait(false),
+                    GetSchemasCommandName => await GetSchemasAsync(cancellationToken).ConfigureAwait(false),
+                    GetTablesCommandName => await GetTablesAsync(cancellationToken).ConfigureAwait(false),
+                    GetColumnsCommandName => await GetColumnsAsync(cancellationToken).ConfigureAwait(false),
+                    GetColumnsExtendedCommandName => await GetColumnsExtendedAsync(cancellationToken).ConfigureAwait(false),
+                    GetPrimaryKeysCommandName => await GetPrimaryKeysAsync(cancellationToken).ConfigureAwait(false),
+                    GetImportedKeysCommandName => await GetImportedKeysAsync(cancellationToken).ConfigureAwait(false),
+                    GetCrossReferenceCommandName => await GetCrossReferenceAsync(cancellationToken).ConfigureAwait(false),
+                    GetTableTypesCommandName => await GetTableTypesAsync(cancellationToken).ConfigureAwait(false),
+                    null or "" => throw new ArgumentNullException(nameof(SqlQuery), $"Metadata command for property 'SqlQuery' must not be empty or null. Supported metadata commands: {SupportedMetadataCommands}"),
+                    _ => throw new NotSupportedException($"Metadata command '{SqlQuery}' is not supported. Supported metadata commands: {SupportedMetadataCommands}"),
+                };
+            });
         }
 
-        private async Task<QueryResult> GetCatalogsAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Gets catalogs metadata.
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing catalog information</returns>
+        protected virtual async Task<QueryResult> GetCatalogsAsync(CancellationToken cancellationToken = default)
         {
-            // For statement-based metadata queries, return flat structure with Thrift HiveServer2-compatible naming
-            // This ensures consistency with Thrift protocol behavior
             var stream = await Task.Run(() => _connection.GetCatalogsFlat(_metadataCatalogName), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
-        private async Task<QueryResult> GetSchemasAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Gets schemas metadata
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing schema information</returns>
+        protected virtual async Task<QueryResult> GetSchemasAsync(CancellationToken cancellationToken = default)
         {
-            // For statement-based metadata queries, return flat structure with Thrift HiveServer2-compatible naming
-            // This ensures consistency with Thrift protocol behavior
             var stream = await Task.Run(() => _connection.GetSchemasFlat(_metadataCatalogName, _metadataSchemaName), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
-        private async Task<QueryResult> GetTablesAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Gets tables metadata
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing table information</returns>
+        protected virtual async Task<QueryResult> GetTablesAsync(CancellationToken cancellationToken = default)
         {
-            // For statement-based metadata queries, return flat structure with Thrift HiveServer2-compatible naming
-            // This ensures consistency with Thrift protocol behavior
             var stream = await Task.Run(() => _connection.GetTablesFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName, null), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
-        private async Task<QueryResult> GetColumnsAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Gets columns metadata
+        /// Returns flat structure matching Thrift HiveServer2 behavior.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing column information</returns>
+        protected virtual async Task<QueryResult> GetColumnsAsync(CancellationToken cancellationToken = default)
         {
-            // For statement-based metadata queries, return flat structure (24 columns)
-            // This matches Thrift HiveServer2 behavior
             var stream = await Task.Run(() => _connection.GetColumnsFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName, _metadataColumnName), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
-        private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Gets extended columns metadata including PK/FK information using DESC TABLE EXTENDED.
+        /// Returns flat structure with extended metadata columns (24 base + 8 PK/FK metadata columns).
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing extended column information with PK/FK metadata</returns>
+        protected virtual async Task<QueryResult> GetColumnsExtendedAsync(CancellationToken cancellationToken = default)
         {
-            // For statement-based metadata queries, return flat structure with Thrift HiveServer2-compatible naming
-            // This ensures consistency with Thrift protocol behavior
+            if (string.IsNullOrEmpty(_metadataTableName))
+            {
+                throw new ArgumentNullException(nameof(_metadataTableName), "Table name is required for GetColumnsExtended");
+            }
+
+            var stream = await Task.Run(() => _connection.GetColumnsExtendedFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets primary keys metadata
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing primary key information</returns>
+        protected virtual async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken = default)
+        {
             var stream = await Task.Run(() => _connection.GetPrimaryKeysFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
-        private async Task<QueryResult> GetImportedKeysAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Gets imported keys (foreign keys) metadata
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing imported key information</returns>
+        protected virtual async Task<QueryResult> GetImportedKeysAsync(CancellationToken cancellationToken = default)
         {
             var stream = await Task.Run(() => _connection.GetImportedKeys(_metadataCatalogName, _metadataSchemaName, _metadataTableName), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
-        private async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Gets cross reference (foreign key relationships) metadata
+        /// Returns flat structure with 14 columns including DEFERRABILITY, matching Thrift HiveServer2 behavior.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing cross reference information</returns>
+        protected virtual async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken = default)
         {
-            // For statement-based metadata queries, return flat structure with Thrift HiveServer2-compatible naming
-            // This ensures consistency with Thrift protocol behavior (14 columns including DEFERRABILITY)
             var stream = await Task.Run(() => _connection.GetCrossReferenceFlat(
                 _metadataCatalogName,
                 _metadataSchemaName,
@@ -642,7 +654,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return new QueryResult(-1, stream);
         }
 
-        private async Task<QueryResult> GetTableTypesAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Gets table types metadata
+        /// Returns list of supported table types (TABLE, VIEW, LOCAL TEMPORARY).
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing table type information</returns>
+        protected virtual async Task<QueryResult> GetTableTypesAsync(CancellationToken cancellationToken = default)
         {
             var stream = await Task.Run(() => _connection.GetTableTypes(), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
@@ -658,22 +676,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 try
                 {
                     // Close statement synchronously during dispose
-                    Activity.Current?.AddEvent("statement.dispose", [
-                        new("statement_id", _currentStatementId)
-                    ]);
+                    Activity.Current?.AddEvent(new ActivityEvent("statement.dispose",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "statement_id", _currentStatementId }
+                        }));
                     _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
                     // Best effort - ignore errors during dispose
-                    Activity.Current?.AddException(ex, [
-                        new("error.type", ex.GetType().Name),
-                        new("operation", "Dispose"),
-                        new("statement_id", _currentStatementId ?? "(null)")
-                    ]);
-                    Activity.Current?.AddEvent("statement.dispose.error", [
-                        new("error.type", ex.GetType().Name)
-                    ]);
+                    Activity.Current?.AddEvent(new ActivityEvent("statement.dispose.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error", ex.Message }
+                        }));
                 }
                 finally
                 {
