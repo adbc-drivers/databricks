@@ -2935,7 +2935,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var schemaBuilder = new StringArray.Builder();
             var tableBuilder = new StringArray.Builder();
             var columnBuilder = new StringArray.Builder();
-            var sequenceBuilder = new Int32Array.Builder();
+            var sequenceBuilder = new Int16Array.Builder();
             var constraintNameBuilder = new StringArray.Builder();
 
             foreach (var pk in primaryKeys)
@@ -2952,7 +2952,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 tableBuilder.Append(pk.TableName);
                 columnBuilder.Append(pk.ColumnName);
-                sequenceBuilder.Append(pk.KeySequence);
+                sequenceBuilder.Append((short)pk.KeySequence);
                 _ = pk.ConstraintName != null ? constraintNameBuilder.Append(pk.ConstraintName) : constraintNameBuilder.AppendNull();
             }
 
@@ -2962,7 +2962,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 new Field("db_schema_name", StringType.Default, nullable: true),
                 new Field("table_name", StringType.Default, nullable: false),
                 new Field("column_name", StringType.Default, nullable: false),
-                new Field("key_sequence", Int32Type.Default, nullable: false),
+                new Field("key_sequence", Int16Type.Default, nullable: false),
                 new Field("constraint_name", StringType.Default, nullable: true)
             }, null);
 
@@ -2997,7 +2997,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var schemaBuilder = new StringArray.Builder();
             var tableBuilder = new StringArray.Builder();
             var columnBuilder = new StringArray.Builder();
-            var sequenceBuilder = new Int32Array.Builder();
+            var sequenceBuilder = new Int16Array.Builder();
             var pkNameBuilder = new StringArray.Builder();
 
             using (var reader = stream)
@@ -3012,7 +3012,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var schemaArray = batch.Column("db_schema_name") as StringArray;
                     var tableArray = batch.Column("table_name") as StringArray;
                     var columnArray = batch.Column("column_name") as StringArray;
-                    var sequenceArray = batch.Column("key_sequence") as Int32Array;
+                    var sequenceArray = batch.Column("key_sequence") as Int16Array;
                     var constraintNameArray = batch.Column("constraint_name") as StringArray;
 
                     if (columnArray != null)
@@ -3263,7 +3263,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var fkSchemaBuilder = new StringArray.Builder();
             var fkTableBuilder = new StringArray.Builder();
             var fkColumnBuilder = new StringArray.Builder();
-            var sequenceBuilder = new Int32Array.Builder();
+            var sequenceBuilder = new Int16Array.Builder();
             var fkNameBuilder = new StringArray.Builder();
             var pkNameBuilder = new StringArray.Builder();
             var updateRuleBuilder = new UInt8Array.Builder();
@@ -3282,7 +3282,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 fkTableBuilder.Append(fk.FkTableName);
                 fkColumnBuilder.Append(fk.FkColumnName);
 
-                sequenceBuilder.Append(fk.KeySequence);
+                sequenceBuilder.Append((short)fk.KeySequence);
                 _ = fk.FkConstraintName != null ? fkNameBuilder.Append(fk.FkConstraintName) : fkNameBuilder.AppendNull();
                 _ = fk.PkKeyName != null ? pkNameBuilder.Append(fk.PkKeyName) : pkNameBuilder.AppendNull();
                 _ = fk.UpdateRule.HasValue ? updateRuleBuilder.Append(fk.UpdateRule.Value) : updateRuleBuilder.AppendNull();
@@ -3300,7 +3300,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 new Field("fk_db_schema_name", StringType.Default, nullable: true),
                 new Field("fk_table_name", StringType.Default, nullable: false),
                 new Field("fk_column_name", StringType.Default, nullable: false),
-                new Field("key_sequence", Int32Type.Default, nullable: false),
+                new Field("key_sequence", Int16Type.Default, nullable: false),
                 new Field("fk_constraint_name", StringType.Default, nullable: true),
                 new Field("pk_key_name", StringType.Default, nullable: true),
                 new Field("update_rule", UInt8Type.Default, nullable: true),
@@ -3361,7 +3361,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var fkSchemaBuilder = new StringArray.Builder();
             var fkTableBuilder = new StringArray.Builder();
             var fkColumnBuilder = new StringArray.Builder();
-            var keySeqBuilder = new Int32Array.Builder();
+            var keySeqBuilder = new Int16Array.Builder();
             var updateRuleBuilder = new Int16Array.Builder();
             var deleteRuleBuilder = new Int16Array.Builder();
             var fkNameBuilder = new StringArray.Builder();
@@ -3384,7 +3384,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var fkSchemaArray = batch.Column("fk_db_schema_name") as StringArray;
                     var fkTableArray = batch.Column("fk_table_name") as StringArray;
                     var fkColumnArray = batch.Column("fk_column_name") as StringArray;
-                    var keySeqArray = batch.Column("key_sequence") as Int32Array;
+                    var keySeqArray = batch.Column("key_sequence") as Int16Array;
                     var updateRuleArray = batch.Column("update_rule") as UInt8Array;
                     var deleteRuleArray = batch.Column("delete_rule") as UInt8Array;
                     var fkNameArray = batch.Column("fk_constraint_name") as StringArray;
