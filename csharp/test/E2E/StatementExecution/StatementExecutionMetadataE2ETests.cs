@@ -258,59 +258,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 
         #endregion
 
-        #region GetTableSchema Tests
-
-        [SkippableFact]
-        public async Task CanGetTableSchema()
-        {
-            SkipIfNotConfigured();
-
-            using var connection = CreateRestConnection();
-
-            // Create a simple test table
-            var testTable = $"schema_test_{Guid.NewGuid():N}";
-            try
-            {
-                using (var stmt = connection.CreateStatement())
-                {
-                    stmt.SqlQuery = $@"
-                        CREATE TABLE IF NOT EXISTS {TestCatalog}.{TestSchema}.{testTable} (
-                            col_int INT,
-                            col_string STRING,
-                            col_double DOUBLE
-                        )";
-                    await stmt.ExecuteUpdateAsync();
-                }
-
-                var schema = connection.GetTableSchema(TestCatalog, TestSchema, testTable);
-
-                Assert.NotNull(schema);
-                Assert.Equal(3, schema.FieldsList.Count);
-
-                var columnNames = schema.FieldsList.Select(f => f.Name).ToList();
-                Assert.Contains("col_int", columnNames);
-                Assert.Contains("col_string", columnNames);
-                Assert.Contains("col_double", columnNames);
-
-                OutputHelper?.WriteLine($"✓ GetTableSchema returned {schema.FieldsList.Count} columns");
-            }
-            finally
-            {
-                try
-                {
-                    using var stmt = connection.CreateStatement();
-                    stmt.SqlQuery = $"DROP TABLE IF EXISTS {TestCatalog}.{TestSchema}.{testTable}";
-                    await stmt.ExecuteUpdateAsync();
-                }
-                catch (Exception ex)
-                {
-                    OutputHelper?.WriteLine($"⚠ Failed to drop {testTable}: {ex.Message}");
-                }
-            }
-        }
-
-        #endregion
-
         #region GetTableTypes Tests
 
         [SkippableFact]

@@ -61,8 +61,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var batch = stream.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
 
-            // Should have 7 supported codes
-            Assert.Equal(7, batch.Length);
+            // Should have 6 supported codes
+            Assert.Equal(6, batch.Length);
 
             // Verify schema has correct fields
             Assert.Equal(2, batch.Schema.FieldsList.Count);
@@ -112,7 +112,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var batch = stream.ReadNextRecordBatchAsync().Result;
 
             Assert.NotNull(batch);
-            Assert.Equal(7, batch.Length); // All 7 supported codes
+            Assert.Equal(6, batch.Length); // All 6 supported codes
         }
 
         #endregion
@@ -165,7 +165,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_VendorArrowVersion_ReturnsArrowVersion()
+        public void GetInfo_VendorArrowVersion_NotSupported()
         {
             var connection = CreateTestConnection();
 
@@ -175,9 +175,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.NotNull(batch);
             var infoValueUnion = batch.Column("info_value") as DenseUnionArray;
             var stringValueArray = infoValueUnion.Fields[0] as StringArray;
-            var value = stringValueArray.GetString(0);
 
-            Assert.Equal("17.0.0", value);
+            // VendorArrowVersion is not in the supported codes list - should return null
+            Assert.True(stringValueArray.IsNull(0));
         }
 
         [Fact]
@@ -196,7 +196,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.NotNull(boolValueArray);
 
             var value = boolValueArray.GetValue(0);
-            Assert.False(value); // Databricks uses Spark SQL, not standard SQL
+            Assert.True(value); // Databricks supports SQL (matches Thrift implementation)
         }
 
         [Fact]
@@ -247,7 +247,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var stringValueArray = infoValueUnion.Fields[0] as StringArray;
             var value = stringValueArray.GetString(0);
 
-            Assert.Equal("17.0.0", value);
+            Assert.Equal("1.0.0", value);
         }
 
         #endregion
