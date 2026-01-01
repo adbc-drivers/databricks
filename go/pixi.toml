@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# !!!! AUTO-GENERATED FILE.  DO NOT EDIT. !!!!
+# USE adbc-gen-workflow (see adbc-drivers/dev) TO UPDATE THIS FILE.
+
 [workspace]
 authors = ["ADBC Drivers Contributors"]
 channels = ["conda-forge"]

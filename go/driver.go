@@ -73,10 +73,13 @@ const (
 )
 
 var (
+	InfoDriverName    string
 	infoVendorVersion string
 )
 
 func init() {
+	InfoDriverName = "ADBC Driver Foundry Driver for Databricks"
+
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, dep := range info.Deps {
 			switch dep.Path {
@@ -94,6 +97,14 @@ type driverImpl struct {
 // NewDriver creates a new Databricks driver using the given Arrow allocator.
 func NewDriver(alloc memory.Allocator) adbc.Driver {
 	info := driverbase.DefaultDriverInfo("Databricks")
+
+	// Override driver name
+	if InfoDriverName != "" {
+		if err := info.RegisterInfoCode(adbc.InfoDriverName, InfoDriverName); err != nil {
+			panic(err)
+		}
+	}
+
 	if infoVendorVersion != "" {
 		if err := info.RegisterInfoCode(adbc.InfoVendorVersion, infoVendorVersion); err != nil {
 			panic(err)

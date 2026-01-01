@@ -55,6 +55,7 @@ type databaseImpl struct {
 	needsRefresh bool // Whether we need to re-initialize
 
 	// Connection parameters
+	uri            string
 	serverHostname string
 	httpPath       string
 	accessToken    string
@@ -160,19 +161,28 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 }
 
 func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, error) {
-	opts, err := d.resolveConnectionOptions()
+	var db *sql.DB
 
-	if err != nil {
-		return nil, err
+	// Use URI if provided
+	if d.uri != "" {
+		var err error
+		db, err = sql.Open("databricks", d.uri)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		opts, err := d.resolveConnectionOptions()
+		if err != nil {
+			return nil, err
+		}
+
+		connector, err := dbsql.NewConnector(opts...)
+		if err != nil {
+			return nil, err
+		}
+
+		db = sql.OpenDB(connector)
 	}
-
-	connector, err := dbsql.NewConnector(opts...)
-
-	if err != nil {
-		return nil, err
-	}
-
-	db := sql.OpenDB(connector)
 
 	// Test the connection
 	if err := db.PingContext(ctx); err != nil {
@@ -238,6 +248,8 @@ func (d *databaseImpl) Close() error {
 
 func (d *databaseImpl) GetOption(key string) (string, error) {
 	switch key {
+	case adbc.OptionKeyURI:
+		return d.uri, nil
 	case OptionServerHostname:
 		return d.serverHostname, nil
 	case OptionHTTPPath:
@@ -288,6 +300,25 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 func (d *databaseImpl) SetOptions(options map[string]string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
+
+	hasURI := false
+	hasOtherOptions := false
+
+	if _, ok := options[adbc.OptionKeyURI]; ok {
+		hasURI = true
+	}
+
+	if len(options) > 1 || (len(options) == 1 && !hasURI) {
+		hasOtherOptions = true
+	}
+
+	if hasURI && hasOtherOptions {
+		return adbc.Error{
+			Code: adbc.StatusInvalidArgument,
+			Msg:  "cannot specify both URI and individual connection options",
+		}
+	}
+
 	for k, v := range options {
 		err := d.SetOption(k, v)
 		if err != nil {
@@ -301,6 +332,16 @@ func (d *databaseImpl) SetOption(key, value string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 	switch key {
+	case adbc.OptionKeyURI:
+		// Strip the databricks:// scheme since databricks-sql-go expects raw DSN format
+		if after, ok := strings.CutPrefix(value, "databricks://"); ok {
+			d.uri = after
+		} else {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("invalid URI scheme: expected 'databricks://', got '%s'", value),
+			}
+		}
 	case OptionServerHostname:
 		d.serverHostname = value
 	case OptionHTTPPath:

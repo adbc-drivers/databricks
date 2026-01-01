@@ -12,23 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.github/pull_request_template.md
-.gitmodules
-*/*.csproj
-*/*.sln
-csharp/test/Resources/databricks.json
-csharp/test/Resources/result_get_column_extended_all_types.json
-csharp/AdbcDrivers.snk
-csharp/Benchmarks/benchmark-queries.json
-test-infrastructure/proxy-server/go.sum
-go/go.sum
-go/license.tpl
-go/pixi.lock
-go/validation/tests/.gitkeep
-go/validation/queries/ingest/.gitkeep
-go/validation/queries/type/bind/.gitkeep
-go/validation/queries/type/literal/.gitkeep
-go/validation/queries/type/select/.gitkeep
-# adbc.h is vendored
-go/pkg/adbc.h
-test-infrastructure/proxy-server/generated/**
+import os
+
+import pytest
+
+
+def pytest_generate_tests(metafunc) -> None:
+    metafunc.parametrize(
+        "driver",
+        [pytest.param("databricks:", id="databricks")],
+        scope="module",
+        indirect=["driver"],
+    )

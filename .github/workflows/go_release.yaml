@@ -49,22 +49,22 @@ defaults:
 
 jobs:
   test:
-    name: "Test/${{ matrix.os }} ${{ matrix.arch }}"
+    name: "Test/${{ matrix.platform }}_${{ matrix.arch }}"
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
       matrix:
         include:
-          - { os: Linux, platform: linux, arch: amd64, runner: ubuntu-latest }
-          - { os: macOS, platform: macos, arch: arm64, runner: macos-latest }
-          - { os: Windows, platform: win, arch: amd64, runner: windows-latest }
+          - { platform: linux, arch: amd64, runner: ubuntu-latest }
+          - { platform: macos, arch: arm64, runner: macos-latest }
+          - { platform: win, arch: amd64, runner: windows-latest }
     permissions:
       contents: read
     steps:
       - name: free up disk space
         if: runner.os != 'Windows'
         run: |
-          # Rust uses a lot of disk space, free up some space
+          # Preinstalled tools use a lot of disk space, free up some space
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
@@ -147,21 +147,21 @@ jobs:
           go test -tags assert -v ./...
 
   validate:
-    name: "Validate/${{ matrix.os }} ${{ matrix.arch }}"
+    name: "Validate/${{ matrix.platform }}_${{ matrix.arch }}"
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
       matrix:
         include:
           # I think we only need to test one platform, but we can change that later
-          - { os: Linux, platform: linux, arch: amd64, runner: ubuntu-latest }
+          - { platform: linux, arch: amd64, runner: ubuntu-latest }
     permissions:
       contents: read
     steps:
       - name: free up disk space
         if: runner.os != 'Windows'
         run: |
-          # Rust uses a lot of disk space, free up some space
+          # Preinstalled tools use a lot of disk space, free up some space
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
@@ -185,6 +185,14 @@ jobs:
       - name: Build Library
         working-directory: go
         run: |
+          if [[ -f ci/scripts/pre-build.sh ]]; then
+            ./ci/scripts/pre-build.sh test ${{ matrix.platform }} ${{ matrix.arch }}
+          fi
+          set -a
+          if [[ -f .env.release ]]; then
+            source .env.test
+          fi
+          set +a
           pixi run adbc-make build DEBUG=true VERBOSE=true DRIVER=databricks
 
       - name: Start Test Dependencies
@@ -244,17 +252,17 @@ jobs:
           retention-days: 2
 
   build:
-    name: "Build databricks/${{ matrix.os }} ${{ matrix.arch }}"
+    name: "Build databricks/${{ matrix.platform }}_${{ matrix.arch }}"
     needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
       matrix:
         include:
-          - { os: Linux, platform: linux, arch: amd64, runner: ubuntu-latest }
-          - { os: Linux, platform: linux, arch: arm64, runner: ubuntu-24.04-arm }
-          - { os: macOS, platform: macos, arch: arm64, runner: macos-latest }
-          - { os: Windows, platform: windows, arch: amd64, runner: windows-latest }
+          - { platform: linux, arch: amd64, runner: ubuntu-latest }
+          - { platform: linux, arch: arm64, runner: ubuntu-24.04-arm }
+          - { platform: macos, arch: arm64, runner: macos-latest }
+          - { platform: windows, arch: amd64, runner: windows-latest }
     permissions:
       contents: read
       packages: read
@@ -289,6 +297,14 @@ jobs:
       - name: Build Library
         working-directory: go
         run: |
+          if [[ -f ci/scripts/pre-build.sh ]]; then
+            ./ci/scripts/pre-build.sh release ${{ matrix.platform }} ${{ matrix.arch }}
+          fi
+          set -a
+          if [[ -f .env.release ]]; then
+            source .env.release
+          fi
+          set +a
           pixi run adbc-make check CI=true VERBOSE=true DRIVER=databricks
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
