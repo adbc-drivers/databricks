@@ -1,638 +1,239 @@
 <!--
-  Copyright (c) 2025 ADBC Drivers Contributors
 
-  Licensed under the Apache License, Version 2.0 (the "License");
-  you may not use this file except in compliance with the License.
-  You may obtain a copy of the License at
+ Copyright (c) 2025 ADBC Drivers Contributors
 
-          http://www.apache.org/licenses/LICENSE-2.0
+ This file has been modified from its original version, which is
+ under the Apache License:
 
-  Unless required by applicable law or agreed to in writing, software
-  distributed under the License is distributed on an "AS IS" BASIS,
-  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  See the License for the specific language governing permissions and
-  limitations under the License.
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+
 -->
 
-# ADBC C# Drivers for Databricks
+# Databricks Driver
 
-This folder contains an [ADBC driver](https://arrow.apache.org/adbc/) for
-Databricks written in C#.
+![Vendor: Databricks](https://img.shields.io/badge/vendor-Databricks-blue?style=flat-square)
+![Implementation: C#](https://img.shields.io/badge/language-C%23-violet?style=flat-square)
+![Status: Experimental](https://img.shields.io/badge/status-experimental-red?style=flat-square)
 
-## Installation
+The Databricks ADBC driver is built on top of the Spark ADBC driver and inherits all of its [properties](../Apache/Spark/readme.md), plus additional Databricks-specific functionality.
 
-At this time pre-packaged drivers are not yet available. See [Building](#building) for instructions on building from source.
+## Database and Connection Properties
 
-## Usage
+**Note**: The Databricks driver inherits all properties from the [Spark driver](../Apache/Spark/readme.md). The properties below are Databricks-specific additions.
 
-### Overview
+## Configuration Methods
 
-The Databricks ADBC driver is a C# implementation built on the Apache Spark ADBC driver foundation. It adds Databricks-specific functionality including:
-- **OAuth Authentication**: Support for personal access tokens and client credentials flow
-- **CloudFetch**: High-performance result retrieval directly from cloud storage
-- **Enhanced Performance**: Optimized batch sizes and polling intervals for Databricks SQL
-- **Comprehensive Metadata**: Primary key, foreign key, and catalog support
+The Databricks driver supports multiple ways to configure properties:
 
-### Quick Start
+### 1. Direct Property Configuration
+Pass properties directly when creating the driver connection (traditional method).
 
-```csharp
-using Apache.Arrow.Adbc.Drivers.Databricks;
+### 2. Environment Variable Configuration
+Configure properties using a JSON file loaded via environment variables:
 
-// Create driver and database
-var driver = new DatabricksDriver();
-var database = driver.Open(new Dictionary<string, string>
-{
-    ["uri"] = "https://your-workspace.cloud.databricks.com/sql/1.0/warehouses/your-warehouse-id",
-    ["adbc.spark.auth_type"] = "oauth",
-    ["adbc.databricks.oauth.grant_type"] = "access_token",
-    ["adbc.spark.oauth.access_token"] = "your-personal-access-token"
-});
-
-// Execute query
-using var connection = database.Connect();
-using var statement = connection.CreateStatement();
-statement.SqlQuery = "SELECT * FROM main.default.my_table LIMIT 10";
-using var reader = statement.ExecuteQuery();
-
-// Process results
-while (reader.ReadNextRecordBatch())
-{
-    // Process Arrow RecordBatch
-}
-```
-
-### Configuration Methods
-
-The driver supports three flexible configuration approaches:
-
-#### 1. Direct Property Configuration
-Pass properties directly when creating connections.
-
-You can use either a full URI or separate host/path parameters:
-
-```csharp
-// Option 1: Using full URI
-var config = new Dictionary<string, string>
-{
-    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
-    ["adbc.spark.auth_type"] = "oauth",
-    ["adbc.databricks.oauth.grant_type"] = "client_credentials",
-    ["adbc.databricks.oauth.client_id"] = "your-client-id",
-    ["adbc.databricks.oauth.client_secret"] = "your-client-secret"
-};
-
-// Option 2: Using separate host and path (from Spark driver)
-var config = new Dictionary<string, string>
-{
-    ["adbc.spark.type"] = "http",
-    ["adbc.spark.host"] = "workspace.databricks.com",
-    ["adbc.spark.port"] = "443",
-    ["adbc.spark.path"] = "/sql/1.0/warehouses/...",
-    ["adbc.spark.auth_type"] = "oauth",
-    ["adbc.databricks.oauth.grant_type"] = "client_credentials",
-    ["adbc.databricks.oauth.client_id"] = "your-client-id",
-    ["adbc.databricks.oauth.client_secret"] = "your-client-secret"
-};
-```
-
-#### 2. Environment Variable Configuration
-Create a JSON configuration file (all values must be strings).
-
-You can use either a full URI or separate host/path parameters:
-
+1. **Create a JSON configuration file** with standard ADBC parameters:
 ```json
 {
-  "uri": "https://workspace.databricks.com/sql/1.0/warehouses/...",
-  "adbc.spark.auth_type": "oauth",
-  "adbc.databricks.oauth.grant_type": "client_credentials",
-  "adbc.databricks.oauth.client_id": "your-client-id",
-  "adbc.databricks.oauth.client_secret": "your-client-secret",
-  "adbc.connection.catalog": "main",
-  "adbc.connection.db_schema": "default"
+  "adbc.databricks.driver_config_take_precedence": "true",
+  "adbc.databricks.enable_pk_fk": "false",
+  "adbc.connection.catalog": "my_catalog",
+  "adbc.connection.db_schema": "my_schema"
 }
 ```
+## Note
 
-Or using separate host and path (from Spark driver):
+All values in the JSON configuration file **must be strings** (including numbers, booleans, and file paths). For example, use `"true"` instead of `true`, and `"4443"` instead of `4443`.
 
+### Example: Using mitmproxy to Inspect Thrift Traffic
+
+To inspect Thrift traffic using [mitmproxy](https://mitmproxy.org/), you can configure the Databricks driver to use a local proxy with TLS interception. Below is an example JSON configuration:
 ```json
 {
-  "adbc.spark.type": "http",
-  "adbc.spark.host": "workspace.databricks.com",
-  "adbc.spark.port": "443",
-  "adbc.spark.path": "/sql/1.0/warehouses/...",
-  "adbc.spark.auth_type": "oauth",
-  "adbc.databricks.oauth.grant_type": "client_credentials",
-  "adbc.databricks.oauth.client_id": "your-client-id",
-  "adbc.databricks.oauth.client_secret": "your-client-secret",
-  "adbc.connection.catalog": "main",
-  "adbc.connection.db_schema": "default"
+  "adbc.databricks.driver_config_take_precedence": "true",
+  "adbc.proxy_options.use_proxy" : "true",
+  "adbc.proxy_options.proxy_host" : "localhost",
+  "adbc.proxy_options.proxy_port" : "4443",
+  "adbc.http_options.tls.enabled": "true",
+  "adbc.http_options.tls.allow_self_signed" : "true",
+  "adbc.http_options.tls.disable_server_certificate_validation" : "true",
+  "adbc.http_options.tls.allow_hostname_mismatch" : "true",
+  "adbc.http_options.tls.trusted_certificate_path" : "C:\\your-path-to\\mitmproxy-ca-cert.pem"
 }
 ```
 
-Set the environment variable:
-```bash
-export DATABRICKS_CONFIG_FILE="/path/to/config.json"
-```
+2. **Set the system environment variable** `DATABRICKS_CONFIG_FILE` to point to your JSON file:
+   1. Open System Properties → Advanced → Environment Variables
+   2. Add new system variable: Name=`DATABRICKS_CONFIG_FILE`, Value=`C:\path\to\your\config.json`
 
-#### 3. Hybrid Configuration
-Combine both methods with the `adbc.databricks.driver_config_take_precedence` property:
-- `true`: Environment config overrides constructor properties
-- `false` (default): Constructor properties override environment config
+3. **Property Merging Behavior**:
+   - By default: Constructor/code properties **override** environment config properties
+   - With `"adbc.databricks.driver_config_take_precedence": "true"`: Environment config properties **override** constructor/code properties
 
-### Authentication
+### 3. Hybrid Configuration
+You can combine both methods - the driver will automatically merge environment config with constructor properties based on the precedence setting.
 
-#### Token-based Authentication (Personal Access Token)
-```csharp
-var config = new Dictionary<string, string>
-{
-    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
-    ["adbc.spark.auth_type"] = "oauth",
-    ["adbc.databricks.oauth.grant_type"] = "access_token",
-    ["adbc.spark.oauth.access_token"] = "your-personal-access-token"
-};
-```
+**Use Cases**:
+- **PowerBI Integration**: Set system-wide defaults via environment config while allowing connection-specific overrides
 
-#### OAuth Client Credentials (Machine-to-Machine)
-```csharp
-var config = new Dictionary<string, string>
-{
-    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
-    ["adbc.spark.auth_type"] = "oauth",
-    ["adbc.databricks.oauth.grant_type"] = "client_credentials",
-    ["adbc.databricks.oauth.client_id"] = "your-client-id",
-    ["adbc.databricks.oauth.client_secret"] = "your-client-secret",
-    ["adbc.databricks.oauth.scope"] = "sql"  // Optional, defaults to "sql"
-};
-```
 
-**Note:** OAuth U2M (User-to-Machine) authentication support is planned for a future release.
-
-**Authentication Properties:**
+### Authentication Properties
 
 | Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.spark.auth_type` | Authentication type: `none`, `username_only`, `basic`, `token`, `oauth` | (required) |
-| `adbc.databricks.oauth.grant_type` | OAuth grant type: `access_token` or `client_credentials` | `access_token` |
-| `adbc.databricks.oauth.client_id` | OAuth client ID for credentials flow | |
-| `adbc.databricks.oauth.client_secret` | OAuth client secret for credentials flow | |
-| `adbc.databricks.oauth.scope` | OAuth scope for credentials flow | `sql` |
-| `adbc.spark.oauth.access_token` | Personal access token (for `access_token` grant type) | |
-| `adbc.databricks.token_renew_limit` | Minutes before expiration to renew token (0 disables) | `0` |
-| `adbc.databricks.identity_federation_client_id` | Service principal client ID for workload identity | |
+| :--- | :--- | :--- |
+| `adbc.databricks.oauth.grant_type` | The OAuth grant type. Supported values: `access_token` (personal access token), `client_credentials` (OAuth client credentials flow) | `access_token` |
+| `adbc.databricks.oauth.client_id` | The OAuth client ID (when using `client_credentials` grant type) | |
+| `adbc.databricks.oauth.client_secret` | The OAuth client secret (when using `client_credentials` grant type) | |
+| `adbc.databricks.oauth.scope` | The OAuth scope (when using `client_credentials` grant type) | `sql` |
+| `adbc.databricks.token_renew_limit` | Minutes before token expiration to start renewing the token. Set to 0 to disable automatic renewal | `0` |
+| `adbc.databricks.identity_federation_client_id` | The client ID of the service principal when using workload identity federation | |
 
-**Note:** Basic username/password authentication is not supported.
+### CloudFetch Properties
 
-### Connection Properties
-
-#### Core Spark Properties (Inherited)
+CloudFetch is Databricks' high-performance result retrieval system that downloads result data directly from cloud storage.
 
 | Property | Description | Default |
-|----------|-------------|---------|
-| `uri` | Full connection URI (alternative to host/port/path) | |
-| `adbc.spark.type` | Server type: `http` | `http` |
-| `adbc.spark.host` | Hostname without scheme/port | |
-| `adbc.spark.port` | Connection port | `443` |
-| `adbc.spark.path` | URI path on server | |
-| `adbc.spark.token` | Token for token-based authentication | |
-| `username` | Username for basic authentication | |
-| `password` | Password for basic authentication | |
-| `adbc.spark.connect_timeout_ms` | Session establishment timeout | `30000` |
-| `adbc.apache.statement.query_timeout_s` | Query execution timeout | `60` |
-| `adbc.apache.connection.polltime_ms` | Query status polling interval | `500` (Databricks: `100`) |
-| `adbc.apache.statement.batch_size` | Max rows per batch request | `50000` (Databricks: `2000000`) |
-| `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` |
+| :--- | :--- | :--- |
+| `adbc.databricks.cloudfetch.enabled` | Whether to use CloudFetch for retrieving results | `true` |
+| `adbc.databricks.cloudfetch.lz4.enabled` | Whether the client can decompress LZ4 compressed results | `true` |
+| `adbc.databricks.cloudfetch.max_bytes_per_file` | Maximum bytes per file for CloudFetch. Supports unit suffixes (B, KB, MB, GB). Examples: `20MB`, `1024KB`, `20971520` | `20MB` |
+| `adbc.databricks.cloudfetch.parallel_downloads` | Maximum number of parallel downloads | `3` |
+| `adbc.databricks.cloudfetch.prefetch_count` | Number of files to prefetch | `2` |
+| `adbc.databricks.cloudfetch.memory_buffer_size_mb` | Maximum memory buffer size in MB for prefetched files | `200` |
+| `adbc.databricks.cloudfetch.prefetch_enabled` | Whether CloudFetch prefetch functionality is enabled | `true` |
+| `adbc.databricks.cloudfetch.max_retries` | Maximum number of retry attempts for downloads | `3` |
+| `adbc.databricks.cloudfetch.retry_delay_ms` | Delay in milliseconds between retry attempts | `500` |
+| `adbc.databricks.cloudfetch.timeout_minutes` | Timeout in minutes for HTTP operations | `5` |
+| `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | Buffer time in seconds before URL expiration to trigger refresh | `60` |
+| `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Maximum number of URL refresh attempts | `3` |
 
-**Note:** Either `uri` or the combination of `adbc.spark.host` + `adbc.spark.path` is required.
-
-#### Databricks-Specific Properties
+### Databricks-Specific Properties
 
 | Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.connection.catalog` | Default catalog for session | |
-| `adbc.connection.db_schema` | Default schema for session | |
-| `adbc.databricks.enable_direct_results` | Use direct results when executing | `true` |
-| `adbc.databricks.max_bytes_per_fetch_request` | Max bytes per fetch request (supports B, KB, MB, GB) | `400MB` |
-| `adbc.databricks.apply_ssp_with_queries` | Apply server-side properties with queries | `false` |
-| `adbc.databricks.enable_multiple_catalog_support` | Support multiple catalogs | `true` |
-| `adbc.databricks.enable_pk_fk` | Enable primary/foreign key metadata | `true` |
-| `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` |
-| `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` |
-| `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (seconds) | `60` |
-| `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (seconds) | `30` |
-| `adbc.spark.temporarily_unavailable_retry` | Retry on 408/502/503/504 responses | `true` |
-| `adbc.spark.temporarily_unavailable_retry_timeout` | Max retry time for 4xx/5xx errors (seconds) | `900` |
-| `adbc.databricks.rate_limit_retry` | Retry on HTTP 429 (rate limit) responses | `true` |
-| `adbc.databricks.rate_limit_retry_timeout` | Max retry time for rate limits (seconds) | `120` |
+| :--- | :--- | :--- |
+| `adbc.connection.catalog` | Optional default catalog for the session | |
+| `adbc.connection.db_schema` | Optional default schema for the session | |
+| `adbc.databricks.enable_direct_results` | Whether to enable the use of direct results when executing queries | `true` |
+| `adbc.databricks.apply_ssp_with_queries` | Whether to apply server-side properties (SSP) with queries. If false, SSP will be applied when opening the session | `false` |
+| `adbc.databricks.ssp_*` | Server-side properties prefix. Properties with this prefix will be passed to the server by executing "set key=value" queries | |
+| `adbc.databricks.enable_multiple_catalog_support` | Whether to use multiple catalogs | `true` |
+| `adbc.databricks.enable_pk_fk` | Whether to enable primary key foreign key metadata calls | `true` |
+| `adbc.databricks.use_desc_table_extended` | Whether to use DESC TABLE EXTENDED to get extended column metadata when supported by DBR | `true` |
+| `adbc.databricks.enable_run_async_thrift` | Whether to enable RunAsync flag in Thrift operations | `true` |
+| `adbc.databricks.driver_config_take_precedence` | Whether driver configuration overrides passed-in properties during configuration merging | `false` |
+| `adbc.apache.statement.batch_size` | Sets the maximum number of rows to retrieve in a single batch request | `2000000` |
+| `adbc.apache.connection.polltime_ms` | The time in milliseconds between each poll for query execution status. Databricks default is 100ms (Apache default: 500ms) | `100` |
 
-**Performance Notes:**
-- Databricks default `batch_size` is `2000000` (vs Spark's `50000`) - optimized for CloudFetch's 1024MB limit
-- Databricks default `polltime_ms` is `100` (vs Spark's `500`) - faster query status feedback
-
-### CloudFetch Configuration
-
-CloudFetch is Databricks' high-performance result retrieval system that downloads results directly from cloud storage. It's **enabled by default** and provides significant performance improvements for large result sets.
-
-**CloudFetch Properties:**
+### Tracing Properties
 
 | Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` |
-| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` |
-| `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` |
-| `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` |
-| `adbc.databricks.cloudfetch.prefetch_count` | Files to prefetch ahead | `2` |
-| `adbc.databricks.cloudfetch.memory_buffer_size_mb` | Max memory buffer in MB | `200` |
-| `adbc.databricks.cloudfetch.prefetch_enabled` | Enable prefetch | `true` |
-| `adbc.databricks.cloudfetch.max_retries` | Max retry attempts | `3` |
-| `adbc.databricks.cloudfetch.retry_delay_ms` | Delay between retries | `500` |
-| `adbc.databricks.cloudfetch.timeout_minutes` | HTTP operation timeout | `5` |
-| `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | URL refresh buffer | `60` |
-| `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Max URL refresh attempts | `3` |
-
-**Example Configuration:**
-```csharp
-var config = new Dictionary<string, string>
-{
-    // ... auth config ...
-    ["adbc.databricks.cloudfetch.parallel_downloads"] = "5",
-    ["adbc.databricks.cloudfetch.memory_buffer_size_mb"] = "500",
-    ["adbc.databricks.cloudfetch.prefetch_count"] = "4"
-};
-```
-
-### Statement Execution API (REST Protocol)
-
-The driver supports both Thrift/HiveServer2 protocol (default) and Statement Execution REST API for query execution.
-
-**Protocol Properties:**
-
-| Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.databricks.protocol` | Protocol: `thrift` or `rest` | `thrift` |
-| `adbc.databricks.warehouse_id` | Warehouse ID for query execution | (required for REST) |
-
-**REST API Configuration:**
-
-| Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.databricks.rest.result_disposition` | Result mode: `inline`, `external_links`, or `inline_or_external_links` | `inline_or_external_links` |
-| `adbc.databricks.rest.result_format` | Format: `arrow_stream`, `json_array`, or `csv` | `arrow_stream` |
-| `adbc.databricks.rest.result_compression` | Compression: `lz4`, `gzip`, or `none` | (auto) |
-| `adbc.databricks.rest.wait_timeout` | Wait timeout in seconds (0=async, 5-50=sync) | `10` |
-| `adbc.databricks.rest.polling_interval_ms` | Polling interval for async execution (ms) | `1000` |
-| `adbc.databricks.rest.enable_session_management` | Enable session management | `true` |
-
-**Example - Using REST Protocol:**
-```csharp
-var config = new Dictionary<string, string>
-{
-    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
-    ["adbc.spark.auth_type"] = "oauth",
-    ["adbc.databricks.oauth.grant_type"] = "access_token",
-    ["adbc.spark.oauth.access_token"] = "your-token",
-    ["adbc.databricks.protocol"] = "rest",
-    ["adbc.databricks.warehouse_id"] = "your-warehouse-id",
-    ["adbc.databricks.rest.result_disposition"] = "inline_or_external_links"
-};
-```
-
-### TLS/SSL Configuration
-
-| Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.http_options.tls.enabled` | Enable TLS | `true` |
-| `adbc.http_options.tls.disable_server_certificate_validation` | Skip certificate validation | `false` |
-| `adbc.http_options.tls.allow_self_signed` | Accept self-signed certificates | `false` |
-| `adbc.http_options.tls.allow_hostname_mismatch` | Allow hostname mismatches | `false` |
-| `adbc.http_options.tls.trusted_certificate_path` | Custom CA certificate path | |
-
-#### Using mitmproxy for Debugging
-
-For debugging HTTP/HTTPS traffic, you can use [mitmproxy](https://mitmproxy.org/) with custom certificate configuration:
-
-```csharp
-var config = new Dictionary<string, string>
-{
-    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
-    ["adbc.spark.auth_type"] = "oauth",
-    ["adbc.databricks.oauth.grant_type"] = "access_token",
-    ["adbc.spark.oauth.access_token"] = "your-token",
-
-    // Configure to trust mitmproxy's certificate
-    ["adbc.http_options.tls.trusted_certificate_path"] = "/path/to/mitmproxy-ca-cert.pem",
-    // Or disable certificate validation (not recommended for production)
-    ["adbc.http_options.tls.disable_server_certificate_validation"] = "true"
-};
-```
-
-**Steps:**
-1. Install and start mitmproxy: `mitmproxy -p 8080`
-2. Export mitmproxy's CA certificate from `~/.mitmproxy/mitmproxy-ca-cert.pem`
-3. Configure your system to route traffic through the proxy (e.g., set HTTP_PROXY environment variable)
-4. Use `trusted_certificate_path` to trust mitmproxy's certificate, or disable validation for testing
-
-### Data Type Support
-
-The driver automatically converts Databricks/Spark types to Apache Arrow types:
-
-| Databricks Type | Arrow Type | C# Type | Notes |
-|----------------|------------|---------|-------|
-| BIGINT | Int64 | long | |
-| BOOLEAN | Boolean | bool | |
-| DATE | Date32 | DateTime | With `scalar` conversion |
-| DECIMAL | Decimal128/Decimal256 | decimal | With `scalar` conversion |
-| DOUBLE | Double | double | |
-| FLOAT | Float | float | Converted to Float instead of Double |
-| INT | Int32 | int | |
-| SMALLINT | Int16 | short | |
-| STRING | String | string | |
-| TIMESTAMP | Timestamp | DateTimeOffset | With `scalar` conversion |
-| TINYINT | Int8 | sbyte | |
-| BINARY | Binary | byte[] | |
-| ARRAY | List | string | Complex types serialize as strings |
-| MAP | Map | string | Complex types serialize as strings |
-| STRUCT | Struct | string | Complex types serialize as strings |
-
-**Data Type Conversion Mode:**
-- `adbc.spark.data_type_conv` = `scalar` (default): Converts DATE, DECIMAL, TIMESTAMP to native types
-- `adbc.spark.data_type_conv` = `none`: No conversion, returns raw string representations
-
-### Server-Side Properties
-
-Properties prefixed with `adbc.databricks.ssp_` are passed to the Databricks server as session configuration.
-
-The behavior is controlled by `adbc.databricks.apply_ssp_with_queries`:
-
-- **`false` (default)**: Server-side properties are applied in the Thrift configuration when the session is opened
-- **`true`**: Server-side properties are applied using SET queries during execution
-
-**Example:**
-```csharp
-var config = new Dictionary<string, string>
-{
-    ["adbc.databricks.ssp_use_cached_result"] = "true",
-    ["adbc.databricks.apply_ssp_with_queries"] = "false"  // Apply during session open (default)
-};
-
-// With apply_ssp_with_queries = false:
-// Properties are included in the Thrift session configuration
-
-// With apply_ssp_with_queries = true:
-// Results in: SET use_cached_result=true (executed as a query)
-```
-
-### Tracing and Observability
-
-The driver includes built-in tracing support via OpenTelemetry.
-
-**Tracing Properties:**
-
-| Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.databricks.trace_propagation.enabled` | Propagate trace parent headers | `true` |
-| `adbc.databricks.trace_propagation.header_name` | HTTP header name for trace | `traceparent` |
-| `adbc.databricks.trace_propagation.state_enabled` | Include trace state header | `false` |
-| `adbc.traces.exporter` | Trace exporter: `none`, `otlp`, `console`, `adbcfile` | |
-| `adbc.telemetry.trace_parent` | W3C trace context identifier | |
-
-**Enable File-Based Tracing:**
-
-Via environment variable:
-```bash
-export OTEL_TRACES_EXPORTER=adbcfile
-```
-
-Or via configuration:
-```csharp
-var config = new Dictionary<string, string>
-{
-    ["adbc.traces.exporter"] = "adbcfile"
-};
-```
-
-**Trace File Locations:**
-- **Windows:** `%LOCALAPPDATA%\Apache.Arrow.Adbc\Traces`
-- **macOS:** `~/Library/Application Support/Apache.Arrow.Adbc/Traces`
-- **Linux:** `~/.local/share/Apache.Arrow.Adbc/Traces`
-
-Files rotate automatically with a pattern: `apache.arrow.adbc.drivers.databricks-<YYYY-MM-DD-HH-mm-ss-fff>-<process-id>.log`
-
-Default: 999 files maximum, 1024 KB each.
-
-## Testing
-
-The driver includes a comprehensive test suite using xUnit framework.
-
-### Running Tests Locally
-
-#### Prerequisites
-
-Before running tests, you need to create a test configuration file.
-
-#### Step 1: Create Test Configuration File
-
-Create a JSON file with your Databricks connection details. All values must be strings.
-
-**Option A: Using Personal Access Token (Recommended for local testing)**
-
-Create `databricks-test-config.json`:
-```json
-{
-  "uri": "https://your-workspace.cloud.databricks.com/sql/1.0/warehouses/your-warehouse-id",
-  "adbc.spark.auth_type": "oauth",
-  "adbc.databricks.oauth.grant_type": "access_token",
-  "adbc.spark.oauth.access_token": "dapi1234567890abcdef",
-  "adbc.connection.catalog": "main",
-  "adbc.connection.db_schema": "default"
-}
-```
-
-**Option B: Using OAuth Client Credentials (M2M)**
-
-Create `databricks-test-config.json`:
-```json
-{
-  "uri": "https://your-workspace.cloud.databricks.com/sql/1.0/warehouses/your-warehouse-id",
-  "adbc.spark.auth_type": "oauth",
-  "adbc.databricks.oauth.grant_type": "client_credentials",
-  "adbc.databricks.oauth.client_id": "your-client-id",
-  "adbc.databricks.oauth.client_secret": "your-client-secret",
-  "adbc.databricks.oauth.scope": "sql",
-  "adbc.connection.catalog": "main",
-  "adbc.connection.db_schema": "default"
-}
-```
-
-**Option C: Using Separate Host and Path (Alternative)**
-
-Create `databricks-test-config.json`:
-```json
-{
-  "adbc.spark.type": "http",
-  "adbc.spark.host": "your-workspace.cloud.databricks.com",
-  "adbc.spark.port": "443",
-  "adbc.spark.path": "/sql/1.0/warehouses/your-warehouse-id",
-  "adbc.spark.auth_type": "oauth",
-  "adbc.databricks.oauth.grant_type": "access_token",
-  "adbc.spark.oauth.access_token": "dapi1234567890abcdef",
-  "adbc.connection.catalog": "main",
-  "adbc.connection.db_schema": "default"
-}
-```
-
-**Configuration Notes:**
-- Save the file in a secure location (e.g., `~/.databricks/test-config.json`)
-- **Never commit this file to version control** - add it to `.gitignore`
-- All property values must be strings (quoted), including numbers
-- The `catalog` and `db_schema` specify which database the tests will use
-- Ensure your user/service principal has access to the specified warehouse and catalog
-
-#### Step 2: Set Environment Variable
-
-Point the `DATABRICKS_TEST_CONFIG_FILE` environment variable to your config file:
-
-**On Windows (PowerShell):**
-```powershell
-$env:DATABRICKS_TEST_CONFIG_FILE="C:\Users\YourName\.databricks\test-config.json"
-```
-
-**On Windows (Command Prompt):**
-```cmd
-set DATABRICKS_TEST_CONFIG_FILE=C:\Users\YourName\.databricks\test-config.json
-```
-
-**On macOS/Linux:**
-```bash
-export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/test-config.json"
-```
-
-**Make it Permanent (macOS/Linux):**
-
-Add to your shell profile (`~/.bashrc`, `~/.zshrc`, or `~/.bash_profile`):
-```bash
-export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/test-config.json"
-```
-
-Then reload: `source ~/.bashrc` (or `~/.zshrc`)
-
-**Verify Configuration:**
-```bash
-# Check the variable is set
-echo $DATABRICKS_TEST_CONFIG_FILE  # macOS/Linux
-echo %DATABRICKS_TEST_CONFIG_FILE%  # Windows CMD
-$env:DATABRICKS_TEST_CONFIG_FILE   # Windows PowerShell
-
-# Verify the file exists and is readable
-cat $DATABRICKS_TEST_CONFIG_FILE  # macOS/Linux
-type %DATABRICKS_TEST_CONFIG_FILE%  # Windows CMD
-Get-Content $env:DATABRICKS_TEST_CONFIG_FILE  # Windows PowerShell
-```
-
-**Note:** The test environment variable is `DATABRICKS_TEST_CONFIG_FILE`, which is different from the driver's runtime environment variable `DATABRICKS_CONFIG_FILE`. This separation allows you to use different configurations for testing vs. production use.
-
-#### Run All Tests
-
-From the test project directory:
-```bash
-cd csharp/test
-dotnet test
-```
-
-Run tests for a specific framework:
-```bash
-# Test on .NET 8.0
-dotnet test -f net8.0
-
-# Test on .NET Framework 4.7.2 (Windows only)
-dotnet test -f net472
-```
-
-#### Run Specific Tests
-
-Run a specific test class:
-```bash
-dotnet test --filter "FullyQualifiedName~TracingDelegatingHandlerTest"
-```
-
-Run a specific test method:
-```bash
-dotnet test --filter "FullyQualifiedName~TracingDelegatingHandlerTest.TestTracePropagation"
-```
-
-Run tests matching a pattern:
-```bash
-# Run all tests with "CloudFetch" in the name
-dotnet test --filter "FullyQualifiedName~CloudFetch"
-```
-
-#### Verbose Test Output
-
-Get detailed test output:
-```bash
-dotnet test --logger "console;verbosity=detailed"
-```
-
-### Debugging Tests in Visual Studio
-
-#### Setup
-
-1. **Open Solution**
-   - Open `csharp/Apache.Arrow.Adbc.Drivers.Databricks.sln` in Visual Studio
-
-2. **Set Environment Variable**
-   - Right-click on the test project → Properties
-   - Navigate to Debug → General → Open debug launch profiles UI
-   - Add environment variable:
-     - Name: `DATABRICKS_TEST_CONFIG_FILE`
-     - Value: `C:\path\to\your\config.json`
-
-#### Running Tests
-
-1. **Test Explorer**
-   - Open Test Explorer: Test → Test Explorer (or Ctrl+E, T)
-   - Build the solution to discover all tests
-   - Tests will appear grouped by namespace and class
-
-2. **Run/Debug Tests**
-   - **Run a test**: Right-click test → Run
-   - **Debug a test**: Right-click test → Debug
-   - **Run all tests**: Click "Run All" in Test Explorer
-   - **Run tests in a class**: Right-click class → Run
-
-3. **Set Breakpoints**
-   - Open the test file or source code
-   - Click in the left margin to set breakpoints
-   - Debug the test - execution will pause at breakpoints
-   - Use F10 (Step Over), F11 (Step Into), F5 (Continue)
-
-#### Tips
-
-- **Filter tests**: Use the search box in Test Explorer to filter by name
-- **Group by**: Use the grouping dropdown to organize by Class, Namespace, or Project
-- **Run Failed Tests**: After a test run, right-click failed tests → Run
-- **Live Unit Testing**: Test → Live Unit Testing → Start (Enterprise edition)
-
-### Continuous Integration
-
-Tests run automatically in CI:
-- On every push to `main`
-- On every pull request
-- Multiple frameworks: .NET 8.0 (Linux) and .NET Framework 4.7.2 (Windows)
-
-## Benchmarking
-
-The C# driver includes a comprehensive benchmark suite for CloudFetch performance testing. For complete documentation including:
-- How to run benchmarks locally and in CI
-- Benchmark query details and characteristics
-- Viewing results on GitHub Pages
-- Understanding benchmark metrics and comparisons
-
-See the [Benchmark Documentation](csharp/Benchmarks/README.md).
-
-## Building
-
-See [CONTRIBUTING.md](../CONTRIBUTING.md).
-
-## Contributing
-
-See [CONTRIBUTING.md](../CONTRIBUTING.md).
+| :--- | :--- | :--- |
+| `adbc.databricks.trace_propagation.enabled` | Whether to propagate trace parent headers in HTTP requests | `true` |
+| `adbc.databricks.trace_propagation.header_name` | The name of the HTTP header to use for trace parent propagation | `traceparent` |
+| `adbc.databricks.trace_propagation.state_enabled` | Whether to include trace state header in HTTP requests | `false` |
+
+## Authentication Methods
+
+The Databricks ADBC driver supports the following authentication methods:
+
+### 1. Token-based Authentication
+Using a [Databricks personal access token](https://docs.databricks.com/en/dev-tools/auth/pat.html):
+
+- Set `adbc.spark.auth_type` to `oauth`
+- Set `adbc.databricks.oauth.grant_type` to `access_token` (this is the default if not specified)
+- Set `adbc.spark.oauth.access_token` to your Databricks personal access token
+
+### 2. OAuth Client Credentials Flow
+For machine-to-machine (m2m) authentication:
+
+- Set `adbc.spark.auth_type` to `oauth`
+- Set `adbc.databricks.oauth.grant_type` to `client_credentials`
+- Set `adbc.databricks.oauth.client_id` to your OAuth client ID
+- Set `adbc.databricks.oauth.client_secret` to your OAuth client secret
+- Set `adbc.databricks.oauth.scope` to your auth scope (defaults to `sql`)
+
+The driver will automatically handle token acquisition, renewal, and authentication with the Databricks service.
+
+**Note**: Basic (username and password) authentication is not supported at this time.
+
+## Server-Side Properties
+
+Server-side properties allow you to configure Databricks session settings. Any property with the `adbc.databricks.ssp_` prefix will be passed to the server by executing `SET key=value` queries.
+
+For example, setting `adbc.databricks.ssp_use_cached_result` to `true` will result in executing `SET use_cached_result=true` on the server when the session is opened.
+
+The property name after the `ssp_` prefix becomes the server-side setting name.
+
+## Data Types
+
+The following table depicts how the Databricks ADBC driver converts a Databricks type to an Arrow type and a .NET type:
+
+
+| Spark Type           | Arrow Type | C# Type |
+| :---                 | :---:      | :---:   |
+| ARRAY*               | String     | string  |
+| BIGINT               | Int64      | long |
+| BINARY               | Binary     | byte[] |
+| BOOLEAN              | Boolean    | bool |
+| CHAR                 | String     | string |
+| DATE                 | Date32     | DateTime |
+| DECIMAL              | Decimal128 | SqlDecimal |
+| DOUBLE               | Double     | double |
+| FLOAT                | Float      | float |
+| INT                  | Int32      | int |
+| INTERVAL_DAY_TIME+   | String     | string |
+| INTERVAL_YEAR_MONTH+ | String     | string |
+| MAP*                 | String     | string |
+| NULL                 | Null       | null |
+| SMALLINT             | Int16      | short |
+| STRING               | String     | string |
+| STRUCT*              | String     | string |
+| TIMESTAMP            | Timestamp  | DateTimeOffset |
+| TINYINT              | Int8       | sbyte |
+| UNION                | String     | string |
+| USER_DEFINED         | String     | string |
+| VARCHAR              | String     | string |
+
+## Tracing
+
+### Tracing Exporters
+
+To enable tracing messages to be observed, a tracing exporter needs to be activated.
+Use either the environment variable `OTEL_TRACES_EXPORTER` or the parameter `adbc.traces.exporter` to select one of the
+supported exporters. The parameter has precedence over the environment variable. The parameter must be set before
+the connection is initialized.
+
+The following exporters are supported:
+
+| Exporter | Description |
+| --- | --- |
+| `adbcfile` | Exports traces to rotating files in a folder. |
+
+#### File Exporter (adbcfile)
+
+Rotating trace files are written to a folder. The file names are created with the following pattern:
+`apache.arrow.adbc.drivers.bigquery-<YYYY-MM-DD-HH-mm-ss-fff>-<process-id>.log`.
+
+The folder used depends on the platform.
+
+| Platform | Folder |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%/Apache.Arrow.Adbc/Traces` |
+| macOS   | `$HOME/Library/Application Support/Apache.Arrow.Adbc/Traces` |
+| Linux   | `$HOME/.local/share/Apache.Arrow.Adbc/Traces` |
+
+By default, up to 999 files of maximum size 1024 KB are written to
+the trace folder.

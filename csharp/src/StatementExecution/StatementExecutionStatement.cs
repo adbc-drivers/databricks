@@ -33,6 +33,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// <summary>
     /// Statement implementation using the Databricks Statement Execution REST API.
     /// Handles query execution, polling, and result retrieval.
+    /// Extends TracingStatement for consistent tracing support with Thrift protocol.
     /// </summary>
     internal class StatementExecutionStatement : TracingStatement
     {
@@ -92,7 +93,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             System.Buffers.ArrayPool<byte> lz4BufferPool,
             HttpClient httpClient,
             StatementExecutionConnection connection)
-            : base(connection)
+            : base(connection) // Initialize TracingStatement base class with TracingConnection
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _sessionId = sessionId;
@@ -186,7 +187,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
             {
-                Statement = _sqlQuery!,
+                Statement = _sqlQuery,
                 WarehouseId = _warehouseId,
                 SessionId = _sessionId,
                 Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
@@ -383,7 +384,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var fields = new List<Field>();
             foreach (var column in manifest.Schema.Columns)
             {
-                var arrowType = MapDatabricksTypeToArrowType(column.TypeName!);
+                var arrowType = MapDatabricksTypeToArrowType(column.TypeName);
                 fields.Add(new Field(column.Name, arrowType, true));
             }
 
