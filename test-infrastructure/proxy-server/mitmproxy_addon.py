@@ -21,13 +21,12 @@ Control API runs on port 18081 (compatible with existing test infrastructure).
 Proxy listens on port 18080.
 """
 
-import json
 import threading
 import time
-from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List
+
 from flask import Flask, jsonify, request
-from mitmproxy import http, ctx
+from mitmproxy import ctx, http
 from thrift_decoder import decode_thrift_message, format_thrift_message
 
 # Flask app for control API
@@ -113,7 +112,8 @@ SCENARIOS = {
 
 # ===== Control API Endpoints =====
 
-@app.route('/scenarios', methods=['GET'])
+
+@app.route("/scenarios", methods=["GET"])
 def list_scenarios():
     """List all available scenarios with their status."""
     with state_lock:
@@ -121,14 +121,15 @@ def list_scenarios():
             {
                 "name": name,
                 "description": config["description"],
-                "enabled": name in enabled_scenarios and enabled_scenarios[name] is not False
+                "enabled": name in enabled_scenarios
+                and enabled_scenarios[name] is not False,
             }
             for name, config in SCENARIOS.items()
         ]
     return jsonify({"scenarios": scenarios_list})
 
 
-@app.route('/scenarios/<scenario_name>/enable', methods=['POST'])
+@app.route("/scenarios/<scenario_name>/enable", methods=["POST"])
 def enable_scenario(scenario_name):
     """
     Enable a failure scenario and auto-reset call history.
@@ -162,15 +163,17 @@ def enable_scenario(scenario_name):
         call_history.clear()
 
     ctx.log.info(f"[API] Enabled scenario: {scenario_name}, reset call history")
-    return jsonify({
-        "scenario": scenario_name,
-        "enabled": True,
-        "config": scenario_config,
-        "call_history_reset": True
-    })
+    return jsonify(
+        {
+            "scenario": scenario_name,
+            "enabled": True,
+            "config": scenario_config,
+            "call_history_reset": True,
+        }
+    )
 
 
-@app.route('/scenarios/<scenario_name>/disable', methods=['POST'])
+@app.route("/scenarios/<scenario_name>/disable", methods=["POST"])
 def disable_scenario(scenario_name):
     """Disable a failure scenario."""
     if scenario_name not in SCENARIOS:
@@ -183,7 +186,7 @@ def disable_scenario(scenario_name):
     return jsonify({"scenario": scenario_name, "enabled": False})
 
 
-@app.route('/scenarios/<scenario_name>/status', methods=['GET'])
+@app.route("/scenarios/<scenario_name>/status", methods=["GET"])
 def get_scenario_status(scenario_name):
     """Get status of a specific scenario."""
     if scenario_name not in SCENARIOS:
@@ -193,15 +196,17 @@ def get_scenario_status(scenario_name):
         enabled_config = enabled_scenarios.get(scenario_name, False)
         enabled = enabled_config is not False
 
-    return jsonify({
-        "name": scenario_name,
-        "description": SCENARIOS[scenario_name]["description"],
-        "enabled": enabled,
-        "config": enabled_config if enabled else None
-    })
+    return jsonify(
+        {
+            "name": scenario_name,
+            "description": SCENARIOS[scenario_name]["description"],
+            "enabled": enabled,
+            "config": enabled_config if enabled else None,
+        }
+    )
 
 
-@app.route('/scenarios/disable-all', methods=['POST'])
+@app.route("/scenarios/disable-all", methods=["POST"])
 def disable_all_scenarios():
     """Disable all failure scenarios."""
     with state_lock:
@@ -212,18 +217,20 @@ def disable_all_scenarios():
     return jsonify({"message": "All scenarios disabled"})
 
 
-@app.route('/thrift/calls', methods=['GET'])
+@app.route("/thrift/calls", methods=["GET"])
 def get_thrift_calls():
     """Get history of Thrift method calls."""
     with state_lock:
-        return jsonify({
-            "calls": call_history.copy(),
-            "count": len(call_history),
-            "max_history": MAX_CALL_HISTORY
-        })
+        return jsonify(
+            {
+                "calls": call_history.copy(),
+                "count": len(call_history),
+                "max_history": MAX_CALL_HISTORY,
+            }
+        )
 
 
-@app.route('/thrift/calls/reset', methods=['POST'])
+@app.route("/thrift/calls/reset", methods=["POST"])
 def reset_thrift_calls():
     """Reset Thrift call history."""
     with state_lock:
@@ -233,7 +240,7 @@ def reset_thrift_calls():
     return jsonify({"message": "Call history reset", "count": 0})
 
 
-@app.route('/thrift/calls/verify', methods=['POST'])
+@app.route("/thrift/calls/verify", methods=["POST"])
 def verify_thrift_calls():
     """
     Verify that Thrift calls match expected patterns.
@@ -284,9 +291,13 @@ def verify_thrift_calls():
         if verification_type == "exact_sequence":
             expected = data.get("methods", [])
             if methods == expected:
-                return jsonify({"verified": True, "actual": methods, "expected": expected})
+                return jsonify(
+                    {"verified": True, "actual": methods, "expected": expected}
+                )
             else:
-                return jsonify({"verified": False, "actual": methods, "expected": expected})
+                return jsonify(
+                    {"verified": False, "actual": methods, "expected": expected}
+                )
 
         elif verification_type == "contains_sequence":
             expected = data.get("methods", [])
@@ -295,8 +306,10 @@ def verify_thrift_calls():
             for method in methods:
                 if idx < len(expected) and method == expected[idx]:
                     idx += 1
-            verified = (idx == len(expected))
-            return jsonify({"verified": verified, "actual": methods, "expected": expected})
+            verified = idx == len(expected)
+            return jsonify(
+                {"verified": verified, "actual": methods, "expected": expected}
+            )
 
         elif verification_type == "method_count":
             method_name = data.get("method")
@@ -304,29 +317,36 @@ def verify_thrift_calls():
             if not method_name or expected_count is None:
                 return jsonify({"error": "method and count required"}), 400
             actual_count = methods.count(method_name)
-            verified = (actual_count == expected_count)
-            return jsonify({
-                "verified": verified,
-                "method": method_name,
-                "actual_count": actual_count,
-                "expected_count": expected_count
-            })
+            verified = actual_count == expected_count
+            return jsonify(
+                {
+                    "verified": verified,
+                    "method": method_name,
+                    "actual_count": actual_count,
+                    "expected_count": expected_count,
+                }
+            )
 
         elif verification_type == "method_exists":
             method_name = data.get("method")
             if not method_name:
                 return jsonify({"error": "method required"}), 400
             verified = method_name in methods
-            return jsonify({"verified": verified, "method": method_name, "actual": methods})
+            return jsonify(
+                {"verified": verified, "method": method_name, "actual": methods}
+            )
 
         else:
-            return jsonify({"error": f"Unknown verification type: {verification_type}"}), 400
+            return jsonify(
+                {"error": f"Unknown verification type: {verification_type}"}
+            ), 400
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 # ===== mitmproxy Addon Class =====
+
 
 class FailureInjectionAddon:
     """mitmproxy addon that injects failures based on enabled scenarios."""
@@ -337,7 +357,7 @@ class FailureInjectionAddon:
 
         # Start Flask control API in background thread
         def run_api():
-            app.run(host='0.0.0.0', port=18081, threaded=True)
+            app.run(host="0.0.0.0", port=18081, threaded=True)
 
         api_thread = threading.Thread(target=run_api, daemon=True, name="ControlAPI")
         api_thread.start()
@@ -361,9 +381,9 @@ class FailureInjectionAddon:
 
         host = request.pretty_host.lower()
         return (
-            "blob.core.windows.net" in host or
-            "s3.amazonaws.com" in host or
-            "storage.googleapis.com" in host
+            "blob.core.windows.net" in host
+            or "s3.amazonaws.com" in host
+            or "storage.googleapis.com" in host
         )
 
     def _is_thrift_request(self, request: http.Request) -> bool:
@@ -379,7 +399,10 @@ class FailureInjectionAddon:
 
         # Thrift requests use /sql/1.0/warehouses/ or /sql/1.0/endpoints/ paths
         # SEA requests use /api/2.0/sql/statements path
-        return "/sql/1.0/warehouses/" in request.path or "/sql/1.0/endpoints/" in request.path
+        return (
+            "/sql/1.0/warehouses/" in request.path
+            or "/sql/1.0/endpoints/" in request.path
+        )
 
     def _handle_cloudfetch_request(self, flow: http.HTTPFlow) -> None:
         """Handle CloudFetch requests and inject failures if scenario is enabled."""
@@ -399,7 +422,9 @@ class FailureInjectionAddon:
             return  # No scenario enabled, let request proceed normally
 
         scenario_name, scenario_config = enabled_scenario
-        ctx.log.info(f"[INJECT] Triggering scenario: {scenario_name} for {flow.request.pretty_url}")
+        ctx.log.info(
+            f"[INJECT] Triggering scenario: {scenario_name} for {flow.request.pretty_url}"
+        )
 
         # Inject failure based on action
         action = scenario_config["action"]
@@ -409,25 +434,29 @@ class FailureInjectionAddon:
             flow.response = http.Response.make(
                 403,
                 b"AuthorizationQueryParametersError: Query Parameters are not supported for this operation",
-                {"Content-Type": "text/plain"}
+                {"Content-Type": "text/plain"},
             )
             self._disable_scenario(scenario_name)
 
         elif action == "return_error":
             # Return HTTP error with specified code and message
             error_code = scenario_config.get("error_code", 500)
-            error_message = scenario_config.get("error_message", "Internal Server Error")
+            error_message = scenario_config.get(
+                "error_message", "Internal Server Error"
+            )
             flow.response = http.Response.make(
                 error_code,
-                error_message.encode('utf-8'),
-                {"Content-Type": "text/plain"}
+                error_message.encode("utf-8"),
+                {"Content-Type": "text/plain"},
             )
             self._disable_scenario(scenario_name)
 
         elif action == "delay":
             # Inject delay (simulates timeout) - now supports configurable duration
             duration_seconds = scenario_config.get("duration_seconds", 5)
-            ctx.log.info(f"[INJECT] Delaying {duration_seconds}s for scenario: {scenario_name}")
+            ctx.log.info(
+                f"[INJECT] Delaying {duration_seconds}s for scenario: {scenario_name}"
+            )
             time.sleep(duration_seconds)
             self._disable_scenario(scenario_name)
             # Let request continue after delay
@@ -435,9 +464,7 @@ class FailureInjectionAddon:
         elif action == "close_connection":
             # Kill the connection abruptly
             flow.response = http.Response.make(
-                500,
-                b"Connection reset by peer",
-                {"Content-Type": "text/plain"}
+                500, b"Connection reset by peer", {"Content-Type": "text/plain"}
             )
             flow.kill()
             self._disable_scenario(scenario_name)
@@ -464,7 +491,7 @@ class FailureInjectionAddon:
                     # Enforce max history limit
                     if len(call_history) > MAX_CALL_HISTORY:
                         # Remove oldest calls to stay within limit
-                        del call_history[:len(call_history) - MAX_CALL_HISTORY]
+                        del call_history[: len(call_history) - MAX_CALL_HISTORY]
 
             elif decoded:
                 ctx.log.warn(f"[THRIFT REQUEST] Decode error: {decoded.get('error')}")
@@ -481,7 +508,9 @@ class FailureInjectionAddon:
                     formatted = format_thrift_message(decoded, max_field_length=100)
                     ctx.log.info(f"[THRIFT RESPONSE]\n{formatted}")
                 elif decoded:
-                    ctx.log.warn(f"[THRIFT RESPONSE] Decode error: {decoded.get('error')}")
+                    ctx.log.warn(
+                        f"[THRIFT RESPONSE] Decode error: {decoded.get('error')}"
+                    )
 
     def _disable_scenario(self, scenario_name: str) -> None:
         """Disable a scenario after one-shot injection."""
