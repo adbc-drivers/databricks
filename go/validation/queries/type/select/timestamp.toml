@@ -12,14 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+[setup]
+drop = "test_timestamp"
 
-import pytest
-
-
-def pytest_generate_tests(metafunc) -> None:
-    metafunc.parametrize(
-        "driver",
-        [pytest.param("databricks:", id="databricks")],
-        scope="module",
-        indirect=["driver"],
-    )
+[tags]
+sql-type-name = "TIMESTAMP_NTZ"

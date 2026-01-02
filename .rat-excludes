@@ -29,6 +29,8 @@ go/validation/queries/ingest/.gitkeep
 go/validation/queries/type/bind/.gitkeep
 go/validation/queries/type/literal/.gitkeep
 go/validation/queries/type/select/.gitkeep
+go/validation/queries/*/*.json
+go/validation/queries/*/*.sql
 # adbc.h is vendored
 go/pkg/adbc.h
 test-infrastructure/proxy-server/generated/**
