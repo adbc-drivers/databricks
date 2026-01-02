@@ -3636,17 +3636,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     try
                     {
-                        activity?.AddEvent("session.delete.start");
+                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.start"));
                         // Delete session synchronously during dispose
                         _client.DeleteSessionAsync(_sessionId, _warehouseId, CancellationToken.None).GetAwaiter().GetResult();
-                        activity?.AddEvent("session.delete.success");
+                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.success"));
                     }
                     catch (Exception ex)
                     {
                         // Best effort - ignore errors during dispose but trace them
-                        activity?.AddEvent("session.delete.error", [
-                            new("error", ex.Message)
-                        ]);
+                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.error",
+                            tags: new System.Diagnostics.ActivityTagsCollection { { "error", ex.Message } }));
                     }
                     finally
                     {
