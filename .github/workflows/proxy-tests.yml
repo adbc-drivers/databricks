@@ -91,9 +91,12 @@ jobs:
           MITM_PID=$!
           # Wait for certificate generation (happens on first run)
           sleep 5
-          # Stop mitmdump
-          kill $MITM_PID || true
+          # Stop mitmdump forcefully
+          kill -9 $MITM_PID || true
           wait $MITM_PID 2>/dev/null || true
+          # Ensure no mitmdump processes are running
+          pkill -9 mitmdump || true
+          sleep 2
           # Verify certificate was created
           ls -la ~/.mitmproxy/
           cat ~/.mitmproxy/mitmproxy-ca-cert.pem
