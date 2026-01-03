@@ -124,10 +124,9 @@ jobs:
         run: |
           cat > databricks-test-config.json << EOF
           {
-            "hostname": "${DATABRICKS_HOST}",
-            "token": "${DATABRICKS_TOKEN}",
-            "http_path": "${DATABRICKS_HTTP_PATH}",
-            "port": "443"
+            "uri": "https://${DATABRICKS_HOST}${DATABRICKS_HTTP_PATH}",
+            "auth_type": "token",
+            "token": "${DATABRICKS_TOKEN}"
           }
           EOF
 
