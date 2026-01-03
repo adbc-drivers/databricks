@@ -21,6 +21,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -148,7 +149,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             {
                 await WaitForApiReadyAsync(cancellationToken);
             }
-            catch (Exception ex)
+            catch
             {
                 // If proxy failed to start, show captured output/errors
                 if (errorLines.Any())
