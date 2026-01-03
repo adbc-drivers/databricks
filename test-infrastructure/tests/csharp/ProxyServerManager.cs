@@ -236,8 +236,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             bool apiReady = false;
             bool proxyReady = false;
 
-            // Increase timeout for macOS where Flask can be slower to start
-            var maxAttempts = OperatingSystem.IsMacOS() ? 600 : 300; // 60s for macOS, 30s for others
+            // Flask with use_reloader=False should start quickly on all platforms
+            var maxAttempts = 150; // 15s timeout for all platforms
             Console.WriteLine($"[Proxy] Waiting up to {maxAttempts / 10}s for proxy to become ready");
 
             for (int i = 0; i < maxAttempts; i++)

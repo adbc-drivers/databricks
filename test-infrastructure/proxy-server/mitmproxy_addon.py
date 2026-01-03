@@ -337,7 +337,8 @@ class FailureInjectionAddon:
 
         # Start Flask control API in background thread
         def run_api():
-            app.run(host='0.0.0.0', port=18081, threaded=True)
+            # Disable reloader and use production mode for faster startup
+            app.run(host='0.0.0.0', port=18081, threaded=True, use_reloader=False, debug=False)
 
         api_thread = threading.Thread(target=run_api, daemon=True, name="ControlAPI")
         api_thread.start()
