@@ -236,7 +236,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             bool apiReady = false;
             bool proxyReady = false;
 
-            for (int i = 0; i < 50; i++) // Try for up to 5 seconds
+            // Increase timeout for macOS where Flask can be slower to start
+            var maxAttempts = OperatingSystem.IsMacOS() ? 600 : 300; // 60s for macOS, 30s for others
+            Console.WriteLine($"[Proxy] Waiting up to {maxAttempts / 10}s for proxy to become ready");
+
+            for (int i = 0; i < maxAttempts; i++)
             {
                 // Check Control API
                 if (!apiReady)
@@ -246,13 +250,17 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                         var response = await httpClient.GetAsync(apiUrl, cancellationToken);
                         if (response.StatusCode == HttpStatusCode.OK)
                         {
-                            Debug.WriteLine($"[Proxy] Control API ready at {apiUrl}");
+                            Console.WriteLine($"[Proxy] Control API ready at {apiUrl} after {i * 100}ms");
                             apiReady = true;
                         }
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
-                        // Expected during startup, continue waiting
+                        // Log every 10 seconds to show progress
+                        if (i > 0 && i % 100 == 0)
+                        {
+                            Console.WriteLine($"[Proxy] Still waiting for API... ({i / 10}s elapsed, last error: {ex.GetType().Name}: {ex.Message})");
+                        }
                     }
                 }
 
@@ -290,7 +298,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             }
 
             var statusMsg = $"API Ready: {apiReady}, Proxy Ready: {proxyReady}";
-            throw new TimeoutException($"Proxy did not become fully ready within 5 seconds. {statusMsg}");
+            var timeoutSeconds = maxAttempts / 10;
+            throw new TimeoutException($"Proxy did not become fully ready within {timeoutSeconds} seconds. {statusMsg}");
         }
 
         /// <summary>
