@@ -118,17 +118,20 @@ jobs:
 
       - name: Create test configuration
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
         run: |
           cat > databricks-test-config.json << EOF
           {
-            "uri": "https://${DATABRICKS_HOST}${DATABRICKS_HTTP_PATH}",
+            "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
             "auth_type": "token",
-            "token": "${DATABRICKS_TOKEN}"
+            "token": "${{ env.DATABRICKS_TOKEN }}"
           }
           EOF
+          echo "Configuration file created:"
+          echo "URI: https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}"
+          echo "Auth type: token"
 
       - name: Run proxy infrastructure tests
         env:
