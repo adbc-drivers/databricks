@@ -94,13 +94,16 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // mitmdump: headless version of mitmproxy (no UI)
             // -s: load addon script
             // --listen-port: proxy port
-            // --set confdir=~/.mitmproxy: certificate directory
+            // --set confdir: certificate directory (expand ~ to actual home directory)
+            var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var mitmproxyConfigDir = Path.Combine(homeDirectory, ".mitmproxy");
+
             _proxyProcess = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "mitmdump",
-                    Arguments = $"-s {_addonScriptPath} --listen-port {_proxyPort} --set confdir=~/.mitmproxy",
+                    Arguments = $"-s \"{_addonScriptPath}\" --listen-port {_proxyPort} --set confdir=\"{mitmproxyConfigDir}\"",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
