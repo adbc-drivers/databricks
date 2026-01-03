@@ -113,11 +113,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             };
 
             // Capture output for debugging
+            var outputLines = new System.Collections.Concurrent.ConcurrentBag<string>();
+            var errorLines = new System.Collections.Concurrent.ConcurrentBag<string>();
+
             _proxyProcess.OutputDataReceived += (sender, args) =>
             {
                 if (!string.IsNullOrEmpty(args.Data))
                 {
-                    Debug.WriteLine($"[mitmproxy] {args.Data}");
+                    outputLines.Add(args.Data);
+                    Console.WriteLine($"[mitmproxy] {args.Data}");
                 }
             };
 
@@ -125,16 +129,46 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             {
                 if (!string.IsNullOrEmpty(args.Data))
                 {
-                    Debug.WriteLine($"[mitmproxy Error] {args.Data}");
+                    errorLines.Add(args.Data);
+                    Console.WriteLine($"[mitmproxy ERROR] {args.Data}");
                 }
             };
+
+            // Log the command being executed
+            Console.WriteLine($"[Proxy] Starting mitmdump");
+            Console.WriteLine($"[Proxy] Command: {_proxyProcess.StartInfo.FileName} {_proxyProcess.StartInfo.Arguments}");
+            Console.WriteLine($"[Proxy] Working Directory: {_proxyProcess.StartInfo.WorkingDirectory}");
 
             _proxyProcess.Start();
             _proxyProcess.BeginOutputReadLine();
             _proxyProcess.BeginErrorReadLine();
 
             // Wait for the API server to be ready
-            await WaitForApiReadyAsync(cancellationToken);
+            try
+            {
+                await WaitForApiReadyAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // If proxy failed to start, show captured output/errors
+                if (errorLines.Any())
+                {
+                    Console.WriteLine("[Proxy] Captured stderr output:");
+                    foreach (var line in errorLines)
+                    {
+                        Console.WriteLine($"  {line}");
+                    }
+                }
+                if (outputLines.Any())
+                {
+                    Console.WriteLine("[Proxy] Captured stdout output:");
+                    foreach (var line in outputLines)
+                    {
+                        Console.WriteLine($"  {line}");
+                    }
+                }
+                throw;
+            }
         }
 
         /// <summary>
