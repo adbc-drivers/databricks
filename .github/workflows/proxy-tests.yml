@@ -33,6 +33,13 @@ on:
       - 'test-infrastructure/proxy-server/**'
       - 'test-infrastructure/tests/csharp/**'
       - 'csharp/src/**'
+  workflow_dispatch:
+    inputs:
+      run_all_tests:
+        description: 'Run all tests (ignores path filters)'
+        required: false
+        default: 'true'
+        type: boolean
 
 concurrency:
   group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
