@@ -84,24 +84,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r test-infrastructure/proxy-server/requirements.txt
 
-      - name: Trust mitmproxy certificate (macOS)
+      - name: Generate and trust mitmproxy certificate (macOS)
         if: runner.os == 'macOS'
         run: |
-          # Generate mitmproxy certificate
-          mitmdump --version
+          # Generate mitmproxy certificate by running mitmdump briefly
+          timeout 5 mitmdump || true
+          # Verify certificate was created
+          ls -la ~/.mitmproxy/
           # Trust the certificate
           sudo security add-trusted-cert -d -r trustRoot \
             -k /Library/Keychains/System.keychain \
-            ~/.mitmproxy/mitmproxy-ca-cert.pem || true
+            ~/.mitmproxy/mitmproxy-ca-cert.pem
 
-      - name: Trust mitmproxy certificate (Linux)
+      - name: Generate and trust mitmproxy certificate (Linux)
         if: runner.os == 'Linux'
         run: |
-          # Generate mitmproxy certificate
-          mitmdump --version
+          # Generate mitmproxy certificate by running mitmdump briefly
+          timeout 5 mitmdump || true
+          # Verify certificate was created
+          ls -la ~/.mitmproxy/
           # Trust the certificate
           sudo cp ~/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/mitmproxy.crt
-          sudo update-ca-certificates || true
+          sudo update-ca-certificates
 
       - name: Build test project
         run: |
