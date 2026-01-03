@@ -103,9 +103,9 @@ jobs:
 
       - name: Create test configuration
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_TEST_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TEST_TOKEN }}
-          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_TEST_HTTP_PATH }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
         run: |
           cat > databricks-test-config.json << EOF
           {
