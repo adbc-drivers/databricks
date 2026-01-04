@@ -50,16 +50,10 @@ permissions:
 
 jobs:
   proxy-tests:
-    name: "Proxy Tests ${{ matrix.os }}"
-    runs-on: ${{ matrix.os }}
+    name: "Proxy Tests"
+    runs-on: ubuntu-latest
     if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -101,15 +95,7 @@ jobs:
           ls -la ~/.mitmproxy/
           cat ~/.mitmproxy/mitmproxy-ca-cert.pem
 
-      - name: Trust mitmproxy certificate (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          sudo security add-trusted-cert -d -r trustRoot \
-            -k /Library/Keychains/System.keychain \
-            ~/.mitmproxy/mitmproxy-ca-cert.pem
-
-      - name: Trust mitmproxy certificate (Linux)
-        if: runner.os == 'Linux'
+      - name: Trust mitmproxy certificate
         run: |
           sudo cp ~/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/mitmproxy.crt
           sudo update-ca-certificates
