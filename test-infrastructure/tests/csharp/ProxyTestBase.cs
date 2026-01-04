@@ -159,18 +159,29 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             }
 
             // Copy connection details from test config
-            if (!string.IsNullOrEmpty(TestConfig.HostName))
+            // Support both uri format and individual hostname/port/path format
+            if (!string.IsNullOrEmpty(TestConfig.Uri))
             {
-                parameters[SparkParameters.HostName] = TestConfig.HostName;
+                // Use uri format (preferred)
+                parameters["uri"] = TestConfig.Uri;
             }
-            if (!string.IsNullOrEmpty(TestConfig.Port))
+            else
             {
-                parameters[SparkParameters.Port] = TestConfig.Port;
+                // Fall back to individual components
+                if (!string.IsNullOrEmpty(TestConfig.HostName))
+                {
+                    parameters[SparkParameters.HostName] = TestConfig.HostName;
+                }
+                if (!string.IsNullOrEmpty(TestConfig.Port))
+                {
+                    parameters[SparkParameters.Port] = TestConfig.Port;
+                }
+                if (!string.IsNullOrEmpty(TestConfig.Path))
+                {
+                    parameters[SparkParameters.Path] = TestConfig.Path;
+                }
             }
-            if (!string.IsNullOrEmpty(TestConfig.Path))
-            {
-                parameters[SparkParameters.Path] = TestConfig.Path;
-            }
+
             if (!string.IsNullOrEmpty(TestConfig.Token))
             {
                 parameters[SparkParameters.Token] = TestConfig.Token;
