@@ -54,8 +54,6 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Assert - Driver should refresh the CloudFetch link by calling FetchResults again
             // and successfully retrieve the data
-            // TODO: Add Thrift call verification once Thrift decoding is available in this branch
-            // Should verify: FetchResults called 2+ times (initial + refresh after link expiry)
             var schema = reader.Schema;
             Assert.NotNull(schema);
             Assert.True(schema.FieldsList.Count > 0);
@@ -63,6 +61,9 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
+
+            // Verify FetchResults was called at least 2 times (initial + refresh after link expiry)
+            await ControlClient.AssertThriftMethodCalledAsync("FetchResults", minCalls: 2);
         }
 
         [Fact]
@@ -86,13 +87,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             Assert.NotNull(reader);
 
             // Assert - Driver should handle 403 and refresh the link via FetchResults
-            // TODO: Add Thrift call verification once Thrift decoding is available
             var schema = reader.Schema;
             Assert.NotNull(schema);
 
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
+
+            // Verify FetchResults was called at least 2 times (initial + refresh after 403)
+            await ControlClient.AssertThriftMethodCalledAsync("FetchResults", minCalls: 2);
         }
 
         [Fact]
@@ -118,13 +121,18 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Assert - Driver should retry on timeout with exponential backoff
             // Note: This test may take 60+ seconds as it waits for CloudFetch timeout
-            // TODO: Add Thrift call verification to confirm retries (not URL refresh)
             var schema = reader.Schema;
             Assert.NotNull(schema);
 
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
+
+            // Verify FetchResults was called once (timeout doesn't trigger URL refresh)
+            // The driver retries the CloudFetch download directly, not via FetchResults
+            var fetchResultsCalls = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+            Assert.True(fetchResultsCalls >= 1,
+                $"Expected FetchResults to be called at least once, but was called {fetchResultsCalls} times");
         }
 
         [Fact]
@@ -150,13 +158,18 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             Assert.NotNull(reader);
 
             // Assert - Driver should retry on connection reset with exponential backoff
-            // TODO: Add Thrift call verification to confirm retries (not URL refresh)
             var schema = reader.Schema;
             Assert.NotNull(schema);
 
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
+
+            // Verify FetchResults was called once (connection reset doesn't trigger URL refresh)
+            // The driver retries the CloudFetch download directly, not via FetchResults
+            var fetchResultsCalls = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+            Assert.True(fetchResultsCalls >= 1,
+                $"Expected FetchResults to be called at least once, but was called {fetchResultsCalls} times");
         }
 
         [Fact]
@@ -184,6 +197,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
+
+            // Verify normal Thrift call pattern (ExecuteStatement, FetchResults, CloseSession)
+            await ControlClient.AssertThriftMethodCalledAsync("ExecuteStatement", minCalls: 1);
+            await ControlClient.AssertThriftMethodCalledAsync("FetchResults", minCalls: 1);
         }
     }
 }
