@@ -15,19 +15,16 @@
 name: Proxy Tests
 
 on:
-  pull_request:
+  push:
     branches:
       - main
-      - 'maint-*'
     paths:
       - '.github/workflows/proxy-tests.yml'
       - 'test-infrastructure/proxy-server/**'
       - 'test-infrastructure/tests/csharp/**'
       - 'csharp/src/**'
-  push:
-    branches:
-      - main
-      - 'maint-*'
+  pull_request:
+    # Only runs on PRs from the repo itself, not forks
     paths:
       - '.github/workflows/proxy-tests.yml'
       - 'test-infrastructure/proxy-server/**'
