@@ -344,14 +344,15 @@ class FailureInjectionAddon:
         api_thread.start()
         ctx.log.info("Control API started on http://0.0.0.0:18081")
 
-    def request(self, flow: http.HTTPFlow) -> None:
+    async def request(self, flow: http.HTTPFlow) -> None:
         """
         Intercept requests and inject failures based on enabled scenarios.
         Called by mitmproxy for each HTTP request.
+        Made async to support non-blocking delays.
         """
         # Detect request type
         if self._is_cloudfetch_download(flow.request):
-            self._handle_cloudfetch_request(flow)
+            await self._handle_cloudfetch_request(flow)
         elif self._is_thrift_request(flow.request):
             self._handle_thrift_request(flow)
 
@@ -382,7 +383,7 @@ class FailureInjectionAddon:
         # SEA requests use /api/2.0/sql/statements path
         return "/sql/1.0/warehouses/" in request.path or "/sql/1.0/endpoints/" in request.path
 
-    def _handle_cloudfetch_request(self, flow: http.HTTPFlow) -> None:
+    async def _handle_cloudfetch_request(self, flow: http.HTTPFlow) -> None:
         """Handle CloudFetch requests and inject failures if scenario is enabled."""
         with state_lock:
             # Find first enabled CloudFetch scenario
@@ -426,10 +427,12 @@ class FailureInjectionAddon:
             self._disable_scenario(scenario_name)
 
         elif action == "delay":
-            # Inject delay (simulates timeout) - now supports configurable duration
+            # Inject delay using asyncio.sleep() to avoid blocking the event loop
+            import asyncio
             duration_seconds = scenario_config.get("duration_seconds", 5)
             ctx.log.info(f"[INJECT] Delaying {duration_seconds}s for scenario: {scenario_name}")
-            time.sleep(duration_seconds)
+            await asyncio.sleep(duration_seconds)
+            ctx.log.info(f"[INJECT] Delay complete, auto-disabled scenario: {scenario_name}")
             self._disable_scenario(scenario_name)
             # Let request continue after delay
 

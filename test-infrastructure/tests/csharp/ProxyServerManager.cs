@@ -237,7 +237,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             bool proxyReady = false;
 
             // Flask with use_reloader=False should start quickly on all platforms
-            var maxAttempts = 150; // 15s timeout for all platforms
+            // But keep conservative timeout to avoid flakiness in CI
+            var maxAttempts = 300; // 30s timeout for all platforms
             Console.WriteLine($"[Proxy] Waiting up to {maxAttempts / 10}s for proxy to become ready");
 
             for (int i = 0; i < maxAttempts; i++)
