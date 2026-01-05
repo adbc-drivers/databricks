@@ -23,7 +23,6 @@
 
 using System;
 using System.Collections.Concurrent;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -41,7 +40,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly BlockingCollection<IDownloadResult> _resultQueue;
         private readonly ICloudFetchResultFetcher _resultFetcher;
         private readonly ICloudFetchDownloader _downloader;
-        private readonly HttpClient _httpClient;
         private bool _isDisposed;
         private bool _isStarted;
         private CancellationTokenSource? _cancellationTokenSource;
@@ -55,7 +53,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="memoryManager">The memory buffer manager.</param>
         /// <param name="downloadQueue">The download queue (shared with fetcher and downloader).</param>
         /// <param name="resultQueue">The result queue (shared with downloader).</param>
-        /// <param name="httpClient">The HTTP client for downloading files.</param>
         /// <param name="config">The CloudFetch configuration.</param>
         public CloudFetchDownloadManager(
             ICloudFetchResultFetcher resultFetcher,
@@ -63,7 +60,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             ICloudFetchMemoryBufferManager memoryManager,
             BlockingCollection<IDownloadResult> downloadQueue,
             BlockingCollection<IDownloadResult> resultQueue,
-            HttpClient httpClient,
             CloudFetchConfiguration config)
         {
             _resultFetcher = resultFetcher ?? throw new ArgumentNullException(nameof(resultFetcher));
@@ -71,13 +67,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
             _resultQueue = resultQueue ?? throw new ArgumentNullException(nameof(resultQueue));
-            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
 
             if (config == null) throw new ArgumentNullException(nameof(config));
-
-            // Note: Don't set _httpClient.Timeout here - it should already be configured
-            // when the HttpClient was created, and modifying it after requests have started
-            // throws InvalidOperationException.
         }
 
         /// <inheritdoc />
@@ -159,9 +150,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             // Stop the pipeline
             StopAsync().GetAwaiter().GetResult();
-
-            // Dispose the HTTP client
-            _httpClient.Dispose();
 
             // Dispose the cancellation token source if it hasn't been disposed yet
             _cancellationTokenSource?.Dispose();

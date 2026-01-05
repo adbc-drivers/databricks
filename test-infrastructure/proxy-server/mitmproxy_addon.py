@@ -444,9 +444,10 @@ class FailureInjectionAddon:
             import asyncio
             duration_seconds = scenario_config.get("duration_seconds", 5)
             ctx.log.info(f"[INJECT] Delaying {duration_seconds}s for scenario: {scenario_name}")
-            await asyncio.sleep(duration_seconds)
-            ctx.log.info(f"[INJECT] Delay complete, auto-disabled scenario: {scenario_name}")
+            # Disable BEFORE the delay so new requests don't trigger this scenario
             self._disable_scenario(scenario_name)
+            await asyncio.sleep(duration_seconds)
+            ctx.log.info(f"[INJECT] Delay complete for scenario: {scenario_name}")
             # Let request continue after delay
 
         elif action == "close_connection":
