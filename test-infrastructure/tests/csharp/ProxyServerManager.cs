@@ -21,6 +21,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -94,13 +95,16 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // mitmdump: headless version of mitmproxy (no UI)
             // -s: load addon script
             // --listen-port: proxy port
-            // --set confdir=~/.mitmproxy: certificate directory
+            // --set confdir: certificate directory (expand ~ to actual home directory)
+            var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var mitmproxyConfigDir = Path.Combine(homeDirectory, ".mitmproxy");
+
             _proxyProcess = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "mitmdump",
-                    Arguments = $"-s {_addonScriptPath} --listen-port {_proxyPort} --set confdir=~/.mitmproxy",
+                    Arguments = $"-s \"{_addonScriptPath}\" --listen-port {_proxyPort} --set confdir=\"{mitmproxyConfigDir}\"",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
@@ -110,11 +114,15 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             };
 
             // Capture output for debugging
+            var outputLines = new System.Collections.Concurrent.ConcurrentBag<string>();
+            var errorLines = new System.Collections.Concurrent.ConcurrentBag<string>();
+
             _proxyProcess.OutputDataReceived += (sender, args) =>
             {
                 if (!string.IsNullOrEmpty(args.Data))
                 {
-                    Debug.WriteLine($"[mitmproxy] {args.Data}");
+                    outputLines.Add(args.Data);
+                    Console.WriteLine($"[mitmproxy] {args.Data}");
                 }
             };
 
@@ -122,16 +130,46 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             {
                 if (!string.IsNullOrEmpty(args.Data))
                 {
-                    Debug.WriteLine($"[mitmproxy Error] {args.Data}");
+                    errorLines.Add(args.Data);
+                    Console.WriteLine($"[mitmproxy ERROR] {args.Data}");
                 }
             };
+
+            // Log the command being executed
+            Console.WriteLine($"[Proxy] Starting mitmdump");
+            Console.WriteLine($"[Proxy] Command: {_proxyProcess.StartInfo.FileName} {_proxyProcess.StartInfo.Arguments}");
+            Console.WriteLine($"[Proxy] Working Directory: {_proxyProcess.StartInfo.WorkingDirectory}");
 
             _proxyProcess.Start();
             _proxyProcess.BeginOutputReadLine();
             _proxyProcess.BeginErrorReadLine();
 
             // Wait for the API server to be ready
-            await WaitForApiReadyAsync(cancellationToken);
+            try
+            {
+                await WaitForApiReadyAsync(cancellationToken);
+            }
+            catch
+            {
+                // If proxy failed to start, show captured output/errors
+                if (errorLines.Any())
+                {
+                    Console.WriteLine("[Proxy] Captured stderr output:");
+                    foreach (var line in errorLines)
+                    {
+                        Console.WriteLine($"  {line}");
+                    }
+                }
+                if (outputLines.Any())
+                {
+                    Console.WriteLine("[Proxy] Captured stdout output:");
+                    foreach (var line in outputLines)
+                    {
+                        Console.WriteLine($"  {line}");
+                    }
+                }
+                throw;
+            }
         }
 
         /// <summary>
@@ -198,7 +236,12 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             bool apiReady = false;
             bool proxyReady = false;
 
-            for (int i = 0; i < 50; i++) // Try for up to 5 seconds
+            // Flask with use_reloader=False should start quickly on all platforms
+            // But keep conservative timeout to avoid flakiness in CI
+            var maxAttempts = 300; // 30s timeout for all platforms
+            Console.WriteLine($"[Proxy] Waiting up to {maxAttempts / 10}s for proxy to become ready");
+
+            for (int i = 0; i < maxAttempts; i++)
             {
                 // Check Control API
                 if (!apiReady)
@@ -208,13 +251,17 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                         var response = await httpClient.GetAsync(apiUrl, cancellationToken);
                         if (response.StatusCode == HttpStatusCode.OK)
                         {
-                            Debug.WriteLine($"[Proxy] Control API ready at {apiUrl}");
+                            Console.WriteLine($"[Proxy] Control API ready at {apiUrl} after {i * 100}ms");
                             apiReady = true;
                         }
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
-                        // Expected during startup, continue waiting
+                        // Log every 10 seconds to show progress
+                        if (i > 0 && i % 100 == 0)
+                        {
+                            Console.WriteLine($"[Proxy] Still waiting for API... ({i / 10}s elapsed, last error: {ex.GetType().Name}: {ex.Message})");
+                        }
                     }
                 }
 
@@ -252,7 +299,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             }
 
             var statusMsg = $"API Ready: {apiReady}, Proxy Ready: {proxyReady}";
-            throw new TimeoutException($"Proxy did not become fully ready within 5 seconds. {statusMsg}");
+            var timeoutSeconds = maxAttempts / 10;
+            throw new TimeoutException($"Proxy did not become fully ready within {timeoutSeconds} seconds. {statusMsg}");
         }
 
         /// <summary>

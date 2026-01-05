@@ -337,20 +337,35 @@ class FailureInjectionAddon:
 
         # Start Flask control API in background thread
         def run_api():
-            app.run(host='0.0.0.0', port=18081, threaded=True)
+            # Disable reloader and use production mode for faster startup
+            app.run(host='0.0.0.0', port=18081, threaded=True, use_reloader=False, debug=False)
 
         api_thread = threading.Thread(target=run_api, daemon=True, name="ControlAPI")
         api_thread.start()
         ctx.log.info("Control API started on http://0.0.0.0:18081")
 
-    def request(self, flow: http.HTTPFlow) -> None:
+    async def request(self, flow: http.HTTPFlow) -> None:
         """
         Intercept requests and inject failures based on enabled scenarios.
         Called by mitmproxy for each HTTP request.
+        Made async to support non-blocking delays.
         """
         # Detect request type
         if self._is_cloudfetch_download(flow.request):
-            self._handle_cloudfetch_request(flow)
+            # Track cloud fetch download
+            with state_lock:
+                call_record = {
+                    "timestamp": time.time(),
+                    "type": "cloud_download",
+                    "url": flow.request.pretty_url,
+                }
+                call_history.append(call_record)
+
+                # Enforce max history limit
+                if len(call_history) > MAX_CALL_HISTORY:
+                    del call_history[:len(call_history) - MAX_CALL_HISTORY]
+
+            await self._handle_cloudfetch_request(flow)
         elif self._is_thrift_request(flow.request):
             self._handle_thrift_request(flow)
 
@@ -381,7 +396,7 @@ class FailureInjectionAddon:
         # SEA requests use /api/2.0/sql/statements path
         return "/sql/1.0/warehouses/" in request.path or "/sql/1.0/endpoints/" in request.path
 
-    def _handle_cloudfetch_request(self, flow: http.HTTPFlow) -> None:
+    async def _handle_cloudfetch_request(self, flow: http.HTTPFlow) -> None:
         """Handle CloudFetch requests and inject failures if scenario is enabled."""
         with state_lock:
             # Find first enabled CloudFetch scenario
@@ -425,10 +440,12 @@ class FailureInjectionAddon:
             self._disable_scenario(scenario_name)
 
         elif action == "delay":
-            # Inject delay (simulates timeout) - now supports configurable duration
+            # Inject delay using asyncio.sleep() to avoid blocking the event loop
+            import asyncio
             duration_seconds = scenario_config.get("duration_seconds", 5)
             ctx.log.info(f"[INJECT] Delaying {duration_seconds}s for scenario: {scenario_name}")
-            time.sleep(duration_seconds)
+            await asyncio.sleep(duration_seconds)
+            ctx.log.info(f"[INJECT] Delay complete, auto-disabled scenario: {scenario_name}")
             self._disable_scenario(scenario_name)
             # Let request continue after delay
 
@@ -455,9 +472,11 @@ class FailureInjectionAddon:
                 with state_lock:
                     call_record = {
                         "timestamp": time.time(),
+                        "type": "thrift",
                         "method": decoded.get("method", "unknown"),
                         "message_type": decoded.get("message_type", "unknown"),
                         "sequence_id": decoded.get("sequence_id", 0),
+                        "fields": decoded.get("fields", {}),
                     }
                     call_history.append(call_record)
 
