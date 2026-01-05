@@ -20,6 +20,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using Xunit;
@@ -176,10 +177,33 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
 
-            // Verify cloud downloads were called exactly (baseline + 1) times
-            // The extra call proves the driver retried the download after timeout
-            var actualCloudDownloads = await ControlClient.CountCloudDownloadsAsync();
+            // Get detailed call history to understand what's happening
+            var callHistory = await ControlClient.GetThriftCallsAsync();
+            var actualCloudDownloads = callHistory.Calls?.Count(c => c.Type == "cloud_download") ?? 0;
+            var fetchResultsCalls = callHistory.Calls?.Count(c => c.Type == "thrift" && c.Method == "FetchResults") ?? 0;
+
+            // Extract cloud download URLs to see if file 2 was requested
+            var cloudDownloadUrls = callHistory.Calls?
+                .Where(c => c.Type == "cloud_download")
+                .Select(c => c.Url)
+                .ToList() ?? new List<string>();
+
             var expectedCloudDownloads = baselineCloudDownloads + 1;
+
+            // Provide detailed diagnostics
+            var diagnosticMessage = $"CloudFetch timeout verification:\n" +
+                                   $"  Baseline cloud downloads: {baselineCloudDownloads}\n" +
+                                   $"  Expected cloud downloads: {expectedCloudDownloads}\n" +
+                                   $"  Actual cloud downloads: {actualCloudDownloads}\n" +
+                                   $"  FetchResults calls: {fetchResultsCalls}\n" +
+                                   $"  Cloud download URLs:\n" +
+                                   string.Join("\n", cloudDownloadUrls.Select((url, i) => $"    [{i + 1}] {url}"));
+
+            if (actualCloudDownloads < expectedCloudDownloads)
+            {
+                throw new Xunit.Sdk.XunitException(diagnosticMessage);
+            }
+
             Assert.Equal(expectedCloudDownloads, actualCloudDownloads);
         }
 
