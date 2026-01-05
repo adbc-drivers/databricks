@@ -19,6 +19,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using Xunit;
@@ -131,8 +132,14 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         public async Task CloudFetchTimeout_RetriesWithExponentialBackoff()
         {
             // Arrange - First establish baseline by running query without failure scenario
+            // Set CloudFetch timeout to 1 minute so it will timeout during the 65s delay
+            var timeoutParams = new Dictionary<string, string>
+            {
+                ["adbc.databricks.cloudfetch.timeout_minutes"] = "1"
+            };
+
             int baselineCloudDownloads;
-            using (var connection = CreateProxiedConnection())
+            using (var connection = CreateProxiedConnectionWithParameters(timeoutParams))
             using (var statement = connection.CreateStatement())
             {
                 statement.SqlQuery = TestQuery;
@@ -142,7 +149,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 baselineCloudDownloads = await ControlClient.CountCloudDownloadsAsync();
             }
 
-            // Arrange - Enable timeout scenario (65s delay)
+            // Arrange - Enable timeout scenario (65s delay) - driver will timeout at 60s and retry
             await ControlClient.EnableScenarioAsync("cloudfetch_timeout");
 
             // Act - Execute a query that triggers CloudFetch (>5MB result set)
@@ -150,7 +157,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // (does NOT refresh URL via FetchResults - timeout is not treated as expired link).
             // The generic retry logic will attempt up to 3 times with increasing delays.
             // Using TPC-DS catalog_returns table which has large result sets
-            using var connection2 = CreateProxiedConnection();
+            using var connection2 = CreateProxiedConnectionWithParameters(timeoutParams);
             using var statement2 = connection2.CreateStatement();
             statement2.SqlQuery = TestQuery;
 
