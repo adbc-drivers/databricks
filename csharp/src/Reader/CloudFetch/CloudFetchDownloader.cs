@@ -478,9 +478,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 {
                     try
                     {
-                        // DEBUG: Log retry attempt
-                        Console.WriteLine($"[CloudFetch] Attempt {retry + 1}/{_maxRetries} for offset {downloadResult.StartRowOffset}, token cancelled: {cancellationToken.IsCancellationRequested}");
-
                         // Create HTTP request with optional custom headers
                         using var request = new HttpRequestMessage(HttpMethod.Get, url);
 
@@ -550,18 +547,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                         // Read the file data
                         fileData = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-
-                        // DEBUG: Log success
-                        Console.WriteLine($"[CloudFetch] SUCCESS: Downloaded offset {downloadResult.StartRowOffset} on attempt {retry + 1}");
-
                         break; // Success, exit retry loop
                     }
                     catch (Exception ex) when (retry < _maxRetries - 1 && !cancellationToken.IsCancellationRequested)
                     {
-                        // DEBUG: Log retry exception
-                        Console.WriteLine($"[CloudFetch] RETRY TRIGGERED: Attempt {retry + 1} failed with {ex.GetType().Name}: {ex.Message}");
-                        Console.WriteLine($"[CloudFetch] Will retry after {_retryDelayMs * (retry + 1)}ms delay");
-
                         // Log the error and retry
                         activity?.AddException(ex, [
                             new("error.context", "cloudfetch.download_retry"),
@@ -572,13 +561,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         ]);
 
                         await Task.Delay(_retryDelayMs * (retry + 1), cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        // DEBUG: Log when retry condition not met
-                        Console.WriteLine($"[CloudFetch] RETRY NOT TRIGGERED: Attempt {retry + 1} failed with {ex.GetType().Name}");
-                        Console.WriteLine($"[CloudFetch] Token cancelled: {cancellationToken.IsCancellationRequested}, retry < maxRetries-1: {retry < _maxRetries - 1}");
-                        throw;
                     }
                 }
 
