@@ -170,7 +170,16 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         public async Task<int> CountThriftMethodCallsAsync(string methodName, CancellationToken cancellationToken = default)
         {
             var history = await GetThriftCallsAsync(cancellationToken);
-            return history.Calls?.Count(c => c.Method == methodName) ?? 0;
+            return history.Calls?.Count(c => c.Type == "thrift" && c.Method == methodName) ?? 0;
+        }
+
+        /// <summary>
+        /// Counts how many cloud download requests were made.
+        /// </summary>
+        public async Task<int> CountCloudDownloadsAsync(CancellationToken cancellationToken = default)
+        {
+            var history = await GetThriftCallsAsync(cancellationToken);
+            return history.Calls?.Count(c => c.Type == "cloud_download") ?? 0;
         }
 
         /// <summary>
@@ -218,13 +227,16 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
     }
 
     /// <summary>
-    /// Represents a single Thrift method call.
+    /// Represents a single tracked call (Thrift method or cloud download).
     /// </summary>
     public class ThriftCall
     {
         public double Timestamp { get; set; }
-        public string Method { get; set; } = string.Empty;
-        public string MessageType { get; set; } = string.Empty;
-        public int SequenceId { get; set; }
+        public string Type { get; set; } = string.Empty; // "thrift" or "cloud_download"
+        public string Method { get; set; } = string.Empty; // For Thrift calls
+        public string MessageType { get; set; } = string.Empty; // For Thrift calls
+        public int SequenceId { get; set; } // For Thrift calls
+        public System.Text.Json.JsonElement? Fields { get; set; } // For Thrift calls
+        public string Url { get; set; } = string.Empty; // For cloud downloads
     }
 }

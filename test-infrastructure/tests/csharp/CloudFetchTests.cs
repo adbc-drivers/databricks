@@ -32,75 +32,116 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
     /// </summary>
     public class CloudFetchTests : ProxyTestBase
     {
+        private const string TestQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+
         [Fact]
         public async Task CloudFetchExpiredLink_RefreshesLinkViaFetchResults()
         {
+            // Arrange - First establish baseline by running query without failure scenario
+            int baselineFetchResults;
+            using (var connection = CreateProxiedConnection())
+            using (var statement = connection.CreateStatement())
+            {
+                statement.SqlQuery = TestQuery;
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                _ = reader.ReadNextRecordBatchAsync().Result;
+                baselineFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+            }
+
             // Arrange - Enable expired link scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
 
-            // Act - Execute a query that triggers CloudFetch (>5MB result set)
-            // When the CloudFetch download link expires (403), the driver should call FetchResults
+            // Act - Execute the same query with expired link scenario enabled
+            // When the CloudFetch download link expires, the driver should call FetchResults
             // again with the same offset to get a fresh download link, then retry the download.
-            // Using TPC-DS catalog_returns table which has large result sets
-            using var connection = CreateProxiedConnection();
-            using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+            using var connection2 = CreateProxiedConnection();
+            using var statement2 = connection2.CreateStatement();
+            statement2.SqlQuery = TestQuery;
 
-            var result = statement.ExecuteQuery();
-            Assert.NotNull(result);
+            var result2 = statement2.ExecuteQuery();
+            Assert.NotNull(result2);
 
-            using var reader = result.Stream;
-            Assert.NotNull(reader);
+            using var reader2 = result2.Stream;
+            Assert.NotNull(reader2);
 
             // Assert - Driver should refresh the CloudFetch link by calling FetchResults again
-            // and successfully retrieve the data
-            var schema = reader.Schema;
+            var schema = reader2.Schema;
             Assert.NotNull(schema);
             Assert.True(schema.FieldsList.Count > 0);
 
-            var batch = reader.ReadNextRecordBatchAsync().Result;
+            var batch = reader2.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
 
-            // Verify FetchResults was called at least 2 times (initial + refresh after link expiry)
-            await ControlClient.AssertThriftMethodCalledAsync("FetchResults", minCalls: 2);
+            // Verify FetchResults was called exactly (baseline + 1) times
+            // The extra call proves the driver refreshed the URL after link expiry
+            var actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+            var expectedFetchResults = baselineFetchResults + 1;
+            Assert.Equal(expectedFetchResults, actualFetchResults);
         }
 
         [Fact]
         public async Task CloudFetch403_RefreshesLinkViaFetchResults()
         {
+            // Arrange - First establish baseline by running query without failure scenario
+            int baselineFetchResults;
+            using (var connection = CreateProxiedConnection())
+            using (var statement = connection.CreateStatement())
+            {
+                statement.SqlQuery = TestQuery;
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                _ = reader.ReadNextRecordBatchAsync().Result;
+                baselineFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+            }
+
             // Arrange - Enable 403 Forbidden scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_403");
 
-            // Act - Execute a query that triggers CloudFetch (>5MB result set)
+            // Act - Execute the same query with 403 scenario enabled
             // When CloudFetch returns 403 Forbidden, the driver should refresh the link
             // by calling FetchResults again and retrying the download.
-            // Using TPC-DS catalog_returns table which has large result sets
-            using var connection = CreateProxiedConnection();
-            using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+            using var connection2 = CreateProxiedConnection();
+            using var statement2 = connection2.CreateStatement();
+            statement2.SqlQuery = TestQuery;
 
-            var result = statement.ExecuteQuery();
-            Assert.NotNull(result);
+            var result2 = statement2.ExecuteQuery();
+            Assert.NotNull(result2);
 
-            using var reader = result.Stream;
-            Assert.NotNull(reader);
+            using var reader2 = result2.Stream;
+            Assert.NotNull(reader2);
 
             // Assert - Driver should handle 403 and refresh the link via FetchResults
-            var schema = reader.Schema;
+            var schema = reader2.Schema;
             Assert.NotNull(schema);
 
-            var batch = reader.ReadNextRecordBatchAsync().Result;
+            var batch = reader2.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
 
-            // Verify FetchResults was called at least 2 times (initial + refresh after 403)
-            await ControlClient.AssertThriftMethodCalledAsync("FetchResults", minCalls: 2);
+            // Verify FetchResults was called exactly (baseline + 1) times
+            // The extra call proves the driver refreshed the URL after 403 Forbidden
+            var actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+            var expectedFetchResults = baselineFetchResults + 1;
+            Assert.Equal(expectedFetchResults, actualFetchResults);
         }
 
         [Fact]
         public async Task CloudFetchTimeout_RetriesWithExponentialBackoff()
         {
+            // Arrange - First establish baseline by running query without failure scenario
+            int baselineCloudDownloads;
+            using (var connection = CreateProxiedConnection())
+            using (var statement = connection.CreateStatement())
+            {
+                statement.SqlQuery = TestQuery;
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                _ = reader.ReadNextRecordBatchAsync().Result;
+                baselineCloudDownloads = await ControlClient.CountCloudDownloadsAsync();
+            }
+
             // Arrange - Enable timeout scenario (65s delay)
             await ControlClient.EnableScenarioAsync("cloudfetch_timeout");
 
@@ -109,35 +150,47 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // (does NOT refresh URL via FetchResults - timeout is not treated as expired link).
             // The generic retry logic will attempt up to 3 times with increasing delays.
             // Using TPC-DS catalog_returns table which has large result sets
-            using var connection = CreateProxiedConnection();
-            using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+            using var connection2 = CreateProxiedConnection();
+            using var statement2 = connection2.CreateStatement();
+            statement2.SqlQuery = TestQuery;
 
-            var result = statement.ExecuteQuery();
-            Assert.NotNull(result);
+            var result2 = statement2.ExecuteQuery();
+            Assert.NotNull(result2);
 
-            using var reader = result.Stream;
-            Assert.NotNull(reader);
+            using var reader2 = result2.Stream;
+            Assert.NotNull(reader2);
 
             // Assert - Driver should retry on timeout with exponential backoff
             // Note: This test may take 60+ seconds as it waits for CloudFetch timeout
-            var schema = reader.Schema;
+            var schema = reader2.Schema;
             Assert.NotNull(schema);
 
-            var batch = reader.ReadNextRecordBatchAsync().Result;
+            var batch = reader2.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
 
-            // Verify FetchResults was called once (timeout doesn't trigger URL refresh)
-            // The driver retries the CloudFetch download directly, not via FetchResults
-            var fetchResultsCalls = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
-            Assert.True(fetchResultsCalls >= 1,
-                $"Expected FetchResults to be called at least once, but was called {fetchResultsCalls} times");
+            // Verify cloud downloads were called exactly (baseline + 1) times
+            // The extra call proves the driver retried the download after timeout
+            var actualCloudDownloads = await ControlClient.CountCloudDownloadsAsync();
+            var expectedCloudDownloads = baselineCloudDownloads + 1;
+            Assert.Equal(expectedCloudDownloads, actualCloudDownloads);
         }
 
         [Fact]
         public async Task CloudFetchConnectionReset_RetriesWithExponentialBackoff()
         {
+            // Arrange - First establish baseline by running query without failure scenario
+            int baselineCloudDownloads;
+            using (var connection = CreateProxiedConnection())
+            using (var statement = connection.CreateStatement())
+            {
+                statement.SqlQuery = TestQuery;
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                _ = reader.ReadNextRecordBatchAsync().Result;
+                baselineCloudDownloads = await ControlClient.CountCloudDownloadsAsync();
+            }
+
             // Arrange - Enable connection reset scenario
             await ControlClient.EnableScenarioAsync("cloudfetch_connection_reset");
 
@@ -147,29 +200,29 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // are not treated as expired links). The generic retry logic attempts up to 3 times
             // with delays of 1s, 2s, 3s between retries.
             // Using TPC-DS catalog_returns table which has large result sets
-            using var connection = CreateProxiedConnection();
-            using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+            using var connection2 = CreateProxiedConnection();
+            using var statement2 = connection2.CreateStatement();
+            statement2.SqlQuery = TestQuery;
 
-            var result = statement.ExecuteQuery();
-            Assert.NotNull(result);
+            var result2 = statement2.ExecuteQuery();
+            Assert.NotNull(result2);
 
-            using var reader = result.Stream;
-            Assert.NotNull(reader);
+            using var reader2 = result2.Stream;
+            Assert.NotNull(reader2);
 
             // Assert - Driver should retry on connection reset with exponential backoff
-            var schema = reader.Schema;
+            var schema = reader2.Schema;
             Assert.NotNull(schema);
 
-            var batch = reader.ReadNextRecordBatchAsync().Result;
+            var batch = reader2.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
 
-            // Verify FetchResults was called once (connection reset doesn't trigger URL refresh)
-            // The driver retries the CloudFetch download directly, not via FetchResults
-            var fetchResultsCalls = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
-            Assert.True(fetchResultsCalls >= 1,
-                $"Expected FetchResults to be called at least once, but was called {fetchResultsCalls} times");
+            // Verify cloud downloads were called exactly (baseline + 1) times
+            // The extra call proves the driver retried the download after connection reset
+            var actualCloudDownloads = await ControlClient.CountCloudDownloadsAsync();
+            var expectedCloudDownloads = baselineCloudDownloads + 1;
+            Assert.Equal(expectedCloudDownloads, actualCloudDownloads);
         }
 
         [Fact]
@@ -181,7 +234,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Using TPC-DS catalog_returns table which has large result sets
             using var connection = CreateProxiedConnection();
             using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+            statement.SqlQuery = TestQuery;
 
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
@@ -200,7 +253,11 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Verify normal Thrift call pattern (ExecuteStatement, FetchResults, CloseSession)
             await ControlClient.AssertThriftMethodCalledAsync("ExecuteStatement", minCalls: 1);
-            await ControlClient.AssertThriftMethodCalledAsync("FetchResults", minCalls: 1);
+
+            // Verify FetchResults was called (should have at least 1 call for normal operation)
+            var actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+            Assert.True(actualFetchResults >= 1,
+                $"Expected FetchResults to be called at least once, but was called {actualFetchResults} times");
         }
     }
 }
