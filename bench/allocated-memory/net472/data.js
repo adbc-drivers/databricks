@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1766362992445,
+  "lastUpdate": 1767725448724,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Allocated Memory (.NET Framework 4.7.2)": [
@@ -825,6 +825,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 2918.12,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "115501094+eric-wang-1990@users.noreply.github.com",
+            "name": "eric-wang-1990",
+            "username": "eric-wang-1990"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f0afca812c6bc1b54239f8988311ebe963f8dc9f",
+          "message": "fix(csharp): apply CloudFetch timeout and remove redundant HttpClient (#112)\n\n## What's Changed\n\nThis PR addresses two issues in the CloudFetch implementation and one\nfix in the proxy test infrastructure:\n\n### 1. Apply CloudFetch Timeout Configuration\n\n**Problem**: The `adbc.databricks.cloudfetch.timeout_minutes`\nconfiguration parameter was being read but never applied to the\nHttpClient. The HttpClient used its default 100-second timeout instead\nof the configured value (default: 5 minutes).\n\n**Solution**: Added timeout configuration in `CloudFetchDownloader`\nconstructor:\n```csharp\n_httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);\n```\n\n**Impact**: The CloudFetch HTTP client now correctly respects the\nuser-configured timeout value, allowing for proper timeout behavior in\nCloudFetch downloads.\n\n**Files Changed**:\n- `csharp/src/Reader/CloudFetch/CloudFetchDownloader.cs`\n\n### 2. Remove Redundant HttpClient from CloudFetchDownloadManager\n\n**Problem**: `CloudFetchDownloadManager` accepted an `HttpClient`\nparameter but never used it for any operations. It only disposed of it,\nwhich is incorrect since it doesn't own the resource. The actual HTTP\noperations are performed by `CloudFetchDownloader`.\n\n**Solution**: Removed the redundant `httpClient` parameter from:\n- `CloudFetchDownloadManager` constructor and field\n- `CloudFetchReaderFactory.CreateThriftReader()` call\n- `CloudFetchReaderFactory.CreateStatementExecutionReader()` call\n\n**Impact**: Cleaner code architecture with proper resource ownership.\nThe HttpClient is now owned solely by CloudFetchDownloader, which\nactually uses it for HTTP operations.\n\n**Files Changed**:\n- `csharp/src/Reader/CloudFetch/CloudFetchDownloadManager.cs`\n- `csharp/src/Reader/CloudFetch/CloudFetchReaderFactory.cs`\n\n### 3. Fix Proxy Timing for Test Reliability\n\n**Problem**: The mitmproxy addon was disabling failure scenarios AFTER\nthe delay completed, causing race conditions. When the client timed out\nand retried, the scenario was still enabled, triggering the delay again.\n\n**Solution**: Modified `mitmproxy_addon.py` to disable the scenario\nimmediately when triggered, before the delay starts:\n```python\nself._disable_scenario(scenario_name)  # Disable BEFORE delay\nawait asyncio.sleep(duration_seconds)\n```\n\n**Impact**: CloudFetch timeout tests now behave correctly - only the\nfirst request is delayed, and retry attempts succeed immediately.\n\n**Files Changed**:\n- `test-infrastructure/proxy-server/mitmproxy_addon.py`\n\n## Testing\n\nAll 5 CloudFetch proxy tests now pass:\n- ✅ `CloudFetchConnectionReset_RetriesWithExponentialBackoff`\n- ✅ `CloudFetchExpiredLink_RefreshesLinkViaFetchResults`\n- ✅ `NormalCloudFetch_SucceedsWithoutFailureScenarios`\n- ✅ `CloudFetchTimeout_RetriesWithExponentialBackoff`\n- ✅ `CloudFetch403_RefreshesLinkViaFetchResults`\n\nCo-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-01-06T10:37:01-08:00",
+          "tree_id": "43ec7fa0f5f9d0b0d4b68b27f54f661db3c00dd7",
+          "url": "https://github.com/adbc-drivers/databricks/commit/f0afca812c6bc1b54239f8988311ebe963f8dc9f"
+        },
+        "date": 1767725448383,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 536.94,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 38.8,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 223.61,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 146.84,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 400.89,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 401.89,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 2920.56,
             "unit": "MB"
           }
         ]
