@@ -352,6 +352,19 @@ class FailureInjectionAddon:
         """
         # Detect request type
         if self._is_cloudfetch_download(flow.request):
+            # Track cloud fetch download
+            with state_lock:
+                call_record = {
+                    "timestamp": time.time(),
+                    "type": "cloud_download",
+                    "url": flow.request.pretty_url,
+                }
+                call_history.append(call_record)
+
+                # Enforce max history limit
+                if len(call_history) > MAX_CALL_HISTORY:
+                    del call_history[:len(call_history) - MAX_CALL_HISTORY]
+
             await self._handle_cloudfetch_request(flow)
         elif self._is_thrift_request(flow.request):
             self._handle_thrift_request(flow)
@@ -431,9 +444,10 @@ class FailureInjectionAddon:
             import asyncio
             duration_seconds = scenario_config.get("duration_seconds", 5)
             ctx.log.info(f"[INJECT] Delaying {duration_seconds}s for scenario: {scenario_name}")
-            await asyncio.sleep(duration_seconds)
-            ctx.log.info(f"[INJECT] Delay complete, auto-disabled scenario: {scenario_name}")
+            # Disable BEFORE the delay so new requests don't trigger this scenario
             self._disable_scenario(scenario_name)
+            await asyncio.sleep(duration_seconds)
+            ctx.log.info(f"[INJECT] Delay complete for scenario: {scenario_name}")
             # Let request continue after delay
 
         elif action == "close_connection":
@@ -459,9 +473,11 @@ class FailureInjectionAddon:
                 with state_lock:
                     call_record = {
                         "timestamp": time.time(),
+                        "type": "thrift",
                         "method": decoded.get("method", "unknown"),
                         "message_type": decoded.get("message_type", "unknown"),
                         "sequence_id": decoded.get("sequence_id", 0),
+                        "fields": decoded.get("fields", {}),
                     }
                     call_history.append(call_record)
 

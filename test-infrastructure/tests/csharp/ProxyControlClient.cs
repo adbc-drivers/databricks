@@ -146,6 +146,55 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             }
         }
 
+        /// <summary>
+        /// Gets the history of Thrift method calls recorded by the proxy.
+        /// Call history is automatically reset when a scenario is enabled.
+        /// </summary>
+        public async Task<ThriftCallHistory> GetThriftCallsAsync(CancellationToken cancellationToken = default)
+        {
+            var response = await _httpClient.GetAsync("/thrift/calls", cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync();
+            var options = new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            };
+            var history = System.Text.Json.JsonSerializer.Deserialize<ThriftCallHistory>(json, options);
+            return history ?? new ThriftCallHistory();
+        }
+
+        /// <summary>
+        /// Counts how many times a specific Thrift method was called.
+        /// </summary>
+        public async Task<int> CountThriftMethodCallsAsync(string methodName, CancellationToken cancellationToken = default)
+        {
+            var history = await GetThriftCallsAsync(cancellationToken);
+            return history.Calls?.Count(c => c.Type == "thrift" && c.Method == methodName) ?? 0;
+        }
+
+        /// <summary>
+        /// Counts how many cloud download requests were made.
+        /// </summary>
+        public async Task<int> CountCloudDownloadsAsync(CancellationToken cancellationToken = default)
+        {
+            var history = await GetThriftCallsAsync(cancellationToken);
+            return history.Calls?.Count(c => c.Type == "cloud_download") ?? 0;
+        }
+
+        /// <summary>
+        /// Verifies that a Thrift method was called at least the specified number of times.
+        /// </summary>
+        public async Task AssertThriftMethodCalledAsync(string methodName, int minCalls, CancellationToken cancellationToken = default)
+        {
+            var actualCalls = await CountThriftMethodCallsAsync(methodName, cancellationToken);
+            if (actualCalls < minCalls)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    $"Expected {methodName} to be called at least {minCalls} time(s), but was called {actualCalls} time(s)");
+            }
+        }
+
         public void Dispose()
         {
             if (!_disposed)
@@ -165,5 +214,29 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         public string Name { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
         public bool Enabled { get; set; }
+    }
+
+    /// <summary>
+    /// Represents the history of Thrift method calls recorded by the proxy.
+    /// </summary>
+    public class ThriftCallHistory
+    {
+        public List<ThriftCall> Calls { get; set; } = new List<ThriftCall>();
+        public int Count { get; set; }
+        public int MaxHistory { get; set; }
+    }
+
+    /// <summary>
+    /// Represents a single tracked call (Thrift method or cloud download).
+    /// </summary>
+    public class ThriftCall
+    {
+        public double Timestamp { get; set; }
+        public string Type { get; set; } = string.Empty; // "thrift" or "cloud_download"
+        public string Method { get; set; } = string.Empty; // For Thrift calls
+        public string MessageType { get; set; } = string.Empty; // For Thrift calls
+        public int SequenceId { get; set; } // For Thrift calls
+        public System.Text.Json.JsonElement? Fields { get; set; } // For Thrift calls
+        public string Url { get; set; } = string.Empty; // For cloud downloads
     }
 }
