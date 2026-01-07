@@ -233,30 +233,6 @@ namespace AdbcDrivers.Databricks
             return result.ToString();
         }
 
-        /// <summary>
-        /// Tests if a value matches an ADBC SQL pattern (% and _ wildcards).
-        /// Used for client-side pattern matching when server-side filtering is not available.
-        /// </summary>
-        /// <param name="value">The value to test</param>
-        /// <param name="pattern">ADBC pattern (% = any chars, _ = single char)</param>
-        /// <returns>True if value matches the pattern (case-insensitive)</returns>
-        /// <example>
-        /// MatchesAdbcPattern("dev_schema", "dev_%") => true
-        /// MatchesAdbcPattern("prod_schema", "dev_%") => false
-        /// MatchesAdbcPattern("test", "t_st") => true
-        /// </example>
-        public static bool MatchesAdbcPattern(string value, string pattern)
-        {
-            if (string.IsNullOrEmpty(pattern))
-                return string.IsNullOrEmpty(value);
-
-            var regexPattern = "^" + Regex.Escape(pattern)
-                .Replace("%", ".*")
-                .Replace("_", ".") + "$";
-
-            return Regex.IsMatch(value, regexPattern, RegexOptions.IgnoreCase);
-        }
-
         #endregion
     }
 }

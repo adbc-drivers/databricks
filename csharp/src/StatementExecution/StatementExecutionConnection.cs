@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -26,6 +27,8 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 using Apache.Arrow.Adbc.Extensions;
+using Apache.Arrow.Adbc.Telemetry.Traces.Listeners;
+using Apache.Arrow.Adbc.Telemetry.Traces.Listeners.FileListener;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
@@ -71,6 +74,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Authentication support
         private HttpClient? _authHttpClient;
         private readonly string? _identityFederationClientId;
+
+        // Trace exporter
+        private readonly FileActivityListener? _fileActivityListener;
+        private readonly string _traceInstanceId = Guid.NewGuid().ToString();
 
         /// <summary>
         /// Creates a new Statement Execution connection with internally managed HTTP client.
@@ -206,6 +213,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
             _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
 
+            // Initialize trace exporter
+            TryInitTracerProvider(out _fileActivityListener);
+
             // Authentication configuration
             if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
             {
@@ -289,6 +299,30 @@ namespace AdbcDrivers.Databricks.StatementExecution
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
 
             return httpClient;
+        }
+
+        /// <summary>
+        /// Initializes the trace provider/exporter if configured.
+        /// </summary>
+        /// <param name="fileActivityListener">The created file activity listener, if any.</param>
+        /// <returns>True if a trace provider was successfully initialized, false otherwise.</returns>
+        private bool TryInitTracerProvider(out FileActivityListener? fileActivityListener)
+        {
+            _properties.TryGetValue(ListenersOptions.Exporter, out string? exporterOption);
+            // This listener will only listen for activity from this specific connection instance.
+            bool shouldListenTo(ActivitySource source) => source.Tags?.Any(t => ReferenceEquals(t.Key, _traceInstanceId)) == true;
+            return FileActivityListener.TryActivateFileListener(AssemblyName, exporterOption, out fileActivityListener, shouldListenTo: shouldListenTo);
+        }
+
+        /// <summary>
+        /// Gets tags for the activity source to enable per-instance trace filtering.
+        /// </summary>
+        public override IEnumerable<KeyValuePair<string, object?>>? GetActivitySourceTags(IReadOnlyDictionary<string, string> properties)
+        {
+            IEnumerable<KeyValuePair<string, object?>>? tags = base.GetActivitySourceTags(properties);
+            tags ??= [];
+            tags = tags.Concat([new(_traceInstanceId, null)]);
+            return tags;
         }
 
         /// <summary>
@@ -399,7 +433,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <param name="catalogPattern">Pattern to filter catalog names Null means all catalogs.</param>
         /// <param name="schemaPattern">Pattern to filter schema names (supports SQL LIKE wildcards: %, _). Null means all schemas.</param>
         /// <param name="tableNamePattern">Pattern to filter table names (supports SQL LIKE wildcards: %, _). Null means all tables.</param>
-        /// <param name="tableTypes">List of table types to include (e.g., "TABLE", "VIEW", "LOCAL TEMPORARY"). Null means all types.</param>
+        /// <param name="tableTypes">List of table types to include (e.g., "TABLE", "VIEW", "SYSTEM TABLE"). Null means all types.</param>
         /// <param name="columnNamePattern">Pattern to filter column names (supports SQL LIKE wildcards: %, _). Null means all columns. Only used with All depth.</param>
         /// <returns>Arrow stream containing metadata records with schema dependent on depth parameter</returns>
         /// <remarks>
@@ -545,11 +579,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var catalogs = new List<string>();
                 using (var reader = stream)
                 {
-                    while (true)
+                    RecordBatch? batch;
+                    while ((batch = await reader.ReadNextRecordBatchAsync().ConfigureAwait(false)) != null)
                     {
-                        var batch = await reader.ReadNextRecordBatchAsync().ConfigureAwait(false);
-                        if (batch == null) break;
-
                         var catalogArray = batch.Column("catalog_name") as StringArray;
                         if (catalogArray != null)
                         {
@@ -587,11 +619,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var schemas = new List<(string catalog, string schema)>();
                 using (var reader = stream)
                 {
-                    while (true)
+                    RecordBatch? batch;
+                    while ((batch = await reader.ReadNextRecordBatchAsync().ConfigureAwait(false)) != null)
                     {
-                        var batch = await reader.ReadNextRecordBatchAsync().ConfigureAwait(false);
-                        if (batch == null) break;
-
                         var catalogArray = batch.Column("catalog_name") as StringArray;
                         var schemaArray = batch.Column("db_schema_name") as StringArray;
 
@@ -638,11 +668,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var tables = new List<(string catalog, string schema, string tableName, string tableType, string remarks)>();
                 using (var reader = stream)
                 {
-                    while (true)
+                    RecordBatch? batch;
+                    while ((batch = await reader.ReadNextRecordBatchAsync().ConfigureAwait(false)) != null)
                     {
-                        var batch = await reader.ReadNextRecordBatchAsync().ConfigureAwait(false);
-                        if (batch == null) break;
-
                         var catalogArray = batch.Column("catalog_name") as StringArray;
                         var schemaArray = batch.Column("db_schema_name") as StringArray;
                         var tableNameArray = batch.Column("table_name") as StringArray;
@@ -696,11 +724,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var columns = new List<ColumnInfo>();
                 using (var reader = stream)
                 {
-                    while (true)
+                    RecordBatch? batch;
+                    while ((batch = await reader.ReadNextRecordBatchAsync().ConfigureAwait(false)) != null)
                     {
-                        var batch = await reader.ReadNextRecordBatchAsync().ConfigureAwait(false);
-                        if (batch == null) break;
-
                         // Extract columns from ADBC stream (17 columns)
                         var catalogArray = batch.Column("catalog_name") as StringArray;
                         var schemaArray = batch.Column("db_schema_name") as StringArray;
@@ -1091,11 +1117,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             using (var reader = stream)
             {
-                while (true)
+                RecordBatch? batch;
+                while ((batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult()) != null)
                 {
-                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
-                    if (batch == null) break;
-
                     // Extract columns from ADBC stream (17 columns, lowercase names)
                     var catalogArray = batch.Column("catalog_name") as StringArray;
                     var schemaArray = batch.Column("db_schema_name") as StringArray;
@@ -1673,11 +1697,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             using (var reader = stream)
             {
-                while (true)
+                RecordBatch? batch;
+                while ((batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult()) != null)
                 {
-                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
-                    if (batch == null) break;
-
                     // Extract catalog_name column
                     var catalogArray = batch.Column("catalog_name") as StringArray;
                     if (catalogArray != null)
@@ -1816,11 +1838,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             using (var reader = stream)
             {
-                while (true)
+                RecordBatch? batch;
+                while ((batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult()) != null)
                 {
-                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
-                    if (batch == null) break;
-
                     // Extract catalog_name and db_schema_name columns
                     var catalogArray = batch.Column("catalog_name") as StringArray;
                     var schemaArray = batch.Column("db_schema_name") as StringArray;
@@ -2030,11 +2050,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             using (var reader = stream)
             {
-                while (true)
+                RecordBatch? batch;
+                while ((batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult()) != null)
                 {
-                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
-                    if (batch == null) break;
-
                     // Extract columns from ADBC stream
                     var catalogArray = batch.Column("catalog_name") as StringArray;
                     var schemaArray = batch.Column("db_schema_name") as StringArray;
@@ -2116,9 +2134,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <list type="bullet">
         /// <item><description>TABLE - Regular persistent tables</description></item>
         /// <item><description>VIEW - Database views</description></item>
-        /// <item><description>LOCAL TEMPORARY - Temporary tables (detected via isTemporary column in SHOW TABLES)</description></item>
+        /// <item><description>SYSTEM TABLE - System/catalog tables</description></item>
         /// </list>
-        /// <para>Note: REST/Statement Execution API includes LOCAL TEMPORARY detection.</para>
+        /// <para>Note: Aligns with JDBC/Thrift implementation table types.</para>
         /// </remarks>
         public override IArrowArrayStream GetTableTypes()
         {
@@ -2127,7 +2145,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var tableTypesBuilder = new StringArray.Builder();
                 tableTypesBuilder.Append("TABLE");
                 tableTypesBuilder.Append("VIEW");
-                tableTypesBuilder.Append("LOCAL TEMPORARY");
+                tableTypesBuilder.Append("SYSTEM TABLE");
 
                 var schema = new Schema(new[] { new Field("table_type", StringType.Default, nullable: false) }, null);
                 var data = new List<IArrowArray> { tableTypesBuilder.Build() };
@@ -2181,27 +2199,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                // Catalog and schema are required for GetTableSchema
-                if (string.IsNullOrEmpty(catalog) || string.IsNullOrEmpty(dbSchema))
-                {
-                    var ex = new ArgumentException("Catalog and schema are required for GetTableSchema");
-                    activity?.AddException(ex, [
-                        new("error.type", ex.GetType().Name),
-                        new("operation", "GetTableSchema"),
-                        new("catalog", catalog ?? "(none)"),
-                        new("db_schema", dbSchema ?? "(none)"),
-                        new("table_name", tableName)
-                    ]);
-                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
-                    throw ex;
-                }
-
-                activity?.SetTag("catalog", catalog);
-                activity?.SetTag("db_schema", dbSchema);
-                activity?.SetTag("table_name", tableName);
+                activity?.SetTag("catalog", catalog ?? "(none)");
+                activity?.SetTag("db_schema", dbSchema ?? "(none)");
+                activity?.SetTag("table_name", tableName ?? "(none)");
 
                 var commandBuilder = new SqlCommandBuilder()
-                    .WithCatalogPattern(catalog)
+                    .WithCatalog(catalog)
                     .WithSchemaPattern(dbSchema)
                     .WithTablePattern(tableName);
 
@@ -2331,11 +2334,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var queryResult = await (statement as StatementExecutionStatement)!.ExecuteQueryAsync().ConfigureAwait(false);
             var batches = new List<RecordBatch>();
 
-            while (true)
+            RecordBatch? batch;
+            while ((batch = await queryResult.Stream!.ReadNextRecordBatchAsync().ConfigureAwait(false)) != null)
             {
-                var batch = await queryResult.Stream!.ReadNextRecordBatchAsync().ConfigureAwait(false);
-                if (batch == null)
-                    break;
                 batches.Add(batch);
             }
 
@@ -2597,8 +2598,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             public StatementExecInfoArrowStream(Schema schema, IReadOnlyList<IArrowArray> data)
             {
-                _schema = schema;
-                _batch = new RecordBatch(schema, data, data[0].Length);
+                _schema = schema ?? throw new ArgumentNullException(nameof(schema));
+                if (data == null)
+                {
+                    throw new ArgumentNullException(nameof(data));
+                }
+
+                if (data.Count == 0)
+                {
+                    _batch = null;
+                }
+                else
+                {
+                    _batch = new RecordBatch(schema, data, data[0].Length);
+                }
             }
 
             public StatementExecInfoArrowStream(Schema schema, RecordBatch[] batches)
@@ -3002,11 +3015,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             using (var reader = stream)
             {
-                while (true)
+                RecordBatch? batch;
+                while ((batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult()) != null)
                 {
-                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
-                    if (batch == null) break;
-
                     // Extract columns
                     var catalogArray = batch.Column("catalog_name") as StringArray;
                     var schemaArray = batch.Column("db_schema_name") as StringArray;
@@ -3370,11 +3381,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             using (var reader = stream)
             {
-                while (true)
+                RecordBatch? batch;
+                while ((batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult()) != null)
                 {
-                    var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
-                    if (batch == null) break;
-
                     // Extract columns from ADBC schema
                     var pkCatalogArray = batch.Column("pk_catalog_name") as StringArray;
                     var pkSchemaArray = batch.Column("pk_db_schema_name") as StringArray;
@@ -3529,12 +3538,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var foreignKeysList = new List<ForeignKeyInfo>();
             var schema = allForeignKeys.Schema;
 
-            while (true)
+            RecordBatch? batch;
+            while ((batch = await allForeignKeys.ReadNextRecordBatchAsync().ConfigureAwait(false)) != null)
             {
-                using var batch = await allForeignKeys.ReadNextRecordBatchAsync().ConfigureAwait(false);
-                if (batch == null) break;
-
-                // Read the foreign key data from the batch
+                using (batch)
+                {
+                    // Read the foreign key data from the batch
                 var pkCatalogArray = batch.Column("pk_catalog_name") as StringArray;
                 var pkSchemaArray = batch.Column("pk_db_schema_name") as StringArray;
                 var pkTableArray = batch.Column("pk_table_name") as StringArray;
@@ -3583,6 +3592,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             Deferrability = deferrabilityArray != null && !deferrabilityArray.IsNull(i) ? deferrabilityArray.GetValue(i) : null
                         });
                     }
+                }
                 }
             }
 
@@ -3666,7 +3676,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _authHttpClient?.Dispose();
 
                 _sessionLock.Dispose();
+
+                // Dispose the trace listener
+                _fileActivityListener?.Dispose();
             });
+
+            // Call base class Dispose
+            base.Dispose();
         }
 
         // TracingConnection provides IActivityTracer implementation

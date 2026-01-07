@@ -225,7 +225,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>SQL command string</returns>
         public string BuildShowColumns(string? catalogOverride = null)
         {
-            var effectiveCatalog = catalogOverride ?? _catalogPattern;
+            var effectiveCatalog = catalogOverride ?? _catalog;
             var sql = new StringBuilder(ShowColumns);
 
             // Handle catalog scope

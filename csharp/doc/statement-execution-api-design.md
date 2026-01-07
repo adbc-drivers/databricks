@@ -1408,7 +1408,7 @@ flowchart TD
 | `GetObjects()` (schemas) | `SHOW SCHEMAS IN {catalog \| ALL CATALOGS} [LIKE 'pattern']` | ✅ | NULL catalog → IN ALL CATALOGS |
 | `GetObjects()` (tables) | `SHOW TABLES IN CATALOG catalog [SCHEMA LIKE 'pattern'] [LIKE 'pattern']` | ✅ | Schema and table patterns |
 | `GetObjects()` (columns) | `SHOW COLUMNS IN CATALOG catalog [SCHEMA LIKE 'pattern'] [TABLE LIKE 'pattern'] [LIKE 'pattern']` | ✅ | Full pattern support |
-| `GetTableTypes()` | Static list: `TABLE`, `VIEW`, `LOCAL TEMPORARY` | N/A | No query needed |
+| `GetTableTypes()` | Static list: `TABLE`, `VIEW`, `SYSTEM TABLE` | N/A | No query needed |
 | `GetTableSchema()` | `SHOW COLUMNS IN CATALOG catalog SCHEMA LIKE 'schema' TABLE LIKE 'table'` | ✅ | More accurate nullable info than DESCRIBE |
 | `GetPrimaryKeys()` | `SHOW KEYS IN CATALOG catalog IN SCHEMA schema IN TABLE table` | ❌ | Exact identifiers only |
 | `GetImportedKeys()` | `SHOW FOREIGN KEYS IN CATALOG catalog IN SCHEMA schema IN TABLE table` | ❌ | Exact identifiers only |

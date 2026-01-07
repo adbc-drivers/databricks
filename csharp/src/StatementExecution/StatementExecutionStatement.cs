@@ -73,9 +73,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _metadataSchemaName;
         private string? _metadataTableName;
         private string? _metadataColumnName;
+        private string? _metadataTableTypes;
         private string? _foreignCatalogName;
         private string? _foreignSchemaName;
         private string? _foreignTableName;
+        private bool _escapePatternWildcards = false;
 
         public StatementExecutionStatement(
             IStatementExecutionClient client,
@@ -143,6 +145,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.ColumnName:
                     _metadataColumnName = value;
                     break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.TableTypes:
+                    _metadataTableTypes = value;
+                    break;
                 case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.ForeignCatalogName:
                     _foreignCatalogName = value;
                     break;
@@ -152,10 +157,37 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.ForeignTableName:
                     _foreignTableName = value;
                     break;
-                default:
-                    base.SetOption(key, value);
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.EscapePatternWildcards:
+                    _escapePatternWildcards = bool.TryParse(value, out var escape) && escape;
                     break;
+
+                // These options are readonly in SEA (set at connection level)
+                // Accept but ignore them to avoid NotImplemented exceptions for compatibility
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.PollTimeMilliseconds:
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.BatchSize:
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.BatchSizeStopCondition:
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.QueryTimeoutSeconds:
+                    // Silently ignore - these are connection-level settings in SEA
+                    break;
+
+                default:
+                    throw AdbcException.NotImplemented($"Option '{key}' is not implemented.");
             }
+        }
+
+        /// <summary>
+        /// Escapes wildcard characters in pattern names when EscapePatternWildcards is enabled.
+        /// Converts % and _ to \% and \_ to treat them as literals rather than wildcards.
+        /// </summary>
+        /// <param name="name">The name/pattern to potentially escape</param>
+        /// <returns>The escaped name if EscapePatternWildcards is true, otherwise the original name</returns>
+        private string? EscapePatternWildcardsInName(string? name)
+        {
+            if (!_escapePatternWildcards || name == null)
+                return name;
+
+            // Escape both _ and %
+            return name.Replace("_", "\\_").Replace("%", "\\%");
         }
 
         /// <summary>
@@ -394,8 +426,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// Maps Databricks SQL type names to Arrow types.
         /// </summary>
-        private IArrowType MapDatabricksTypeToArrowType(string typeName)
+        private IArrowType MapDatabricksTypeToArrowType(string? typeName)
         {
+            if (string.IsNullOrEmpty(typeName))
+            {
+                return StringType.Default;
+            }
+
             // Handle parameterized types (e.g., DECIMAL(10,2), VARCHAR(100))
             var baseType = typeName.Split('(')[0].ToUpperInvariant();
 
@@ -556,7 +593,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing catalog information</returns>
         protected virtual async Task<QueryResult> GetCatalogsAsync(CancellationToken cancellationToken = default)
         {
-            var stream = await Task.Run(() => _connection.GetCatalogsFlat(_metadataCatalogName), cancellationToken).ConfigureAwait(false);
+            var stream = await Task.Run(() => _connection.GetCatalogsFlat(
+                EscapePatternWildcardsInName(_metadataCatalogName)), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -568,7 +606,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing schema information</returns>
         protected virtual async Task<QueryResult> GetSchemasAsync(CancellationToken cancellationToken = default)
         {
-            var stream = await Task.Run(() => _connection.GetSchemasFlat(_metadataCatalogName, _metadataSchemaName), cancellationToken).ConfigureAwait(false);
+            var stream = await Task.Run(() => _connection.GetSchemasFlat(
+                EscapePatternWildcardsInName(_metadataCatalogName),
+                EscapePatternWildcardsInName(_metadataSchemaName)), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -580,7 +620,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing table information</returns>
         protected virtual async Task<QueryResult> GetTablesAsync(CancellationToken cancellationToken = default)
         {
-            var stream = await Task.Run(() => _connection.GetTablesFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName, null), cancellationToken).ConfigureAwait(false);
+            List<string>? tableTypesList = _metadataTableTypes?.Split(',').ToList();
+            var stream = await Task.Run(() => _connection.GetTablesFlat(
+                EscapePatternWildcardsInName(_metadataCatalogName),
+                EscapePatternWildcardsInName(_metadataSchemaName),
+                EscapePatternWildcardsInName(_metadataTableName),
+                tableTypesList), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -592,7 +637,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing column information</returns>
         protected virtual async Task<QueryResult> GetColumnsAsync(CancellationToken cancellationToken = default)
         {
-            var stream = await Task.Run(() => _connection.GetColumnsFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName, _metadataColumnName), cancellationToken).ConfigureAwait(false);
+            var stream = await Task.Run(() => _connection.GetColumnsFlat(
+                EscapePatternWildcardsInName(_metadataCatalogName),
+                EscapePatternWildcardsInName(_metadataSchemaName),
+                EscapePatternWildcardsInName(_metadataTableName),
+                EscapePatternWildcardsInName(_metadataColumnName)), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -657,7 +706,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Gets table types metadata
-        /// Returns list of supported table types (TABLE, VIEW, LOCAL TEMPORARY).
+        /// Returns list of supported table types (TABLE, VIEW, SYSTEM TABLE).
         /// </summary>
         /// <param name="cancellationToken">Cancellation token</param>
         /// <returns>Query result containing table type information</returns>

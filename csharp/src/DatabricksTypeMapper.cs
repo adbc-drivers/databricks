@@ -257,10 +257,8 @@ namespace AdbcDrivers.Databricks
                 if (precision.HasValue)
                     return precision.Value;
 
-                // Default precision for DECIMAL
                 if (DefaultColumnSizes.TryGetValue(baseType, out var decimalSize))
                     return decimalSize;
-                return 38;
             }
 
             // For VARCHAR(n) or CHAR(n), extract length
