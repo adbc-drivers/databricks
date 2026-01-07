@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767725447629,
+  "lastUpdate": 1767745130226,
   "repoUrl": "https://github.com/adbc-drivers/databricks",
   "entries": {
     "Peak Memory (.NET Framework 4.7.2)": [
@@ -884,6 +884,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "wide_sales_analysis",
             "value": 776.57,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "13318837+davidhcoe@users.noreply.github.com",
+            "name": "davidhcoe",
+            "username": "davidhcoe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0bff54c1e37649d81d61cd442a3fbbaa73714078",
+          "message": "feat(csharp): align project structures and output locations to other drivers (#115)\n\n## What's Changed\n\n- aligns the project structure and output location (artifacts) with the\nother ADBC drivers\n- added Directory.Build.props file\n\nCo-authored-by: David Coe <>",
+          "timestamp": "2026-01-06T19:05:54-05:00",
+          "tree_id": "f396118726ef8d5e2d266b58b5d9e7c9ea0f0332",
+          "url": "https://github.com/adbc-drivers/databricks/commit/0bff54c1e37649d81d61cd442a3fbbaa73714078"
+        },
+        "date": 1767745129633,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "catalog_sales",
+            "value": 504.36,
+            "unit": "MB"
+          },
+          {
+            "name": "customer",
+            "value": 285.43,
+            "unit": "MB"
+          },
+          {
+            "name": "inventory",
+            "value": 400.87,
+            "unit": "MB"
+          },
+          {
+            "name": "sales(...)tamps_[21]",
+            "value": 336.29,
+            "unit": "MB"
+          },
+          {
+            "name": "store_sales_numeric",
+            "value": 529.24,
+            "unit": "MB"
+          },
+          {
+            "name": "web_sales",
+            "value": 480,
+            "unit": "MB"
+          },
+          {
+            "name": "wide_sales_analysis",
+            "value": 702.13,
             "unit": "MB"
           }
         ]
