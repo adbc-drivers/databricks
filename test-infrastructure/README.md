@@ -13,6 +13,23 @@ The test infrastructure enables comprehensive testing of driver behavior includi
 **Initial Target**: C# ADBC Driver (this repository)
 **Future Targets**: Java (JDBC), C++ (ODBC), Go (ADBC) drivers
 
+## Goals and Non-Goals
+
+### Goals
+
+- ✅ **Comprehensive Coverage**: All Thrift operations, protocol versions, Databricks extensions
+- ✅ **Driver Behavior Focus**: Test what drivers send/receive, not server implementation
+- ✅ **Language-Agnostic Specs**: Common test cases described in markdown, implemented per language
+- ✅ **Failure Scenario Testing**: Expired links, network errors, timeouts, retries
+- ✅ **Extractable**: Easy to move to common repo when ready
+
+### Non-Goals
+
+- ❌ **Server-side testing**: Use existing runtime tests for ThriftServer behavior
+- ⏸️ **Performance benchmarking**: Focus on correctness first; performance tests can be added later
+- ❌ **Load testing**: Basic concurrency only, not large-scale load tests
+- ❌ **Protocol design**: Test existing protocol, not propose new features
+
 ## Quick Links
 
 - **[Proxy Server README](./proxy-server/README.md)** - How to use the mitmproxy-based test server and Flask API
@@ -249,6 +266,40 @@ Rationale:
 - Provides working reference for other languages
 - Validates spec quality before wider rollout
 - Establishes patterns for future implementations
+
+## Alternatives Considered
+
+### Alternative 1: Mock Server Instead of Proxy
+
+**Considered:** Implement mock Thrift server that simulates responses
+
+**Rejected Because:**
+- Want to test against **real** Thrift server behavior
+- Mock server requires duplicating server logic
+- Proxy provides better integration testing
+- Proxy can still inject failures in real interactions
+
+**Note:** Proxy server can operate in "standalone mock mode" if needed
+
+### Alternative 2: Separate Test Suite Per Driver
+
+**Considered:** Each driver implements tests independently
+
+**Rejected Because:**
+- Leads to inconsistent behavior across drivers
+- Duplicate effort for similar tests
+- Harder to ensure feature parity
+- No shared validation of Thrift protocol compliance
+
+### Alternative 3: Implement Everything in One Language
+
+**Considered:** Write all tests in C# and use language bindings
+
+**Rejected Because:**
+- C++ ODBC driver can't easily call C# code
+- Java JDBC driver would need complex interop
+- Each driver has different test frameworks
+- Language-native tests are easier to maintain
 
 ## Getting Started
 
