@@ -15,9 +15,7 @@ The test infrastructure enables comprehensive testing of driver behavior includi
 
 ## Quick Links
 
-- **[Design Document](../docs/designs/thrift-protocol-tests/design.md)** - Full architecture, rationale, and implementation plan
-- **[Proxy Configuration Schema](../docs/designs/thrift-protocol-tests/proxy-config-schema.md)** - YAML configuration reference
-- **[Proxy Server README](./proxy-server/README.md)** - How to use the mitmproxy-based test server
+- **[Proxy Server README](./proxy-server/README.md)** - How to use the mitmproxy-based test server and Flask API
 
 ## Architecture
 
@@ -254,7 +252,6 @@ When contributing:
 
 ## References
 
-- [Design Document](../docs/designs/thrift-protocol-tests/design.md) - Full architecture and rationale
-- [Proxy Configuration Schema](../docs/designs/thrift-protocol-tests/proxy-config-schema.md) - YAML reference
 - [PR #74](https://github.com/adbc-drivers/databricks/pull/74) - Initial design proposal
 - [ADBC Specification](https://arrow.apache.org/adbc/) - Arrow Database Connectivity standard
+- [mitmproxy Documentation](https://docs.mitmproxy.org/) - HTTPS proxy documentation

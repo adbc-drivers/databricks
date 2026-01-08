@@ -316,6 +316,5 @@ curl http://localhost:18081/scenarios/cloudfetch_403/status
 
 ## References
 
-- [mitmproxy Documentation](https://docs.mitmproxy.org/)
-- [Design Document](../../docs/designs/thrift-protocol-tests/design.md)
-- [Proxy Configuration Schema](../../docs/designs/thrift-protocol-tests/proxy-config-schema.md)
+- [mitmproxy Documentation](https://docs.mitmproxy.org/) - Official mitmproxy docs
+- [Test Infrastructure README](../README.md) - Main test infrastructure overview
