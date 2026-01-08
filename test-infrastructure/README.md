@@ -156,7 +156,6 @@ This infrastructure is designed to be extracted to a common repository in the fu
 **Current**:
 ```
 adbc-drivers/databricks/
-├── docs/designs/thrift-protocol-tests/
 └── test-infrastructure/
 ```
 
@@ -171,6 +170,85 @@ github.com/databricks/thrift-test-infrastructure/
     ├── java/          # Java implementation example
     └── cpp/           # C++ implementation example
 ```
+
+## Implementation Plan
+
+### Phased Approach
+
+**Phase 1: Foundation Infrastructure**
+- Design document and architecture definition
+- Directory structure (`test-infrastructure/` with `proxy-server/` and `tests/`)
+- Proxy server implementation (mitmproxy-based) with:
+  - HTTPS/Thrift traffic interception
+  - Flask control API for scenario management
+  - Failure injection capabilities
+  - Thrift protocol decoder for call verification
+- C# test infrastructure:
+  - Base classes for proxy-based tests
+  - Proxy lifecycle management
+  - Control API client
+- CI/CD integration with GitHub Actions
+
+**Phase 2: Critical Test Categories**
+- CloudFetch failure scenarios (expired links, HTTP errors, timeouts, connection resets)
+- Session lifecycle tests (open/close, expiration, invalidation)
+- Statement execution tests (query execution, cancellation, timeouts)
+- Basic error handling validation
+
+**Phase 3: Comprehensive Coverage**
+- Metadata operations (catalogs, schemas, tables, columns, functions)
+- Arrow format validation (schemas, batches, compression)
+- Direct results testing
+- Parameterized query validation
+- Result fetching edge cases
+
+**Phase 4: Advanced Scenarios**
+- Concurrency and thread safety
+- Protocol version negotiation
+- Security testing (authentication, authorization)
+- Performance regression detection
+- Edge cases and corner scenarios
+
+**Phase 5: Cross-Driver Expansion**
+- Adapt specifications for Java JDBC driver
+- Adapt specifications for C++ ODBC driver
+- Adapt specifications for Go ADBC driver
+- Consider extraction to common repository
+
+## Key Design Decisions
+
+### Why Language-Agnostic Specifications?
+
+Multiple driver implementations exist (C#, Java, C++, Go). Language-agnostic specifications ensure:
+- Consistent behavior across all drivers
+- Single source of truth for protocol compliance
+- Easier review and maintenance
+- Reduced duplicate effort
+
+### Why mitmproxy Over Alternatives?
+
+**Chosen: mitmproxy/Python**
+
+Rationale:
+- **HTTPS Interception**: CloudFetch downloads happen over HTTPS to cloud storage (S3, Azure Blob, GCS), requiring full HTTPS man-in-the-middle capability. mitmproxy is battle-tested for this.
+- **Certificate Management**: Built-in TLS certificate generation and trust chain handling
+- **Protocol Support**: Excellent HTTP/1.1, HTTP/2, and WebSocket support
+- **Rich Ecosystem**: Python ecosystem for extension (Flask API, Thrift parsing)
+- **Development Speed**: Fast prototyping and iteration
+- **Industry Standard**: Used by security researchers and QA teams worldwide
+
+**Alternatives Considered:**
+- **Go proxy**: Would need custom HTTPS interception; complex certificate management
+- **C# proxy**: Other drivers would need .NET runtime
+- **Java proxy**: Heavy JVM dependency, less mature HTTPS interception libraries
+- **Custom solution**: Would replicate what mitmproxy already provides
+
+### Why Start with C# Implementation?
+
+- This repository is the C# ADBC driver
+- Provides working reference for other languages
+- Validates spec quality before wider rollout
+- Establishes patterns for future implementations
 
 ## Getting Started
 
