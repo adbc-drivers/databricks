@@ -129,7 +129,7 @@ Hive Protocol V1-V10 → Spark Protocol V1-V9 → Databricks Extensions
 ```mermaid
 graph TD
     A["Test Specifications<br/>(Language-Agnostic Markdown)<br/>- 16 specification documents<br/>- ~300 test cases<br/>- Shared by ALL driver implementations"]
-    B["Standalone Proxy Server (Go)<br/>- HTTP/Thrift proxy with failure injection<br/>- Configuration-driven (YAML)<br/>- Used by all language implementations"]
+    B["Standalone Proxy Server (mitmproxy/Python)<br/>- HTTPS/Thrift interception with failure injection<br/>- Flask control API for scenario management<br/>- Thrift protocol decoder for call verification<br/>- Used by all language implementations"]
     C1["C# Tests<br/>(ADBC)"]
     C2["Java Tests<br/>(JDBC)"]
     C3["C++ Tests<br/>(ODBC)"]
@@ -140,6 +140,9 @@ graph TD
     B --> C2
     B --> C3
     B --> C4
+
+    style B fill:#e1f5ff
+    style C1 fill:#c8e6c9
 ```
 
 ### Component Responsibilities
@@ -147,9 +150,11 @@ graph TD
 | Component | Responsibility | Language | Location |
 |-----------|---------------|----------|----------|
 | **Test Specifications** | Document test cases, expected behavior | Markdown | `docs/designs/thrift-protocol-tests/specs/` |
-| **Proxy Server** | Failure injection, request interception | Go | `test-infrastructure/proxy-server/` |
-| **C# Test Suite** | C#-specific test implementation | C# | `csharp/test/ThriftProtocol/` |
-| **Test Helpers** | C#-specific utilities, assertions | C# | `csharp/ThriftTestHelpers/` |
+| **Proxy Server** | HTTPS/Thrift interception, failure injection | Python (mitmproxy) | `test-infrastructure/proxy-server/` |
+| **Thrift Decoder** | Protocol parsing and call verification | Python | `test-infrastructure/proxy-server/thrift_decoder.py` |
+| **C# Test Suite** | Driver behavior validation tests | C# | `test-infrastructure/tests/csharp/` |
+| **Test Helpers** | Proxy management, control client, base classes | C# | `test-infrastructure/tests/csharp/` |
+| **CI Integration** | GitHub Actions workflow | YAML | `.github/workflows/proxy-tests.yml` |
 
 ---
 
@@ -324,11 +329,19 @@ Specific guidance for C# implementation
 
 ### Standalone Proxy Server
 
-The proxy server is a standalone Go application that:
-- Forwards requests to real Thrift server
-- Intercepts and modifies requests/responses
-- Injects failures based on configuration
-- Logs all traffic for debugging
+The proxy server is a **Python-based mitmproxy application** with the following capabilities:
+- **HTTPS Interception**: Full HTTPS man-in-the-middle for CloudFetch downloads from cloud storage
+- **Request Forwarding**: Transparent proxy for Thrift operations
+- **Failure Injection**: Controlled injection via HTTP API (port 18081)
+- **Thrift Protocol Decoding**: Tracks and verifies all Thrift method calls for test assertions
+- **Traffic Logging**: Captures all HTTP/HTTPS and Thrift traffic for debugging
+
+**Why mitmproxy over Go:**
+- Mature HTTPS interception capabilities used by security researchers worldwide
+- Built-in TLS certificate generation and management
+- Rich Python ecosystem for extending functionality
+- Excellent HTTP/2 and WebSocket support for future needs
+- Faster to prototype and iterate on test scenarios
 
 **Failure Injection Approaches:**
 
@@ -558,40 +571,51 @@ func TestSessionTimeoutRecovery(t *testing.T) {
 
 **Proxy API Endpoints**:
 ```bash
-# Enable a scenario defined in YAML (recommended)
-POST /api/v1/scenarios/{name}/enable
+# List all available scenarios with their status
+GET /scenarios
 
-# Disable a scenario
-POST /api/v1/scenarios/{name}/disable
-
-# List all defined scenarios (from YAML)
-GET /api/v1/scenarios
-
-# List currently active scenarios
-GET /api/v1/scenarios/active
-
-# Create a custom failure scenario on-the-fly (advanced)
-POST /api/v1/failures
+# Enable a scenario (optionally with runtime config)
+POST /scenarios/{name}/enable
 {
-  "name": "custom_failure",
-  "trigger": {...},
-  "action": {...}
+  "duration_seconds": 30  # Optional: Override delay duration
 }
 
-# Clear all active failures/scenarios
-DELETE /api/v1/scenarios/active
+# Disable a scenario
+POST /scenarios/{name}/disable
+
+# Get status of specific scenario
+GET /scenarios/{name}/status
+
+# Get Thrift call history (for verification)
+GET /thrift/calls
+
+# Reset Thrift call history (auto-resets when scenario enabled)
+POST /thrift/calls/reset
+
+# Count specific Thrift method calls
+GET /thrift/calls/count?method=FetchResults
+
+# Verify expected Thrift call sequence
+POST /thrift/verify
+{
+  "expected_calls": [
+    {"method": "OpenSession"},
+    {"method": "ExecuteStatement"},
+    {"method": "FetchResults", "min_count": 1}
+  ]
+}
 ```
 
 **Recommended Workflow (Hybrid Approach)**:
 
 **Step 1**: Start proxy ONCE with all scenario definitions
 ```bash
-# All scenarios defined in YAML, but none are active initially
+# Scenarios hardcoded in mitmproxy_addon.py, none active initially
 cd test-infrastructure/proxy-server
-go run main.go --config all-scenarios.yaml --api-port 8081
+mitmdump -s mitmproxy_addon.py --listen-port 18080 --set api_port=18081
 
-# Proxy runs on :8080 (for Thrift traffic)
-# API runs on :8081 (for control)
+# Proxy runs on :18080 (for HTTP/HTTPS/Thrift traffic)
+# Control API runs on :18081 (Flask server)
 ```
 
 **Step 2**: Tests control failures via API (no restart needed)
@@ -685,79 +709,218 @@ The proxy server configuration includes **24 production-validated failure scenar
 - Scenarios activate deterministically when enabled via API (no random probability)
 - Tests control when failures occur for reproducible results
 
+### Thrift Call Verification
+
+A key capability of the proxy is **Thrift protocol decoding and call tracking**. The proxy intercepts and decodes all Thrift RPC calls, enabling tests to verify driver behavior at the protocol level.
+
+**Verification Capabilities:**
+- Track all Thrift method calls (e.g., `OpenSession`, `ExecuteStatement`, `FetchResults`)
+- Count specific method invocations (e.g., "did driver call FetchResults to refresh expired link?")
+- Track CloudFetch downloads with full URL details
+- Verify request parameters and response handling
+- Detect protocol violations or unexpected call patterns
+
+**Example Test Pattern:**
+```csharp
+// Establish baseline without failure
+int baselineFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+
+// Enable failure scenario
+await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
+
+// Execute query that triggers CloudFetch
+var result = await statement.ExecuteQuery();
+
+// Verify driver behavior by checking Thrift calls
+int actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+Assert.Equal(baselineFetchResults + 1, actualFetchResults); // Driver refreshed link
+```
+
+This approach validates **what the driver actually does** at the protocol level, not just that it returns correct results. It detects issues like:
+- Driver not retrying after specific errors
+- Driver making unnecessary duplicate calls
+- Driver using wrong error recovery strategy
+
+**Real-World Example:**
+
+Here's how a complete test validates driver behavior when CloudFetch link expires:
+
+```csharp
+[Fact]
+public async Task CloudFetchExpiredLink_RefreshesLinkViaFetchResults()
+{
+    // Step 1: Establish baseline by running query without failure
+    int baselineFetchResults;
+    using (var connection = CreateProxiedConnection())
+    using (var statement = connection.CreateStatement())
+    {
+        statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+        var result = statement.ExecuteQuery();
+        using var reader = result.Stream;
+        _ = reader.ReadNextRecordBatchAsync().Result;
+        // Record how many FetchResults calls happen normally
+        baselineFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+    }
+
+    // Step 2: Enable failure scenario - next CloudFetch download will return expired link
+    await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
+
+    // Step 3: Execute same query with failure injected
+    using var connection2 = CreateProxiedConnection();
+    using var statement2 = connection2.CreateStatement();
+    statement2.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+    var result2 = statement2.ExecuteQuery();
+
+    // Step 4: Verify driver successfully recovered
+    using var reader2 = result2.Stream;
+    var batch = reader2.ReadNextRecordBatchAsync().Result;
+    Assert.NotNull(batch);
+    Assert.True(batch.Length > 0);
+
+    // Step 5: Verify driver called FetchResults AGAIN to get fresh link
+    var actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+    Assert.Equal(baselineFetchResults + 1, actualFetchResults);
+    // The +1 proves the driver detected the expired link and refreshed it
+}
+```
+
+**What this test validates:**
+1. Driver completes the query successfully despite expired link
+2. Driver uses correct recovery strategy: calls `FetchResults` again (not retry same URL)
+3. Driver makes exactly one additional call (not retry loop or panic)
+4. End-to-end correctness: returned data is valid
+
 ### C# Test Structure
 
 ```
-csharp/
-├── test/
-│   ├── ThriftProtocol/                # New: Protocol tests
-│   │   ├── ThriftProtocolTestBase.cs  # Base class with proxy setup
-│   │   ├── SessionTests.cs
-│   │   ├── StatementExecutionTests.cs
-│   │   ├── CloudFetchTests.cs
-│   │   └── ... (13 more test files)
-│   └── ThriftTestHelpers/             # New: Test utilities
-│       ├── ProxyConfiguration.cs
-│       ├── ThriftAssertions.cs
-│       └── TestFixtures.cs
+test-infrastructure/
+├── proxy-server/
+│   ├── mitmproxy_addon.py             # Main proxy implementation
+│   ├── thrift_decoder.py              # Thrift protocol parser
+│   ├── requirements.txt               # Python dependencies
+│   └── README.md
+└── tests/
+    └── csharp/
+        ├── CloudFetchTests.cs         # CloudFetch failure tests
+        ├── ProxyTestBase.cs           # Base class with proxy setup
+        ├── ProxyServerManager.cs      # Proxy lifecycle management
+        ├── ProxyControlClient.cs      # OpenAPI-generated client
+        └── ProxyTests.csproj          # Test project
 ```
 
 **Base Test Class**:
 ```csharp
-public abstract class ThriftProtocolTestBase : IDisposable
+public abstract class ProxyTestBase : IAsyncLifetime
 {
-    protected string ProxyUrl =>
-        Environment.GetEnvironmentVariable("THRIFT_PROXY_URL")
-        ?? "http://localhost:8080";
+    private ProxyServerManager _proxyManager;
+    private ProxyControlClient _controlClient;
 
-    protected DatabricksDriver CreateTestDriver()
+    public virtual async Task InitializeAsync()
     {
-        return new DatabricksDriver();
+        // Start mitmproxy server
+        _proxyManager = new ProxyServerManager();
+        _controlClient = new ProxyControlClient(_proxyManager.ApiPort);
+        await _proxyManager.StartAsync();
+
+        // Set environment variables for CloudFetch HTTP client
+        var proxyUrl = $"http://localhost:{_proxyManager.ProxyPort}";
+        Environment.SetEnvironmentVariable("HTTP_PROXY", proxyUrl);
+        Environment.SetEnvironmentVariable("HTTPS_PROXY", proxyUrl);
+
+        // Disable all scenarios at start of test
+        await _controlClient.DisableAllScenariosAsync();
     }
 
-    protected Dictionary<string, string> GetTestConfig()
+    protected virtual Dictionary<string, string> BuildProxiedConnectionParameters()
     {
-        return new Dictionary<string, string>
+        var parameters = new Dictionary<string, string>();
+
+        // === Proxy Configuration ===
+        parameters["adbc.proxy_options.use_proxy"] = "true";
+        parameters["adbc.proxy_options.proxy_host"] = "localhost";
+        parameters["adbc.proxy_options.proxy_port"] = ProxyManager.ProxyPort.ToString();
+
+        // === TLS Certificate Trust Configuration ===
+        // Required because mitmproxy uses self-signed CA for HTTPS interception
+        parameters["adbc.http_options.tls.allow_self_signed"] = "true";
+        parameters["adbc.http_options.tls.disable_server_certificate_validation"] = "true";
+        parameters["adbc.http_options.tls.allow_hostname_mismatch"] = "true";
+
+        // Point to mitmproxy's CA certificate
+        var mitmproxyCertPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".mitmproxy", "mitmproxy-ca-cert.pem");
+        if (File.Exists(mitmproxyCertPath))
         {
-            ["uri"] = ProxyUrl,
-            ["adbc.spark.auth_type"] = "oauth",
-            ["adbc.spark.oauth.access_token"] = GetTestToken()
-        };
+            parameters["adbc.http_options.tls.trusted_certificate_path"] = mitmproxyCertPath;
+        }
+
+        // Copy authentication from test config
+        parameters["uri"] = TestConfig.Uri;
+        parameters["adbc.spark.auth_type"] = TestConfig.AuthType;
+        parameters["adbc.spark.oauth.access_token"] = TestConfig.Token;
+
+        return parameters;
+    }
+
+    public virtual async Task DisposeAsync()
+    {
+        await _proxyManager.StopAsync();
     }
 }
 ```
+
+**Key Configuration Points:**
+1. **Environment Variables**: `HTTP_PROXY` and `HTTPS_PROXY` route CloudFetch downloads through proxy
+2. **Driver Proxy Settings**: Explicit proxy host/port configuration for Thrift traffic
+3. **TLS Trust Configuration**: Required to trust mitmproxy's self-signed CA certificate
+4. **Certificate Path**: Points to `~/.mitmproxy/mitmproxy-ca-cert.pem` auto-generated by mitmproxy
 
 ---
 
 ## Implementation Plan
 
-### 2-Week Sprint: Foundation & Critical Tests
+### Phased Approach
 
-**Sprint Goals:**
-1. ✅ Design document (this document)
-2. ✅ Directory structure
-3. Test specification documents (critical categories)
-4. Proxy server MVP implementation
-5. C# critical test implementation (~60 tests)
-6. CI integration setup
+**Phase 1: Foundation Infrastructure**
+- Design document and architecture definition
+- Directory structure (`test-infrastructure/` with `proxy-server/` and `tests/`)
+- Proxy server implementation (mitmproxy-based) with:
+  - HTTPS/Thrift traffic interception
+  - Flask control API for scenario management
+  - Failure injection capabilities
+  - Thrift protocol decoder for call verification
+- C# test infrastructure:
+  - Base classes for proxy-based tests
+  - Proxy lifecycle management
+  - Control API client
+- CI/CD integration with GitHub Actions
 
-**Week 1: Foundation**
-- [ ] Write test specifications for critical categories (Session, Statement, CloudFetch)
-- [ ] Implement proxy server MVP with basic failure injection
-- [ ] Create C# test base classes and helpers
-- [ ] Set up GitHub Actions workflow
+**Phase 2: Critical Test Categories**
+- CloudFetch failure scenarios (expired links, HTTP errors, timeouts, connection resets)
+- Session lifecycle tests (open/close, expiration, invalidation)
+- Statement execution tests (query execution, cancellation, timeouts)
+- Basic error handling validation
 
-**Week 2: Critical Tests**
-- [ ] Implement Session lifecycle tests (15 tests)
-- [ ] Implement Statement execution tests (25 tests)
-- [ ] Implement CloudFetch tests with proxy (20 tests)
-- [ ] Validate CI pipeline with critical tests
+**Phase 3: Comprehensive Coverage**
+- Metadata operations (catalogs, schemas, tables, columns, functions)
+- Arrow format validation (schemas, batches, compression)
+- Direct results testing
+- Parameterized query validation
+- Result fetching edge cases
 
-**Future Sprints:**
-- Additional test categories (Metadata, Arrow, Parameterized Queries, etc.)
-- Complete test specification documents (remaining categories)
-- Advanced proxy features
-- Cross-driver expansion
+**Phase 4: Advanced Scenarios**
+- Concurrency and thread safety
+- Protocol version negotiation
+- Security testing (authentication, authorization)
+- Performance regression detection
+- Edge cases and corner scenarios
+
+**Phase 5: Cross-Driver Expansion**
+- Adapt specifications for Java JDBC driver
+- Adapt specifications for C++ ODBC driver
+- Adapt specifications for Go ADBC driver
+- Consider extraction to common repository
 
 ### Cross-Driver Expansion (Future)
 
@@ -815,18 +978,21 @@ public abstract class ThriftProtocolTestBase : IDisposable
 - Language-specific implementations
 - Shared validation checklist
 
-### Decision 2: Standalone Proxy Server (Go)
+### Decision 2: Standalone Proxy Server (mitmproxy/Python)
 
 **Rationale:**
-- Single implementation serves all drivers
-- Go provides excellent HTTP/networking support
-- Lightweight and fast
-- Easy to containerize for CI
+- **HTTPS Interception**: CloudFetch downloads happen over HTTPS directly to cloud storage (S3, Azure Blob, GCS), requiring full HTTPS man-in-the-middle capability. mitmproxy is battle-tested for this use case.
+- **Certificate Management**: Built-in TLS certificate generation and trust chain handling
+- **Protocol Support**: Excellent HTTP/1.1, HTTP/2, and WebSocket support for future needs
+- **Rich Ecosystem**: Python ecosystem provides easy extension (Flask API, Thrift parsing libraries)
+- **Development Speed**: Faster to prototype and iterate on failure scenarios
+- **Industry Standard**: Used by security researchers and QA teams worldwide for similar testing
 
 **Alternatives Considered:**
-- C# proxy: Would require other drivers to run .NET runtime
-- Java proxy: Heavy JVM dependency
-- Python proxy: Performance concerns
+- **Go proxy**: Would need custom HTTPS interception logic; more complex for certificate management
+- **C# proxy**: Would require other drivers to run .NET runtime
+- **Java proxy**: Heavy JVM dependency, less mature HTTPS interception libraries
+- **Custom solution**: Would replicate what mitmproxy already provides robustly
 
 ### Decision 3: Start with C# Implementation
 
