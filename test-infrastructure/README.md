@@ -32,6 +32,7 @@ The test infrastructure enables comprehensive testing of driver behavior includi
 
 ## Quick Links
 
+- **[Test Specifications](./specs/README.md)** - Language-agnostic YAML test definitions
 - **[Proxy Server README](./proxy-server/README.md)** - How to use the mitmproxy-based test server and Flask API
 
 ## Architecture
@@ -58,6 +59,9 @@ graph TD
 ```
 test-infrastructure/
 ├── README.md                           # This file
+├── specs/                              # Language-agnostic test specifications
+│   ├── README.md                       # How to use YAML specs
+│   └── cloudfetch.yaml                # CloudFetch test specs (3 tests)
 ├── proxy-server/                       # Standalone proxy implementation
 │   ├── README.md                       # Proxy usage documentation
 │   ├── mitmproxy_addon.py             # Main proxy implementation
@@ -74,7 +78,40 @@ test-infrastructure/
 
 ## Components
 
-### 1. Proxy Server (Python/mitmproxy)
+### 1. Test Specifications (YAML)
+
+Language-agnostic test definitions in machine-readable YAML format:
+- **Single source of truth** for test behavior across all driver implementations
+- **Maps directly to proxy scenarios** for easy implementation
+- **Includes test steps and assertions** that any language can follow
+- **Tracks implementation status** across C#, Java, C++, Go
+
+**Example structure:**
+```yaml
+tests:
+  - id: CLOUDFETCH-001
+    name: Expired Link Recovery
+    proxy_scenario: cloudfetch_expired_link
+    steps:
+      - action: establish_baseline
+        execute_query: "SELECT * FROM table"
+        measure:
+          - thrift_method: FetchResults
+            save_as: baseline_count
+      - action: enable_failure_scenario
+        scenario: cloudfetch_expired_link
+      - action: execute_test
+        execute_query: "SELECT * FROM table"
+    assertions:
+      - type: query_succeeds
+      - type: thrift_call_count
+        method: FetchResults
+        expected: baseline_count + 1
+```
+
+See [specs/README.md](./specs/README.md) for full documentation.
+
+### 2. Proxy Server (Python/mitmproxy)
 
 A standalone HTTPS/Thrift proxy that enables failure injection testing:
 
@@ -91,34 +128,6 @@ A standalone HTTPS/Thrift proxy that enables failure injection testing:
 - Excellent HTTP/2 and WebSocket support for future needs
 
 See [proxy-server/README.md](./proxy-server/README.md) for usage details.
-
-### 2. Test Specifications
-
-Language-agnostic test case definitions that describe:
-- Test steps and expected behavior
-- Thrift protocol interactions
-- Failure scenarios and recovery strategies
-- Implementation notes for edge cases
-
-**Planned: ~300 test cases across 16 categories:**
-
-| Category | Tests | Priority | Description |
-|----------|-------|----------|-------------|
-| Session Lifecycle | 15 | Critical | OpenSession, CloseSession, timeouts |
-| Statement Execution | 25 | Critical | Sync/async execution, cancellation |
-| Metadata Operations | 40 | High | GetCatalogs, GetSchemas, GetTables, etc. |
-| Arrow Format | 20 | High | Arrow IPC, compression, type handling |
-| CloudFetch | 20 | Critical | Cloud storage results, link expiration |
-| Direct Results | 15 | High | TSparkDirectResults optimization |
-| Parameterized Queries | 20 | High | Named/positional parameters |
-| Result Fetching | 15 | High | Pagination, cursor management |
-| Error Handling | 30 | Critical | Error codes, recovery, retries |
-| Timeout & Cleanup | 12 | Medium | Session/operation timeouts |
-| Concurrency | 15 | Medium | Thread safety, parallel operations |
-| Protocol Versions | 12 | Medium | Version negotiation, compatibility |
-| Security | 15 | High | Authentication, authorization |
-| Performance | 10 | Low | Limits, batch sizes |
-| Edge Cases | 36 | Medium | NULL handling, empty results, etc. |
 
 ### 3. C# Test Implementation
 
