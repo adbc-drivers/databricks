@@ -25,6 +25,7 @@ package databricks
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -263,4 +264,30 @@ func (c *connectionImpl) GetTablesForDBSchema(ctx context.Context, catalog strin
 	}
 
 	return tables, errors.Join(err, rows.Err())
+}
+
+// PrepareDriverInfo implements driverbase.DriverInfoPreparer.
+func (c *connectionImpl) PrepareDriverInfo(ctx context.Context, infoCodes []adbc.InfoCode) error {
+	var versionJSON string
+	err := c.conn.QueryRowContext(ctx, "SELECT current_version()").Scan(&versionJSON)
+	if err != nil {
+		return adbc.Error{
+			Code: adbc.StatusInternal,
+			Msg:  fmt.Sprintf("failed to get vendor version: %v", err),
+		}
+	}
+
+	var versionData map[string]any
+	if err := json.Unmarshal([]byte(versionJSON), &versionData); err != nil {
+		return c.DriverInfo.RegisterInfoCode(adbc.InfoVendorVersion, "unknown")
+	}
+
+	version := "unknown"
+	if dbsqlVersion, ok := versionData["dbsql_version"].(string); ok && dbsqlVersion != "" {
+		version = dbsqlVersion
+	} else if dbrVersion, ok := versionData["dbr_version"].(string); ok {
+		version = dbrVersion
+	}
+
+	return c.DriverInfo.RegisterInfoCode(adbc.InfoVendorVersion, version)
 }

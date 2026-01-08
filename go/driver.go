@@ -36,7 +36,6 @@ package databricks
 
 import (
 	"context"
-	"runtime/debug"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -72,24 +71,6 @@ const (
 	DefaultSSLMode = "require"
 )
 
-var (
-	InfoDriverName    string
-	infoVendorVersion string
-)
-
-func init() {
-	InfoDriverName = "ADBC Driver Foundry Driver for Databricks"
-
-	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, dep := range info.Deps {
-			switch dep.Path {
-			case "github.com/databricks/databricks-sql-go":
-				infoVendorVersion = dep.Version
-			}
-		}
-	}
-}
-
 type driverImpl struct {
 	driverbase.DriverImplBase
 }
@@ -98,18 +79,10 @@ type driverImpl struct {
 func NewDriver(alloc memory.Allocator) adbc.Driver {
 	info := driverbase.DefaultDriverInfo("Databricks")
 
-	// Override driver name
-	if InfoDriverName != "" {
-		if err := info.RegisterInfoCode(adbc.InfoDriverName, InfoDriverName); err != nil {
-			panic(err)
-		}
+	if err := info.RegisterInfoCode(adbc.InfoDriverName, "ADBC Driver Foundry Driver for Databricks"); err != nil {
+		panic(err)
 	}
 
-	if infoVendorVersion != "" {
-		if err := info.RegisterInfoCode(adbc.InfoVendorVersion, infoVendorVersion); err != nil {
-			panic(err)
-		}
-	}
 	return driverbase.NewDriver(&driverImpl{
 		DriverImplBase: driverbase.NewDriverImplBase(info, alloc),
 	})

@@ -126,6 +126,27 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         /// <summary>
+        /// Creates a driver connection with custom parameters.
+        /// </summary>
+        /// <param name="additionalParameters">Additional parameters to merge with default proxy parameters</param>
+        protected AdbcConnection CreateProxiedConnectionWithParameters(Dictionary<string, string> additionalParameters)
+        {
+            if (!_proxyStarted)
+            {
+                throw new InvalidOperationException("Proxy server not started. Call InitializeAsync first.");
+            }
+
+            var parameters = BuildProxiedConnectionParameters();
+            foreach (var kvp in additionalParameters)
+            {
+                parameters[kvp.Key] = kvp.Value;
+            }
+            var driver = new DatabricksDriver();
+            var database = driver.Open(parameters);
+            return database.Connect(parameters);
+        }
+
+        /// <summary>
         /// Builds connection parameters that route through the mitmproxy server.
         /// Uses proper proxy settings with TLS certificate handling for HTTPS interception.
         /// Override this method to customize connection configuration.
@@ -159,18 +180,29 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             }
 
             // Copy connection details from test config
-            if (!string.IsNullOrEmpty(TestConfig.HostName))
+            // Support both uri format and individual hostname/port/path format
+            if (!string.IsNullOrEmpty(TestConfig.Uri))
             {
-                parameters[SparkParameters.HostName] = TestConfig.HostName;
+                // Use uri format (preferred)
+                parameters["uri"] = TestConfig.Uri;
             }
-            if (!string.IsNullOrEmpty(TestConfig.Port))
+            else
             {
-                parameters[SparkParameters.Port] = TestConfig.Port;
+                // Fall back to individual components
+                if (!string.IsNullOrEmpty(TestConfig.HostName))
+                {
+                    parameters[SparkParameters.HostName] = TestConfig.HostName;
+                }
+                if (!string.IsNullOrEmpty(TestConfig.Port))
+                {
+                    parameters[SparkParameters.Port] = TestConfig.Port;
+                }
+                if (!string.IsNullOrEmpty(TestConfig.Path))
+                {
+                    parameters[SparkParameters.Path] = TestConfig.Path;
+                }
             }
-            if (!string.IsNullOrEmpty(TestConfig.Path))
-            {
-                parameters[SparkParameters.Path] = TestConfig.Path;
-            }
+
             if (!string.IsNullOrEmpty(TestConfig.Token))
             {
                 parameters[SparkParameters.Token] = TestConfig.Token;

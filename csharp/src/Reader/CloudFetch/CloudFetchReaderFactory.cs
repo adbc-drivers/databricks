@@ -104,7 +104,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 memoryManager,
                 downloadQueue,
                 resultQueue,
-                httpClient,
                 config);
 
             // Start the download manager
@@ -196,7 +195,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 memoryManager,
                 downloadQueue,
                 resultQueue,
-                httpClient,
                 config);
 
             // Start the download manager

@@ -287,7 +287,7 @@ class ThriftDecoder:
         size = self.read_i32()
 
         if size > 10000:  # Sanity check
-            return {f"<large_map>": f"{size} entries"}
+            return {"<large_map>": f"{size} entries"}
 
         result = {}
         for _ in range(size):
@@ -350,7 +350,7 @@ class ThriftDecoder:
                     # Try to skip and continue
                     try:
                         self.skip_field(field_type, max_depth)
-                    except:
+                    except Exception:
                         break
 
             except EOFError:

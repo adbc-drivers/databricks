@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 from pathlib import Path
 
 from adbc_drivers_validation import model, quirks
@@ -22,39 +23,33 @@ class DatabricksQuirks(model.DriverQuirks):
     driver = "adbc_driver_databricks"
     driver_name = "ADBC Driver Foundry Driver for Databricks"
     vendor_name = "Databricks"
-    vendor_version = "v1.9.0"
-    short_version = "v1.9.0"
-    # I copied in the members of DriverFeatures here and set them all to False
-    # or None. TODO: Disable/enable what should be enabled/disabled.
+    vendor_version = re.compile(r"(17\.[0-9]+.*|2025\.[0-9]+)")
+    short_version = "17"
     features = model.DriverFeatures(
-        connection_get_table_schema = False,
-        connection_set_current_catalog = False,
-        connection_set_current_schema = False,
-        connection_transactions = False,
-        get_objects_constraints_check= False,
-        get_objects_constraints_foreign= False,
-        get_objects_constraints_primary= False,
-        get_objects_constraints_unique= False,
-        statement_bind= False,
-        statement_bulk_ingest= False,
-        statement_bulk_ingest_catalog= False,
-        statement_bulk_ingest_schema= False,
-        statement_bulk_ingest_temporary= False,
-        statement_execute_schema= False,
-        statement_get_parameter_schema= False,
-        statement_prepare= False,
-        statement_rows_affected= False,
+        connection_get_table_schema=False,
+        connection_set_current_catalog=False,
+        connection_set_current_schema=False,
+        connection_transactions=False,
+        get_objects_constraints_check=False,
+        get_objects_constraints_foreign=False,
+        get_objects_constraints_primary=False,
+        get_objects_constraints_unique=False,
+        statement_bind=False,
+        statement_bulk_ingest=False,
+        statement_bulk_ingest_catalog=False,
+        statement_bulk_ingest_schema=False,
+        statement_bulk_ingest_temporary=False,
+        statement_execute_schema=False,
+        statement_get_parameter_schema=False,
+        statement_prepare=False,
+        statement_rows_affected=True,
         current_catalog="workspace",
         current_schema="default",
         supported_xdbc_fields=[],
     )
     setup = model.DriverSetup(
         database={
-            "databricks.server_hostname": model.FromEnv("DATABRICKS_HOST"),
-            "databricks.access_token": model.FromEnv("DATABRICKS_ACCESSTOKEN"),
-            "databricks.http_path": model.FromEnv("DATABRICKS_HTTPPATH"),
-            "databricks.catalog": model.FromEnv("DATABRICKS_CATALOG"),
-            "databricks.schema": model.FromEnv("DATABRICKS_SCHEMA"),
+            "uri": model.FromEnv("DATABRICKS_URI"),
         },
         connection={},
         statement={},
@@ -85,7 +80,7 @@ class DatabricksQuirks(model.DriverQuirks):
         return f"`{identifier}`"
 
     def split_statement(self, statement: str) -> list[str]:
-        return quirks.split_statement(statement)
+        return quirks.split_statement(statement, dialect=self.name)
 
 
 QUIRKS = [DatabricksQuirks()]

@@ -1,0 +1,138 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Proxy Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/proxy-tests.yml'
+      - 'test-infrastructure/proxy-server/**'
+      - 'test-infrastructure/tests/csharp/**'
+      - 'csharp/src/**'
+  pull_request:
+    # Only runs on PRs from the repo itself, not forks
+    paths:
+      - '.github/workflows/proxy-tests.yml'
+      - 'test-infrastructure/proxy-server/**'
+      - 'test-infrastructure/tests/csharp/**'
+      - 'csharp/src/**'
+  workflow_dispatch:
+    inputs:
+      run_all_tests:
+        description: 'Run all tests (ignores path filters)'
+        required: false
+        default: 'true'
+        type: boolean
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  proxy-tests:
+    name: "Proxy Tests"
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Setup .NET 8.0
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r test-infrastructure/proxy-server/requirements.txt
+
+      - name: Generate mitmproxy certificates
+        run: |
+          # Start mitmdump in background to generate certificates
+          mitmdump &
+          MITM_PID=$!
+          # Wait for certificate generation (happens on first run)
+          sleep 5
+          # Stop mitmdump forcefully
+          kill -9 $MITM_PID || true
+          wait $MITM_PID 2>/dev/null || true
+          # Ensure no mitmdump processes are running
+          pkill -9 mitmdump || true
+          sleep 2
+          # Verify certificate was created
+          ls -la ~/.mitmproxy/
+          cat ~/.mitmproxy/mitmproxy-ca-cert.pem
+
+      - name: Trust mitmproxy certificate
+        run: |
+          sudo cp ~/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/mitmproxy.crt
+          sudo update-ca-certificates
+
+      - name: Build test project
+        run: |
+          cd test-infrastructure/tests/csharp
+          dotnet build
+
+      - name: Create test configuration
+        env:
+          DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+        run: |
+          cat > databricks-test-config.json << EOF
+          {
+            "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
+            "auth_type": "token",
+            "token": "${{ env.DATABRICKS_TOKEN }}"
+          }
+          EOF
+          echo "Configuration file created:"
+          echo "URI: https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}"
+          echo "Auth type: token"
+
+      - name: Run proxy infrastructure tests
+        env:
+          DATABRICKS_TEST_CONFIG_FILE: ${{ github.workspace }}/databricks-test-config.json
+        run: |
+          cd test-infrastructure/tests/csharp
+          dotnet test --filter "FullyQualifiedName~ProxyInfrastructureTests" \
+            --logger "console;verbosity=normal" \
+            --no-build
+
+      - name: Run CloudFetch proxy tests
+        env:
+          DATABRICKS_TEST_CONFIG_FILE: ${{ github.workspace }}/databricks-test-config.json
+        run: |
+          cd test-infrastructure/tests/csharp
+          dotnet test --filter "FullyQualifiedName~CloudFetchTests" \
+            --logger "console;verbosity=normal" \
+            --no-build

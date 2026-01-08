@@ -1,0 +1,55 @@
+<!--
+
+Copyright (c) 2025 ADBC Drivers Contributors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+-->
+
+
+<Project>
+
+  <!-- Common repo directories -->
+  <PropertyGroup>
+    <RepoRoot>$(MSBuildThisFileDirectory)../</RepoRoot>
+    <CSharpDir>$(MSBuildThisFileDirectory)</CSharpDir>
+    <BaseOutputPath>$(CSharpDir)/artifacts/$(MSBuildProjectName)</BaseOutputPath>
+  </PropertyGroup>
+
+  <!-- AssemblyInfo properties -->
+  <PropertyGroup>
+    <Product>ADBC Driver for Databricks</Product>
+    <Copyright>Copyright 2025 ADBC Drivers Contributors</Copyright>
+    <VersionPrefix>0.22.0</VersionPrefix>
+    <VersionSuffix>SNAPSHOT</VersionSuffix>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <LangVersion>latest</LangVersion>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>$(CSharpDir)AdbcDrivers.snk</AssemblyOriginatorKeyFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <NoWarn>CS8600;CS8601;CS8602;CS8604;CS8618</NoWarn>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsWindows Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Windows)))' == 'true'">true</IsWindows>
+  </PropertyGroup>
+
+  <ItemGroup Condition="!$([MSBuild]::IsTargetFrameworkCompatible($(TargetFramework), 'net8.0'))">
+    <PackageReference Include="Microsoft.SourceLink.GitHub">
+      <PrivateAssets>All</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

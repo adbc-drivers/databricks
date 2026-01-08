@@ -20,8 +20,8 @@ Creates separate JSON files for each metric type with all queries.
 """
 
 import json
-import sys
 import os
+import sys
 
 
 def main():
@@ -38,7 +38,7 @@ def main():
         sys.exit(1)
 
     # Read all query files
-    with open(queries_file, 'r') as f:
+    with open(queries_file, "r") as f:
         queries = [line.strip() for line in f if line.strip()]
 
     # Organize by metric
@@ -50,20 +50,18 @@ def main():
             print(f"Warning: {query_file} not found, skipping")
             continue
 
-        with open(query_file, 'r') as f:
+        with open(query_file, "r") as f:
             benches = json.load(f)
 
         # Group by metric name
         for bench in benches:
-            metric_name = bench['name']
+            metric_name = bench["name"]
             if metric_name not in metrics:
                 metrics[metric_name] = []
 
-            metrics[metric_name].append({
-                'name': query,
-                'value': bench['value'],
-                'unit': bench['unit']
-            })
+            metrics[metric_name].append(
+                {"name": query, "value": bench["value"], "unit": bench["unit"]}
+            )
 
     # Write metric files
     os.makedirs(output_dir, exist_ok=True)
@@ -71,10 +69,12 @@ def main():
     metric_files = {}
     for metric_name, benches in metrics.items():
         # Create safe filename
-        safe_name = metric_name.lower().replace(' ', '-').replace('(', '').replace(')', '')
+        safe_name = (
+            metric_name.lower().replace(" ", "-").replace("(", "").replace(")", "")
+        )
         output_file = os.path.join(output_dir, f"{safe_name}.json")
 
-        with open(output_file, 'w') as f:
+        with open(output_file, "w") as f:
             json.dump(benches, f, indent=2)
 
         metric_files[metric_name] = safe_name
@@ -83,7 +83,7 @@ def main():
 
     # Write metric list for workflow
     metrics_list_file = os.path.join(output_dir, "metrics.txt")
-    with open(metrics_list_file, 'w') as f:
+    with open(metrics_list_file, "w") as f:
         for metric_name, safe_name in metric_files.items():
             f.write(f"{safe_name}|{metric_name}\n")
 
