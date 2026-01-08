@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -47,7 +48,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         #region GetInfo Basic Tests
 
         [Fact]
-        public void GetInfo_AllCodes_ReturnsAllSupportedCodes()
+        public async Task GetInfo_AllCodes_ReturnsAllSupportedCodes()
         {
             var connection = CreateTestConnection();
 
@@ -58,7 +59,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.NotNull(stream.Schema);
 
             // Read the batch
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
             Assert.NotNull(batch);
 
             // Should have 6 supported codes
@@ -73,7 +74,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_SpecificCodes_ReturnsRequestedCodes()
+        public async Task GetInfo_SpecificCodes_ReturnsRequestedCodes()
         {
             var connection = CreateTestConnection();
 
@@ -84,7 +85,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             };
 
             using var stream = connection.GetInfo(requestedCodes);
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             Assert.Equal(2, batch.Length);
@@ -96,7 +97,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var returnedCodes = new List<AdbcInfoCode>();
             for (int i = 0; i < batch.Length; i++)
             {
-                returnedCodes.Add((AdbcInfoCode)infoNameArray.GetValue(i));
+                var value = infoNameArray.GetValue(i);
+                if (value.HasValue)
+                {
+                    returnedCodes.Add((AdbcInfoCode)value.Value);
+                }
             }
 
             Assert.Contains(AdbcInfoCode.DriverName, returnedCodes);
@@ -104,12 +109,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_NullCodesList_ReturnsAllCodes()
+        public async Task GetInfo_NullCodesList_ReturnsAllCodes()
         {
             var connection = CreateTestConnection();
 
             using var stream = connection.GetInfo(null!);
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             Assert.Equal(6, batch.Length); // All 6 supported codes
@@ -120,12 +125,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         #region Individual Info Code Tests
 
         [Fact]
-        public void GetInfo_VendorName_ReturnsDatabricks()
+        public async Task GetInfo_VendorName_ReturnsDatabricks()
         {
             var connection = CreateTestConnection();
 
             using var stream = connection.GetInfo(new[] { AdbcInfoCode.VendorName });
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             Assert.Equal(1, batch.Length);
@@ -142,12 +147,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_VendorVersion_ReturnsVersionOrUnknown()
+        public async Task GetInfo_VendorVersion_ReturnsVersionOrUnknown()
         {
             var connection = CreateTestConnection();
 
             using var stream = connection.GetInfo(new[] { AdbcInfoCode.VendorVersion });
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             Assert.Equal(1, batch.Length);
@@ -165,12 +170,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_VendorArrowVersion_NotSupported()
+        public async Task GetInfo_VendorArrowVersion_NotSupported()
         {
             var connection = CreateTestConnection();
 
             using var stream = connection.GetInfo(new[] { AdbcInfoCode.VendorArrowVersion });
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             var infoValueUnion = batch.Column("info_value") as DenseUnionArray;
@@ -181,12 +186,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_VendorSql_ReturnsFalse()
+        public async Task GetInfo_VendorSql_ReturnsFalse()
         {
             var connection = CreateTestConnection();
 
             using var stream = connection.GetInfo(new[] { AdbcInfoCode.VendorSql });
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             var infoValueUnion = batch.Column("info_value") as DenseUnionArray;
@@ -200,12 +205,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_DriverName_ReturnsCorrectName()
+        public async Task GetInfo_DriverName_ReturnsCorrectName()
         {
             var connection = CreateTestConnection();
 
             using var stream = connection.GetInfo(new[] { AdbcInfoCode.DriverName });
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             var infoValueUnion = batch.Column("info_value") as DenseUnionArray;
@@ -216,12 +221,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_DriverVersion_ReturnsAssemblyVersion()
+        public async Task GetInfo_DriverVersion_ReturnsAssemblyVersion()
         {
             var connection = CreateTestConnection();
 
             using var stream = connection.GetInfo(new[] { AdbcInfoCode.DriverVersion });
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             var infoValueUnion = batch.Column("info_value") as DenseUnionArray;
@@ -235,12 +240,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_DriverArrowVersion_ReturnsArrowVersion()
+        public async Task GetInfo_DriverArrowVersion_ReturnsArrowVersion()
         {
             var connection = CreateTestConnection();
 
             using var stream = connection.GetInfo(new[] { AdbcInfoCode.DriverArrowVersion });
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             var infoValueUnion = batch.Column("info_value") as DenseUnionArray;
@@ -308,14 +313,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         #region Error Handling Tests
 
         [Fact]
-        public void GetInfo_UnsupportedCode_ReturnsNull()
+        public async Task GetInfo_UnsupportedCode_ReturnsNull()
         {
             var connection = CreateTestConnection();
 
             // Request an unsupported code
             var unsupportedCode = (AdbcInfoCode)999;
             using var stream = connection.GetInfo(new[] { unsupportedCode });
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
             Assert.Equal(1, batch.Length);
@@ -331,13 +336,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GetInfo_MultipleCallsSameConnection_WorksCorrectly()
+        public async Task GetInfo_MultipleCallsSameConnection_WorksCorrectly()
         {
             var connection = CreateTestConnection();
 
             // First call
             using (var stream1 = connection.GetInfo(new[] { AdbcInfoCode.DriverName }))
-            using (var batch1 = stream1.ReadNextRecordBatchAsync().Result)
+            using (var batch1 = await stream1.ReadNextRecordBatchAsync())
             {
                 Assert.NotNull(batch1);
                 Assert.Equal(1, batch1.Length);
@@ -345,7 +350,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             // Second call
             using (var stream2 = connection.GetInfo(new[] { AdbcInfoCode.DriverVersion }))
-            using (var batch2 = stream2.ReadNextRecordBatchAsync().Result)
+            using (var batch2 = await stream2.ReadNextRecordBatchAsync())
             {
                 Assert.NotNull(batch2);
                 Assert.Equal(1, batch2.Length);
@@ -357,13 +362,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         #region Performance Tests
 
         [Fact]
-        public void GetInfo_AllCodes_CompletesQuickly()
+        public async Task GetInfo_AllCodes_CompletesQuickly()
         {
             var connection = CreateTestConnection();
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
             using var stream = connection.GetInfo(System.Array.Empty<AdbcInfoCode>());
-            using var batch = stream.ReadNextRecordBatchAsync().Result;
+            using var batch = await stream.ReadNextRecordBatchAsync();
 
             stopwatch.Stop();
 
@@ -376,13 +381,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         #region Disposal Tests
 
         [Fact]
-        public void GetInfo_ConnectionDisposal_DoesNotThrow()
+        public async Task GetInfo_ConnectionDisposal_DoesNotThrow()
         {
             var connection = CreateTestConnection();
 
             using (var stream = connection.GetInfo(new[] { AdbcInfoCode.DriverName }))
             {
-                var batch = stream.ReadNextRecordBatchAsync().Result;
+                var batch = await stream.ReadNextRecordBatchAsync();
                 Assert.NotNull(batch);
             }
 
