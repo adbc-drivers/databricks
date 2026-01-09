@@ -107,6 +107,44 @@ SCENARIOS = {
         "operation": "CloudFetchDownload",
         "action": "close_connection",
     },
+    # Session Lifecycle Scenarios
+    "invalid_session_handle": {
+        "description": "Server returns invalid session handle error",
+        "operation": "ThriftOperation",
+        "action": "return_thrift_error",
+        "error_type": "INVALID_HANDLE",
+        "error_message": "Invalid or expired session handle",
+    },
+    "session_timeout_premature": {
+        "description": "Session expires before idle timeout",
+        "operation": "ThriftOperation",
+        "action": "return_thrift_error",
+        "error_type": "SESSION_EXPIRED",
+        "error_message": "Session timed out due to inactivity",
+    },
+    "session_close_with_active_operations": {
+        "description": "CloseSession called with operations still running",
+        "operation": "CloseSession",
+        "action": "track_active_operations",
+    },
+    "expired_credentials": {
+        "description": "Authentication fails due to expired credentials",
+        "operation": "OpenSession",
+        "action": "return_thrift_error",
+        "error_type": "INVALID_AUTHORIZATION_SPECIFICATION",
+        "error_message": "Token has expired",
+    },
+    "network_timeout_open_session": {
+        "description": "Network timeout during OpenSession request",
+        "operation": "OpenSession",
+        "action": "delay",
+        "duration_seconds": 35,
+    },
+    "network_failure_close_session": {
+        "description": "Network failure during CloseSession request",
+        "operation": "CloseSession",
+        "action": "close_connection",
+    },
 }
 
 
@@ -394,6 +432,8 @@ class FailureInjectionAddon:
             await self._handle_cloudfetch_request(flow)
         elif self._is_thrift_request(flow.request):
             self._handle_thrift_request(flow)
+            # Check for session-related failure scenarios
+            await self._handle_thrift_session_scenarios(flow)
 
     def _is_cloudfetch_download(self, request: http.Request) -> bool:
         """Detect if this is a CloudFetch download to cloud storage."""
@@ -493,6 +533,87 @@ class FailureInjectionAddon:
             )
             flow.kill()
             self._disable_scenario(scenario_name)
+
+    async def _handle_thrift_session_scenarios(self, flow: http.HTTPFlow) -> None:
+        """Handle Thrift session-related failure scenarios."""
+        # Decode the Thrift request to determine the operation type
+        if not flow.request.content:
+            return
+
+        decoded = decode_thrift_message(flow.request.content)
+        if not decoded or "error" in decoded:
+            return
+
+        method_name = decoded.get("method", "")
+
+        # Find enabled scenario that matches this Thrift operation
+        with state_lock:
+            enabled_scenario = None
+            for name in enabled_scenarios:
+                scenario_config = enabled_scenarios[name]
+                if scenario_config is not False:
+                    base_config = SCENARIOS.get(name, {})
+                    operation = base_config.get("operation", "")
+
+                    # Check if this scenario matches the operation
+                    if operation == "ThriftOperation" or operation == method_name:
+                        enabled_scenario = (name, scenario_config, base_config)
+                        break
+
+        if not enabled_scenario:
+            return  # No matching scenario enabled
+
+        scenario_name, scenario_config, base_config = enabled_scenario
+        action = base_config.get("action", "")
+
+        ctx.log.info(
+            f"[INJECT] Triggering Thrift scenario: {scenario_name} for method: {method_name}"
+        )
+
+        if action == "return_thrift_error":
+            # Create a Thrift error response
+            # For simplicity, return HTTP 500 with error message
+            # A full implementation would construct proper Thrift error response
+            error_message = base_config.get("error_message", "Thrift operation failed")
+            error_type = base_config.get("error_type", "UNKNOWN_ERROR")
+
+            flow.response = http.Response.make(
+                500,
+                f"Thrift Error [{error_type}]: {error_message}".encode("utf-8"),
+                {"Content-Type": "application/x-thrift"},
+            )
+            self._disable_scenario(scenario_name)
+
+        elif action == "delay":
+            # Inject delay for slow operations
+            import asyncio
+
+            duration_seconds = base_config.get("duration_seconds", 5)
+            ctx.log.info(
+                f"[INJECT] Delaying {duration_seconds}s for Thrift scenario: {scenario_name}"
+            )
+            self._disable_scenario(scenario_name)
+            await asyncio.sleep(duration_seconds)
+            ctx.log.info(
+                f"[INJECT] Delay complete for Thrift scenario: {scenario_name}"
+            )
+
+        elif action == "close_connection":
+            # Kill the connection abruptly
+            flow.response = http.Response.make(
+                500, b"Connection reset by peer", {"Content-Type": "text/plain"}
+            )
+            flow.kill()
+            self._disable_scenario(scenario_name)
+
+        elif action == "track_active_operations":
+            # For CloseSession with active operations
+            # This is a passive tracking scenario - log but don't block
+            ctx.log.info(
+                f"[INJECT] Tracking scenario: {scenario_name} - CloseSession called"
+            )
+            # Don't disable - let the request proceed normally
+            # Tests can verify behavior via call tracking
 
     def _handle_thrift_request(self, flow: http.HTTPFlow) -> None:
         """Handle Thrift requests, log decoded messages, and track call history."""

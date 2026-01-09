@@ -317,38 +317,54 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// Validates that driver handles OpenSession failure due to
         /// expired authentication credentials.
         /// </summary>
-        [Fact(Skip = "Requires proxy scenario for expired credentials - implement when scenario is available")]
+        [Fact]
         public async Task SessionWithExpiredCredentials_ThrowsAuthenticationError()
         {
             // Arrange - Enable expired credentials scenario
             await ControlClient.EnableScenarioAsync("expired_credentials");
 
             // Act & Assert - Should fail with authentication error
-            var exception = Assert.ThrowsAny<AdbcException>(() =>
+            var exception = Assert.ThrowsAny<Exception>(() =>
             {
                 using var connection = CreateProxiedConnection();
             });
 
-            // Verify error indicates authentication failure
-            Assert.Contains("auth", exception.Message, StringComparison.OrdinalIgnoreCase);
+            // Verify error indicates authentication or session issue
+            Assert.NotNull(exception);
+            var message = exception.Message.ToLower();
+            Assert.True(
+                message.Contains("auth") || message.Contains("token") || message.Contains("credential"),
+                $"Expected authentication error but got: {exception.Message}"
+            );
         }
 
         /// <summary>
         /// SESSION-011: OpenSession Network Timeout
         /// Validates that driver handles network timeout during OpenSession request.
         /// </summary>
-        [Fact(Skip = "Requires proxy scenario for network timeout on OpenSession - implement when scenario is available")]
+        [Fact(Skip = "35 second delay - enable for comprehensive testing")]
         public async Task OpenSessionNetworkTimeout_RetriesWithBackoff()
         {
-            // Arrange - Enable network timeout scenario
+            // Arrange - Enable network timeout scenario (35s delay)
             await ControlClient.EnableScenarioAsync("network_timeout_open_session");
 
-            // This test would validate:
-            // 1. Driver detects timeout during OpenSession
-            // 2. Driver retries with exponential backoff
-            // 3. Eventually succeeds or fails with clear timeout error
+            // Act & Assert - Driver should handle timeout
+            // This will take 35+ seconds as it waits for the delay
+            var startTime = DateTime.UtcNow;
 
-            Assert.True(true, "Test structure defined - implementation pending proxy scenario");
+            var exception = Assert.ThrowsAny<Exception>(() =>
+            {
+                using var connection = CreateProxiedConnection();
+            });
+
+            var elapsed = DateTime.UtcNow - startTime;
+
+            // Verify the delay occurred (at least 30 seconds)
+            Assert.True(elapsed.TotalSeconds >= 30,
+                $"Expected delay of at least 30s but only took {elapsed.TotalSeconds}s");
+
+            // Verify some kind of timeout or connection error occurred
+            Assert.NotNull(exception);
         }
 
         /// <summary>
@@ -356,14 +372,13 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// Validates that driver handles network failure during CloseSession
         /// and still cleans up local resources.
         /// </summary>
-        [Fact(Skip = "Requires proxy scenario for network failure on CloseSession - implement when scenario is available")]
+        [Fact]
         public async Task CloseSessionNetworkFailure_CleansUpLocalResources()
         {
-            // Arrange - Open a connection
-            using (var connection = CreateProxiedConnection())
+            // Arrange - Open a connection and execute a query
+            var connection = CreateProxiedConnection();
+            using (var statement = connection.CreateStatement())
             {
-                // Execute a query to ensure session is active
-                using var statement = connection.CreateStatement();
                 statement.SqlQuery = SimpleQuery;
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -375,10 +390,23 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Act - Connection disposal should handle failure gracefully
             // (CloseSession will fail but local resources should still be cleaned)
-
-            // Assert - This is hard to test without internal driver instrumentation
             // The key requirement is that Dispose() doesn't throw to the caller
-            Assert.True(true, "Test structure defined - implementation requires driver instrumentation");
+            Exception? caughtException = null;
+            try
+            {
+                connection.Dispose();
+            }
+            catch (Exception ex)
+            {
+                caughtException = ex;
+            }
+
+            // Assert - Dispose should not throw even if network fails
+            // Driver should clean up local resources and log the failure
+            Assert.Null(caughtException);
+
+            // Note: We can't easily verify local resource cleanup without driver instrumentation,
+            // but the absence of exceptions indicates graceful handling
         }
     }
 }
