@@ -1,0 +1,183 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# CloudFetch Test Specifications
+#
+# These tests validate driver behavior when CloudFetch operations fail.
+# CloudFetch is Databricks' high-performance result retrieval system that downloads
+# results directly from cloud storage (Azure Blob, S3, GCS).
+
+test_suite: CloudFetch
+priority: Critical
+
+tests:
+  - id: CLOUDFETCH-001
+    name: Expired Link Recovery
+    priority: Critical
+    description: |
+      Validates that driver correctly handles expired CloudFetch download links
+      by calling FetchResults again to get a fresh link.
+
+    jira: PECOBLR-1131
+    proxy_scenario: cloudfetch_expired_link
+
+    steps:
+      - action: establish_baseline
+        description: Execute query without failure to measure normal behavior
+        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
+        measure:
+          - thrift_method: FetchResults
+            save_as: baseline_fetch_results_count
+
+      - action: enable_failure_scenario
+        scenario: cloudfetch_expired_link
+
+      - action: execute_test
+        description: Execute same query with expired link scenario enabled
+        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
+
+    assertions:
+      - type: no_error
+        description: Query completes successfully despite expired link
+
+      - type: result_not_null
+        description: Query returns valid result
+
+      - type: thrift_call_count
+        method: FetchResults
+        expected: baseline_fetch_results_count + 1
+        description: Driver called FetchResults one additional time to refresh link
+
+  - id: CLOUDFETCH-002
+    name: 403 Forbidden Recovery
+    priority: Critical
+    description: |
+      Validates that driver correctly handles 403 Forbidden errors from CloudFetch
+      by calling FetchResults again to get a new link.
+
+    jira: ES-1624602
+    proxy_scenario: cloudfetch_403
+
+    steps:
+      - action: establish_baseline
+        description: Execute query without failure to measure normal behavior
+        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
+        measure:
+          - thrift_method: FetchResults
+            save_as: baseline_fetch_results_count
+
+      - action: enable_failure_scenario
+        scenario: cloudfetch_403
+
+      - action: execute_test
+        description: Execute same query with 403 scenario enabled
+        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
+
+    assertions:
+      - type: no_error
+        description: Query completes successfully despite 403 error
+
+      - type: result_not_null
+        description: Query returns valid result
+
+      - type: thrift_call_count
+        method: FetchResults
+        expected: baseline_fetch_results_count + 1
+        description: Driver called FetchResults one additional time to refresh link
+
+  - id: CLOUDFETCH-003
+    name: Timeout Retry with Backoff
+    priority: Critical
+    description: |
+      Validates that driver correctly handles CloudFetch download timeouts
+      by retrying with exponential backoff (does NOT refresh URL via FetchResults).
+
+    jira: BL-13239
+    proxy_scenario: cloudfetch_timeout
+
+    driver_config:
+      cloudfetch_timeout_minutes: 1
+
+    steps:
+      - action: establish_baseline
+        description: Execute query without failure to measure normal behavior
+        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
+        driver_config: driver_config
+        measure:
+          - cloud_downloads: true
+            save_as: baseline_cloud_downloads_count
+
+      - action: enable_failure_scenario
+        scenario: cloudfetch_timeout
+        config:
+          duration_seconds: 65  # Exceeds 60s timeout
+
+      - action: execute_test
+        description: Execute same query with timeout scenario (will timeout at 60s)
+        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
+        driver_config: driver_config
+
+    assertions:
+      - type: no_error
+        description: Query completes successfully despite timeout
+
+      - type: result_not_null
+        description: Query returns valid result
+
+      - type: cloud_download_count
+        expected: baseline_cloud_downloads_count + 1
+        description: Driver retried the download (timeout is not treated as expired link)
+
+    notes: |
+      This test may take 60+ seconds as it waits for CloudFetch timeout.
+      Driver should use generic retry logic with exponential backoff,
+      NOT refresh the URL via FetchResults (timeout != expired link).
+
+# Future tests (not yet implemented)
+planned_tests:
+  - id: CLOUDFETCH-004
+    name: 400 Bad Request Error
+    proxy_scenario: cloudfetch_400
+    status: planned
+
+  - id: CLOUDFETCH-005
+    name: 404 Not Found Error
+    proxy_scenario: cloudfetch_404
+    status: planned
+
+  - id: CLOUDFETCH-006
+    name: 405 Method Not Allowed Error
+    proxy_scenario: cloudfetch_405
+    status: planned
+
+  - id: CLOUDFETCH-007
+    name: 412 Precondition Failed Error
+    proxy_scenario: cloudfetch_412
+    status: planned
+
+  - id: CLOUDFETCH-008
+    name: 500 Internal Server Error
+    proxy_scenario: cloudfetch_500
+    status: planned
+
+  - id: CLOUDFETCH-009
+    name: 503 Service Unavailable Error
+    proxy_scenario: cloudfetch_503
+    status: planned
+
+  - id: CLOUDFETCH-010
+    name: Connection Reset During Download
+    proxy_scenario: cloudfetch_connection_reset
+    status: planned
+    jira: BL-13580

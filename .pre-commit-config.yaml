@@ -13,6 +13,16 @@
 # limitations under the License.
 
 repos:
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: 36243b70e5ce219623c3503f5afba0f8c96fda55  # frozen: v0.14.7
+  hooks:
+    - id: ruff-check
+      name: "ruff check (isort)"
+      args: ["--select", "I", "--fix"]
+    - id: ruff-check
+      args: ["--fix"]
+    - id: ruff-format
+
 - repo: https://github.com/codespell-project/codespell
   rev: 63c8f8312b7559622c0d82815639671ae42132ac  # v2.4.1
   hooks:
@@ -22,8 +32,16 @@ repos:
             .*go\.sum
         )$
 
+- repo: https://github.com/golangci/golangci-lint
+  rev: a4b55ebc3471c9fbb763fd56eefede8050f99887  # frozen: v2.7.1
+  hooks:
+  - id: golangci-lint
+    name: lint
+    entry: bash -c 'cd go && golangci-lint run --fix --timeout 5m'
+    types_or: [go, go-mod]
+
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # v5.0.0
+  rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
   hooks:
   - id: check-added-large-files
     args: ["--enforce-all"]
@@ -39,6 +57,6 @@ repos:
   - id: trailing-whitespace
 
 - repo: https://github.com/adbc-drivers/dev
-  rev: 8a3917560f04e4eb03f028e3d296f3ca053417ac
+  rev: 8f218b6c808702a8b7e25f6fd6db5e85dbeeae8d
   hooks:
   - id: rat
