@@ -21,6 +21,34 @@ Driver → mitmproxy (port 18080) → Databricks Server
 - **Flask Control API**: REST API for programmatic scenario management
 - **Production-Validated Scenarios**: 10+ failure scenarios based on real customer issues (JIRA-referenced)
 - **One-Shot Behavior**: Scenarios automatically disable after injection for deterministic testing
+- **No Restart Required**: Tests enable/disable scenarios via API without restarting proxy
+
+## Design Philosophy: Hybrid Approach
+
+**"Code Defines WHAT, API Controls WHEN"**
+
+The proxy follows a hybrid design pattern inspired by mocking frameworks:
+
+1. **Scenarios are defined once** in Python code (`mitmproxy_addon.py`)
+   - Version controlled and reviewable
+   - All possible failure scenarios documented in code
+   - Maps to JIRA tickets for production issues
+
+2. **Tests control activation** via Flask API (port 18081)
+   - Enable scenario: `POST /scenarios/{name}/enable`
+   - Disable scenario: `POST /scenarios/{name}/disable`
+   - No proxy restart needed between tests
+
+3. **Fast test execution**
+   - Start proxy once: `mitmdump -s mitmproxy_addon.py`
+   - Run hundreds of tests enabling different scenarios
+   - Each test gets clean state (scenarios auto-disable after injection)
+
+**Benefits:**
+- ✅ Fast: No restart overhead between tests
+- ✅ Simple: Clear separation between definition (code) and control (API)
+- ✅ Deterministic: One-shot behavior ensures predictable test results
+- ✅ Traceable: JIRA references link scenarios to production issues
 
 ## Installation
 

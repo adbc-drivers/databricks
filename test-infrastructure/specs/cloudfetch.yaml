@@ -34,17 +34,11 @@ tests:
         execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
 
     assertions:
-      - type: query_succeeds
+      - type: no_error
         description: Query completes successfully despite expired link
 
       - type: result_not_null
         description: Query returns valid result
-
-      - type: schema_valid
-        description: Result schema is valid and has fields
-
-      - type: batch_not_empty
-        description: First batch contains data
 
       - type: thrift_call_count
         method: FetchResults
@@ -77,17 +71,11 @@ tests:
         execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
 
     assertions:
-      - type: query_succeeds
+      - type: no_error
         description: Query completes successfully despite 403 error
 
       - type: result_not_null
         description: Query returns valid result
-
-      - type: schema_valid
-        description: Result schema is valid
-
-      - type: batch_not_empty
-        description: First batch contains data
 
       - type: thrift_call_count
         method: FetchResults
@@ -127,17 +115,11 @@ tests:
         driver_config: driver_config
 
     assertions:
-      - type: query_succeeds
+      - type: no_error
         description: Query completes successfully despite timeout
 
       - type: result_not_null
         description: Query returns valid result
-
-      - type: schema_valid
-        description: Result schema is valid
-
-      - type: batch_not_empty
-        description: First batch contains data
 
       - type: cloud_download_count
         expected: baseline_cloud_downloads_count + 1

@@ -103,23 +103,61 @@ Enable a proxy failure scenario (maps to `mitmproxy_addon.py` SCENARIOS). Option
 ### `execute_test`
 Execute the test query with failure scenario active.
 
-## Assertion Types
+## Assertions
 
-| Type | Description | Parameters |
-|------|-------------|------------|
-| `query_succeeds` | Query completes without error | - |
-| `result_not_null` | Query returns non-null result | - |
-| `schema_valid` | Result schema is valid | - |
-| `batch_not_empty` | First batch has data | - |
-| `thrift_call_count` | Verify Thrift method call count | `method`, `expected` |
-| `cloud_download_count` | Verify CloudFetch download count | `expected` |
+Assertions validate expected behavior using equations/formulas rather than predefined types. This allows flexible validation for any test scenario.
+
+**Common assertion patterns:**
+
+```yaml
+assertions:
+  # No error thrown
+  - type: no_error
+
+  # Thrift method call count verification
+  - type: thrift_call_count
+    method: FetchResults  # or GetCatalogs, GetColumns, OpenSession, etc.
+    expected: baseline_count + 1
+
+  # Schema validation against golden results
+  - type: schema_matches
+    golden_file: "golden/get_columns_result.json"
+
+  # Result not null
+  - type: result_not_null
+
+  # CloudFetch download count
+  - type: cloud_download_count
+    expected: baseline_downloads + 1
+```
+
+**Examples for specific test scenarios:**
+
+GetColumns metadata test:
+```yaml
+assertions:
+  - type: no_error
+  - type: schema_matches
+    golden_file: "golden/get_columns_schema.json"
+```
+
+CloudFetch expired link recovery:
+```yaml
+assertions:
+  - type: no_error
+  - type: thrift_call_count
+    method: FetchResults
+    expected: baseline_fetch_results + 1
+```
 
 ## Measurement Types
 
-| Type | Description | Save As |
-|------|-------------|---------|
-| `thrift_method` | Count calls to Thrift method | Variable name |
-| `cloud_downloads` | Count CloudFetch downloads | Variable name |
+Measurements capture baseline metrics during the test for later comparison in assertions.
+
+| Type | Description | Parameters | Save As |
+|------|-------------|------------|---------|
+| `thrift_method` | Count calls to specific Thrift method | `method` (e.g., FetchResults, GetCatalogs, GetColumns, OpenSession) | Variable name |
+| `cloud_downloads` | Count CloudFetch downloads | - | Variable name |
 
 ## Using Specs in Your Language
 
