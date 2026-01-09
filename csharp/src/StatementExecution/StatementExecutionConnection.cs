@@ -246,6 +246,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
+        /// Gets the default catalog name for this connection.
+        /// Used to replace null catalog in metadata operations, similar to DefaultNamespace.CatalogName in Thrift protocol.
+        /// </summary>
+        internal string? DefaultCatalog => _catalog;
+
+        /// <summary>
         /// Creates an HTTP client with proper handler chain for the Statement Execution API.
         /// Handler chain order (outermost to innermost):
         /// 1. OAuthDelegatingHandler (if OAuth M2M) OR TokenRefreshDelegatingHandler (if token refresh) - token management

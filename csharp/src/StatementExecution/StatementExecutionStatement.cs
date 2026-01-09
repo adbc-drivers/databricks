@@ -593,8 +593,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing catalog information</returns>
         protected virtual async Task<QueryResult> GetCatalogsAsync(CancellationToken cancellationToken = default)
         {
+            // Replace null catalog with default catalog
             var stream = await Task.Run(() => _connection.GetCatalogsFlat(
-                EscapePatternWildcardsInName(_metadataCatalogName)), cancellationToken).ConfigureAwait(false);
+                EscapePatternWildcardsInName(_metadataCatalogName ?? _connection.DefaultCatalog)), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -606,8 +607,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing schema information</returns>
         protected virtual async Task<QueryResult> GetSchemasAsync(CancellationToken cancellationToken = default)
         {
+            // Replace null catalog with default catalog
             var stream = await Task.Run(() => _connection.GetSchemasFlat(
-                EscapePatternWildcardsInName(_metadataCatalogName),
+                EscapePatternWildcardsInName(_metadataCatalogName ?? _connection.DefaultCatalog),
                 EscapePatternWildcardsInName(_metadataSchemaName)), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
@@ -620,9 +622,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing table information</returns>
         protected virtual async Task<QueryResult> GetTablesAsync(CancellationToken cancellationToken = default)
         {
+            // Replace null catalog with default catalog
             List<string>? tableTypesList = _metadataTableTypes?.Split(',').ToList();
             var stream = await Task.Run(() => _connection.GetTablesFlat(
-                EscapePatternWildcardsInName(_metadataCatalogName),
+                EscapePatternWildcardsInName(_metadataCatalogName ?? _connection.DefaultCatalog),
                 EscapePatternWildcardsInName(_metadataSchemaName),
                 EscapePatternWildcardsInName(_metadataTableName),
                 tableTypesList), cancellationToken).ConfigureAwait(false);
@@ -637,8 +640,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing column information</returns>
         protected virtual async Task<QueryResult> GetColumnsAsync(CancellationToken cancellationToken = default)
         {
+            // Replace null catalog with default catalog
             var stream = await Task.Run(() => _connection.GetColumnsFlat(
-                EscapePatternWildcardsInName(_metadataCatalogName),
+                EscapePatternWildcardsInName(_metadataCatalogName ?? _connection.DefaultCatalog),
                 EscapePatternWildcardsInName(_metadataSchemaName),
                 EscapePatternWildcardsInName(_metadataTableName),
                 EscapePatternWildcardsInName(_metadataColumnName)), cancellationToken).ConfigureAwait(false);
@@ -658,7 +662,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentNullException(nameof(_metadataTableName), "Table name is required for GetColumnsExtended");
             }
 
-            var stream = await Task.Run(() => _connection.GetColumnsExtendedFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName!), cancellationToken).ConfigureAwait(false);
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetColumnsExtendedFlat(
+                _metadataCatalogName ?? _connection.DefaultCatalog,
+                _metadataSchemaName,
+                _metadataTableName!), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -670,7 +678,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing primary key information</returns>
         protected virtual async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken = default)
         {
-            var stream = await Task.Run(() => _connection.GetPrimaryKeysFlat(_metadataCatalogName, _metadataSchemaName, _metadataTableName!), cancellationToken).ConfigureAwait(false);
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetPrimaryKeysFlat(
+                _metadataCatalogName ?? _connection.DefaultCatalog,
+                _metadataSchemaName,
+                _metadataTableName!), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -682,7 +694,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing imported key information</returns>
         protected virtual async Task<QueryResult> GetImportedKeysAsync(CancellationToken cancellationToken = default)
         {
-            var stream = await Task.Run(() => _connection.GetImportedKeys(_metadataCatalogName, _metadataSchemaName, _metadataTableName!), cancellationToken).ConfigureAwait(false);
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetImportedKeys(
+                _metadataCatalogName ?? _connection.DefaultCatalog,
+                _metadataSchemaName,
+                _metadataTableName!), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
         }
 
@@ -694,11 +710,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <returns>Query result containing cross reference information</returns>
         protected virtual async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken = default)
         {
+            // Replace null catalogs with default catalog
             var stream = await Task.Run(() => _connection.GetCrossReferenceFlat(
-                _metadataCatalogName,
+                _metadataCatalogName ?? _connection.DefaultCatalog,
                 _metadataSchemaName,
                 _metadataTableName,
-                _foreignCatalogName,
+                _foreignCatalogName ?? _connection.DefaultCatalog,
                 _foreignSchemaName,
                 _foreignTableName), cancellationToken).ConfigureAwait(false);
             return new QueryResult(-1, stream);
