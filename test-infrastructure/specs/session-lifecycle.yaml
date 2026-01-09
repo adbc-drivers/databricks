@@ -1,0 +1,435 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Session Lifecycle Test Specifications
+#
+# These tests validate driver behavior for session management operations including
+# OpenSession, CloseSession, session expiration, and timeout handling.
+
+test_suite: Session Lifecycle
+priority: Critical
+
+tests:
+  - id: SESSION-001
+    name: Basic OpenSession Success
+    priority: Critical
+    description: |
+      Validates that driver can successfully open a session with valid credentials
+      and receives a valid session handle.
+
+    steps:
+      - action: execute_test
+        description: Open a new session with valid credentials
+        thrift_call: OpenSession
+
+    assertions:
+      - type: no_error
+        description: OpenSession completes without error
+
+      - type: thrift_call_count
+        method: OpenSession
+        expected: 1
+        description: Driver called OpenSession exactly once
+
+      - type: session_handle_valid
+        description: Session handle is not null and properly formatted
+
+    notes: |
+      This is the most basic test. All other session tests depend on this working.
+
+  - id: SESSION-002
+    name: CloseSession on Active Session
+    priority: Critical
+    description: |
+      Validates that driver can successfully close an active session and
+      properly cleans up resources.
+
+    steps:
+      - action: execute_test
+        description: Open session, then close it
+        thrift_calls:
+          - OpenSession
+          - CloseSession
+
+    assertions:
+      - type: no_error
+        description: CloseSession completes without error
+
+      - type: thrift_call_count
+        method: CloseSession
+        expected: 1
+        description: Driver called CloseSession exactly once
+
+    notes: |
+      Driver should release all resources associated with the session.
+
+  - id: SESSION-003
+    name: Operation on Closed Session
+    priority: Critical
+    description: |
+      Validates that driver properly handles attempts to use a session handle
+      after the session has been closed.
+
+    jira: ES-610899
+    proxy_scenario: invalid_session_handle
+
+    steps:
+      - action: execute_test
+        description: Open session, close it, then attempt to execute statement
+        thrift_calls:
+          - OpenSession
+          - CloseSession
+          - ExecuteStatement
+
+    assertions:
+      - type: error_thrown
+        error_type: InvalidSessionHandle
+        description: Driver throws appropriate error for invalid session
+
+    notes: |
+      Driver must detect closed session and fail gracefully rather than
+      sending request to server with invalid handle.
+
+  - id: SESSION-004
+    name: Session Timeout Due to Inactivity
+    priority: High
+    description: |
+      Validates that driver handles session timeout when session idle timeout
+      is exceeded without activity.
+
+    proxy_scenario: session_timeout_premature
+    jira: ES-1661289
+
+    driver_config:
+      session_idle_timeout_minutes: 1
+
+    steps:
+      - action: establish_baseline
+        description: Open session and execute query
+        execute_query: "SELECT 1"
+        measure:
+          - thrift_method: OpenSession
+            save_as: baseline_open_session_count
+
+      - action: enable_failure_scenario
+        scenario: session_timeout_premature
+
+      - action: execute_test
+        description: Wait for timeout, then attempt query
+        wait_seconds: 70
+        execute_query: "SELECT 1"
+
+    assertions:
+      - type: error_thrown
+        error_type: SessionExpired
+        description: Driver detects session expiration
+
+      - type: thrift_call_count
+        method: OpenSession
+        expected: baseline_open_session_count + 1
+        description: Driver opens new session after detecting expiration
+
+    notes: |
+      Driver should detect session expiration and either:
+      1. Throw clear error to user, OR
+      2. Automatically create new session (if auto-reconnect enabled)
+
+  - id: SESSION-005
+    name: CloseSession with Active Operations
+    priority: High
+    description: |
+      Validates driver behavior when CloseSession is called while
+      operations are still running.
+
+    jira: XTA-11040
+    proxy_scenario: session_close_with_active_operations
+
+    steps:
+      - action: execute_test
+        description: Start long-running query, then immediately close session
+        execute_query: "SELECT * FROM large_table"
+        close_immediately: true
+
+    assertions:
+      - type: operations_cancelled
+        description: All active operations are cancelled
+
+      - type: thrift_call_count
+        method: CancelOperation
+        expected: ">= 1"
+        description: Driver cancels active operations before closing
+
+      - type: no_error
+        description: CloseSession completes successfully
+
+    notes: |
+      Driver should cancel all active operations before closing session.
+      This prevents resource leaks on the server.
+
+  - id: SESSION-006
+    name: Session Handle Reuse After Close
+    priority: Medium
+    description: |
+      Validates that driver prevents reuse of session handle after CloseSession.
+
+    jira: ES-1608485
+    proxy_scenario: session_handle_reuse_after_close
+
+    steps:
+      - action: execute_test
+        description: Close session, save handle, attempt to reuse
+        thrift_calls:
+          - OpenSession
+          - CloseSession
+          - ExecuteStatement  # with closed handle
+
+    assertions:
+      - type: error_thrown
+        error_type: InvalidSessionHandle
+        description: Driver rejects closed session handle
+
+    notes: |
+      Driver should track session state and prevent operations on closed sessions.
+
+  - id: SESSION-007
+    name: Multiple Concurrent Sessions
+    priority: Medium
+    description: |
+      Validates that driver can maintain multiple concurrent sessions
+      independently without interference.
+
+    steps:
+      - action: execute_test
+        description: Open two sessions, execute queries on both
+        concurrent_sessions: 2
+        execute_query: "SELECT 1"
+
+    assertions:
+      - type: no_error
+        description: Both sessions execute queries successfully
+
+      - type: thrift_call_count
+        method: OpenSession
+        expected: 2
+        description: Driver opened two separate sessions
+
+      - type: sessions_independent
+        description: Operations on one session don't affect the other
+
+    notes: |
+      Each session should have independent state and operation tracking.
+
+  - id: SESSION-008
+    name: OpenSession with Configuration Parameters
+    priority: High
+    description: |
+      Validates that driver correctly passes session configuration parameters
+      to OpenSession request.
+
+    steps:
+      - action: execute_test
+        description: Open session with custom configuration
+        session_config:
+          spark.sql.adaptive.enabled: "true"
+          spark.sql.shuffle.partitions: "200"
+
+    assertions:
+      - type: no_error
+        description: Session opens successfully
+
+      - type: session_config_applied
+        description: Configuration parameters are sent to server
+
+    notes: |
+      Driver should include configuration map in OpenSession request.
+
+  - id: SESSION-009
+    name: GetInfo on Valid Session
+    priority: Medium
+    description: |
+      Validates that driver can retrieve server information using GetInfo
+      on an active session.
+
+    steps:
+      - action: execute_test
+        description: Open session and call GetInfo
+        thrift_calls:
+          - OpenSession
+          - GetInfo
+
+    assertions:
+      - type: no_error
+        description: GetInfo completes successfully
+
+      - type: info_response_valid
+        description: GetInfo returns valid server information
+
+    notes: |
+      GetInfo provides server version, capabilities, and configuration.
+
+  - id: SESSION-010
+    name: Session with Expired Credentials
+    priority: High
+    description: |
+      Validates that driver handles OpenSession failure due to
+      expired authentication credentials.
+
+    proxy_scenario: expired_credentials
+
+    steps:
+      - action: enable_failure_scenario
+        scenario: expired_credentials
+
+      - action: execute_test
+        description: Attempt to open session with expired token
+        thrift_call: OpenSession
+
+    assertions:
+      - type: error_thrown
+        error_type: AuthenticationFailed
+        description: Driver reports authentication failure
+
+    notes: |
+      Driver should provide clear error message about expired credentials.
+
+  - id: SESSION-011
+    name: OpenSession Network Timeout
+    priority: Medium
+    description: |
+      Validates that driver handles network timeout during OpenSession request.
+
+    proxy_scenario: network_timeout_open_session
+
+    steps:
+      - action: enable_failure_scenario
+        scenario: network_timeout_open_session
+        config:
+          duration_seconds: 35  # Exceeds 30s timeout
+
+      - action: execute_test
+        description: Attempt to open session with network delay
+        thrift_call: OpenSession
+
+    assertions:
+      - type: error_thrown
+        error_type: Timeout
+        description: Driver reports timeout error
+
+      - type: retry_attempted
+        description: Driver retries OpenSession with exponential backoff
+
+    notes: |
+      Driver should retry transient network failures with backoff.
+
+  - id: SESSION-012
+    name: CloseSession Network Failure
+    priority: Low
+    description: |
+      Validates that driver handles network failure during CloseSession
+      and still cleans up local resources.
+
+    proxy_scenario: network_failure_close_session
+
+    steps:
+      - action: execute_test
+        description: Open session, enable failure, then close
+        thrift_calls:
+          - OpenSession
+          - CloseSession  # will fail
+
+    assertions:
+      - type: local_resources_cleaned
+        description: Driver releases local resources despite network failure
+
+    notes: |
+      CloseSession failure should not prevent local cleanup.
+      Driver should log warning but not throw to caller.
+
+  - id: SESSION-013
+    name: Session Creation Under Rate Limiting
+    priority: Low
+    description: |
+      Validates that driver handles rate limiting during session creation.
+
+    proxy_scenario: rate_limit_429
+
+    steps:
+      - action: enable_failure_scenario
+        scenario: rate_limit_429
+
+      - action: execute_test
+        description: Attempt to open session when rate limited
+        thrift_call: OpenSession
+
+    assertions:
+      - type: retry_with_backoff
+        description: Driver retries with exponential backoff
+
+      - type: eventual_success
+        description: Session eventually opens after rate limit clears
+
+    notes: |
+      Driver should respect rate limit headers and retry appropriately.
+
+  - id: SESSION-014
+    name: Concurrent Session Close
+    priority: Low
+    description: |
+      Validates that driver handles multiple threads attempting to
+      close the same session simultaneously.
+
+    proxy_scenario: concurrent_session_close
+
+    steps:
+      - action: execute_test
+        description: Open session, close from multiple threads
+        concurrent_close_threads: 3
+
+    assertions:
+      - type: no_error
+        description: No errors thrown from any thread
+
+      - type: thrift_call_count
+        method: CloseSession
+        expected: 1
+        description: Only one CloseSession call actually sent
+
+    notes: |
+      Driver should handle concurrent close gracefully with internal locking.
+
+  - id: SESSION-015
+    name: Session Idle Timeout Configuration
+    priority: Medium
+    description: |
+      Validates that driver respects custom session idle timeout configuration.
+
+    driver_config:
+      session_idle_timeout_minutes: 5
+
+    steps:
+      - action: execute_test
+        description: Open session with custom timeout
+        session_config:
+          idle_timeout_minutes: 5
+
+    assertions:
+      - type: no_error
+        description: Session opens successfully
+
+      - type: timeout_config_sent
+        description: Timeout configuration sent in OpenSession request
+
+    notes: |
+      Driver should allow configuration of session idle timeout.
+      Default is typically 60 minutes.
