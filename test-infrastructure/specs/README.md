@@ -56,9 +56,41 @@ tests:
 
 ## Available Test Suites
 
-| File | Suite | Tests | Status |
-|------|-------|-------|--------|
-| `cloudfetch.yaml` | CloudFetch | 3 implemented, 7 planned | ✅ In Progress |
+### Implemented
+
+| File | Suite | Tests | Priority | Status |
+|------|-------|-------|----------|--------|
+| `cloudfetch.yaml` | CloudFetch | 3 implemented, 7 planned | Critical | ✅ In Progress |
+
+### Planned (~300 tests across 16 categories)
+
+These test suites should be created as additional YAML files following the same structure as `cloudfetch.yaml`:
+
+| File (Future) | Suite | Tests | Priority | Description |
+|---------------|-------|-------|----------|-------------|
+| `session-lifecycle.yaml` | Session Lifecycle | 15 | Critical | OpenSession, CloseSession, session expiration, timeouts |
+| `statement-execution.yaml` | Statement Execution | 25 | Critical | Sync/async execution, cancellation, long-running queries |
+| `metadata-operations.yaml` | Metadata Operations | 40 | High | GetCatalogs, GetSchemas, GetTables, GetColumns, GetFunctions, GetTypeInfo, GetPrimaryKeys, GetCrossReference |
+| `arrow-format.yaml` | Arrow Format | 20 | High | Arrow IPC format, compression (LZ4, ZSTD), type handling, schema validation |
+| `direct-results.yaml` | Direct Results | 15 | High | TSparkDirectResults optimization, inline results in OpenSession response |
+| `parameterized-queries.yaml` | Parameterized Queries | 20 | High | Named parameters, positional parameters, type binding |
+| `result-fetching.yaml` | Result Fetching | 15 | High | Pagination, cursor management, batch sizes, offset handling |
+| `error-handling.yaml` | Error Handling | 30 | Critical | Error codes, error messages, retry logic, recovery strategies |
+| `timeout-cleanup.yaml` | Timeout & Cleanup | 12 | Medium | Session timeouts, operation timeouts, resource cleanup |
+| `concurrency.yaml` | Concurrency | 15 | Medium | Thread safety, parallel operations, connection pooling |
+| `protocol-versions.yaml` | Protocol Versions | 12 | Medium | Version negotiation, backward compatibility, feature detection |
+| `security.yaml` | Security | 15 | High | Authentication (OAuth, PAT), authorization, SSL/TLS, token refresh |
+| `performance.yaml` | Performance | 10 | Low | Large result sets, batch size limits, memory limits |
+| `edge-cases.yaml` | Edge Cases | 36 | Medium | NULL handling, empty results, special characters, boundary conditions |
+
+**Total: ~300 test cases**
+
+Each YAML file should:
+- Follow the structure defined above
+- Map tests to proxy scenarios where applicable
+- Include JIRA references for tests based on production issues
+- Define clear steps, assertions, and expected behavior
+- Support implementation across all languages (C#, Java, C++, Go)
 
 ## Test Actions
 
