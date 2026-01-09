@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
+# Copyright (c) 2025 ADBC Drivers Contributors
 #
-#   http://www.apache.org/licenses/LICENSE-2.0
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """
 Process BenchmarkDotNet results and format for GitHub Pages visualization.
@@ -28,11 +25,10 @@ Extracts metrics for each benchmark query:
 Creates separate data files for each query to enable dropdown selection.
 """
 
-import json
-import sys
-import os
 import csv
-from pathlib import Path
+import json
+import os
+import sys
 
 
 def load_peak_memory_from_csv(csv_path):
@@ -42,11 +38,11 @@ def load_peak_memory_from_csv(csv_path):
     if not os.path.exists(csv_path):
         return peak_memory_map
 
-    with open(csv_path, 'r') as f:
+    with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            query_name = row.get('benchmarkQuery', 'unknown')
-            peak_memory_str = row.get('Peak Memory (MB)', '')
+            query_name = row.get("benchmarkQuery", "unknown")
+            peak_memory_str = row.get("Peak Memory (MB)", "")
 
             if peak_memory_str:
                 try:
@@ -83,7 +79,7 @@ def extract_query_name(benchmark):
 def process_benchmark_file(json_path, csv_path, output_dir):
     """Process a BenchmarkDotNet JSON file and extract metrics per query."""
 
-    with open(json_path, 'r') as f:
+    with open(json_path, "r") as f:
         data = json.load(f)
 
     benchmarks = data.get("Benchmarks", [])
@@ -128,27 +124,30 @@ def process_benchmark_file(json_path, csv_path, output_dir):
             {
                 "name": "Mean Execution Time",
                 "value": round(metrics["mean_time_ms"], 2),
-                "unit": "ms"
+                "unit": "ms",
             },
             {
                 "name": "Allocated Memory",
                 "value": round(metrics["allocated_mb"], 2),
-                "unit": "MB"
+                "unit": "MB",
             },
             {
                 "name": "Gen2 Collections",
                 "value": int(metrics["gen2_collections"]),
-                "unit": "collections"
-            }
+                "unit": "collections",
+            },
         ]
 
         # Add Peak Memory if available (insert at position 1, after execution time)
         if metrics["peak_memory_mb"] is not None:
-            benches.insert(1, {
-                "name": "Peak Memory",
-                "value": round(metrics["peak_memory_mb"], 2),
-                "unit": "MB"
-            })
+            benches.insert(
+                1,
+                {
+                    "name": "Peak Memory",
+                    "value": round(metrics["peak_memory_mb"], 2),
+                    "unit": "MB",
+                },
+            )
 
         results[query_name] = benches
 
@@ -169,7 +168,9 @@ def main():
         sys.exit(1)
 
     if not os.path.exists(csv_path):
-        print(f"Warning: CSV file not found: {csv_path}. Peak Memory will not be available.")
+        print(
+            f"Warning: CSV file not found: {csv_path}. Peak Memory will not be available."
+        )
 
     results = process_benchmark_file(json_path, csv_path, output_dir)
 
@@ -180,17 +181,17 @@ def main():
     query_files = []
     for query_name, benches in results.items():
         # Sanitize query name for filename
-        safe_name = query_name.replace('/', '_').replace(' ', '_')
+        safe_name = query_name.replace("/", "_").replace(" ", "_")
         output_path = os.path.join(output_dir, f"{safe_name}.json")
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(benches, f, indent=2)
 
         query_files.append((query_name, safe_name, output_path))
 
     # Write query list for workflow to use
     query_list_path = os.path.join(output_dir, "queries.txt")
-    with open(query_list_path, 'w') as f:
+    with open(query_list_path, "w") as f:
         for query_name, safe_name, _ in query_files:
             f.write(f"{safe_name}\n")
 

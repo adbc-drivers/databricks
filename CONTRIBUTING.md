@@ -41,6 +41,22 @@ $ dotnet build
 $ dotnet test
 ```
 
+### Go
+
+You can build and run unit tests for the Go driver by switching to the `./go`
+folder and running:
+
+```shell
+$ go build
+$ go test
+```
+
+To run the full suite of tests, you will need a Databricks instance to test against and the following environment variables set:
+
+- `DATABRICKS_HOST`
+- `DATABRICKS_ACCESSTOKEN`
+- `DATABRICKS_HTTPPATH`
+
 ## Opening a Pull Request
 
 Before opening a pull request:

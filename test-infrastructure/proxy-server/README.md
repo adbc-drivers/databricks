@@ -1,348 +1,318 @@
-# Thrift Proxy Server
+<!--
+Copyright (c) 2025 ADBC Drivers Contributors
 
-A mitmproxy-based proxy server for testing ADBC driver behavior under various failure scenarios.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+# Thrift Protocol Test Infrastructure
+
+A test infrastructure for injecting controlled failures into Databricks Thrift protocol operations and CloudFetch downloads using **mitmproxy** for HTTPS traffic interception.
 
 ## Overview
 
-This proxy sits between ADBC drivers and the real Databricks Thrift server, intercepting both HTTP (Thrift) and HTTPS (CloudFetch) traffic to enable controlled failure injection for integration testing.
+This infrastructure uses mitmproxy as a forward proxy to intercept both:
+- **Thrift operations** - Driver ↔ Databricks communication
+- **CloudFetch downloads** - Direct downloads from cloud storage (Azure Blob, S3, GCS)
 
 ```
-Driver → mitmproxy (port 18080) → Databricks Server
-           ↓
-    Flask Control API (port 18081)
-           ↓
-    Enable/disable failure scenarios
+Driver (HTTP_PROXY set) → mitmproxy:18080 → Databricks/Cloud Storage
+                           ↓
+                      Control API:18081
 ```
 
-## Features
+## Key Features
 
-- **HTTPS Interception**: Full man-in-the-middle for CloudFetch downloads from cloud storage (S3, Azure Blob, GCS)
-- **Thrift Protocol Decoding**: Tracks and verifies all Thrift RPC calls for test assertions
-- **Flask Control API**: REST API for programmatic scenario management
-- **Production-Validated Scenarios**: 10+ failure scenarios based on real customer issues (JIRA-referenced)
-- **One-Shot Behavior**: Scenarios automatically disable after injection for deterministic testing
-- **No Restart Required**: Tests enable/disable scenarios via API without restarting proxy
+✅ **HTTPS Interception** - Inspects and modifies encrypted CloudFetch downloads
+✅ **Automatic Certificates** - Generates TLS certificates on-the-fly
+✅ **Battle-Tested** - mitmproxy is used by security researchers worldwide
+✅ **Multi-Language Clients** - OpenAPI-generated clients for C#, Java, Python, C++, Go
+✅ **Test Integration** - Automatically managed by C# test infrastructure
+✅ **Thrift Protocol Decoding** - Logs decoded HiveServer2/Databricks Thrift messages for debugging
 
-## Design Philosophy: Hybrid Approach
-
-**"Code Defines WHAT, API Controls WHEN"**
-
-The proxy follows a hybrid design pattern inspired by mocking frameworks:
-
-1. **Scenarios are defined once** in Python code (`mitmproxy_addon.py`)
-   - Version controlled and reviewable
-   - All possible failure scenarios documented in code
-   - Maps to JIRA tickets for production issues
-
-2. **Tests control activation** via Flask API (port 18081)
-   - Enable scenario: `POST /scenarios/{name}/enable`
-   - Disable scenario: `POST /scenarios/{name}/disable`
-   - No proxy restart needed between tests
-
-3. **Fast test execution**
-   - Start proxy once: `mitmdump -s mitmproxy_addon.py`
-   - Run hundreds of tests enabling different scenarios
-   - Each test gets clean state (scenarios auto-disable after injection)
-
-**Benefits:**
-- ✅ Fast: No restart overhead between tests
-- ✅ Simple: Clear separation between definition (code) and control (API)
-- ✅ Deterministic: One-shot behavior ensures predictable test results
-- ✅ Traceable: JIRA references link scenarios to production issues
-
-## Installation
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
-- pip
-
-### Install Dependencies
-
 ```bash
+# Install mitmproxy and Flask
 pip install -r requirements.txt
+
+# Trust mitmproxy certificate (macOS, first time only)
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain \
+  ~/.mitmproxy/mitmproxy-ca-cert.pem
 ```
 
-This installs:
-- `mitmproxy` - HTTPS proxy with certificate generation
-- `flask` - Control API server
-- `thrift` - Thrift protocol parsing
+For other platforms, see: https://docs.mitmproxy.org/stable/concepts-certificates/
 
-## Usage
-
-### Starting the Proxy
+### Run Tests
 
 ```bash
-# Basic usage
-mitmdump -s mitmproxy_addon.py --listen-port 18080
+# C# tests (proxy starts automatically)
+cd test-infrastructure/tests/csharp
+export DATABRICKS_TEST_CONFIG_FILE=/path/to/databricks-test-config.json
+dotnet test --filter "FullyQualifiedName~CloudFetchTests"
 
-# With custom API port
-mitmdump -s mitmproxy_addon.py --listen-port 18080 --set api_port=18081
-```
-
-The proxy will:
-1. Start listening on port 18080 for HTTP/HTTPS traffic
-2. Start Flask API server on port 18081
-3. Generate TLS certificates in `~/.mitmproxy/` (first run only)
-
-### Control API Endpoints
-
-#### List Available Scenarios
-
-```bash
-curl http://localhost:18081/scenarios
-```
-
-Returns:
-```json
-{
-  "scenarios": [
-    {
-      "name": "cloudfetch_expired_link",
-      "description": "CloudFetch link expires, driver should retry via FetchResults",
-      "enabled": false
-    },
-    ...
-  ]
-}
-```
-
-#### Enable a Scenario
-
-```bash
-curl -X POST http://localhost:18081/scenarios/cloudfetch_expired_link/enable
-```
-
-**With runtime configuration** (for configurable scenarios like delays):
-```bash
-curl -X POST http://localhost:18081/scenarios/cloudfetch_timeout/enable \
-  -H "Content-Type: application/json" \
-  -d '{"duration_seconds": 30}'
-```
-
-#### Disable a Scenario
-
-```bash
-curl -X POST http://localhost:18081/scenarios/cloudfetch_expired_link/disable
-```
-
-#### Get Scenario Status
-
-```bash
-curl http://localhost:18081/scenarios/cloudfetch_expired_link/status
-```
-
-#### Thrift Call Verification
-
-Get all Thrift calls (for test verification):
-```bash
-curl http://localhost:18081/thrift/calls
-```
-
-Count specific Thrift method calls:
-```bash
-curl http://localhost:18081/thrift/calls/count?method=FetchResults
-```
-
-Reset call history (automatically resets when scenario enabled):
-```bash
-curl -X POST http://localhost:18081/thrift/calls/reset
+# Manual proxy startup (for development/debugging)
+cd test-infrastructure/proxy-server
+make start-proxy
 ```
 
 ## Available Failure Scenarios
 
-### CloudFetch Failures
+All scenarios are controlled via the REST API on port 18081:
 
-| Scenario | HTTP Code | Description | JIRA Reference |
-|----------|-----------|-------------|----------------|
-| `cloudfetch_expired_link` | 403 | Expired CloudFetch link, driver should refresh via FetchResults | PECOBLR-1131 |
-| `cloudfetch_400` | 400 | Bad Request (malformed request or missing parameters) | - |
-| `cloudfetch_403` | 403 | Forbidden (expired link or insufficient permissions) | ES-1624602 |
-| `cloudfetch_404` | 404 | Not Found (object does not exist) | - |
-| `cloudfetch_405` | 405 | Method Not Allowed (incorrect HTTP method) | - |
-| `cloudfetch_412` | 412 | Precondition Failed (condition not met) | - |
-| `cloudfetch_500` | 500 | Internal Server Error (server-side error) | - |
-| `cloudfetch_503` | 503 | Service Unavailable (rate limiting or temporary failure) | - |
-| `cloudfetch_timeout` | - | Download exceeds 60s timeout (configurable delay) | BL-13239 |
-| `cloudfetch_connection_reset` | - | Connection abruptly closed during download | BL-13580 |
+| Scenario | Description | Effect |
+|----------|-------------|--------|
+| `cloudfetch_expired_link` | Expired Azure SAS token | Returns 403 with AuthorizationQueryParametersError |
+| `cloudfetch_azure_403` | Azure Blob Forbidden | Returns 403 with AuthenticationFailed |
+| `cloudfetch_timeout` | 65-second delay | Triggers driver timeout (60s default) |
+| `cloudfetch_connection_reset` | Abrupt connection close | Simulates network failure |
 
-## Using from Tests
+### Scenario API Examples
 
-### C# Example
+```bash
+# Enable a scenario
+curl -X POST http://localhost:18081/scenarios/cloudfetch_expired_link/enable
+
+# Check scenario status
+curl http://localhost:18081/scenarios/cloudfetch_expired_link
+
+# List all scenarios
+curl http://localhost:18081/scenarios
+
+# Disable all scenarios
+curl -X POST http://localhost:18081/scenarios/disable-all
+```
+
+## Thrift Protocol Decoding
+
+The proxy automatically decodes and logs Thrift Binary Protocol messages for debugging. This works with:
+- **Any Thrift protocol** (HiveServer2, Databricks extensions, JDBC, ADBC)
+- **No IDL files required** - Generic decoder reads wire format directly
+- **Forward compatible** - Works with protocol changes and custom fields
+
+### What Gets Logged
+
+When Thrift requests/responses pass through the proxy, you'll see:
+
+```
+[THRIFT REQUEST]
+Method: ExecuteStatement
+Type: CALL
+Bytes: 1245/1245
+Protocol: HiveServer2/Databricks
+Fields (5):
+  field_1 (STRUCT): {session_handle...}
+  field_2 (STRING): SELECT * FROM table
+  field_3 (MAP): {spark.sql.adaptive.enabled: true}
+  field_4 (I64): 10000
+  field_5 (I32): 2
+```
+
+### Implementation
+
+- **Generic decoder** (`thrift_decoder.py`) - Protocol-agnostic Thrift Binary Protocol parser
+- **Automatic logging** - Integrated into mitmproxy addon
+- **Field identification** - Shows field IDs, types, and values
+- **Error handling** - Gracefully handles malformed or partial messages
+
+This helps with:
+- Understanding protocol differences between drivers
+- Debugging test failures
+- Verifying proxy behavior
+- Documenting protocol extensions
+
+## Call Tracking and Verification
+
+The proxy tracks all Thrift method calls and provides verification APIs to assert expected call sequences in tests. This is useful for:
+- **Verifying fallback behavior** - e.g., CloudFetch failure → FetchResults → retry CloudFetch
+- **Ensuring correct call sequences** - e.g., OpenSession → ExecuteStatement → CloseOperation
+- **Debugging test failures** - See actual call sequences when tests fail
+
+### Features
+
+✅ **Automatic tracking** - All Thrift requests logged with method name, timestamp, type
+✅ **Auto-reset** - Call history resets when a scenario is enabled (per test)
+✅ **Limited history** - Max 1000 calls to prevent memory issues
+✅ **Flexible verification** - Exact sequence, contains sequence, method count, method exists
+
+### Tracking API
+
+```bash
+# Get current call history
+curl http://localhost:18081/thrift/calls
+
+# Manually reset call history
+curl -X POST http://localhost:18081/thrift/calls/reset
+```
+
+### Verification API
+
+Verify call sequences using POST requests to `/thrift/calls/verify`:
+
+```bash
+# 1. Exact sequence match
+curl -X POST http://localhost:18081/thrift/calls/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "exact_sequence",
+    "methods": ["ExecuteStatement", "FetchResults", "CloseOperation"]
+  }'
+
+# 2. Contains sequence (in order, but not consecutive)
+curl -X POST http://localhost:18081/thrift/calls/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "contains_sequence",
+    "methods": ["ExecuteStatement", "FetchResults"]
+  }'
+
+# 3. Method count
+curl -X POST http://localhost:18081/thrift/calls/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "method_count",
+    "method": "FetchResults",
+    "count": 2
+  }'
+
+# 4. Method exists
+curl -X POST http://localhost:18081/thrift/calls/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "method_exists",
+    "method": "ExecuteStatement"
+  }'
+```
+
+### C# Test Integration Example
 
 ```csharp
-public class CloudFetchTests : ProxyTestBase
+// In your test class
+private async Task<bool> VerifyThriftSequence(string type, params string[] methods)
 {
-    [Fact]
-    public async Task TestCloudFetchExpiredLink()
-    {
-        // Proxy automatically started by ProxyTestBase.InitializeAsync()
+    var payload = new { type, methods };
+    var json = JsonSerializer.Serialize(payload);
+    var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        // Enable failure scenario
-        await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
+    var response = await _httpClient.PostAsync(
+        "http://localhost:18081/thrift/calls/verify",
+        content
+    );
 
-        // Run driver code
-        using var connection = CreateProxiedConnection();
-        using var statement = connection.CreateStatement();
-        statement.SqlQuery = "SELECT * FROM large_table";
-        var result = statement.ExecuteQuery();
+    var result = await response.Content.ReadAsStringAsync();
+    var verification = JsonSerializer.Deserialize<JsonElement>(result);
+    return verification.GetProperty("verified").GetBoolean();
+}
 
-        // Verify driver behavior
-        Assert.NotNull(result);
+// In your test method
+[Fact]
+public async Task CloudFetchExpiredLink_ShouldFallbackToFetchResults()
+{
+    // Enable scenario (auto-resets call history)
+    await _scenarioClient.EnableAsync("cloudfetch_expired_link");
 
-        // Verify driver called FetchResults to refresh the link
-        int fetchResultsCalls = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
-        Assert.True(fetchResultsCalls > 0);
+    // Execute query that triggers CloudFetch
+    var statement = connection.CreateStatement();
+    statement.SqlQuery = "SELECT * FROM catalog_returns LIMIT 10000";
+    var reader = statement.ExecuteQuery();
 
-        // Scenario automatically disabled after one-shot injection
-    }
+    // Verify expected call sequence
+    var verified = await VerifyThriftSequence(
+        "contains_sequence",
+        "ExecuteStatement",
+        "FetchResults",  // Fallback after CloudFetch fails
+        "CloseOperation"
+    );
+
+    Assert.True(verified, "Expected fallback to FetchResults");
 }
 ```
 
-The `ProxyTestBase` class:
-- Starts/stops mitmproxy automatically per test
-- Sets `HTTP_PROXY` and `HTTPS_PROXY` environment variables
-- Configures driver with TLS certificate trust settings
-- Resets scenario state between tests
+## OpenAPI Client Generation
 
-### Configuration Required
-
-Drivers must be configured to:
-
-1. **Route through proxy**:
-   ```csharp
-   parameters["adbc.proxy_options.use_proxy"] = "true";
-   parameters["adbc.proxy_options.proxy_host"] = "localhost";
-   parameters["adbc.proxy_options.proxy_port"] = "18080";
-   ```
-
-2. **Trust mitmproxy's self-signed certificate**:
-   ```csharp
-   parameters["adbc.http_options.tls.allow_self_signed"] = "true";
-   parameters["adbc.http_options.tls.disable_server_certificate_validation"] = "true";
-   parameters["adbc.http_options.tls.allow_hostname_mismatch"] = "true";
-   parameters["adbc.http_options.tls.trusted_certificate_path"] = "~/.mitmproxy/mitmproxy-ca-cert.pem";
-   ```
-
-3. **Set environment variables** (for CloudFetch HTTP client):
-   ```csharp
-   Environment.SetEnvironmentVariable("HTTP_PROXY", "http://localhost:18080");
-   Environment.SetEnvironmentVariable("HTTPS_PROXY", "http://localhost:18080");
-   ```
-
-## Architecture
-
-### Components
-
-1. **mitmproxy_addon.py** - Main proxy implementation
-   - Intercepts HTTP/HTTPS requests
-   - Implements failure injection logic
-   - Runs Flask API server in background thread
-   - Decodes Thrift protocol for call tracking
-
-2. **thrift_decoder.py** - Thrift protocol decoder
-   - Parses Thrift binary protocol
-   - Extracts method names and message types
-   - Enables test assertions on Thrift calls
-
-3. **requirements.txt** - Python dependencies
-   - mitmproxy
-   - flask
-   - thrift
-
-### Failure Injection Flow
-
-```
-1. Test enables scenario via API: POST /scenarios/{name}/enable
-2. Proxy stores scenario config in memory
-3. Driver makes request → mitmproxy intercepts
-4. Proxy checks if scenario enabled AND matches request
-5. If match: inject failure, disable scenario (one-shot)
-6. If no match: forward request normally
-7. Test verifies behavior via Thrift call tracking
-```
-
-### One-Shot Behavior
-
-Scenarios automatically disable after first injection to ensure:
-- **Deterministic testing**: Each scenario triggers exactly once
-- **Test isolation**: Scenarios don't affect subsequent operations
-- **Clear causality**: Easy to correlate failure with driver behavior
-
-## Adding New Scenarios
-
-To add a new failure scenario:
-
-1. **Define scenario** in `mitmproxy_addon.py`:
-   ```python
-   SCENARIOS = {
-       "my_new_scenario": {
-           "description": "What this tests",
-           "operation": "CloudFetchDownload",  # or omit for any operation
-           "action": "return_error",
-           "error_code": 500,
-           "error_message": "Custom error"
-       }
-   }
-   ```
-
-2. **Implement injection logic** in `response()` or `request()` hooks
-
-3. **Add test** in C#:
-   ```csharp
-   [Fact]
-   public async Task TestMyNewScenario()
-   {
-       await ControlClient.EnableScenarioAsync("my_new_scenario");
-       // ... test code ...
-   }
-   ```
-
-4. **Document** with JIRA reference if based on production issue
-
-## Debugging
-
-### View All Traffic
+The Control API is documented with OpenAPI 3.0, enabling auto-generated clients:
 
 ```bash
-# Start with verbose logging
-mitmdump -s mitmproxy_addon.py --listen-port 18080 -v
+# Generate C# client
+make generate-csharp
+
+# Generate clients for all languages
+make generate-clients
 ```
 
-### Inspect Certificates
+See [CLIENTS.md](CLIENTS.md) for usage examples in each language.
+See [OPENAPI-IMPLEMENTATION.md](OPENAPI-IMPLEMENTATION.md) for implementation details.
+
+## Architecture Details
+
+### How HTTPS Interception Works
+
+1. **Certificate Trust**: mitmproxy generates a root CA certificate on first run (`~/.mitmproxy/mitmproxy-ca-cert.pem`)
+2. **Environment Variables**: Driver sets `HTTP_PROXY` and `HTTPS_PROXY` to `http://localhost:18080`
+3. **TLS Man-in-the-Middle**: mitmproxy presents its own certificate for HTTPS connections
+4. **Request Inspection**: Addon code (`mitmproxy_addon.py`) inspects URLs and injects failures
+5. **Transparent Proxying**: Non-failing requests pass through unchanged
+
+### Test Infrastructure Integration
+
+The C# test base class (`ProxyTestBase`) automatically:
+- Starts mitmproxy before each test
+- Sets proxy environment variables
+- Configures driver to trust mitmproxy certificate
+- Stops proxy and cleans up after test
+
+See `test-infrastructure/tests/csharp/ProxyTestBase.cs` for implementation.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `mitmproxy_addon.py` | mitmproxy addon with Flask control API and Thrift decoding |
+| `thrift_decoder.py` | Generic Thrift Binary Protocol decoder |
+| `requirements.txt` | Python dependencies (mitmproxy, Flask, thrift) |
+| `openapi.yaml` | OpenAPI spec for Control API |
+| `Makefile` | Build automation (client generation, proxy management) |
+| `CLIENTS.md` | Multi-language client usage examples |
+| `OPENAPI-IMPLEMENTATION.md` | OpenAPI design and implementation guide |
+
+## Development
 
 ```bash
-# Check certificate generated
-ls -la ~/.mitmproxy/
+# Validate OpenAPI spec
+make validate-api
 
-# View certificate details
-openssl x509 -in ~/.mitmproxy/mitmproxy-ca-cert.pem -text -noout
+# Start proxy manually
+make start-proxy
+
+# Stop proxy
+make stop-proxy
+
+# Clean generated files
+make clean
 ```
 
-### Test Scenarios Manually
+## Troubleshooting
 
-```bash
-# Start proxy
-mitmdump -s mitmproxy_addon.py --listen-port 18080 &
+**Issue**: Tests hang or connection refused
+**Solution**: Ensure mitmproxy is installed and certificate is trusted
 
-# Enable scenario
-curl -X POST http://localhost:18081/scenarios/cloudfetch_403/enable
+**Issue**: HTTPS connections fail with certificate errors
+**Solution**: Trust mitmproxy CA certificate (see Prerequisites)
 
-# Make request through proxy (will trigger failure)
-curl -x http://localhost:18080 https://example.com
+**Issue**: CloudFetch still succeeds despite enabled scenario
+**Solution**: Scenarios are one-shot (auto-disable after first use). Re-enable for next test.
 
-# Check status
-curl http://localhost:18081/scenarios/cloudfetch_403/status
-```
-
-## Security Considerations
-
-- **Test environments only**: Never use in production
-- **No sensitive logging**: Proxy does not log tokens or credentials
-- **Certificate trust**: mitmproxy CA certificate must be trusted by system/driver
-- **Localhost only**: API server binds to localhost by default
-
-## References
-
-- [mitmproxy Documentation](https://docs.mitmproxy.org/) - Official mitmproxy docs
-- [Test Infrastructure README](../README.md) - Main test infrastructure overview
+**Issue**: Proxy doesn't intercept CloudFetch URLs
+**Solution**: Verify `HTTP_PROXY` and `HTTPS_PROXY` environment variables are set correctly
