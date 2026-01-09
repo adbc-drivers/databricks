@@ -111,6 +111,26 @@ tests:
 
 See [specs/README.md](./specs/README.md) for full documentation.
 
+**Planned Test Suites (~300 test cases across 16 categories):**
+
+| Category | Tests | Priority | Description |
+|----------|-------|----------|-------------|
+| Session Lifecycle | 15 | Critical | OpenSession, CloseSession, timeouts |
+| Statement Execution | 25 | Critical | Sync/async execution, cancellation |
+| Metadata Operations | 40 | High | GetCatalogs, GetSchemas, GetTables, etc. |
+| Arrow Format | 20 | High | Arrow IPC, compression, type handling |
+| CloudFetch | 20 | Critical | Cloud storage results, link expiration (3 implemented ✅) |
+| Direct Results | 15 | High | TSparkDirectResults optimization |
+| Parameterized Queries | 20 | High | Named/positional parameters |
+| Result Fetching | 15 | High | Pagination, cursor management |
+| Error Handling | 30 | Critical | Error codes, recovery, retries |
+| Timeout & Cleanup | 12 | Medium | Session/operation timeouts |
+| Concurrency | 15 | Medium | Thread safety, parallel operations |
+| Protocol Versions | 12 | Medium | Version negotiation, compatibility |
+| Security | 15 | High | Authentication, authorization |
+| Performance | 10 | Low | Limits, batch sizes |
+| Edge Cases | 36 | Medium | NULL handling, empty results, etc. |
+
 ### 2. Proxy Server (Python/mitmproxy)
 
 A standalone HTTPS/Thrift proxy that enables failure injection testing:
