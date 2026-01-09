@@ -30,6 +30,47 @@ The test infrastructure enables comprehensive testing of driver behavior includi
 - ❌ **Load testing**: Basic concurrency only, not large-scale load tests
 - ❌ **Protocol design**: Test existing protocol, not propose new features
 
+## Background
+
+### Thrift Protocol Overview
+
+The Databricks Thrift protocol extends Apache Hive's HiveServer2 protocol:
+
+```
+Hive Protocol V1-V10 → Spark Protocol V1-V9 → Databricks Extensions
+                                                ├─ CloudFetch
+                                                ├─ Direct Results
+                                                ├─ Arrow Streaming
+                                                └─ Parameterized Queries
+```
+
+**Key Operations (20 RPCs):**
+- **Session**: OpenSession, CloseSession, GetInfo
+- **Execution**: ExecuteStatement, GetOperationStatus, CancelOperation, CloseOperation
+- **Results**: GetResultSetMetadata, FetchResults
+- **Metadata**: GetCatalogs, GetSchemas, GetTables, GetColumns, GetFunctions, GetTypeInfo, GetPrimaryKeys, GetCrossReference
+
+**Databricks Extensions:**
+- **TSparkDirectResults**: Shortcut to fetch results in OpenSession response
+- **CloudFetch (V3+)**: High-performance result retrieval directly from cloud storage (S3/Azure Blob/GCS)
+- **Arrow Streaming (V5+)**: Columnar results with compression (V6+)
+- **Parameterized Queries (V8+)**: Named and positional parameters
+
+### Current Test Coverage
+
+**C# ADBC Driver:**
+- ✅ E2E tests: Basic connection, statement execution, CloudFetch happy path
+- ✅ Unit tests: Configuration, retry logic, Thrift error handling
+- ❌ **Coverage Gaps:**
+  - Systematic metadata operation testing
+  - Parameterized query validation
+  - Protocol version negotiation
+  - Failure scenarios (expired links, network timeouts, connection resets)
+  - Concurrent operation handling
+  - Direct results optimization
+
+**This test infrastructure aims to close these gaps systematically.**
+
 ## Quick Links
 
 - **[Test Specifications](./specs/README.md)** - Language-agnostic YAML test definitions
