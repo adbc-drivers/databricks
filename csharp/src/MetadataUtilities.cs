@@ -147,7 +147,7 @@ namespace AdbcDrivers.Databricks
         /// QuoteIdentifier("my_table") => "`my_table`"
         /// QuoteIdentifier("my`table") => "`my``table`"
         /// </example>
-        public static string QuoteIdentifier(string identifier)
+        public static string? QuoteIdentifier(string? identifier)
         {
             if (string.IsNullOrEmpty(identifier))
                 return identifier;

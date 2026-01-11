@@ -155,7 +155,7 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         /// <param name="typeName">The full Databricks type name</param>
         /// <returns>The base type name without parameters, with XDBC normalization applied</returns>
-        public static string StripBaseTypeName(string typeName)
+        public static string StripBaseTypeName(string? typeName)
         {
             if (string.IsNullOrEmpty(typeName))
                 return string.Empty;
