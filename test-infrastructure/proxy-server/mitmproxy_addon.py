@@ -36,6 +36,9 @@ app = Flask(__name__)
 state_lock = threading.Lock()
 enabled_scenarios: Dict[str, bool] = {}
 
+# Call count tracking for trigger_after_count scenarios
+scenario_call_counts: Dict[str, int] = {}
+
 # Call tracking state (thread-safe with lock)
 MAX_CALL_HISTORY = 1000
 call_history: List[Dict[str, Any]] = []
@@ -109,11 +112,12 @@ SCENARIOS = {
     },
     # Session Lifecycle Scenarios
     "invalid_session_handle": {
-        "description": "Server returns invalid session handle error",
-        "operation": "ThriftOperation",
+        "description": "Server returns invalid session handle error on second ExecuteStatement",
+        "operation": "ExecuteStatement",
         "action": "return_thrift_error",
         "error_type": "INVALID_HANDLE",
         "error_message": "Invalid or expired session handle",
+        "trigger_after_count": 1,  # Trigger on second ExecuteStatement (skip first)
     },
     "session_timeout_premature": {
         "description": "Session expires before idle timeout",
@@ -199,6 +203,8 @@ def enable_scenario(scenario_name):
         enabled_scenarios[scenario_name] = scenario_config
         # Auto-reset call history when scenario is enabled (new test scenario)
         call_history.clear()
+        # Reset call counts for trigger_after_count scenarios
+        scenario_call_counts.clear()
 
     ctx.log.info(f"[API] Enabled scenario: {scenario_name}, reset call history")
     return jsonify(
@@ -557,6 +563,18 @@ class FailureInjectionAddon:
 
                     # Check if this scenario matches the operation
                     if operation == "ThriftOperation" or operation == method_name:
+                        # Check trigger_after_count if specified
+                        trigger_after = base_config.get("trigger_after_count", 0)
+                        if trigger_after > 0:
+                            # Track call count for this scenario + method combination
+                            key = f"{name}:{method_name}"
+                            current_count = scenario_call_counts.get(key, 0)
+                            scenario_call_counts[key] = current_count + 1
+
+                            # Only trigger if we've reached the threshold
+                            if scenario_call_counts[key] <= trigger_after:
+                                continue  # Skip this scenario for now
+
                         enabled_scenario = (name, scenario_config, base_config)
                         break
 

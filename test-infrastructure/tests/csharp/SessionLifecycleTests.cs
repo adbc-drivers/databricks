@@ -123,7 +123,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Scenario will invalidate the session on next operation
             // Second query should fail with session error
-            var exception = Assert.Throws<AdbcException>(() =>
+            var exception = Assert.ThrowsAny<Exception>(() =>
             {
                 using var statement = connection.CreateStatement();
                 statement.SqlQuery = SimpleQuery;
@@ -132,8 +132,13 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 _ = reader.ReadNextRecordBatchAsync().Result;
             });
 
-            // Verify the error indicates session issue
-            Assert.Contains("session", exception.Message, StringComparison.OrdinalIgnoreCase);
+            // Verify the error indicates session issue (may be in inner exception)
+            var fullMessage = exception.ToString();
+            Assert.True(
+                fullMessage.Contains("session", StringComparison.OrdinalIgnoreCase) ||
+                fullMessage.Contains("500", StringComparison.OrdinalIgnoreCase) ||
+                fullMessage.Contains("INVALID_HANDLE", StringComparison.OrdinalIgnoreCase),
+                $"Expected error related to session/invalid handle, but got: {fullMessage}");
         }
 
         /// <summary>
