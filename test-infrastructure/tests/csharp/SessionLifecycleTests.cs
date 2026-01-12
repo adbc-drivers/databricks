@@ -19,6 +19,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
@@ -182,6 +183,63 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
 
             // Assert - Should get session expiration error
             Assert.NotNull(exception);
+        }
+
+        /// <summary>
+        /// SESSION-004b: Session Timeout with Auto-Reconnect Enabled
+        /// Validates that driver automatically creates a new session when auto-reconnect
+        /// is enabled and a session timeout occurs.
+        ///
+        /// JIRA: ES-1661289
+        /// </summary>
+        [Fact(Skip = "Auto-reconnect feature not yet implemented - waiting for driver support")]
+        public async Task SessionTimeout_WithAutoReconnect_CreatesNewSession()
+        {
+            // Arrange - Create connection with auto-reconnect enabled
+            var parameters = new Dictionary<string, string>
+            {
+                // TODO: Replace with actual auto-reconnect parameter when implemented
+                // Expected parameter name might be one of:
+                // - "adbc.spark.auto_reconnect"
+                // - "adbc.spark.session.auto_reconnect"
+                // - "adbc.databricks.auto_reconnect"
+                ["adbc.spark.auto_reconnect"] = "true"
+            };
+
+            using var connection = CreateProxiedConnectionWithParameters(parameters);
+
+            // Execute initial query to establish baseline
+            int baselineOpenSessionCount;
+            using (var statement = connection.CreateStatement())
+            {
+                statement.SqlQuery = SimpleQuery;
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                _ = reader.ReadNextRecordBatchAsync().Result;
+                baselineOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
+            }
+
+            // Enable session timeout scenario - next operation will get INVALID_HANDLE error
+            await ControlClient.EnableScenarioAsync("invalid_session_handle");
+
+            // Act - Attempt to use connection after session timeout
+            // Driver should detect INVALID_HANDLE error and automatically open new session
+            using (var statement = connection.CreateStatement())
+            {
+                statement.SqlQuery = SimpleQuery;
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                var batch = reader.ReadNextRecordBatchAsync().Result;
+
+                // Assert - Query should succeed (no exception thrown)
+                Assert.NotNull(batch);
+                Assert.True(batch.Length > 0);
+            }
+
+            // Assert - Driver should have opened a new session automatically
+            var finalOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
+            Assert.True(finalOpenSessionCount > baselineOpenSessionCount,
+                $"Expected driver to open new session automatically. Baseline: {baselineOpenSessionCount}, Final: {finalOpenSessionCount}");
         }
 
         /// <summary>
