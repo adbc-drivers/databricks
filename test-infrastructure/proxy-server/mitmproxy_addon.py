@@ -134,7 +134,7 @@ SCENARIOS = {
     "expired_credentials": {
         "description": "Authentication fails due to expired credentials",
         "operation": "OpenSession",
-        "action": "return_thrift_error",
+        "action": "return_auth_error",
         "error_type": "INVALID_AUTHORIZATION_SPECIFICATION",
         "error_message": "Token has expired",
     },
@@ -598,6 +598,18 @@ class FailureInjectionAddon:
             flow.response = http.Response.make(
                 500,
                 f"Thrift Error [{error_type}]: {error_message}".encode("utf-8"),
+                {"Content-Type": "application/x-thrift"},
+            )
+            self._disable_scenario(scenario_name)
+
+        elif action == "return_auth_error":
+            # Return HTTP 401 for authentication failures (non-retryable)
+            error_message = base_config.get("error_message", "Authentication failed")
+            error_type = base_config.get("error_type", "UNAUTHORIZED")
+
+            flow.response = http.Response.make(
+                401,
+                f"Authentication Error [{error_type}]: {error_message}".encode("utf-8"),
                 {"Content-Type": "application/x-thrift"},
             )
             self._disable_scenario(scenario_name)
