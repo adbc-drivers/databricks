@@ -126,11 +126,6 @@ SCENARIOS = {
         "error_type": "SESSION_EXPIRED",
         "error_message": "Session timed out due to inactivity",
     },
-    "session_close_with_active_operations": {
-        "description": "CloseSession called with operations still running",
-        "operation": "CloseSession",
-        "action": "track_active_operations",
-    },
     "expired_credentials": {
         "description": "Authentication fails due to expired credentials",
         "operation": "OpenSession",

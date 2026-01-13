@@ -287,22 +287,60 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// Validates driver behavior when CloseSession is called while
         /// operations are still running.
         ///
+        /// Expected behavior:
+        /// - Driver should call CancelOperation for active operations before CloseSession
+        /// - Connection close should succeed even if operations are running
+        /// - Background query task should be interrupted/cancelled
+        ///
         /// JIRA: XTA-11040
         /// </summary>
-        [Fact(Skip = "Requires complex concurrency handling - implement when proxy supports operation tracking")]
+        [Fact]
         public async Task CloseSessionWithActiveOperations_CancelsOperations()
         {
-            // Arrange - Enable scenario
-            await ControlClient.EnableScenarioAsync("session_close_with_active_operations");
+            // Arrange - Open connection
+            var connection = CreateProxiedConnection();
 
-            // This test requires:
-            // 1. Starting a long-running query
-            // 2. Closing connection while query is running
-            // 3. Verifying CancelOperation is called
-            //
-            // Implementation depends on proxy server tracking active operations
+            // Start a long-running query in the background
+            // Using a large CROSS JOIN to ensure query takes significant time
+            var longRunningQueryTask = Task.Run(() =>
+            {
+                try
+                {
+                    using var statement = connection.CreateStatement();
+                    // Query that will take 10+ seconds: cross join two large ranges
+                    statement.SqlQuery = "SELECT count(*) FROM range(1, 100000) CROSS JOIN range(1, 100000)";
+                    var result = statement.ExecuteQuery();
+                    using var reader = result.Stream;
+                    _ = reader.ReadNextRecordBatchAsync().Result;
+                    return true; // Query completed
+                }
+                catch
+                {
+                    return false; // Query was interrupted/cancelled
+                }
+            });
 
-            Assert.True(true, "Test structure defined - implementation pending proxy support");
+            // Wait to ensure query has started executing
+            await Task.Delay(1000);
+
+            // Get baseline call counts before closing
+            var cancelOpCountBefore = await ControlClient.CountThriftMethodCallsAsync("CancelOperation");
+
+            // Act - Close connection while query is running
+            connection.Dispose();
+
+            // Assert - CancelOperation should have been called
+            var cancelOpCountAfter = await ControlClient.CountThriftMethodCallsAsync("CancelOperation");
+            Assert.True(cancelOpCountAfter > cancelOpCountBefore,
+                $"Expected CancelOperation to be called when closing connection with active operations. Before: {cancelOpCountBefore}, After: {cancelOpCountAfter}");
+
+            // Wait for background task to complete (should be quick after cancel)
+            var completed = await Task.WhenAny(longRunningQueryTask, Task.Delay(5000)) == longRunningQueryTask;
+            Assert.True(completed, "Long-running query task should complete within 5 seconds after connection close");
+
+            // The query should have been interrupted (returned false)
+            var querySucceeded = await longRunningQueryTask;
+            Assert.False(querySucceeded, "Expected long-running query to be interrupted by connection close");
         }
 
         /// <summary>
