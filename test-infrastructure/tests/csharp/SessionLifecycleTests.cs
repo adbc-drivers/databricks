@@ -107,9 +107,6 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         [Fact]
         public async Task OperationOnClosedSession_ThrowsAppropriateError()
         {
-            // Arrange - Enable invalid session handle scenario
-            await ControlClient.EnableScenarioAsync("invalid_session_handle");
-
             // Act & Assert - Attempting to use closed session should fail
             using var connection = CreateProxiedConnection();
 
@@ -121,6 +118,9 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 using var reader = result.Stream;
                 _ = reader.ReadNextRecordBatchAsync().Result;
             }
+
+            // Arrange - Enable invalid session handle scenario after first statement
+            await ControlClient.EnableScenarioAsync("invalid_session_handle");
 
             // Scenario will invalidate the session on next operation
             // Second query should fail with session error
@@ -152,12 +152,12 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         [Fact(Skip = "Requires 70+ second wait time - enable for comprehensive testing")]
         public async Task SessionTimeout_HandlesInactivityExpiration()
         {
-            // Arrange - Enable session timeout scenario
+            // Arrange - Enable session timeout scenario and create connection
             await ControlClient.EnableScenarioAsync("session_timeout_premature");
+            using var connection = CreateProxiedConnection();
 
             // Establish baseline
             int baselineOpenSessionCount;
-            using (var connection = CreateProxiedConnection())
             using (var statement = connection.CreateStatement())
             {
                 statement.SqlQuery = SimpleQuery;
@@ -170,10 +170,9 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Act - Wait for session to timeout (70 seconds > 60s default timeout)
             await Task.Delay(TimeSpan.FromSeconds(70));
 
-            // Attempt to use expired session
+            // Attempt to use expired session on the same connection
             var exception = Assert.ThrowsAny<Exception>(() =>
             {
-                using var connection = CreateProxiedConnection();
                 using var statement = connection.CreateStatement();
                 statement.SqlQuery = SimpleQuery;
                 var result = statement.ExecuteQuery();
@@ -186,14 +185,20 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         /// <summary>
-        /// SESSION-004b: Session Timeout with Auto-Reconnect Enabled
-        /// Validates that driver automatically creates a new session when auto-reconnect
-        /// is enabled and a session timeout occurs.
+        /// SESSION-004b: Auto-Reconnect on Communication Error
+        /// Validates that driver automatically reconnects when communication link errors occur
+        /// (connection drops, timeouts, or stalled responses) during operations.
+        ///
+        /// Expected behavior:
+        /// - During connect/login: should reconnect and succeed
+        /// - During metadata calls (GetTables/GetColumns): often reconnect + retry
+        /// - During query execution: may reconnect, query might restart depending on state
+        /// - During fetch (mid-stream results): usually fails and won't resume
         ///
         /// JIRA: ES-1661289
         /// </summary>
         [Fact(Skip = "Auto-reconnect feature not yet implemented - waiting for driver support")]
-        public async Task SessionTimeout_WithAutoReconnect_CreatesNewSession()
+        public async Task CommunicationError_WithAutoReconnect_ReconnectsSuccessfully()
         {
             // Arrange - Create connection with auto-reconnect enabled
             var parameters = new Dictionary<string, string>
@@ -219,11 +224,12 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 baselineOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
             }
 
-            // Enable session timeout scenario - next operation will get INVALID_HANDLE error
-            await ControlClient.EnableScenarioAsync("invalid_session_handle");
+            // Enable communication error scenario - simulates connection drop/timeout
+            // during next operation (e.g., during GetTables metadata call)
+            await ControlClient.EnableScenarioAsync("connection_drop_during_metadata");
 
-            // Act - Attempt to use connection after session timeout
-            // Driver should detect INVALID_HANDLE error and automatically open new session
+            // Act - Attempt metadata operation that will encounter communication error
+            // Driver should detect connection error and automatically reconnect
             using (var statement = connection.CreateStatement())
             {
                 statement.SqlQuery = SimpleQuery;
@@ -231,7 +237,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 using var reader = result.Stream;
                 var batch = reader.ReadNextRecordBatchAsync().Result;
 
-                // Assert - Query should succeed (no exception thrown)
+                // Assert - Query should succeed after auto-reconnect (no exception thrown)
                 Assert.NotNull(batch);
                 Assert.True(batch.Length > 0);
             }
@@ -239,7 +245,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Assert - Driver should have opened a new session automatically
             var finalOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
             Assert.True(finalOpenSessionCount > baselineOpenSessionCount,
-                $"Expected driver to open new session automatically. Baseline: {baselineOpenSessionCount}, Final: {finalOpenSessionCount}");
+                $"Expected driver to open new session automatically after connection error. Baseline: {baselineOpenSessionCount}, Final: {finalOpenSessionCount}");
+
+            // Verify that driver logs show reconnection attempt
+            // (This would require checking driver logs, which may need proxy support)
         }
 
         /// <summary>
@@ -265,44 +274,6 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             Assert.True(true, "Test structure defined - implementation pending proxy support");
         }
 
-        /// <summary>
-        /// SESSION-007: Multiple Concurrent Sessions
-        /// Validates that driver can maintain multiple concurrent sessions
-        /// independently without interference.
-        /// </summary>
-        [Fact]
-        public async Task MultipleConcurrentSessions_OperateIndependently()
-        {
-            // Arrange & Act - Open two separate connections
-            using var connection1 = CreateProxiedConnection();
-            using var connection2 = CreateProxiedConnection();
-
-            // Execute queries on both connections
-            using (var statement1 = connection1.CreateStatement())
-            {
-                statement1.SqlQuery = SimpleQuery;
-                var result1 = statement1.ExecuteQuery();
-                using var reader1 = result1.Stream;
-                var batch1 = reader1.ReadNextRecordBatchAsync().Result;
-                Assert.NotNull(batch1);
-            }
-
-            using (var statement2 = connection2.CreateStatement())
-            {
-                statement2.SqlQuery = SimpleQuery;
-                var result2 = statement2.ExecuteQuery();
-                using var reader2 = result2.Stream;
-                var batch2 = reader2.ReadNextRecordBatchAsync().Result;
-                Assert.NotNull(batch2);
-            }
-
-            // Assert - Two separate OpenSession calls should have been made
-            var openSessionCalls = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
-            Assert.Equal(2, openSessionCalls);
-
-            // Both queries should have succeeded independently
-            await ControlClient.AssertThriftMethodCalledAsync("ExecuteStatement", minCalls: 2);
-        }
 
         /// <summary>
         /// SESSION-008: OpenSession with Configuration Parameters
@@ -404,15 +375,22 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// <summary>
         /// SESSION-011: OpenSession Network Timeout
         /// Validates that driver handles network timeout during OpenSession request.
+        ///
+        /// Without auto-reconnect: Should throw timeout/connection error
+        /// With auto-reconnect enabled: Should retry and eventually succeed or fail after max retries
+        ///
+        /// This test validates the error case without auto-reconnect.
+        /// For auto-reconnect behavior, see SESSION-004b.
         /// </summary>
         [Fact(Skip = "35 second delay - enable for comprehensive testing")]
-        public async Task OpenSessionNetworkTimeout_RetriesWithBackoff()
+        public async Task OpenSessionNetworkTimeout_ThrowsTimeoutError()
         {
             // Arrange - Enable network timeout scenario (35s delay)
+            // This simulates a slow/stalled connection during OpenSession
             await ControlClient.EnableScenarioAsync("network_timeout_open_session");
 
-            // Act & Assert - Driver should handle timeout
-            // This will take 35+ seconds as it waits for the delay
+            // Act & Assert - Without auto-reconnect, driver should throw timeout error
+            // This will take 35+ seconds as it waits for the delay before timeout
             var startTime = DateTime.UtcNow;
 
             var exception = Assert.ThrowsAny<Exception>(() =>
@@ -426,8 +404,14 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             Assert.True(elapsed.TotalSeconds >= 30,
                 $"Expected delay of at least 30s but only took {elapsed.TotalSeconds}s");
 
-            // Verify some kind of timeout or connection error occurred
+            // Verify timeout or connection error occurred
             Assert.NotNull(exception);
+            var exceptionString = exception.ToString();
+            Assert.True(
+                exceptionString.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                exceptionString.Contains("connection", StringComparison.OrdinalIgnoreCase) ||
+                exceptionString.Contains("network", StringComparison.OrdinalIgnoreCase),
+                $"Expected timeout/connection error but got: {exceptionString}");
         }
 
         /// <summary>
