@@ -156,6 +156,34 @@ SCENARIOS = {
         "error_code": 503,
         "error_message": "Service Unavailable",
     },
+    "request_timeout_408_open_session": {
+        "description": "OpenSession returns 408 Request Timeout (transient error, driver should retry)",
+        "operation": "OpenSession",
+        "action": "return_error",
+        "error_code": 408,
+        "error_message": "Request Timeout",
+    },
+    "bad_gateway_502_open_session": {
+        "description": "OpenSession returns 502 Bad Gateway (transient error, driver should retry)",
+        "operation": "OpenSession",
+        "action": "return_error",
+        "error_code": 502,
+        "error_message": "Bad Gateway",
+    },
+    "gateway_timeout_504_open_session": {
+        "description": "OpenSession returns 504 Gateway Timeout (transient error, driver should retry)",
+        "operation": "OpenSession",
+        "action": "return_error",
+        "error_code": 504,
+        "error_message": "Gateway Timeout",
+    },
+    "too_many_requests_429_open_session": {
+        "description": "OpenSession returns 429 Too Many Requests (rate limit, driver should retry with separate timeout)",
+        "operation": "OpenSession",
+        "action": "return_error",
+        "error_code": 429,
+        "error_message": "Too Many Requests",
+    },
 }
 
 

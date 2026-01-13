@@ -357,30 +357,61 @@ tests:
       Driver should log warning but not throw to caller.
 
   - id: SESSION-013
-    name: Session Creation Under Rate Limiting
-    priority: Low
+    name: HTTP Retry on Transient Errors
+    priority: Medium
     description: |
-      Validates that driver handles rate limiting during session creation.
+      Validates that driver automatically retries OpenSession when receiving
+      transient HTTP errors with exponential backoff.
 
-    proxy_scenario: rate_limit_429
+      Retryable HTTP status codes (per RetryHttpHandler.cs):
+      - 408 Request Timeout
+      - 429 Too Many Requests (uses RateLimitRetryTimeout)
+      - 502 Bad Gateway
+      - 503 Service Unavailable
+      - 504 Gateway Timeout
+
+      Retry behavior:
+      - Uses Retry-After header if present, otherwise exponential backoff
+      - Backoff starts at 1s, doubles each time (max 32s)
+      - Adds jitter (80-120%) to avoid thundering herd
+      - Retries until timeout exceeded:
+        - TemporarilyUnavailableRetryTimeout (default 900s) for 408/502/503/504
+        - RateLimitRetryTimeout (default 120s) for 429
+
+    proxy_scenarios:
+      - service_unavailable_503_open_session (HTTP 503)
+      - request_timeout_408_open_session (HTTP 408)
+      - bad_gateway_502_open_session (HTTP 502)
+      - gateway_timeout_504_open_session (HTTP 504)
+      - too_many_requests_429_open_session (HTTP 429)
 
     steps:
       - action: enable_failure_scenario
-        scenario: rate_limit_429
+        scenario: <one_of_above>
+        note: Scenario auto-disables after first error
 
       - action: execute_test
-        description: Attempt to open session when rate limited
+        description: Attempt to open session with transient error
         thrift_call: OpenSession
 
     assertions:
       - type: retry_with_backoff
-        description: Driver retries with exponential backoff
+        description: Driver waits ~1 second before retry (with jitter)
 
       - type: eventual_success
-        description: Session eventually opens after rate limit clears
+        description: Connection succeeds after retry
+
+      - type: multiple_calls
+        description: OpenSession called at least twice (initial + retry)
+
+      - type: connection_valid
+        description: Connection can execute queries
 
     notes: |
-      Driver should respect rate limit headers and retry appropriately.
+      Each proxy scenario returns error once then auto-disables, simulating
+      transient errors that clear quickly.
+
+      Tests validate automatic retry without manual intervention.
 
   - id: SESSION-014
     name: Concurrent Session Close

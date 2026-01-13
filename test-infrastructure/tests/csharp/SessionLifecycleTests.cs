@@ -490,8 +490,8 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// - Retries until TemporarilyUnavailableRetryTimeout is exceeded
         /// - Default TemporarilyUnavailableRetryTimeout = 900 seconds (15 minutes)
         ///
-        /// This test configures a 30-second retry timeout and simulates a 503 error
-        /// that clears after the first attempt. The driver should:
+        /// This test simulates a 503 error that clears after the first attempt.
+        /// The proxy returns 503 once then auto-disables. The driver should:
         /// 1. Receive 503 on first OpenSession attempt
         /// 2. Wait ~1 second (initial backoff with jitter)
         /// 3. Retry OpenSession and succeed
@@ -499,14 +499,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         [Fact]
         public async Task ServiceUnavailable503_RetriesAndSucceeds()
         {
-            // Arrange - Configure retry timeout and enable 503 scenario
-            // Set retry timeout to 30 seconds (sufficient for a few retries)
-            var parameters = new Dictionary<string, string>
-            {
-                ["adbc.spark.temporarily_unavailable_retry_timeout"] = "30"  // 30 seconds
-            };
-
-            // Enable 503 Service Unavailable scenario
+            // Arrange - Enable 503 Service Unavailable scenario
             // The proxy will return 503 once, then auto-disable (allowing retry to succeed)
             await ControlClient.EnableScenarioAsync("service_unavailable_503_open_session");
 
@@ -519,7 +512,7 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // 2. Wait with backoff (~1 second with jitter)
             // 3. Retry OpenSession -> succeed (scenario auto-disabled)
             var startTime = DateTime.UtcNow;
-            using var connection = CreateProxiedConnectionWithParameters(parameters);
+            using var connection = CreateProxiedConnection();
             var elapsed = DateTime.UtcNow - startTime;
 
             // Assert - Verify retry behavior
@@ -547,6 +540,57 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.True(batch.Length > 0);
+        }
+
+        /// <summary>
+        /// SESSION-013b: Retry on Other Transient HTTP Errors (408, 429, 502, 504)
+        /// Validates that driver automatically retries OpenSession when receiving
+        /// other retryable HTTP errors.
+        ///
+        /// Status codes tested:
+        /// - 408 Request Timeout
+        /// - 429 Too Many Requests (uses RateLimitRetryTimeout instead of TemporarilyUnavailableRetryTimeout)
+        /// - 502 Bad Gateway
+        /// - 504 Gateway Timeout
+        ///
+        /// Note: 429 uses RateLimitRetryTimeout (default 120s) while others use
+        /// TemporarilyUnavailableRetryTimeout (default 900s), but for a single retry
+        /// (~1 second backoff), both timeouts are sufficient.
+        /// </summary>
+        [Theory]
+        [InlineData(408, "request_timeout_408_open_session", "Request Timeout")]
+        [InlineData(429, "too_many_requests_429_open_session", "Too Many Requests")]
+        [InlineData(502, "bad_gateway_502_open_session", "Bad Gateway")]
+        [InlineData(504, "gateway_timeout_504_open_session", "Gateway Timeout")]
+        public async Task TransientHttpErrors_RetriesAndSucceeds(int statusCode, string scenarioName, string errorType)
+        {
+            // Arrange - Enable error scenario (auto-disables after first error)
+            await ControlClient.EnableScenarioAsync(scenarioName);
+            var initialOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
+
+            // Act - Attempt to open connection
+            var startTime = DateTime.UtcNow;
+            using var connection = CreateProxiedConnection();
+            var elapsed = DateTime.UtcNow - startTime;
+
+            // Assert - Verify retry behavior
+            Assert.NotNull(connection);
+
+            // Should have taken at least 0.8 seconds (backoff delay with jitter)
+            Assert.True(elapsed.TotalSeconds >= 0.8,
+                $"Expected at least 0.8s for retry backoff on HTTP {statusCode} ({errorType}), but only took {elapsed.TotalSeconds}s");
+
+            // OpenSession should have been called at least twice (initial + retry)
+            var finalOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
+            var openSessionCallsMade = finalOpenSessionCount - initialOpenSessionCount;
+            Assert.True(openSessionCallsMade >= 2,
+                $"Expected at least 2 OpenSession calls for HTTP {statusCode} ({errorType}), but only {openSessionCallsMade} were made");
+
+            // Verify connection is valid
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = SimpleQuery;
+            var result = statement.ExecuteQuery();
+            Assert.NotNull(result);
         }
     }
 }
