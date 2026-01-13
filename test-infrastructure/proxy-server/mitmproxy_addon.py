@@ -112,12 +112,12 @@ SCENARIOS = {
     },
     # Session Lifecycle Scenarios
     "invalid_session_handle": {
-        "description": "Server returns invalid session handle error on second ExecuteStatement",
+        "description": "Server returns invalid session handle error on next ExecuteStatement",
         "operation": "ExecuteStatement",
         "action": "return_thrift_error",
         "error_type": "INVALID_HANDLE",
         "error_message": "Invalid or expired session handle",
-        "trigger_after_count": 1,  # Trigger on second ExecuteStatement (skip first)
+        # No trigger_after_count needed - test enables scenario after first statement
     },
     "session_timeout_premature": {
         "description": "Session expires before idle timeout",
