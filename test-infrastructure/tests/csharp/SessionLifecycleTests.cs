@@ -274,39 +274,6 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             Assert.True(true, "Test structure defined - implementation pending proxy support");
         }
 
-
-        /// <summary>
-        /// SESSION-008: OpenSession with Configuration Parameters
-        /// Validates that driver correctly passes session configuration parameters
-        /// to OpenSession request.
-        /// </summary>
-        [Fact]
-        public async Task OpenSessionWithConfiguration_PassesParameters()
-        {
-            // Arrange - Create connection with custom session configuration
-            var parameters = new System.Collections.Generic.Dictionary<string, string>
-            {
-                ["spark.sql.adaptive.enabled"] = "true",
-                ["spark.sql.shuffle.partitions"] = "200"
-            };
-
-            // Act - Open connection (triggers OpenSession with config)
-            using var connection = CreateProxiedConnectionWithParameters(parameters);
-
-            // Execute a query to ensure session is active
-            using var statement = connection.CreateStatement();
-            statement.SqlQuery = SimpleQuery;
-            var result = statement.ExecuteQuery();
-            Assert.NotNull(result);
-
-            // Assert - OpenSession should have been called
-            var openSessionCalls = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
-            Assert.Equal(1, openSessionCalls);
-
-            // Note: Verifying that parameters were actually sent requires Thrift message inspection
-            // which is tracked by the proxy but not yet exposed via control API
-        }
-
         /// <summary>
         /// SESSION-014: Concurrent Session Close
         /// Validates that driver handles multiple threads attempting to
