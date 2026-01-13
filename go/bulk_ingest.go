@@ -52,9 +52,6 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 
 	totalRows := int64(0)
 	params := make([]driver.NamedValue, s.boundStream.Schema().NumFields())
-	for i := range params {
-		params[i].Ordinal = i + 1
-	}
 
 	for s.boundStream.Next() {
 		recordBatch := s.boundStream.RecordBatch()

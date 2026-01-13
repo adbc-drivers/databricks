@@ -27,8 +27,8 @@ class DatabricksQuirks(model.DriverQuirks):
     short_version = "17"
     features = model.DriverFeatures(
         connection_get_table_schema=False,
-        connection_set_current_catalog=True,
-        connection_set_current_schema=True,
+        connection_set_current_catalog=False,
+        connection_set_current_schema=False,
         connection_transactions=False,
         get_objects_constraints_check=False,
         get_objects_constraints_foreign=False,
