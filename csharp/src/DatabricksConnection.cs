@@ -57,6 +57,8 @@ namespace AdbcDrivers.Databricks
 
         public const string DefaultInitialSchema = "default";
 
+        private new const string DriverName = "Databricks ADBC Driver";
+
         internal static readonly Dictionary<string, string> timestampConfig = new Dictionary<string, string>
         {
             { "spark.thriftserver.arrowBasedRowSet.timestampAsString", "false" },
@@ -509,6 +511,8 @@ namespace AdbcDrivers.Databricks
         }
 
         protected override bool GetObjectsPatternsRequireLowerCase => true;
+
+        protected override string InfoDriverName => DriverName;
 
         internal override IArrowArrayStream NewReader<T>(T statement, Schema schema, IResponse response, TGetResultSetMetadataResp? metadataResp = null)
         {
