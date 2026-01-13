@@ -470,5 +470,83 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Note: We can't easily verify local resource cleanup without driver instrumentation,
             // but the test validates the driver handles CloseSession failure appropriately
         }
+
+        /// <summary>
+        /// SESSION-013: Retry on Transient HTTP 503 Service Unavailable
+        /// Validates that driver automatically retries OpenSession when receiving
+        /// HTTP 503 Service Unavailable errors using exponential backoff.
+        ///
+        /// The driver's RetryHttpHandler retries these status codes:
+        /// - 408 Request Timeout
+        /// - 429 Too Many Requests (separate timeout)
+        /// - 502 Bad Gateway
+        /// - 503 Service Unavailable
+        /// - 504 Gateway Timeout
+        ///
+        /// Retry behavior (RetryHttpHandler.cs):
+        /// - Uses Retry-After header if present, otherwise exponential backoff
+        /// - Backoff: starts at 1s, doubles each time (1, 2, 4, 8, 16, 32), max 32s
+        /// - Adds jitter (80-120% of base) to avoid thundering herd
+        /// - Retries until TemporarilyUnavailableRetryTimeout is exceeded
+        /// - Default TemporarilyUnavailableRetryTimeout = 900 seconds (15 minutes)
+        ///
+        /// This test configures a 30-second retry timeout and simulates a 503 error
+        /// that clears after the first attempt. The driver should:
+        /// 1. Receive 503 on first OpenSession attempt
+        /// 2. Wait ~1 second (initial backoff with jitter)
+        /// 3. Retry OpenSession and succeed
+        /// </summary>
+        [Fact]
+        public async Task ServiceUnavailable503_RetriesAndSucceeds()
+        {
+            // Arrange - Configure retry timeout and enable 503 scenario
+            // Set retry timeout to 30 seconds (sufficient for a few retries)
+            var parameters = new Dictionary<string, string>
+            {
+                ["adbc.spark.temporarily_unavailable_retry_timeout"] = "30"  // 30 seconds
+            };
+
+            // Enable 503 Service Unavailable scenario
+            // The proxy will return 503 once, then auto-disable (allowing retry to succeed)
+            await ControlClient.EnableScenarioAsync("service_unavailable_503_open_session");
+
+            // Get baseline call count before connection attempt
+            var initialOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
+
+            // Act - Attempt to open connection
+            // Driver should:
+            // 1. Try OpenSession -> receive 503
+            // 2. Wait with backoff (~1 second with jitter)
+            // 3. Retry OpenSession -> succeed (scenario auto-disabled)
+            var startTime = DateTime.UtcNow;
+            using var connection = CreateProxiedConnectionWithParameters(parameters);
+            var elapsed = DateTime.UtcNow - startTime;
+
+            // Assert - Verify retry behavior
+            // 1. Connection should eventually succeed (no exception thrown)
+            Assert.NotNull(connection);
+
+            // 2. Should have taken at least 1 second (backoff delay)
+            // Allow some tolerance for timing (0.8s - accounts for jitter 80-120%)
+            Assert.True(elapsed.TotalSeconds >= 0.8,
+                $"Expected at least 0.8s for retry backoff, but only took {elapsed.TotalSeconds}s");
+
+            // 3. OpenSession should have been called more than once (showing retry happened)
+            var finalOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
+            var openSessionCallsMade = finalOpenSessionCount - initialOpenSessionCount;
+            Assert.True(openSessionCallsMade >= 2,
+                $"Expected at least 2 OpenSession calls (initial + retry), but only {openSessionCallsMade} were made");
+
+            // 4. Verify we can execute a query (connection is valid)
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = SimpleQuery;
+            var result = statement.ExecuteQuery();
+            Assert.NotNull(result);
+
+            using var reader = result.Stream;
+            var batch = reader.ReadNextRecordBatchAsync().Result;
+            Assert.NotNull(batch);
+            Assert.True(batch.Length > 0);
+        }
     }
 }

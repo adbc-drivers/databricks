@@ -149,6 +149,13 @@ SCENARIOS = {
         "operation": "CloseSession",
         "action": "close_connection",
     },
+    "service_unavailable_503_open_session": {
+        "description": "OpenSession returns 503 Service Unavailable (transient error, driver should retry)",
+        "operation": "OpenSession",
+        "action": "return_error",
+        "error_code": 503,
+        "error_message": "Service Unavailable",
+    },
 }
 
 
