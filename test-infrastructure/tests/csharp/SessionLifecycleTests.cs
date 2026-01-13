@@ -366,6 +366,16 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         /// SESSION-011: OpenSession Network Timeout
         /// Validates that driver handles network timeout during OpenSession request.
         ///
+        /// The driver's connection timeout is determined by:
+        /// - Base timeout: HiveServer2Connection.ConnectTimeoutMillisecondsDefault = 30 seconds
+        /// - With TemporarilyUnavailableRetry enabled (default): timeout is adjusted to
+        ///   max(base_timeout, TemporarilyUnavailableRetryTimeout * 1000)
+        /// - Default TemporarilyUnavailableRetryTimeout = 900 seconds (15 minutes)
+        ///
+        /// This test configures TemporarilyUnavailableRetryTimeout to 20 seconds, so the
+        /// effective connection timeout becomes 20 seconds. The proxy delays OpenSession
+        /// by 35 seconds, which exceeds this timeout.
+        ///
         /// Without auto-reconnect: Should throw timeout/connection error
         /// With auto-reconnect enabled: Should retry and eventually succeed or fail after max retries
         ///
@@ -375,24 +385,29 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         [Fact(Skip = "35 second delay - enable for comprehensive testing")]
         public async Task OpenSessionNetworkTimeout_ThrowsTimeoutError()
         {
-            // Arrange - Enable network timeout scenario (35s delay)
-            // This simulates a slow/stalled connection during OpenSession
+            // Arrange - Configure timeout to 20 seconds, then enable 35-second delay scenario
+            // Driver will adjust ConnectTimeoutMilliseconds to 20,000ms based on retry timeout
+            var parameters = new Dictionary<string, string>
+            {
+                ["adbc.spark.temporarily_unavailable_retry_timeout"] = "20"  // 20 seconds
+            };
+
+            // Enable network timeout scenario (35s delay) - exceeds our 20s timeout
             await ControlClient.EnableScenarioAsync("network_timeout_open_session");
 
-            // Act & Assert - Without auto-reconnect, driver should throw timeout error
-            // This will take 35+ seconds as it waits for the delay before timeout
+            // Act & Assert - Driver should throw timeout error after 20+ seconds
             var startTime = DateTime.UtcNow;
 
             var exception = Assert.ThrowsAny<Exception>(() =>
             {
-                using var connection = CreateProxiedConnection();
+                using var connection = CreateProxiedConnectionWithParameters(parameters);
             });
 
             var elapsed = DateTime.UtcNow - startTime;
 
-            // Verify the delay occurred (at least 30 seconds)
-            Assert.True(elapsed.TotalSeconds >= 30,
-                $"Expected delay of at least 30s but only took {elapsed.TotalSeconds}s");
+            // Verify the timeout occurred (should be around 20 seconds, not 35)
+            Assert.True(elapsed.TotalSeconds >= 18 && elapsed.TotalSeconds <= 32,
+                $"Expected timeout around 20s but took {elapsed.TotalSeconds}s");
 
             // Verify timeout or connection error occurred
             Assert.NotNull(exception);
