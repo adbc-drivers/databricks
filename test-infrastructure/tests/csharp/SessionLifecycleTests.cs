@@ -208,15 +208,24 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
         }
 
         /// <summary>
-        /// SESSION-004b: Auto-Reconnect on Communication Error
-        /// Validates that driver automatically reconnects when communication link errors occur
-        /// (connection drops, timeouts, or stalled responses) during operations.
+        /// SESSION-004b: Auto-Reconnect on Communication Error During Query Execution
+        /// Validates that driver automatically reconnects when communication errors occur
+        /// during query execution (connection drops, network timeouts).
         ///
-        /// Expected behavior:
-        /// - During connect/login: should reconnect and succeed
-        /// - During metadata calls (GetTables/GetColumns): often reconnect + retry
-        /// - During query execution: may reconnect, query might restart depending on state
-        /// - During fetch (mid-stream results): usually fails and won't resume
+        /// This test simulates a connection drop during ExecuteStatement (query execution).
+        /// With auto-reconnect enabled, the driver should:
+        /// 1. Detect the communication error
+        /// 2. Automatically create a new session
+        /// 3. Retry the query on the new session
+        /// 4. Return results without throwing exception to the caller
+        ///
+        /// Expected behavior with auto-reconnect:
+        /// - Query succeeds without exception
+        /// - Driver opens a new session automatically (OpenSession count increases)
+        /// - Application is unaware of the reconnection
+        ///
+        /// Note: This is different from SESSION-004 (session expiration), which tests
+        /// handling of SESSION_EXPIRED Thrift errors, not communication/transport errors.
         ///
         /// JIRA: ES-1661289
         /// </summary>
@@ -247,11 +256,10 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
                 baselineOpenSessionCount = await ControlClient.CountThriftMethodCallsAsync("OpenSession");
             }
 
-            // Enable communication error scenario - simulates connection drop/timeout
-            // during next operation (e.g., during GetTables metadata call)
+            // Enable communication error scenario - simulates connection drop during ExecuteStatement
             await ControlClient.EnableScenarioAsync("connection_drop_during_metadata");
 
-            // Act - Attempt metadata operation that will encounter communication error
+            // Act - Execute query that will encounter communication error during execution
             // Driver should detect connection error and automatically reconnect
             using (var statement = connection.CreateStatement())
             {
