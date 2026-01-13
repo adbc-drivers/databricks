@@ -92,9 +92,9 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             // Wait a moment for async cleanup
             await Task.Delay(100);
 
-            // Assert - CloseSession should have been called
+            // Assert - CloseSession should have been called exactly once
             var closeSessionCalls = await ControlClient.CountThriftMethodCallsAsync("CloseSession");
-            Assert.True(closeSessionCalls >= 1, $"Expected CloseSession to be called at least once, but was called {closeSessionCalls} times");
+            Assert.Equal(1, closeSessionCalls);
         }
 
         /// <summary>
