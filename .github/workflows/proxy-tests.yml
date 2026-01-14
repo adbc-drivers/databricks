@@ -136,3 +136,12 @@ jobs:
           dotnet test --filter "FullyQualifiedName~CloudFetchTests" \
             --logger "console;verbosity=normal" \
             --no-build
+
+      - name: Run Session Lifecycle proxy tests
+        env:
+          DATABRICKS_TEST_CONFIG_FILE: ${{ github.workspace }}/databricks-test-config.json
+        run: |
+          cd test-infrastructure/tests/csharp
+          dotnet test --filter "FullyQualifiedName~SessionLifecycleTests" \
+            --logger "console;verbosity=normal" \
+            --no-build

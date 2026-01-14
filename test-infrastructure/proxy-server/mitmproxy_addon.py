@@ -658,6 +658,19 @@ class FailureInjectionAddon:
                 f"[INJECT] Delay complete for Thrift scenario: {scenario_name}"
             )
 
+        elif action == "return_error":
+            # Return HTTP error with specified code and message
+            error_code = base_config.get("error_code", 500)
+            error_message = base_config.get(
+                "error_message", "Internal Server Error"
+            )
+            flow.response = http.Response.make(
+                error_code,
+                error_message.encode("utf-8"),
+                {"Content-Type": "text/plain"},
+            )
+            self._disable_scenario(scenario_name)
+
         elif action == "close_connection":
             # Kill the connection abruptly
             flow.response = http.Response.make(
