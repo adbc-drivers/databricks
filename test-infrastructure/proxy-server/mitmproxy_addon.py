@@ -661,9 +661,7 @@ class FailureInjectionAddon:
         elif action == "return_error":
             # Return HTTP error with specified code and message
             error_code = base_config.get("error_code", 500)
-            error_message = base_config.get(
-                "error_message", "Internal Server Error"
-            )
+            error_message = base_config.get("error_message", "Internal Server Error")
             flow.response = http.Response.make(
                 error_code,
                 error_message.encode("utf-8"),
