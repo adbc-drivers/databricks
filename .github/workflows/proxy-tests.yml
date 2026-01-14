@@ -129,6 +129,7 @@ jobs:
             --no-build
 
       - name: Run CloudFetch proxy tests
+        if: success() || failure()
         env:
           DATABRICKS_TEST_CONFIG_FILE: ${{ github.workspace }}/databricks-test-config.json
         run: |
@@ -138,6 +139,7 @@ jobs:
             --no-build
 
       - name: Run Session Lifecycle proxy tests
+        if: success() || failure()
         env:
           DATABRICKS_TEST_CONFIG_FILE: ${{ github.workspace }}/databricks-test-config.json
         run: |
