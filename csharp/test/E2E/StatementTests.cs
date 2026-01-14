@@ -88,6 +88,51 @@ namespace AdbcDrivers.Databricks.Tests
             OutputHelper?.WriteLine("NOTE: Whether actual LZ4 compression was used is determined by the server");
         }
 
+        /// <summary>
+        /// Tests that the non-CloudFetch reader (DatabricksReader) correctly respects LIMIT N
+        /// by trimming excess rows returned by the server when trimArrowBatchesToLimit=false.
+        /// This verifies the fix for PECO-2524.
+        /// </summary>
+        [SkippableFact]
+        public async Task NonCloudFetchReader_RespectsRowCountLimit()
+        {
+            OutputHelper?.WriteLine("Testing non-CloudFetch reader row count limiting (PECO-2524)");
+
+            // Create a connection with CloudFetch explicitly disabled to use DatabricksReader
+            using AdbcConnection connection = NewConnection();
+            using var statement = connection.CreateStatement();
+
+            // Disable CloudFetch to ensure we use the DatabricksReader path
+            statement.SetOption(DatabricksParameters.UseCloudFetch, "false");
+            OutputHelper?.WriteLine("CloudFetch disabled - using DatabricksReader");
+
+            // Use a query with LIMIT to test row count limiting
+            // The server may return more rows than LIMIT when trimArrowBatchesToLimit=false (default)
+            const int expectedRows = 1000;
+            statement.SqlQuery = $"SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT {expectedRows}";
+
+            QueryResult result = statement.ExecuteQuery();
+            Assert.NotNull(result.Stream);
+
+            // Read all batches and count rows
+            long totalRows = 0;
+            int batchCount = 0;
+
+            while (result.Stream != null)
+            {
+                using var batch = await result.Stream.ReadNextRecordBatchAsync();
+                if (batch == null)
+                    break;
+
+                batchCount++;
+                totalRows += batch.Length;
+                OutputHelper?.WriteLine($"Batch {batchCount}: Read {batch.Length} rows (total so far: {totalRows})");
+            }
+
+            // Verify exact row count - driver must respect LIMIT N and trim excess rows
+            Assert.Equal(expectedRows, totalRows);
+            OutputHelper?.WriteLine($"Successfully read exactly {totalRows} rows in {batchCount} batches using non-CloudFetch reader");
+        }
 
         [SkippableTheory]
         [ClassData(typeof(LongRunningStatementTimeoutTestData))]

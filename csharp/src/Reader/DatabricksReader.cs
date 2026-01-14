@@ -146,7 +146,8 @@ namespace AdbcDrivers.Databricks.Reader
         /// </summary>
         private RecordBatch? ApplyRowCountLimit(RecordBatch batch, System.Diagnostics.Activity? activity)
         {
-            // If no row limit set or batch fits within expected count
+            // If no row limit tracking (0 means no limit set, negative is invalid/defensive),
+            // or batch fits within expected count - return as-is
             if (_currentBatchExpectedRows <= 0 || batch.Length <= _currentBatchExpectedRows)
             {
                 return batch;
