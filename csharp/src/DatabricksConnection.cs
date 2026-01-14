@@ -57,7 +57,7 @@ namespace AdbcDrivers.Databricks
 
         public const string DefaultInitialSchema = "default";
 
-        private new const string DriverName = "ADBC Databricks Driver";
+        protected override string DriverName => "ADBC Databricks Driver";
 
         internal static readonly Dictionary<string, string> timestampConfig = new Dictionary<string, string>
         {
