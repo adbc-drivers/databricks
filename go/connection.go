@@ -58,7 +58,9 @@ func (c *connectionImpl) Close() error {
 
 func (c *connectionImpl) NewStatement() (adbc.Statement, error) {
 	return &statementImpl{
-		conn: c,
+		StatementImplBase: driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper),
+		conn:              c,
+		bulkIngestOptions: driverbase.NewBulkIngestOptions(),
 	}, nil
 }
 
