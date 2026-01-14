@@ -47,9 +47,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private ArrowStreamReader? currentReader;
         private IDownloadResult? currentDownloadResult;
 
-        // Row count limiting: tracks the total expected rows and cumulative rows read.
-        // For REST (SEA): manifest.TotalRowCount is known upfront - use global limiting
-        // For Thrift: rowCount is known per-chunk - use chunk-level limiting
+        // Row count limiting supports two modes:
+        // 1. Global limiting (SEA/REST): Uses manifest.TotalRowCount for total expected rows
+        // 2. Per-chunk limiting (Thrift): Uses TSparkArrowResultLink.RowCount per chunk
         // When trimArrowBatchesToLimit=false (server default), the server may return more data
         // than the limit in the last batch but reports adjusted rowCount in metadata.
         private readonly long _totalExpectedRows;
@@ -66,7 +66,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="schema">The Arrow schema.</param>
         /// <param name="response">The query response (nullable for REST API, which doesn't use IResponse).</param>
         /// <param name="downloadManager">The download manager (already initialized and started).</param>
-        /// <param name="totalExpectedRows">The total expected rows from metadata (0 to disable limiting).</param>
+        /// <param name="totalExpectedRows">Total expected rows for global limiting (SEA). Pass 0 to use per-chunk limiting (Thrift).</param>
         public CloudFetchReader(
             ITracingStatement statement,
             Schema schema,
@@ -92,36 +92,26 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 while (true)
                 {
-                    // Check if we've already read all expected rows (global row count limiting for REST API)
+                    // Check global row limit first (used by SEA with manifest.TotalRowCount)
                     if (_totalExpectedRows > 0 && _rowsRead >= _totalExpectedRows)
                     {
-                        Activity.Current?.AddEvent("cloudfetch.row_limit_reached", [
+                        Activity.Current?.AddEvent("cloudfetch.global_row_limit_reached", [
                             new("total_expected_rows", _totalExpectedRows),
                             new("rows_read", _rowsRead)
                         ]);
+                        CleanupCurrentReaderAndDownloadResult();
                         return null;
                     }
 
-                    // Check if we've reached the chunk limit (per-chunk limiting for Thrift)
-                    if (_totalExpectedRows == 0 && _currentChunkExpectedRows > 0 && _currentChunkRowsRead >= _currentChunkExpectedRows)
+                    // Check per-chunk row limit (used by Thrift with TSparkArrowResultLink.RowCount)
+                    if (_totalExpectedRows <= 0 && _currentChunkExpectedRows > 0 && _currentChunkRowsRead >= _currentChunkExpectedRows)
                     {
                         Activity.Current?.AddEvent("cloudfetch.chunk_row_limit_reached", [
                             new("chunk_expected_rows", _currentChunkExpectedRows),
                             new("chunk_rows_read", _currentChunkRowsRead)
                         ]);
                         // Move to next chunk
-                        if (this.currentReader != null)
-                        {
-                            this.currentReader.Dispose();
-                            this.currentReader = null;
-                        }
-                        if (this.currentDownloadResult != null)
-                        {
-                            this.currentDownloadResult.Dispose();
-                            this.currentDownloadResult = null;
-                        }
-                        _currentChunkExpectedRows = 0;
-                        _currentChunkRowsRead = 0;
+                        CleanupCurrentReaderAndDownloadResult();
                     }
 
                     // If we have a current reader, try to read the next batch
@@ -142,18 +132,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         else
                         {
                             // Clean up the current reader and download result
-                            this.currentReader.Dispose();
-                            this.currentReader = null;
-
-                            if (this.currentDownloadResult != null)
-                            {
-                                this.currentDownloadResult.Dispose();
-                                this.currentDownloadResult = null;
-                            }
-
-                            // Reset chunk-level tracking
-                            _currentChunkExpectedRows = 0;
-                            _currentChunkRowsRead = 0;
+                            CleanupCurrentReaderAndDownloadResult();
                         }
                     }
 
@@ -179,8 +158,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                             Activity.Current?.AddEvent("cloudfetch.reader_waiting_for_download", [
                                 new("chunk_index", this.currentDownloadResult.ChunkIndex),
-                                new("chunk_row_count", this.currentDownloadResult.RowCount),
-                                new("total_expected_rows", _totalExpectedRows)
+                                new("chunk_row_count", this.currentDownloadResult.RowCount)
                             ]);
 
                             await this.currentDownloadResult.DownloadCompletedTask;
@@ -223,59 +201,99 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         }
 
         /// <summary>
+        /// Cleans up the current reader and download result, resetting chunk-level tracking.
+        /// </summary>
+        private void CleanupCurrentReaderAndDownloadResult()
+        {
+            if (this.currentReader != null)
+            {
+                this.currentReader.Dispose();
+                this.currentReader = null;
+            }
+            if (this.currentDownloadResult != null)
+            {
+                this.currentDownloadResult.Dispose();
+                this.currentDownloadResult = null;
+            }
+            _currentChunkExpectedRows = 0;
+            _currentChunkRowsRead = 0;
+        }
+
+        /// <summary>
         /// Applies row count limiting to a record batch.
-        /// Uses global limiting (totalExpectedRows) for REST API where the total is known upfront.
-        /// Uses chunk-level limiting (currentChunkExpectedRows) for Thrift where we don't know total upfront.
+        /// Supports two modes:
+        /// - Global limiting (SEA): Uses _totalExpectedRows from manifest.TotalRowCount
+        /// - Per-chunk limiting (Thrift): Uses _currentChunkExpectedRows from TSparkArrowResultLink.RowCount
         /// </summary>
         private RecordBatch? ApplyRowCountLimit(RecordBatch batch)
         {
-            // Determine which limit to use: global (REST) or chunk-level (Thrift)
-            long expectedRows = _totalExpectedRows > 0 ? _totalExpectedRows : _currentChunkExpectedRows;
-            long rowsReadRef = _totalExpectedRows > 0 ? _rowsRead : _currentChunkRowsRead;
-
-            // If no row limit tracking
-            if (expectedRows <= 0)
+            // Mode 1: Global row limiting (SEA with manifest.TotalRowCount)
+            if (_totalExpectedRows > 0)
             {
-                _rowsRead += batch.Length;
+                long remainingRows = _totalExpectedRows - _rowsRead;
+
+                if (batch.Length <= remainingRows)
+                {
+                    _rowsRead += batch.Length;
+                    return batch;
+                }
+
+                if (remainingRows <= 0)
+                {
+                    return null;
+                }
+
+                Activity.Current?.AddEvent("cloudfetch.trimming_batch_global", [
+                    new("original_length", batch.Length),
+                    new("trimmed_length", remainingRows),
+                    new("total_expected_rows", _totalExpectedRows),
+                    new("rows_read_before", _rowsRead)
+                ]);
+
+                // Slice uses reference counting - dispose original to release its reference
+                var globalTrimmedBatch = batch.Slice(0, (int)remainingRows);
+                batch.Dispose();
+                _rowsRead += globalTrimmedBatch.Length;
+                return globalTrimmedBatch;
+            }
+
+            // Mode 2: Per-chunk row limiting (Thrift with TSparkArrowResultLink.RowCount)
+            // If no row limit tracking for this chunk (0 means no limit set, negative is invalid/defensive)
+            if (_currentChunkExpectedRows <= 0)
+            {
                 _currentChunkRowsRead += batch.Length;
                 return batch;
             }
 
-            long remainingRows = expectedRows - rowsReadRef;
+            long chunkRemainingRows = _currentChunkExpectedRows - _currentChunkRowsRead;
 
             // If we can return the full batch without exceeding the limit
-            if (batch.Length <= remainingRows)
+            if (batch.Length <= chunkRemainingRows)
             {
-                _rowsRead += batch.Length;
                 _currentChunkRowsRead += batch.Length;
                 return batch;
             }
 
             // We need to trim the batch - it contains more rows than we should return
-            if (remainingRows <= 0)
+            if (chunkRemainingRows <= 0)
             {
-                // We've already read all expected rows
-                batch.Dispose();
+                // We've already read all expected rows for this chunk
                 return null;
             }
 
-            Activity.Current?.AddEvent("cloudfetch.trimming_batch", [
+            Activity.Current?.AddEvent("cloudfetch.trimming_batch_chunk", [
                 new("original_length", batch.Length),
-                new("trimmed_length", remainingRows),
-                new("total_expected_rows", _totalExpectedRows),
+                new("trimmed_length", chunkRemainingRows),
                 new("chunk_expected_rows", _currentChunkExpectedRows),
-                new("rows_read_before", _rowsRead)
+                new("chunk_rows_read_before", _currentChunkRowsRead)
             ]);
 
-            // Slice the batch to return only the remaining expected rows
-            var trimmedBatch = batch.Slice(0, (int)remainingRows);
-            _rowsRead += trimmedBatch.Length;
-            _currentChunkRowsRead += trimmedBatch.Length;
-
-            // Dispose the original batch after slicing
+            // Slice uses reference counting - dispose original to release its reference
+            var chunkTrimmedBatch = batch.Slice(0, (int)chunkRemainingRows);
             batch.Dispose();
+            _currentChunkRowsRead += chunkTrimmedBatch.Length;
 
-            return trimmedBatch;
+            return chunkTrimmedBatch;
         }
 
         protected override void Dispose(bool disposing)

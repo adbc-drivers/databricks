@@ -201,14 +201,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             // Start the download manager
             downloadManager.StartAsync().Wait();
 
-            // For REST API (SEA), use manifest.TotalRowCount for row count limiting
-            long totalExpectedRows = manifest.TotalRowCount;
-
-            // Create and return the reader
-            // Note: response is null for Statement Execution API because CloudFetchReader doesn't use it.
-            // The IResponse parameter exists for compatibility with the Thrift path (DatabricksReader),
-            // which uses it for direct results and operation handle management.
-            return new CloudFetchReader(statement, schema, response: null, downloadManager, totalExpectedRows);
+            // For REST API (SEA), use global row count limiting from manifest.TotalRowCount.
+            // The manifest contains the adjusted total row count that respects LIMIT queries.
+            return new CloudFetchReader(statement, schema, response: null, downloadManager, totalExpectedRows: manifest.TotalRowCount);
         }
     }
 }

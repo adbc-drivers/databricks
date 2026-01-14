@@ -159,12 +159,9 @@ namespace AdbcDrivers.Databricks.Reader
                 new("expected_rows", _currentBatchExpectedRows)
             ]);
 
-            // Slice the batch to return only the expected number of rows
+            // Slice uses reference counting - dispose original to release its reference
             var trimmedBatch = batch.Slice(0, (int)_currentBatchExpectedRows);
-
-            // Dispose the original batch after slicing
             batch.Dispose();
-
             return trimmedBatch;
         }
 
