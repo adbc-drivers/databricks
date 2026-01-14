@@ -209,6 +209,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>A collection of download results with refreshed URLs.</returns>
         Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startRowOffset, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Gets the total expected row count from metadata for row count limiting.
+        /// For Thrift: sum of all link.RowCount values from initial results
+        /// For REST (SEA): manifest.TotalRowCount
+        /// </summary>
+        /// <returns>Total expected rows, or 0 if not available.</returns>
+        long GetTotalExpectedRows();
     }
 
     /// <summary>

@@ -133,6 +133,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <returns>A collection of download results with refreshed URLs.</returns>
         public abstract Task<IEnumerable<IDownloadResult>> RefreshUrlsAsync(long startRowOffset, CancellationToken cancellationToken);
 
+        /// <inheritdoc />
+        public abstract long GetTotalExpectedRows();
+
         /// <summary>
         /// Resets the fetcher state. Called at the beginning of StartAsync.
         /// Subclasses should override to reset protocol-specific state.

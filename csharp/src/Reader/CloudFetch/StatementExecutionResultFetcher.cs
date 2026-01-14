@@ -71,6 +71,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         }
 
         /// <inheritdoc />
+        public override long GetTotalExpectedRows()
+        {
+            // For REST API (SEA), use manifest.TotalRowCount for row count limiting
+            return _manifest.TotalRowCount;
+        }
+
+        /// <inheritdoc />
         protected override Task<bool> HasInitialResultsAsync(CancellationToken cancellationToken)
         {
             // Check if we have initial external links from the response

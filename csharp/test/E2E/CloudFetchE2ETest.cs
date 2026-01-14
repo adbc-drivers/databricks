@@ -171,6 +171,7 @@ namespace AdbcDrivers.Databricks.Tests
 
         /// <summary>
         /// Executes a query and validates the row count.
+        /// Validates exact row count to ensure the driver correctly respects LIMIT N in queries (PECO-2524).
         /// </summary>
         private async Task ExecuteAndValidateQuery(AdbcConnection connection, string query, int expectedRowCount, string protocolName)
         {
@@ -206,14 +207,16 @@ namespace AdbcDrivers.Databricks.Tests
             }
             Console.WriteLine($"[TEST] Finished reading {batchCount} batches, {totalRows} total rows");
 
-            Assert.True(totalRows >= expectedRowCount,
-                $"Expected at least {expectedRowCount} rows but got {totalRows} using {protocolName}");
+            // Validate exact row count - driver must respect LIMIT N and trim excess rows (PECO-2524)
+            // For Thrift: sum of all batch.RowCount = total expected rows
+            // For REST API (SEA): manifest.TotalRowCount = total expected rows
+            Assert.Equal(expectedRowCount, totalRows);
 
             Assert.Null(await result.Stream.ReadNextRecordBatchAsync());
             statement.Dispose();
 
             // Also log to the test output helper if available
-            OutputHelper?.WriteLine($"[{protocolName}] Read {totalRows} rows");
+            OutputHelper?.WriteLine($"[{protocolName}] Read exactly {totalRows} rows as expected");
         }
     }
 }

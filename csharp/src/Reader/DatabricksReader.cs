@@ -42,6 +42,11 @@ namespace AdbcDrivers.Databricks.Reader
         int index;
         IArrowReader? reader;
 
+        // Row count limiting: tracks the expected row count for the current batch from metadata.
+        // When trimArrowBatchesToLimit=false (server default), the server may return more data
+        // than the limit in the last batch but reports adjusted rowCount in metadata.
+        private long _currentBatchExpectedRows;
+
         public DatabricksReader(IHiveServer2Statement statement, Schema schema, IResponse response, TFetchResultsResp? initialResults, bool isLz4Compressed)
             : base(statement, schema, response, isLz4Compressed) // IHiveServer2Statement implements IActivityTracer
         {
@@ -73,8 +78,15 @@ namespace AdbcDrivers.Databricks.Reader
                         RecordBatch? next = await this.reader.ReadNextRecordBatchAsync(cancellationToken);
                         if (next != null)
                         {
-                            activity?.AddEvent(SemanticConventions.Messaging.Batch.Response, [new(SemanticConventions.Db.Response.ReturnedRows, next.Length)]);
-                            return next;
+                            // Apply row count limiting: trim the batch if actual data exceeds metadata row count
+                            next = ApplyRowCountLimit(next, activity);
+                            if (next != null)
+                            {
+                                activity?.AddEvent(SemanticConventions.Messaging.Batch.Response, [new(SemanticConventions.Db.Response.ReturnedRows, next.Length)]);
+                                return next;
+                            }
+                            // If next is null after limiting, continue to next batch
+                            continue;
                         }
                         this.reader = null;
                     }
@@ -127,11 +139,42 @@ namespace AdbcDrivers.Databricks.Reader
             });
         }
 
+        /// <summary>
+        /// Applies row count limiting to a record batch.
+        /// When the server returns more rows than the metadata reports (trimArrowBatchesToLimit=false),
+        /// this method trims the batch to match the expected row count from metadata.
+        /// </summary>
+        private RecordBatch? ApplyRowCountLimit(RecordBatch batch, System.Diagnostics.Activity? activity)
+        {
+            // If no row limit set or batch fits within expected count
+            if (_currentBatchExpectedRows <= 0 || batch.Length <= _currentBatchExpectedRows)
+            {
+                return batch;
+            }
+
+            // We need to trim the batch - actual data exceeds metadata row count
+            activity?.AddEvent("databricks_reader.trimming_batch", [
+                new("original_length", batch.Length),
+                new("expected_rows", _currentBatchExpectedRows)
+            ]);
+
+            // Slice the batch to return only the expected number of rows
+            var trimmedBatch = batch.Slice(0, (int)_currentBatchExpectedRows);
+
+            // Dispose the original batch after slicing
+            batch.Dispose();
+
+            return trimmedBatch;
+        }
+
         private void ProcessFetchedBatches()
         {
             this.TraceActivity(activity =>
             {
                 var batch = this.batches![this.index];
+
+                // Store the expected row count from metadata for row count limiting
+                _currentBatchExpectedRows = batch.RowCount;
 
                 // Ensure batch data exists
                 if (batch.Batch == null || batch.Batch.Length == 0)

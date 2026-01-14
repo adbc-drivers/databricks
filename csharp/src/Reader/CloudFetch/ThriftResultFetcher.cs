@@ -41,6 +41,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private long _startOffset;
         private long _batchSize;
         private long _nextChunkIndex = 0;
+        private long _totalExpectedRows = 0;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ThriftResultFetcher"/> class.
@@ -77,6 +78,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         {
             _startOffset = 0;
             _urlsByOffset.Clear();
+            _totalExpectedRows = 0;
+        }
+
+        /// <inheritdoc />
+        public override long GetTotalExpectedRows()
+        {
+            return _totalExpectedRows;
         }
 
         /// <inheritdoc />
@@ -220,6 +228,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 // Track the maximum offset for future fetches
                 long endOffset = link.StartRowOffset + link.RowCount;
                 maxOffset = Math.Max(maxOffset, endOffset);
+
+                // Accumulate total expected rows from metadata for row count limiting
+                _totalExpectedRows += link.RowCount;
             }
 
             return maxOffset;
