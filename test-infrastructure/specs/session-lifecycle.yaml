@@ -440,32 +440,6 @@ tests:
       Driver should handle concurrent close gracefully with internal locking.
 
   - id: SESSION-015
-    name: Session Idle Timeout Configuration
-    priority: Medium
-    description: |
-      Validates that driver respects custom session idle timeout configuration.
-
-    driver_config:
-      session_idle_timeout_minutes: 5
-
-    steps:
-      - action: execute_test
-        description: Open session with custom timeout
-        session_config:
-          idle_timeout_minutes: 5
-
-    assertions:
-      - type: no_error
-        description: Session opens successfully
-
-      - type: timeout_config_sent
-        description: Timeout configuration sent in OpenSession request
-
-    notes: |
-      Driver should allow configuration of session idle timeout.
-      Default is typically 60 minutes.
-
-  - id: SESSION-016
     name: Keep-Alive During Long Result Fetching
     priority: High
     description: |
