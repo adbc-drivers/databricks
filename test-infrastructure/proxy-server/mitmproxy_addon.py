@@ -179,6 +179,12 @@ SCENARIOS = {
         "error_code": 429,
         "error_message": "Too Many Requests",
     },
+    "long_running_cloud_fetch": {
+        "description": "CloudFetch download takes a long time, simulating slow result fetching (tests keep-alive GetOperationStatus calls)",
+        "operation": "CloudFetchDownload",
+        "action": "delay",
+        "duration_seconds": 15,  # Default 15 seconds, can be overridden via API
+    },
 }
 
 

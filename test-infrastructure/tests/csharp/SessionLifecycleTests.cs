@@ -679,5 +679,79 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             var result = statement.ExecuteQuery();
             Assert.NotNull(result);
         }
+
+        /// <summary>
+        /// SESSION-016: Keep-Alive During Long Result Fetching
+        /// Validates that driver sends periodic GetOperationStatus calls to keep
+        /// the session alive during long-running result fetching operations.
+        ///
+        /// The driver's DatabricksOperationStatusPoller starts when the reader is
+        /// created (after query execution completes). It immediately makes the first
+        /// GetOperationStatus call, then waits fetch_heartbeat_interval seconds
+        /// before each subsequent call.
+        ///
+        /// Test uses 5-second heartbeat interval with 15-second result fetching
+        /// to verify at least 3 GetOperationStatus calls (at 0s, 5s, 10s).
+        ///
+        /// JIRA: ES-1661289
+        /// </summary>
+        [Fact]
+        public async Task LongResultFetching_SendsKeepAliveGetOperationStatus()
+        {
+            // Arrange - Configure 5-second heartbeat interval for fast testing
+            var parameters = new Dictionary<string, string>
+            {
+                ["adbc.databricks.fetch_heartbeat_interval"] = "5"  // 5 seconds
+            };
+
+            // Enable long-running CloudFetch scenario (15 seconds)
+            await ControlClient.EnableScenarioAsync("long_running_cloud_fetch");
+
+            using var connection = CreateProxiedConnectionWithParameters(parameters);
+
+            // Get baseline GetOperationStatus call count
+            var initialGetOpStatusCount = await ControlClient.CountThriftMethodCallsAsync("GetOperationStatus");
+
+            // Act - Execute query and fetch results slowly
+            var startTime = DateTime.UtcNow;
+            int totalRows = 0;
+            using (var statement = connection.CreateStatement())
+            {
+                // Use a large table that triggers CloudFetch (same as CloudFetchTests)
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+                var result = statement.ExecuteQuery();
+
+                // Consume all results (forces CloudFetch to stream all data)
+                using var reader = result.Stream;
+                while (true)
+                {
+                    var batch = await reader.ReadNextRecordBatchAsync();
+                    if (batch == null)
+                        break;
+                    totalRows += batch.Length;
+                }
+            }
+            var elapsed = DateTime.UtcNow - startTime;
+
+            // Assert - Verify keep-alive behavior during result fetching
+            // 1. Result fetching should complete successfully
+            Assert.True(totalRows > 0, "Expected to fetch at least some rows");
+            Assert.True(elapsed.TotalSeconds >= 13,
+                $"Expected result fetching to take at least 13 seconds, but took {elapsed.TotalSeconds}s");
+
+            // 2. GetOperationStatus should have been called at least 3 times (keep-alive)
+            // With 5-second interval and 15-second duration:
+            // - t=0s: First call (reader created)
+            // - t=5s: Second call
+            // - t=10s: Third call
+            var finalGetOpStatusCount = await ControlClient.CountThriftMethodCallsAsync("GetOperationStatus");
+            var getOpStatusCallsMade = finalGetOpStatusCount - initialGetOpStatusCount;
+
+            Assert.True(getOpStatusCallsMade >= 3,
+                $"Expected at least 3 GetOperationStatus calls during 15s fetch (at 0s, 5s, 10s), but only {getOpStatusCallsMade} were made. " +
+                $"These calls keep the session alive during long result fetching operations.");
+
+            Console.WriteLine($"Result fetching took {elapsed.TotalSeconds:F1}s, fetched {totalRows} rows, and made {getOpStatusCallsMade} GetOperationStatus calls");
+        }
     }
 }

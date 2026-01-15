@@ -464,3 +464,65 @@ tests:
     notes: |
       Driver should allow configuration of session idle timeout.
       Default is typically 60 minutes.
+
+  - id: SESSION-016
+    name: Keep-Alive During Long Result Fetching
+    priority: High
+    description: |
+      Validates that driver sends periodic GetOperationStatus calls to keep
+      the session alive during long-running result fetching operations.
+
+      When fetching result sets that take a long time (e.g., via CloudFetch
+      downloading large files from cloud storage), the driver automatically
+      sends GetOperationStatus calls at regular intervals (configurable via
+      adbc.databricks.fetch_heartbeat_interval, default 60s) to prevent
+      session timeout while reading data.
+
+      For testing, we configure a 5-second heartbeat interval and simulate a
+      15-second result fetching operation to verify at least 3 GetOperationStatus
+      calls are made (at t=0s, t=5s, t=10s).
+
+    proxy_scenario: long_running_cloud_fetch
+    jira: ES-1661289
+
+    driver_config:
+      fetch_heartbeat_interval_seconds: 5
+
+    steps:
+      - action: enable_failure_scenario
+        scenario: long_running_cloud_fetch
+        config:
+          duration_seconds: 15  # Result fetching takes 15 seconds
+
+      - action: execute_test
+        description: Fetch results slowly and verify keep-alive calls
+        execute_query: "SELECT * FROM large_table"
+        fetch_all_results: true
+
+    assertions:
+      - type: no_error
+        description: Result fetching completes successfully despite long duration
+
+      - type: thrift_call_count
+        method: GetOperationStatus
+        expected: ">= 3"
+        description: Driver sends at least 3 GetOperationStatus calls during 15s fetch (at 0s, 5s, 10s)
+
+      - type: all_rows_fetched
+        description: All result rows are successfully fetched
+
+    notes: |
+      The DatabricksOperationStatusPoller starts when the reader is created (after
+      query execution completes and enters FINISHED state). It immediately makes
+      the first GetOperationStatus call, then waits fetch_heartbeat_interval seconds
+      before each subsequent call.
+
+      With 5-second interval and 15-second operation:
+      - t=0s: First GetOperationStatus (reader created)
+      - t=5s: Second GetOperationStatus
+      - t=10s: Third GetOperationStatus
+      - t=15s: Operation completes
+
+      This keep-alive mechanism is crucial for CloudFetch operations where large
+      result sets take significant time to download from cloud storage (S3, Azure
+      Blob, GCS).
