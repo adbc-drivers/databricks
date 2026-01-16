@@ -32,6 +32,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Telemetry;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
@@ -102,6 +103,11 @@ namespace AdbcDrivers.Databricks
         private TNamespace? _defaultNamespace;
 
         private HttpClient? _authHttpClient;
+
+        // Telemetry integration
+        private string? _host;
+        private ITelemetryClient? _telemetryClient;
+        private TelemetryConfiguration? _telemetryConfig;
 
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
@@ -664,6 +670,9 @@ namespace AdbcDrivers.Databricks
                 ]);
                 await SetSchema(_defaultNamespace.SchemaName);
             }
+
+            // Initialize telemetry (Section 6.2 & 9.2 of design doc)
+            await InitializeTelemetryAsync();
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
@@ -964,6 +973,99 @@ namespace AdbcDrivers.Databricks
                 return null;
             }
             return CatalogName;
+        }
+
+        /// <summary>
+        /// Initializes telemetry components after connection is established.
+        /// Follows design document Section 6.2 & 9.2:
+        /// (1) Get/create feature flag context
+        /// (2) Check if telemetry enabled via feature flag
+        /// (3) Get/create telemetry client if enabled
+        /// All exceptions swallowed at TRACE level.
+        /// </summary>
+        private async Task InitializeTelemetryAsync()
+        {
+            try
+            {
+                // Step 1: Get host and validate
+                _host = GetHost();
+                if (string.IsNullOrEmpty(_host))
+                {
+                    return;
+                }
+
+                // Step 2: Create telemetry configuration from connection properties
+                _telemetryConfig = TelemetryConfiguration.FromProperties(Properties);
+                if (!_telemetryConfig.Enabled)
+                {
+                    return;
+                }
+
+                // Step 3: Get/create feature flag context (increments ref count)
+                var featureFlagCache = FeatureFlagCache.GetInstance();
+                featureFlagCache.GetOrCreateContext(_host);
+
+                // Step 4: Check if telemetry enabled via server feature flag
+                bool telemetryEnabled = await featureFlagCache.IsTelemetryEnabledAsync(
+                    _host,
+                    _authHttpClient ?? throw new InvalidOperationException("HttpClient not initialized"),
+                    CancellationToken.None);
+
+                if (!telemetryEnabled)
+                {
+                    // Feature flag disabled, release context and return
+                    featureFlagCache.ReleaseContext(_host);
+                    return;
+                }
+
+                // Step 5: Get/create telemetry client (increments ref count)
+                var telemetryClientManager = TelemetryClientManager.GetInstance();
+                _telemetryClient = telemetryClientManager.GetOrCreateClient(
+                    _host,
+                    _authHttpClient ?? throw new InvalidOperationException("HttpClient not initialized"),
+                    _telemetryConfig);
+            }
+            catch (Exception ex)
+            {
+                // Swallow all exceptions per requirement (Section 8.1)
+                // Log at TRACE level to avoid customer anxiety
+                Debug.WriteLine($"[TRACE] Telemetry initialization error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Disposes the connection asynchronously.
+        /// Releases telemetry resources (Section 9.2):
+        /// (1) Flush pending metrics
+        /// (2) Release telemetry client
+        /// (3) Release feature flag context
+        /// All exceptions swallowed at TRACE level.
+        /// </summary>
+        protected override async ValueTask DisposeAsyncCore()
+        {
+            try
+            {
+                if (_host != null)
+                {
+                    // Step 1: Release telemetry client (decrements ref count, closes if last)
+                    if (_telemetryClient != null)
+                    {
+                        await TelemetryClientManager.GetInstance().ReleaseClientAsync(_host);
+                        _telemetryClient = null;
+                    }
+
+                    // Step 2: Release feature flag context (decrements ref count)
+                    FeatureFlagCache.GetInstance().ReleaseContext(_host);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Swallow all exceptions per requirement (Section 8.1)
+                Debug.WriteLine($"[TRACE] Error during telemetry cleanup: {ex.Message}");
+            }
+
+            // Continue with normal connection cleanup
+            await base.DisposeAsyncCore();
         }
 
         protected override void Dispose(bool disposing)
