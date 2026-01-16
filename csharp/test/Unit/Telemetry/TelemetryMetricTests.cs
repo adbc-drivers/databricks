@@ -68,7 +68,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal("statement", metricType.GetString());
 
             Assert.True(root.TryGetProperty("timestamp", out var timestamp));
-            Assert.NotNull(timestamp.GetDateTimeOffset());
+            Assert.Equal(new DateTimeOffset(2025, 1, 16, 10, 30, 0, TimeSpan.Zero), timestamp.GetDateTimeOffset());
 
             Assert.True(root.TryGetProperty("workspaceId", out var workspaceId));
             Assert.Equal(123456789, workspaceId.GetInt64());
