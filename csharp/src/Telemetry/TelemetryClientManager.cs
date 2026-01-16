@@ -124,8 +124,6 @@ namespace AdbcDrivers.Databricks.Telemetry
 
         /// <summary>
         /// Creates a new TelemetryClientHolder with a fresh client instance.
-        /// This is a factory method that will be implemented when TelemetryClient is created.
-        /// For now, it throws NotImplementedException to allow compilation.
         /// </summary>
         /// <param name="host">The Databricks host.</param>
         /// <param name="httpClient">The HttpClient for making telemetry requests.</param>
@@ -136,11 +134,12 @@ namespace AdbcDrivers.Databricks.Telemetry
             HttpClient httpClient,
             TelemetryConfiguration config)
         {
-            // TODO: This will be implemented when TelemetryClient class is created in WI-5.5
-            // For now, throw NotImplementedException to allow compilation and testing of the manager structure
-            throw new NotImplementedException(
-                "TelemetryClient creation will be implemented in WI-5.5. " +
-                "This method is a placeholder for now to allow TelemetryClientManager to compile.");
+            // Create a new TelemetryClient instance
+            // Note: isAuthenticated is set to true by default
+            // This can be made configurable if needed in the future
+            var client = new TelemetryClient(host, httpClient, config, isAuthenticated: true);
+
+            return new TelemetryClientHolder(client);
         }
     }
 }
