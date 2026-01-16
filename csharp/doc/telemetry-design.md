@@ -1894,25 +1894,25 @@ The Activity-based design was selected because it:
 
 ### Phase 3: Exception Handling
 - [x] Create `ExceptionClassifier` for terminal vs retryable (WI-1.3) ✅
-- [ ] Update `MetricsAggregator` to buffer retryable exceptions
-- [ ] Implement immediate flush for terminal exceptions
-- [ ] Wrap all telemetry code in try-catch blocks
-- [ ] Replace all logging with TRACE/DEBUG levels only
+- [x] Update `MetricsAggregator` to buffer retryable exceptions (WI-5.4) ✅
+- [x] Implement immediate flush for terminal exceptions (WI-5.4) ✅
+- [x] Wrap all telemetry code in try-catch blocks (WI-5.4) ✅
+- [x] Replace all logging with TRACE/DEBUG levels only (WI-5.4) ✅
 - [ ] Ensure circuit breaker sees exceptions before swallowing
 - [x] Add unit tests for exception classification (WI-1.3) ✅
 
 ### Phase 4: Tag Definition System
-- [ ] Create `TagDefinitions/TelemetryTag.cs` (attribute and enums)
-- [ ] Create `TagDefinitions/ConnectionOpenEvent.cs` (connection tag definitions)
-- [ ] Create `TagDefinitions/StatementExecutionEvent.cs` (statement tag definitions)
-- [ ] Create `TagDefinitions/ErrorEvent.cs` (error tag definitions)
-- [ ] Create `TagDefinitions/TelemetryTagRegistry.cs` (central registry)
-- [ ] Add unit tests for tag registry
+- [x] Create `TagDefinitions/TelemetryTag.cs` (attribute and enums) ✅
+- [x] Create `TagDefinitions/ConnectionOpenEvent.cs` (connection tag definitions) ✅
+- [x] Create `TagDefinitions/StatementExecutionEvent.cs` (statement tag definitions) ✅
+- [x] Create `TagDefinitions/ErrorEvent.cs` (error tag definitions) ✅
+- [x] Create `TagDefinitions/TelemetryTagRegistry.cs` (central registry) ✅
+- [x] Add unit tests for tag registry ✅
 
 ### Phase 5: Core Implementation
 - [ ] Create `DatabricksActivityListener` class
-- [ ] Create `MetricsAggregator` class (with exception buffering)
-- [ ] Create `DatabricksTelemetryExporter` class
+- [x] Create `MetricsAggregator` class (with exception buffering) (WI-5.4) ✅
+- [x] Create `DatabricksTelemetryExporter` class ✅
 - [ ] Add necessary tags to existing activities (using defined constants)
 - [ ] Update connection to use per-host management
 
@@ -1923,7 +1923,8 @@ The Activity-based design was selected because it:
 - [ ] Wire up feature flag cache
 
 ### Phase 7: Testing
-- [ ] Unit tests for all new components
+- [x] Unit tests for MetricsAggregator (WI-5.4) ✅
+- [ ] Unit tests for all other new components
 - [ ] Integration tests for per-host management
 - [ ] Integration tests for circuit breaker
 - [ ] Integration tests for graceful shutdown
