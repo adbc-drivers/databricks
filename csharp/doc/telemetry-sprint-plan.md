@@ -595,7 +595,9 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-5.4: DatabricksActivityListener
 **Description**: Listens to Activity events and delegates to MetricsAggregator.
 
-**Location**: `csharp/src/Telemetry/DatabricksActivityListener.cs`
+**Status**: ✅ **COMPLETED**
+
+**Location**: `csharp/src/Telemetry/DatabricksActivityListener.cs`, `csharp/test/Unit/Telemetry/DatabricksActivityListenerTests.cs`
 
 **Input**:
 - Host string
@@ -616,6 +618,39 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `DatabricksActivityListener_Sample_FeatureFlagDisabled_ReturnsNone` | Config.Enabled=false | ActivitySamplingResult.None |
 | Unit | `DatabricksActivityListener_Sample_FeatureFlagEnabled_ReturnsAllData` | Config.Enabled=true | ActivitySamplingResult.AllDataAndRecorded |
 | Unit | `DatabricksActivityListener_StopAsync_FlushesAndDisposes` | N/A | Aggregator.FlushAsync called, resources disposed |
+
+**Implementation Notes**:
+- Implemented DatabricksActivityListener class with ActivityListener wrapper for Databricks.Adbc.Driver ActivitySource
+- Constructor takes host, ITelemetryClient, and TelemetryConfiguration parameters
+- CreateListener() configures ActivityListener with:
+  - ShouldListenTo filter for "Databricks.Adbc.Driver" ActivitySource only
+  - Sample callback respecting feature flag (_config.Enabled)
+  - ActivityStarted callback (placeholder for future enhancements)
+  - ActivityStopped callback delegating to MetricsAggregator.ProcessActivity
+- Start() method adds listener to ActivitySource global listeners
+- StopAsync() method disposes listener and flushes pending metrics
+- Dispose() method ensures proper cleanup with synchronous flush
+- All exceptions swallowed and logged at TRACE level using Debug.WriteLine
+- Internal TelemetryClientExporter wrapper adapts ITelemetryClient to ITelemetryExporter interface
+- Comprehensive test coverage with 14 unit tests:
+  - Constructor parameter validation (null/empty checks)
+  - ActivitySource filtering (Databricks vs other sources)
+  - Activity processing and delegation to aggregator
+  - Exception swallowing validation
+  - Feature flag respect (enabled vs disabled)
+  - StopAsync and Dispose behavior
+  - Multiple Start/Dispose calls safety
+  - Activities after Stop are not processed
+- Test file location: `csharp/test/Unit/Telemetry/DatabricksActivityListenerTests.cs`
+
+**Exit Criteria Verified**:
+✓ Filters to 'Databricks.Adbc.Driver' ActivitySource only (ShouldListenTo callback)
+✓ ActivityStopped calls MetricsAggregator.ProcessActivity (OnActivityStopped method)
+✓ Sample callback respects feature flag (_config.Enabled check)
+✓ All exceptions swallowed at TRACE level (try-catch in all callbacks)
+✓ StopAsync flushes pending metrics (_aggregator.FlushAsync call)
+✓ Dispose releases resources properly (listener disposal and aggregator cleanup)
+✓ All listener tests implemented (14 comprehensive unit tests)
 
 ---
 
