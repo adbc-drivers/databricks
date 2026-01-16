@@ -142,7 +142,9 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-2.1: FeatureFlagCache
 **Description**: Singleton that caches feature flags per host with reference counting.
 
-**Location**: `csharp/src/Telemetry/FeatureFlagCache.cs`
+**Status**: ✅ **COMPLETED**
+
+**Location**: `csharp/src/Telemetry/FeatureFlagCache.cs`, `csharp/src/Telemetry/FeatureFlagContext.cs`
 
 **Input**:
 - Host string
@@ -163,6 +165,39 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `FeatureFlagCache_IsTelemetryEnabledAsync_CachedValue_DoesNotFetch` | Pre-cached enabled=true | Returns true without HTTP call |
 | Unit | `FeatureFlagCache_IsTelemetryEnabledAsync_ExpiredCache_RefetchesValue` | Cached value older than 15 minutes | Makes HTTP call to refresh |
 | Integration | `FeatureFlagCache_IsTelemetryEnabledAsync_FetchesFromServer` | Live Databricks host | Returns boolean from feature flag endpoint |
+
+**Implementation Notes**:
+- Implemented singleton pattern with thread-safe lazy initialization
+- Used ConcurrentDictionary for per-host context storage
+- Reference counting implemented with Interlocked operations for atomic increments/decrements
+- Cache expiration set to 15 minutes as per design spec
+- HTTP client integration for feature flag endpoint: `/api/2.0/feature-flags?flag={FeatureFlagName}`
+- Graceful error handling: defaults to telemetry disabled on any fetch errors
+- Comprehensive test coverage with 22 unit tests covering:
+  - Singleton behavior
+  - Context creation and reference counting
+  - Cache expiration and refresh logic
+  - HTTP fetching with various response scenarios (success, error, invalid JSON)
+  - Thread safety with concurrent access
+  - Null/empty host handling
+- Test file location: `csharp/test/Unit/Telemetry/FeatureFlagCacheTests.cs`
+- Tests use custom TestHttpMessageHandler instead of Moq for compatibility with existing test infrastructure
+
+**Key Design Decisions**:
+1. **Singleton with thread-safe lazy init**: Used `private static readonly` instance pattern for simplicity
+2. **Atomic reference counting**: Used `Interlocked.Increment/Decrement` to ensure thread safety without locks
+3. **ConcurrentDictionary for cache**: Provides thread-safe access without explicit locking
+4. **Default to disabled on errors**: All exceptions swallowed and default to telemetry disabled for safety
+5. **15-minute TTL**: Balances freshness with rate limiting prevention as per JDBC driver reference
+
+**Exit Criteria Verified**:
+✓ Singleton instance correctly implemented
+✓ GetOrCreateContext increments ref count atomically
+✓ ReleaseContext decrements ref count and removes at zero
+✓ Cache expires after 15 minutes
+✓ Thread-safe for concurrent access
+✓ IsTelemetryEnabledAsync uses cached value when available
+✓ All cache tests implemented and verified
 
 ---
 
