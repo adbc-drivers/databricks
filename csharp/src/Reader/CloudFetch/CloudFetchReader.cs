@@ -76,6 +76,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             : base(statement, schema, response, isLz4Compressed: false) // isLz4Compressed handled by download manager
         {
             this.downloadManager = downloadManager ?? throw new ArgumentNullException(nameof(downloadManager));
+            if (totalExpectedRows < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(totalExpectedRows), totalExpectedRows, "Total expected rows cannot be negative.");
+            }
             _totalExpectedRows = totalExpectedRows;
         }
 
