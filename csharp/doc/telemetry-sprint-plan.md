@@ -465,11 +465,15 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-5.2: DatabricksTelemetryExporter
 **Description**: Exports metrics to Databricks telemetry service via HTTP POST.
 
-**Location**: `csharp/src/Telemetry/DatabricksTelemetryExporter.cs`
+**Status**: ✅ **COMPLETED**
+
+**Location**: `csharp/src/Telemetry/DatabricksTelemetryExporter.cs`, `csharp/src/Telemetry/ITelemetryExporter.cs`
 
 **Input**:
 - List of TelemetryMetric
 - HttpClient
+- Host string
+- Authentication state (boolean)
 - TelemetryConfiguration
 
 **Output**:
@@ -486,6 +490,40 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `DatabricksTelemetryExporter_ExportAsync_TransientFailure_Retries` | 503 then 200 | Retries and succeeds |
 | Unit | `DatabricksTelemetryExporter_ExportAsync_MaxRetries_DoesNotThrow` | Continuous 503 | Completes without exception (swallowed) |
 | Integration | `DatabricksTelemetryExporter_ExportAsync_RealEndpoint_Succeeds` | Live Databricks endpoint | Successfully exports |
+
+**Implementation Notes**:
+- Implemented ITelemetryExporter interface defining the contract for telemetry export
+- DatabricksTelemetryExporter uses HttpClient to POST metrics to Databricks endpoints
+- Constructor accepts HttpClient, host, isAuthenticated flag, and TelemetryConfiguration
+- Endpoint selection: `/telemetry-ext` for authenticated, `/telemetry-unauth` for unauthenticated
+- Retry logic for transient failures: 429, 500, 502, 503, 504 status codes
+- Non-transient failures (400, 401, 403, 404) are not retried
+- All exceptions swallowed and logged at TRACE level using Debug.WriteLine
+- Configurable MaxRetries (default 3) and RetryDelayMs (default 100ms)
+- Respects cancellation tokens for graceful shutdown
+- JSON serialization using System.Text.Json with null field omission
+- Comprehensive test coverage with 15 unit tests:
+  - Constructor parameter validation (null checks)
+  - Null/empty metrics handling
+  - Authenticated vs unauthenticated endpoint selection
+  - Success case with 200 OK response
+  - Transient failure retry logic
+  - Max retries enforcement
+  - Non-transient failures (no retry)
+  - All transient status codes tested individually
+  - HTTP exception handling
+  - Cancellation token support
+  - JSON serialization verification
+- Test file location: `csharp/test/Unit/Telemetry/DatabricksTelemetryExporterTests.cs`
+- Commit: d84cb0a "feat(csharp): implement DatabricksTelemetryExporter (WI-5.2)"
+
+**Exit Criteria Verified**:
+✓ Uses correct endpoint based on authentication
+✓ Retries transient failures up to MaxRetries
+✓ Respects RetryDelayMs between retries
+✓ All exceptions swallowed, logged at TRACE
+✓ All exporter tests implemented and verified
+⚠ Live endpoint integration test structure created (requires Databricks credentials to execute)
 
 ---
 
