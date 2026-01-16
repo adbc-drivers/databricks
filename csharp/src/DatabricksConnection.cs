@@ -33,6 +33,7 @@ using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
 using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
@@ -651,6 +652,9 @@ namespace AdbcDrivers.Databricks
             activity?.SetTag("connection.feature.use_desc_table_extended", _useDescTableExtended);
             activity?.SetTag("connection.feature.enable_run_async_in_thrift_op", _runAsyncInThrift);
 
+            // Add telemetry tags for driver configuration and feature flags
+            AddDriverConfigurationTags(activity);
+
             // Handle default namespace
             if (session.__isset.initialNamespace)
             {
@@ -682,6 +686,25 @@ namespace AdbcDrivers.Databricks
             using var statement = new DatabricksStatement(this);
             statement.SqlQuery = $"USE {schemaName}";
             await statement.ExecuteUpdateAsync();
+        }
+
+        /// <summary>
+        /// Adds driver configuration tags to the activity for telemetry purposes.
+        /// These tags will be exported to Databricks telemetry service.
+        /// </summary>
+        /// <param name="activity">The activity to add tags to</param>
+        private void AddDriverConfigurationTags(Activity? activity)
+        {
+            if (activity == null) return;
+
+            // Add driver version, OS, and runtime information
+            activity.SetTag(ConnectionOpenEvent.DriverVersion, s_assemblyVersion);
+            activity.SetTag(ConnectionOpenEvent.DriverOS, Environment.OSVersion.Platform.ToString());
+            activity.SetTag(ConnectionOpenEvent.DriverRuntime, System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
+
+            // Add feature flags for telemetry (using defined constants)
+            activity.SetTag(ConnectionOpenEvent.FeatureCloudFetch, _useCloudFetch);
+            activity.SetTag(ConnectionOpenEvent.FeatureLz4, _canDecompressLz4);
         }
 
         /// <summary>
