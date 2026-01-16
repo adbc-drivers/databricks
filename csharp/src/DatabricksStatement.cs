@@ -236,6 +236,9 @@ namespace AdbcDrivers.Databricks
                         throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than zero.");
                     }
                     break;
+                case AdbcOptions.Telemetry.TraceParent:
+                    ((IActivityTracer)this).Trace.TraceParent = string.IsNullOrWhiteSpace(value) ? null : value;
+                    break;
                 default:
                     base.SetOption(key, value);
                     break;
