@@ -15,4 +15,4 @@
 driver = "databricks"
 
 [lang]
-go = "true"
+go = true
