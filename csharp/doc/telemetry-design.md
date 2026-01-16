@@ -1708,24 +1708,22 @@ await TelemetryClientManager.GetInstance().ReleaseClientAsync("host1");
 
 ### 10.2 Integration Tests
 
-**End-to-End with Activity**:
-- `ActivityBased_ConnectionOpen_ExportedSuccessfully`
-- `ActivityBased_StatementWithChunks_AggregatedCorrectly`
-- `ActivityBased_ErrorActivity_CapturedInMetrics`
-- `ActivityBased_FeatureFlagDisabled_NoExport`
+**End-to-End Tests** (implemented in `csharp/test/E2E/TelemetryTests.cs`):
+- ✅ `Telemetry_Connection_ExportsConnectionEvent` - Verifies connection open events are exported successfully
+- ✅ `Telemetry_Statement_ExportsStatementEvent` - Verifies statement execution events with metrics
+- ✅ `Telemetry_CloudFetch_ExportsChunkMetrics` - Verifies CloudFetch chunk metrics are included
+- ✅ `Telemetry_Error_ExportsErrorEvent` - Verifies error events are captured and exported
+- ✅ `Telemetry_FeatureFlagDisabled_NoExport` - Verifies feature flag disable prevents export
+- ✅ `Telemetry_MultipleConnections_SameHost_SharesClient` - Verifies per-host client sharing
+- ✅ `Telemetry_CircuitBreaker_StopsExportingOnFailure` - Verifies circuit breaker protection
+- ✅ `Telemetry_GracefulShutdown_FlushesBeforeClose` - Verifies graceful shutdown with flush
+- ✅ `Telemetry_FullPipeline_IntegrationTest` - Comprehensive integration test
 
-**Compatibility Tests**:
-- `ActivityBased_CoexistsWithOpenTelemetry`
-- `ActivityBased_CorrelationIdPreserved`
-- `ActivityBased_ParentChildSpansWork`
-
-**New Integration Tests** (production requirements):
-- `MultipleConnections_SameHost_SharesClient`
-- `FeatureFlagCache_SharedAcrossConnections`
-- `CircuitBreaker_StopsFlushingWhenOpen`
-- `GracefulShutdown_LastConnection_ClosesClient`
-- `TerminalException_FlushedImmediately`
-- `RetryableException_BufferedUntilComplete`
+**Test Implementation Details**:
+- All tests use ActivityListener to capture telemetry events directly
+- Tests verify Activity tags, timing, and aggregation behavior
+- Tests cover full telemetry pipeline from Activity creation through export
+- Tests run against real Databricks workspace using E2E test configuration
 
 ### 10.3 Performance Tests
 
@@ -1925,9 +1923,15 @@ The Activity-based design was selected because it:
 ### Phase 7: Testing
 - [x] Unit tests for MetricsAggregator (WI-5.4) ✅
 - [ ] Unit tests for all other new components
-- [ ] Integration tests for per-host management
-- [ ] Integration tests for circuit breaker
-- [ ] Integration tests for graceful shutdown
+- [x] E2E tests for connection events (WI-6.3) ✅
+- [x] E2E tests for statement events with metrics (WI-6.3) ✅
+- [x] E2E tests for CloudFetch chunk metrics (WI-6.3) ✅
+- [x] E2E tests for error event capture (WI-6.3) ✅
+- [x] E2E tests for feature flag disable (WI-6.3) ✅
+- [x] E2E tests for per-host client sharing (WI-6.3) ✅
+- [x] E2E tests for circuit breaker (WI-6.3) ✅
+- [x] E2E tests for graceful shutdown (WI-6.3) ✅
+- [x] Comprehensive full pipeline integration test (WI-6.3) ✅
 - [ ] Performance tests (overhead measurement)
 - [ ] Load tests with many concurrent connections
 
