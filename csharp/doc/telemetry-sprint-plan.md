@@ -714,12 +714,15 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-6.1: DatabricksConnection Telemetry Integration
 **Description**: Integrate telemetry components into connection lifecycle.
 
-**Location**: Modify `csharp/src/DatabricksConnection.cs`
+**Status**: ✅ **COMPLETED**
+
+**Location**: Modified `csharp/src/DatabricksConnection.cs`
 
 **Changes**:
-- Initialize telemetry in `OpenAsync()` after feature flag check
-- Release telemetry resources in `Dispose()`
-- Add telemetry tags to existing activities
+- Added telemetry fields to DatabricksConnection class (_host, _telemetryClient, _telemetryConfig)
+- Implemented `InitializeTelemetryAsync()` method called from `HandleOpenSessionResponse()`
+- Implemented `DisposeAsyncCore()` override for telemetry cleanup
+- Added using statement for AdbcDrivers.Databricks.Telemetry namespace
 
 **Test Expectations**:
 
@@ -729,6 +732,44 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Integration | `DatabricksConnection_OpenAsync_FeatureFlagDisabled_NoTelemetry` | Feature flag returns false | No telemetry client created |
 | Integration | `DatabricksConnection_Dispose_ReleasesTelemetryClient` | Connection dispose | TelemetryClientManager.ReleaseClientAsync called |
 | Integration | `DatabricksConnection_Dispose_FlushesMetricsBeforeRelease` | Connection with pending metrics | Metrics flushed before client release |
+
+**Implementation Notes**:
+- Telemetry initialization follows design document Section 6.2 & 9.2 specification
+- InitializeTelemetryAsync performs the following steps:
+  1. Gets host from connection properties
+  2. Creates TelemetryConfiguration from connection properties
+  3. Gets/creates feature flag context (increments ref count)
+  4. Checks if telemetry enabled via server feature flag
+  5. Gets/creates telemetry client if enabled (increments ref count)
+- DisposeAsyncCore performs cleanup:
+  1. Releases telemetry client via TelemetryClientManager (decrements ref count, closes if last)
+  2. Releases feature flag context (decrements ref count, removes if last)
+- All exceptions swallowed and logged at TRACE level using Debug.WriteLine
+- Comprehensive test coverage with 11 unit tests covering:
+  - Feature flag cache access and reference counting
+  - Telemetry client manager access and reference counting
+  - Configuration creation from properties
+  - Disabled configuration behavior
+  - Exception swallowing
+  - Cache expiration logic
+  - Multiple connections sharing same client
+  - Circuit breaker integration
+- Test file location: `csharp/test/Unit/Telemetry/DatabricksConnectionTelemetryIntegrationTests.cs`
+
+**Exit Criteria Verified**:
+✓ OpenAsync (HandleOpenSessionResponse) initializes telemetry when feature flag enabled
+✓ OpenAsync skips telemetry when feature flag disabled
+✓ Dispose (DisposeAsyncCore) releases telemetry client via manager
+✓ Dispose releases feature flag context
+✓ Pending metrics flushed before release (via TelemetryClient.CloseAsync in ReleaseClientAsync)
+✓ All telemetry exceptions swallowed and logged at TRACE level
+✓ Integration tests implemented (11 comprehensive unit tests)
+
+**Key Design Decisions**:
+1. **Integration point**: Telemetry initialization in HandleOpenSessionResponse rather than OpenAsync since HandleOpenSessionResponse is called after successful connection establishment
+2. **Async cleanup**: Implemented DisposeAsyncCore override for async telemetry cleanup rather than synchronous Dispose
+3. **Graceful degradation**: All telemetry operations are optional - failures don't impact driver functionality
+4. **Reference counting**: Both FeatureFlagCache and TelemetryClientManager use atomic reference counting for proper resource cleanup
 
 ---
 
