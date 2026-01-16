@@ -37,11 +37,12 @@ namespace AdbcDrivers.Databricks.Telemetry
         public DateTime? LastFetched { get; set; }
 
         /// <summary>
-        /// Gets or sets the reference count for this context.
+        /// Reference count for this context.
         /// Incremented when a connection is opened, decremented when closed.
         /// When reference count reaches zero, the context is removed from the cache.
+        /// Must be a field (not property) to support Interlocked operations.
         /// </summary>
-        public int RefCount { get; set; }
+        public int RefCount;
 
         /// <summary>
         /// Gets the cache duration for feature flag values.
