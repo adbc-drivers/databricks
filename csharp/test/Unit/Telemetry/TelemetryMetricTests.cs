@@ -15,6 +15,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using AdbcDrivers.Databricks.Telemetry;
 using Xunit;
@@ -22,407 +23,581 @@ using Xunit;
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 {
     /// <summary>
-    /// Tests for TelemetryMetric class focusing on JSON serialization and schema compliance.
+    /// Tests for JDBC-compatible telemetry data model classes.
+    /// Verifies JSON serialization format matches Databricks telemetry backend expectations.
     /// </summary>
     public class TelemetryMetricTests
     {
+        #region TelemetryRequest Tests
+
         [Fact]
-        public void TelemetryMetric_Serialization_ProducesValidJson()
+        public void TelemetryRequest_Serialization_ProducesValidJson()
         {
             // Arrange
-            var metric = new TelemetryMetric
+            var telemetryEvent = new TelemetryEvent
             {
-                MetricType = "statement",
-                Timestamp = new DateTimeOffset(2025, 1, 16, 10, 30, 0, TimeSpan.Zero),
-                WorkspaceId = 123456789,
-                SessionId = "session-abc-123",
-                StatementId = "stmt-xyz-456",
-                ExecutionLatencyMs = 1500,
-                ResultFormat = "cloudfetch",
-                ChunkCount = 5,
-                TotalBytesDownloaded = 1048576,
-                PollCount = 3,
-                DriverConfiguration = new DriverConfiguration
+                SessionId = "session-123",
+                SqlStatementId = "stmt-456",
+                OperationLatencyMs = 1500
+            };
+
+            var frontendLog = TelemetryFrontendLog.Create(
+                workspaceId: 123456789,
+                telemetryEvent: telemetryEvent,
+                userAgent: "DatabricksAdbcDriver/1.0.0");
+
+            var request = TelemetryRequest.Create(new[] { frontendLog });
+
+            // Act
+            string json = request.ToJson();
+
+            // Assert
+            Assert.NotNull(json);
+            Assert.NotEmpty(json);
+
+            using var jsonDoc = JsonDocument.Parse(json);
+            var root = jsonDoc.RootElement;
+
+            // Verify top-level structure
+            Assert.True(root.TryGetProperty("uploadTime", out var uploadTime));
+            Assert.True(uploadTime.GetInt64() > 0);
+
+            Assert.True(root.TryGetProperty("items", out var items));
+            Assert.Equal(JsonValueKind.Array, items.ValueKind);
+            Assert.Equal(0, items.GetArrayLength()); // items should always be empty
+
+            Assert.True(root.TryGetProperty("protoLogs", out var protoLogs));
+            Assert.Equal(JsonValueKind.Array, protoLogs.ValueKind);
+            Assert.Equal(1, protoLogs.GetArrayLength());
+
+            // Verify protoLogs contains a JSON string
+            var protoLogEntry = protoLogs[0].GetString();
+            Assert.NotNull(protoLogEntry);
+
+            // Parse the nested JSON string
+            using var nestedDoc = JsonDocument.Parse(protoLogEntry);
+            var nestedRoot = nestedDoc.RootElement;
+            Assert.True(nestedRoot.TryGetProperty("workspace_id", out var workspaceId));
+            Assert.Equal(123456789, workspaceId.GetInt64());
+        }
+
+        [Fact]
+        public void TelemetryRequest_Create_SetsUploadTimeToCurrentTime()
+        {
+            // Arrange
+            var beforeTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var request = TelemetryRequest.Create(new List<TelemetryFrontendLog>());
+            var afterTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            // Assert
+            Assert.InRange(request.UploadTime, beforeTime, afterTime);
+        }
+
+        [Fact]
+        public void TelemetryRequest_Create_WithMultipleEvents_SerializesAll()
+        {
+            // Arrange
+            var events = new List<TelemetryFrontendLog>
+            {
+                TelemetryFrontendLog.Create(111, new TelemetryEvent { SessionId = "s1" }, "agent"),
+                TelemetryFrontendLog.Create(222, new TelemetryEvent { SessionId = "s2" }, "agent"),
+                TelemetryFrontendLog.Create(333, new TelemetryEvent { SessionId = "s3" }, "agent")
+            };
+
+            // Act
+            var request = TelemetryRequest.Create(events);
+
+            // Assert
+            Assert.Equal(3, request.ProtoLogs.Count);
+            Assert.Empty(request.Items);
+        }
+
+        #endregion
+
+        #region TelemetryFrontendLog Tests
+
+        [Fact]
+        public void TelemetryFrontendLog_Create_SetsAllFields()
+        {
+            // Arrange
+            var telemetryEvent = new TelemetryEvent
+            {
+                SessionId = "session-abc",
+                SqlStatementId = "stmt-xyz",
+                OperationLatencyMs = 500
+            };
+
+            // Act
+            var frontendLog = TelemetryFrontendLog.Create(
+                workspaceId: 987654321,
+                telemetryEvent: telemetryEvent,
+                userAgent: "TestAgent/2.0");
+
+            // Assert
+            Assert.Equal(987654321, frontendLog.WorkspaceId);
+            Assert.NotNull(frontendLog.FrontendLogEventId);
+            Assert.NotEmpty(frontendLog.FrontendLogEventId);
+
+            Assert.NotNull(frontendLog.Context);
+            Assert.NotNull(frontendLog.Context.ClientContext);
+            Assert.True(frontendLog.Context.ClientContext.TimestampMillis > 0);
+            Assert.Equal("TestAgent/2.0", frontendLog.Context.ClientContext.UserAgent);
+
+            Assert.NotNull(frontendLog.Entry);
+            Assert.NotNull(frontendLog.Entry.SqlDriverLog);
+            Assert.Equal("session-abc", frontendLog.Entry.SqlDriverLog.SessionId);
+        }
+
+        [Fact]
+        public void TelemetryFrontendLog_Create_GeneratesUniqueEventIds()
+        {
+            // Arrange
+            var telemetryEvent = new TelemetryEvent { SessionId = "test" };
+
+            // Act
+            var log1 = TelemetryFrontendLog.Create(1, telemetryEvent, "agent");
+            var log2 = TelemetryFrontendLog.Create(1, telemetryEvent, "agent");
+
+            // Assert
+            Assert.NotEqual(log1.FrontendLogEventId, log2.FrontendLogEventId);
+        }
+
+        [Fact]
+        public void TelemetryFrontendLog_Serialization_ProducesCorrectJsonPropertyNames()
+        {
+            // Arrange
+            var frontendLog = TelemetryFrontendLog.Create(
+                123, new TelemetryEvent { SessionId = "s1" }, "agent");
+
+            // Act
+            var options = new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+                WriteIndented = false
+            };
+            string json = JsonSerializer.Serialize(frontendLog, options);
+
+            // Assert - verify snake_case property names
+            Assert.Contains("\"workspace_id\"", json);
+            Assert.Contains("\"frontend_log_event_id\"", json);
+            Assert.Contains("\"client_context\"", json);
+            Assert.Contains("\"timestamp_millis\"", json);
+            Assert.Contains("\"user_agent\"", json);
+            Assert.Contains("\"sql_driver_log\"", json);
+        }
+
+        #endregion
+
+        #region TelemetryEvent Tests
+
+        [Fact]
+        public void TelemetryEvent_Serialization_IncludesAllFields()
+        {
+            // Arrange
+            var telemetryEvent = new TelemetryEvent
+            {
+                SessionId = "session-full",
+                SqlStatementId = "stmt-full",
+                AuthType = "PAT",
+                OperationLatencyMs = 2500,
+                SystemConfiguration = new DriverSystemConfiguration
                 {
-                    DriverVersion = "1.0.0",
-                    DriverOS = "Linux",
-                    DriverRuntime = ".NET 8.0",
-                    FeatureCloudFetch = true,
-                    FeatureLz4 = true
+                    DriverName = "Test Driver",
+                    DriverVersion = "1.0.0"
+                },
+                DriverConnectionParams = new DriverConnectionParameters
+                {
+                    HttpPath = "/sql/1.0/warehouses/abc123",
+                    Mode = "thrift"
+                },
+                SqlOperation = new SqlExecutionEvent
+                {
+                    StatementType = "QUERY",
+                    ExecutionResult = "CLOUD_FETCH"
                 }
             };
 
             // Act
-            string json = metric.ToJson();
+            var options = new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            };
+            string json = JsonSerializer.Serialize(telemetryEvent, options);
 
-            // Assert - Verify JSON is valid
-            Assert.NotNull(json);
-            Assert.NotEmpty(json);
-
-            // Parse JSON to verify structure
+            // Assert
             using var jsonDoc = JsonDocument.Parse(json);
             var root = jsonDoc.RootElement;
 
-            // Verify all required fields are present
-            Assert.True(root.TryGetProperty("metricType", out var metricType));
-            Assert.Equal("statement", metricType.GetString());
+            Assert.True(root.TryGetProperty("session_id", out var sessionId));
+            Assert.Equal("session-full", sessionId.GetString());
 
-            Assert.True(root.TryGetProperty("timestamp", out var timestamp));
-            Assert.NotNull(timestamp.GetDateTimeOffset());
+            Assert.True(root.TryGetProperty("sql_statement_id", out var stmtId));
+            Assert.Equal("stmt-full", stmtId.GetString());
 
-            Assert.True(root.TryGetProperty("workspaceId", out var workspaceId));
-            Assert.Equal(123456789, workspaceId.GetInt64());
+            Assert.True(root.TryGetProperty("auth_type", out var authType));
+            Assert.Equal("PAT", authType.GetString());
 
-            Assert.True(root.TryGetProperty("sessionId", out var sessionId));
-            Assert.Equal("session-abc-123", sessionId.GetString());
+            Assert.True(root.TryGetProperty("operation_latency_ms", out var latency));
+            Assert.Equal(2500, latency.GetInt64());
 
-            Assert.True(root.TryGetProperty("statementId", out var statementId));
-            Assert.Equal("stmt-xyz-456", statementId.GetString());
+            Assert.True(root.TryGetProperty("system_configuration", out var sysConfig));
+            Assert.True(sysConfig.TryGetProperty("driver_name", out var driverName));
+            Assert.Equal("Test Driver", driverName.GetString());
 
-            Assert.True(root.TryGetProperty("executionLatencyMs", out var executionLatency));
-            Assert.Equal(1500, executionLatency.GetInt64());
+            Assert.True(root.TryGetProperty("driver_connection_params", out var connParams));
+            Assert.True(connParams.TryGetProperty("http_path", out var httpPath));
+            Assert.Equal("/sql/1.0/warehouses/abc123", httpPath.GetString());
 
-            Assert.True(root.TryGetProperty("resultFormat", out var resultFormat));
-            Assert.Equal("cloudfetch", resultFormat.GetString());
-
-            Assert.True(root.TryGetProperty("chunkCount", out var chunkCount));
-            Assert.Equal(5, chunkCount.GetInt32());
-
-            Assert.True(root.TryGetProperty("totalBytesDownloaded", out var totalBytes));
-            Assert.Equal(1048576, totalBytes.GetInt64());
-
-            Assert.True(root.TryGetProperty("pollCount", out var pollCount));
-            Assert.Equal(3, pollCount.GetInt32());
-
-            // Verify driver configuration
-            Assert.True(root.TryGetProperty("driverConfiguration", out var driverConfig));
-            Assert.True(driverConfig.TryGetProperty("driverVersion", out var driverVersion));
-            Assert.Equal("1.0.0", driverVersion.GetString());
-
-            Assert.True(driverConfig.TryGetProperty("driverOs", out var driverOs));
-            Assert.Equal("Linux", driverOs.GetString());
-
-            Assert.True(driverConfig.TryGetProperty("driverRuntime", out var driverRuntime));
-            Assert.Equal(".NET 8.0", driverRuntime.GetString());
-
-            Assert.True(driverConfig.TryGetProperty("featureCloudfetch", out var featureCloudfetch));
-            Assert.True(featureCloudfetch.GetBoolean());
-
-            Assert.True(driverConfig.TryGetProperty("featureLz4", out var featureLz4));
-            Assert.True(featureLz4.GetBoolean());
+            Assert.True(root.TryGetProperty("sql_operation", out var sqlOp));
+            Assert.True(sqlOp.TryGetProperty("statement_type", out var stmtType));
+            Assert.Equal("QUERY", stmtType.GetString());
         }
 
         [Fact]
-        public void TelemetryMetric_Serialization_OmitsNullFields()
+        public void TelemetryEvent_Serialization_OmitsNullFields()
         {
-            // Arrange - Create metric with only required fields
-            var metric = new TelemetryMetric
+            // Arrange
+            var telemetryEvent = new TelemetryEvent
             {
-                MetricType = "connection",
-                Timestamp = new DateTimeOffset(2025, 1, 16, 10, 30, 0, TimeSpan.Zero),
-                SessionId = "session-abc-123"
+                SessionId = "session-minimal",
+                OperationLatencyMs = 100
                 // All other fields are null
             };
 
             // Act
-            string json = metric.ToJson();
+            var options = new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            };
+            string json = JsonSerializer.Serialize(telemetryEvent, options);
 
-            // Assert - Verify JSON does not contain null fields
-            Assert.NotNull(json);
-            Assert.NotEmpty(json);
-
-            // Parse JSON to verify null fields are omitted
+            // Assert
             using var jsonDoc = JsonDocument.Parse(json);
             var root = jsonDoc.RootElement;
 
-            // Verify present fields
-            Assert.True(root.TryGetProperty("metricType", out _));
-            Assert.True(root.TryGetProperty("timestamp", out _));
-            Assert.True(root.TryGetProperty("sessionId", out _));
+            Assert.True(root.TryGetProperty("session_id", out _));
+            Assert.True(root.TryGetProperty("operation_latency_ms", out _));
 
             // Verify null fields are NOT present
-            Assert.False(root.TryGetProperty("workspaceId", out _));
-            Assert.False(root.TryGetProperty("statementId", out _));
-            Assert.False(root.TryGetProperty("executionLatencyMs", out _));
-            Assert.False(root.TryGetProperty("resultFormat", out _));
-            Assert.False(root.TryGetProperty("chunkCount", out _));
-            Assert.False(root.TryGetProperty("totalBytesDownloaded", out _));
-            Assert.False(root.TryGetProperty("pollCount", out _));
-            Assert.False(root.TryGetProperty("driverConfiguration", out _));
+            Assert.False(root.TryGetProperty("sql_statement_id", out _));
+            Assert.False(root.TryGetProperty("system_configuration", out _));
+            Assert.False(root.TryGetProperty("driver_connection_params", out _));
+            Assert.False(root.TryGetProperty("sql_operation", out _));
+            Assert.False(root.TryGetProperty("error_info", out _));
+        }
+
+        #endregion
+
+        #region DriverSystemConfiguration Tests
+
+        [Fact]
+        public void DriverSystemConfiguration_CreateDefault_PopulatesSystemInfo()
+        {
+            // Act
+            var config = DriverSystemConfiguration.CreateDefault("1.2.3");
+
+            // Assert
+            Assert.Equal("Databricks ADBC Driver", config.DriverName);
+            Assert.Equal("1.2.3", config.DriverVersion);
+            Assert.NotNull(config.OsName);
+            Assert.NotNull(config.OsArch);
+            Assert.Equal(".NET", config.RuntimeName);
+            Assert.NotNull(config.RuntimeVersion);
+            Assert.Equal("UTF-8", config.CharSetEncoding);
         }
 
         [Fact]
-        public void TelemetryMetric_Serialization_ConnectionEvent_ProducesValidJson()
+        public void DriverSystemConfiguration_Serialization_UsesCorrectPropertyNames()
         {
-            // Arrange - Connection event with driver configuration
-            var metric = new TelemetryMetric
+            // Arrange
+            var config = new DriverSystemConfiguration
             {
-                MetricType = "connection",
-                Timestamp = DateTimeOffset.UtcNow,
-                WorkspaceId = 987654321,
-                SessionId = "session-connection-001",
-                DriverConfiguration = new DriverConfiguration
-                {
-                    DriverVersion = "1.2.3",
-                    DriverOS = "Windows",
-                    DriverRuntime = ".NET Framework 4.7.2",
-                    FeatureCloudFetch = false,
-                    FeatureLz4 = false
-                }
+                DriverName = "Test",
+                DriverVersion = "1.0",
+                OsName = "Linux",
+                OsVersion = "5.4",
+                OsArch = "x64",
+                RuntimeName = ".NET",
+                RuntimeVersion = "8.0",
+                LocaleName = "en-US",
+                CharSetEncoding = "UTF-8"
             };
 
             // Act
-            string json = metric.ToJson();
+            var options = new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            };
+            string json = JsonSerializer.Serialize(config, options);
 
             // Assert
-            Assert.NotNull(json);
-            using var jsonDoc = JsonDocument.Parse(json);
-            var root = jsonDoc.RootElement;
-
-            Assert.True(root.TryGetProperty("metricType", out var metricType));
-            Assert.Equal("connection", metricType.GetString());
-
-            Assert.True(root.TryGetProperty("driverConfiguration", out var driverConfig));
-            Assert.True(driverConfig.TryGetProperty("featureCloudfetch", out var featureCloudfetch));
-            Assert.False(featureCloudfetch.GetBoolean());
+            Assert.Contains("\"driver_name\"", json);
+            Assert.Contains("\"driver_version\"", json);
+            Assert.Contains("\"os_name\"", json);
+            Assert.Contains("\"os_version\"", json);
+            Assert.Contains("\"os_arch\"", json);
+            Assert.Contains("\"runtime_name\"", json);
+            Assert.Contains("\"runtime_version\"", json);
+            Assert.Contains("\"locale_name\"", json);
+            Assert.Contains("\"char_set_encoding\"", json);
         }
 
+        #endregion
+
+        #region DriverConnectionParameters Tests
+
         [Fact]
-        public void TelemetryMetric_Serialization_StatementEvent_WithAllFields_ProducesValidJson()
+        public void DriverConnectionParameters_Serialization_IncludesAllFields()
         {
-            // Arrange - Statement event with all fields populated
-            var metric = new TelemetryMetric
+            // Arrange
+            var params_ = new DriverConnectionParameters
             {
-                MetricType = "statement",
-                Timestamp = DateTimeOffset.UtcNow,
-                WorkspaceId = 111222333,
-                SessionId = "session-stmt-001",
-                StatementId = "stmt-001",
-                ExecutionLatencyMs = 5000,
-                ResultFormat = "inline",
-                ChunkCount = 0,
-                TotalBytesDownloaded = 0,
-                PollCount = 10
+                HttpPath = "/sql/1.0/warehouses/test",
+                Mode = "thrift",
+                AuthMech = "PAT",
+                EnableArrow = true,
+                EnableDirectResults = true,
+                EnableCloudFetch = true,
+                EnableLz4Compression = false
             };
 
             // Act
-            string json = metric.ToJson();
-
-            // Assert
-            Assert.NotNull(json);
-            using var jsonDoc = JsonDocument.Parse(json);
-            var root = jsonDoc.RootElement;
-
-            Assert.True(root.TryGetProperty("metricType", out var metricType));
-            Assert.Equal("statement", metricType.GetString());
-
-            Assert.True(root.TryGetProperty("resultFormat", out var resultFormat));
-            Assert.Equal("inline", resultFormat.GetString());
-
-            // Even zero values should be included
-            Assert.True(root.TryGetProperty("chunkCount", out var chunkCount));
-            Assert.Equal(0, chunkCount.GetInt32());
-
-            Assert.True(root.TryGetProperty("totalBytesDownloaded", out var totalBytes));
-            Assert.Equal(0, totalBytes.GetInt64());
-        }
-
-        [Fact]
-        public void TelemetryMetric_Serialization_ErrorEvent_ProducesValidJson()
-        {
-            // Arrange - Error event (minimal fields)
-            var metric = new TelemetryMetric
+            var options = new JsonSerializerOptions
             {
-                MetricType = "error",
-                Timestamp = DateTimeOffset.UtcNow,
-                SessionId = "session-error-001",
-                StatementId = "stmt-error-001"
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
             };
-
-            // Act
-            string json = metric.ToJson();
+            string json = JsonSerializer.Serialize(params_, options);
 
             // Assert
-            Assert.NotNull(json);
             using var jsonDoc = JsonDocument.Parse(json);
             var root = jsonDoc.RootElement;
 
-            Assert.True(root.TryGetProperty("metricType", out var metricType));
-            Assert.Equal("error", metricType.GetString());
+            Assert.True(root.TryGetProperty("http_path", out var httpPath));
+            Assert.Equal("/sql/1.0/warehouses/test", httpPath.GetString());
 
-            Assert.True(root.TryGetProperty("sessionId", out _));
-            Assert.True(root.TryGetProperty("statementId", out _));
+            Assert.True(root.TryGetProperty("mode", out var mode));
+            Assert.Equal("thrift", mode.GetString());
+
+            Assert.True(root.TryGetProperty("enable_cloud_fetch", out var cloudFetch));
+            Assert.True(cloudFetch.GetBoolean());
+
+            Assert.True(root.TryGetProperty("enable_lz4_compression", out var lz4));
+            Assert.False(lz4.GetBoolean());
         }
 
-        [Fact]
-        public void TelemetryMetric_Deserialization_FromJson_ReturnsValidObject()
-        {
-            // Arrange
-            string json = @"{
-                ""metricType"": ""statement"",
-                ""timestamp"": ""2025-01-16T10:30:00Z"",
-                ""workspaceId"": 123456789,
-                ""sessionId"": ""session-abc-123"",
-                ""statementId"": ""stmt-xyz-456"",
-                ""executionLatencyMs"": 1500,
-                ""resultFormat"": ""cloudfetch"",
-                ""chunkCount"": 5,
-                ""totalBytesDownloaded"": 1048576,
-                ""pollCount"": 3
-            }";
+        #endregion
 
-            // Act
-            var metric = TelemetryMetric.FromJson(json);
-
-            // Assert
-            Assert.NotNull(metric);
-            Assert.Equal("statement", metric.MetricType);
-            Assert.Equal(new DateTimeOffset(2025, 1, 16, 10, 30, 0, TimeSpan.Zero), metric.Timestamp);
-            Assert.Equal(123456789, metric.WorkspaceId);
-            Assert.Equal("session-abc-123", metric.SessionId);
-            Assert.Equal("stmt-xyz-456", metric.StatementId);
-            Assert.Equal(1500, metric.ExecutionLatencyMs);
-            Assert.Equal("cloudfetch", metric.ResultFormat);
-            Assert.Equal(5, metric.ChunkCount);
-            Assert.Equal(1048576, metric.TotalBytesDownloaded);
-            Assert.Equal(3, metric.PollCount);
-        }
+        #region SqlExecutionEvent Tests
 
         [Fact]
-        public void TelemetryMetric_Deserialization_WithMissingFields_ReturnsObjectWithNulls()
+        public void SqlExecutionEvent_Serialization_IncludesAllFields()
         {
             // Arrange
-            string json = @"{
-                ""metricType"": ""connection"",
-                ""timestamp"": ""2025-01-16T10:30:00Z"",
-                ""sessionId"": ""session-minimal""
-            }";
-
-            // Act
-            var metric = TelemetryMetric.FromJson(json);
-
-            // Assert
-            Assert.NotNull(metric);
-            Assert.Equal("connection", metric.MetricType);
-            Assert.Equal("session-minimal", metric.SessionId);
-            Assert.Null(metric.WorkspaceId);
-            Assert.Null(metric.StatementId);
-            Assert.Null(metric.ExecutionLatencyMs);
-            Assert.Null(metric.ResultFormat);
-            Assert.Null(metric.ChunkCount);
-            Assert.Null(metric.TotalBytesDownloaded);
-            Assert.Null(metric.PollCount);
-            Assert.Null(metric.DriverConfiguration);
-        }
-
-        [Fact]
-        public void TelemetryMetric_RoundTrip_PreservesData()
-        {
-            // Arrange
-            var originalMetric = new TelemetryMetric
+            var sqlEvent = new SqlExecutionEvent
             {
-                MetricType = "statement",
-                Timestamp = new DateTimeOffset(2025, 1, 16, 10, 30, 45, TimeSpan.FromHours(-5)),
-                WorkspaceId = 999888777,
-                SessionId = "session-roundtrip",
-                StatementId = "stmt-roundtrip",
-                ExecutionLatencyMs = 2500,
-                ResultFormat = "cloudfetch",
+                StatementType = "QUERY",
+                IsCompressed = true,
+                ExecutionResult = "CLOUD_FETCH",
+                RetryCount = 2,
                 ChunkCount = 10,
-                TotalBytesDownloaded = 5242880,
-                PollCount = 5,
-                DriverConfiguration = new DriverConfiguration
-                {
-                    DriverVersion = "2.0.0",
-                    DriverOS = "macOS",
-                    DriverRuntime = ".NET 8.0",
-                    FeatureCloudFetch = true,
-                    FeatureLz4 = false
-                }
-            };
-
-            // Act - Serialize and deserialize
-            string json = originalMetric.ToJson();
-            var deserializedMetric = TelemetryMetric.FromJson(json);
-
-            // Assert - Verify all fields match
-            Assert.Equal(originalMetric.MetricType, deserializedMetric.MetricType);
-            Assert.Equal(originalMetric.Timestamp, deserializedMetric.Timestamp);
-            Assert.Equal(originalMetric.WorkspaceId, deserializedMetric.WorkspaceId);
-            Assert.Equal(originalMetric.SessionId, deserializedMetric.SessionId);
-            Assert.Equal(originalMetric.StatementId, deserializedMetric.StatementId);
-            Assert.Equal(originalMetric.ExecutionLatencyMs, deserializedMetric.ExecutionLatencyMs);
-            Assert.Equal(originalMetric.ResultFormat, deserializedMetric.ResultFormat);
-            Assert.Equal(originalMetric.ChunkCount, deserializedMetric.ChunkCount);
-            Assert.Equal(originalMetric.TotalBytesDownloaded, deserializedMetric.TotalBytesDownloaded);
-            Assert.Equal(originalMetric.PollCount, deserializedMetric.PollCount);
-
-            Assert.NotNull(deserializedMetric.DriverConfiguration);
-            Assert.Equal(originalMetric.DriverConfiguration.DriverVersion, deserializedMetric.DriverConfiguration.DriverVersion);
-            Assert.Equal(originalMetric.DriverConfiguration.DriverOS, deserializedMetric.DriverConfiguration.DriverOS);
-            Assert.Equal(originalMetric.DriverConfiguration.DriverRuntime, deserializedMetric.DriverConfiguration.DriverRuntime);
-            Assert.Equal(originalMetric.DriverConfiguration.FeatureCloudFetch, deserializedMetric.DriverConfiguration.FeatureCloudFetch);
-            Assert.Equal(originalMetric.DriverConfiguration.FeatureLz4, deserializedMetric.DriverConfiguration.FeatureLz4);
-        }
-
-        [Fact]
-        public void DriverConfiguration_Serialization_OmitsNullFields()
-        {
-            // Arrange
-            var config = new DriverConfiguration
-            {
-                DriverVersion = "1.0.0",
-                DriverOS = "Linux"
-                // DriverRuntime, FeatureCloudFetch, FeatureLz4 are null
-            };
-
-            var metric = new TelemetryMetric
-            {
-                MetricType = "connection",
-                Timestamp = DateTimeOffset.UtcNow,
-                SessionId = "session-test",
-                DriverConfiguration = config
+                TotalBytesDownloaded = 5242880
             };
 
             // Act
-            string json = metric.ToJson();
+            var options = new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            };
+            string json = JsonSerializer.Serialize(sqlEvent, options);
 
             // Assert
             using var jsonDoc = JsonDocument.Parse(json);
             var root = jsonDoc.RootElement;
 
-            Assert.True(root.TryGetProperty("driverConfiguration", out var driverConfig));
-            Assert.True(driverConfig.TryGetProperty("driverVersion", out _));
-            Assert.True(driverConfig.TryGetProperty("driverOs", out _));
+            Assert.True(root.TryGetProperty("statement_type", out var stmtType));
+            Assert.Equal("QUERY", stmtType.GetString());
 
-            // Verify null fields are omitted
-            Assert.False(driverConfig.TryGetProperty("driverRuntime", out _));
-            Assert.False(driverConfig.TryGetProperty("featureCloudfetch", out _));
-            Assert.False(driverConfig.TryGetProperty("featureLz4", out _));
+            Assert.True(root.TryGetProperty("is_compressed", out var compressed));
+            Assert.True(compressed.GetBoolean());
+
+            Assert.True(root.TryGetProperty("execution_result", out var execResult));
+            Assert.Equal("CLOUD_FETCH", execResult.GetString());
+
+            Assert.True(root.TryGetProperty("retry_count", out var retryCount));
+            Assert.Equal(2, retryCount.GetInt32());
+
+            Assert.True(root.TryGetProperty("chunk_count", out var chunkCount));
+            Assert.Equal(10, chunkCount.GetInt32());
+
+            Assert.True(root.TryGetProperty("total_bytes_downloaded", out var totalBytes));
+            Assert.Equal(5242880, totalBytes.GetInt64());
+        }
+
+        #endregion
+
+        #region DriverErrorInfo Tests
+
+        [Fact]
+        public void DriverErrorInfo_FromException_CapturesTypeAndMessage()
+        {
+            // Arrange
+            var exception = new InvalidOperationException("Test error message");
+
+            // Act
+            var errorInfo = DriverErrorInfo.FromException(exception);
+
+            // Assert
+            Assert.Equal("InvalidOperationException", errorInfo.ErrorName);
+            Assert.Equal("Test error message", errorInfo.ErrorMessage);
         }
 
         [Fact]
-        public void TelemetryMetric_Serialization_UsesSnakeCaseForPropertyNames()
+        public void DriverErrorInfo_Serialization_ProducesCorrectJson()
         {
             // Arrange
-            var metric = new TelemetryMetric
+            var errorInfo = new DriverErrorInfo
             {
-                MetricType = "statement",
-                Timestamp = DateTimeOffset.UtcNow,
-                SessionId = "session-test"
+                ErrorName = "SqlException",
+                ErrorMessage = "Syntax error near 'SELECT'"
             };
 
             // Act
-            string json = metric.ToJson();
+            var options = new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            };
+            string json = JsonSerializer.Serialize(errorInfo, options);
 
-            // Assert - Verify camelCase property names (as per System.Text.Json default)
-            Assert.Contains("\"metricType\"", json);
-            Assert.Contains("\"timestamp\"", json);
-            Assert.Contains("\"sessionId\"", json);
-
-            // Should NOT contain PascalCase
-            Assert.DoesNotContain("\"MetricType\"", json);
-            Assert.DoesNotContain("\"SessionId\"", json);
+            // Assert
+            Assert.Contains("\"error_name\"", json);
+            Assert.Contains("\"SqlException\"", json);
+            Assert.Contains("\"error_message\"", json);
+            Assert.Contains("Syntax error", json);
         }
+
+        #endregion
+
+        #region Full Pipeline Tests
+
+        [Fact]
+        public void FullPipeline_ConnectionEvent_ProducesValidTelemetryRequest()
+        {
+            // Arrange - Connection open event
+            var telemetryEvent = new TelemetryEvent
+            {
+                SessionId = "connection-session-001",
+                SystemConfiguration = DriverSystemConfiguration.CreateDefault("1.0.0"),
+                DriverConnectionParams = new DriverConnectionParameters
+                {
+                    HttpPath = "/sql/1.0/warehouses/abc",
+                    Mode = "thrift",
+                    EnableCloudFetch = true
+                },
+                AuthType = "PAT",
+                OperationLatencyMs = 250
+            };
+
+            var frontendLog = TelemetryFrontendLog.Create(
+                workspaceId: 123456789,
+                telemetryEvent: telemetryEvent,
+                userAgent: "DatabricksAdbcDriver/1.0.0");
+
+            // Act
+            var request = TelemetryRequest.Create(new[] { frontendLog });
+            string json = request.ToJson();
+
+            // Assert - Verify complete structure
+            Assert.NotNull(json);
+            using var jsonDoc = JsonDocument.Parse(json);
+            var root = jsonDoc.RootElement;
+
+            // Verify top-level
+            Assert.True(root.TryGetProperty("uploadTime", out _));
+            Assert.True(root.TryGetProperty("items", out _));
+            Assert.True(root.TryGetProperty("protoLogs", out var protoLogs));
+
+            // Parse nested protoLog
+            var protoLogJson = protoLogs[0].GetString();
+            using var nestedDoc = JsonDocument.Parse(protoLogJson!);
+            var nestedRoot = nestedDoc.RootElement;
+
+            // Verify nested structure
+            Assert.True(nestedRoot.TryGetProperty("workspace_id", out _));
+            Assert.True(nestedRoot.TryGetProperty("frontend_log_event_id", out _));
+            Assert.True(nestedRoot.TryGetProperty("context", out var context));
+            Assert.True(context.TryGetProperty("client_context", out _));
+            Assert.True(nestedRoot.TryGetProperty("entry", out var entry));
+            Assert.True(entry.TryGetProperty("sql_driver_log", out var sqlDriverLog));
+            Assert.True(sqlDriverLog.TryGetProperty("session_id", out _));
+            Assert.True(sqlDriverLog.TryGetProperty("system_configuration", out _));
+            Assert.True(sqlDriverLog.TryGetProperty("driver_connection_params", out _));
+        }
+
+        [Fact]
+        public void FullPipeline_StatementEvent_ProducesValidTelemetryRequest()
+        {
+            // Arrange - Statement execution event
+            var telemetryEvent = new TelemetryEvent
+            {
+                SessionId = "session-stmt",
+                SqlStatementId = "stmt-001",
+                SqlOperation = new SqlExecutionEvent
+                {
+                    StatementType = "QUERY",
+                    ExecutionResult = "CLOUD_FETCH",
+                    ChunkCount = 5,
+                    TotalBytesDownloaded = 1048576,
+                    IsCompressed = true
+                },
+                OperationLatencyMs = 3500
+            };
+
+            var frontendLog = TelemetryFrontendLog.Create(
+                workspaceId: 999888777,
+                telemetryEvent: telemetryEvent,
+                userAgent: "DatabricksAdbcDriver/1.0.0");
+
+            // Act
+            var request = TelemetryRequest.Create(new[] { frontendLog });
+            string json = request.ToJson();
+
+            // Assert
+            Assert.NotNull(json);
+            Assert.Contains("sql_statement_id", json);
+            Assert.Contains("stmt-001", json);
+            Assert.Contains("sql_operation", json);
+            Assert.Contains("CLOUD_FETCH", json);
+        }
+
+        [Fact]
+        public void FullPipeline_ErrorEvent_ProducesValidTelemetryRequest()
+        {
+            // Arrange - Error event
+            var telemetryEvent = new TelemetryEvent
+            {
+                SessionId = "session-error",
+                SqlStatementId = "stmt-error-001",
+                ErrorInfo = DriverErrorInfo.FromException(new Exception("Query failed")),
+                OperationLatencyMs = 100
+            };
+
+            var frontendLog = TelemetryFrontendLog.Create(
+                workspaceId: 111222333,
+                telemetryEvent: telemetryEvent,
+                userAgent: "DatabricksAdbcDriver/1.0.0");
+
+            // Act
+            var request = TelemetryRequest.Create(new[] { frontendLog });
+            string json = request.ToJson();
+
+            // Assert
+            Assert.NotNull(json);
+            Assert.Contains("error_info", json);
+            Assert.Contains("error_name", json);
+            Assert.Contains("Exception", json);
+            Assert.Contains("Query failed", json);
+        }
+
+        #endregion
     }
 }

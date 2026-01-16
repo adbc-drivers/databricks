@@ -15,155 +15,457 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace AdbcDrivers.Databricks.Telemetry
 {
     /// <summary>
-    /// Represents an aggregated telemetry metric that will be exported to Databricks telemetry service.
-    /// This class aggregates data from multiple activities with the same statement_id.
-    /// Includes both session_id (connection-level) and statement_id (statement-level) for multi-level correlation.
+    /// Top-level HTTP request wrapper sent to /telemetry-ext endpoint.
+    /// This format is compatible with the Databricks JDBC driver telemetry format.
     /// </summary>
-    public sealed class TelemetryMetric
+    public sealed class TelemetryRequest
     {
         /// <summary>
-        /// Gets or sets the type of metric: "connection", "statement", or "error".
+        /// Gets or sets the upload timestamp in Unix milliseconds.
         /// </summary>
-        [JsonPropertyName("metric_type")]
-        public string? MetricType { get; set; }
+        [JsonPropertyName("uploadTime")]
+        public long UploadTime { get; set; }
 
         /// <summary>
-        /// Gets or sets the timestamp of when the metric was recorded.
-        /// Derived from Activity.StartTimeUtc.
+        /// Gets or sets the items array. Always empty for driver telemetry.
+        /// Required field for backend compatibility.
         /// </summary>
-        [JsonPropertyName("timestamp")]
-        public DateTimeOffset Timestamp { get; set; }
+        [JsonPropertyName("items")]
+        public List<string> Items { get; set; } = new();
 
         /// <summary>
-        /// Gets or sets the Databricks workspace ID.
+        /// Gets or sets the protoLogs array containing JSON-serialized TelemetryFrontendLog objects.
+        /// Each entry is a complete TelemetryFrontendLog serialized to a JSON string.
         /// </summary>
-        [JsonPropertyName("workspace_id")]
-        public long? WorkspaceId { get; set; }
+        [JsonPropertyName("protoLogs")]
+        public List<string> ProtoLogs { get; set; } = new();
 
         /// <summary>
-        /// Gets or sets the session ID (connection-level identifier).
-        /// All statements within a connection share the same session_id for correlation.
+        /// Creates a TelemetryRequest from a collection of TelemetryFrontendLog events.
         /// </summary>
-        [JsonPropertyName("session_id")]
-        public string? SessionId { get; set; }
+        public static TelemetryRequest Create(IEnumerable<TelemetryFrontendLog> events)
+        {
+            var request = new TelemetryRequest
+            {
+                UploadTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            };
+
+            var options = new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                WriteIndented = false
+            };
+
+            foreach (var evt in events)
+            {
+                request.ProtoLogs.Add(JsonSerializer.Serialize(evt, options));
+            }
+
+            return request;
+        }
 
         /// <summary>
-        /// Gets or sets the statement ID (statement-level identifier).
-        /// Unique per statement and used as the aggregation key.
+        /// Serializes the telemetry request to JSON string.
         /// </summary>
-        [JsonPropertyName("statement_id")]
-        public string? StatementId { get; set; }
-
-        /// <summary>
-        /// Gets or sets the execution latency in milliseconds.
-        /// Derived from Activity.Duration.TotalMilliseconds.
-        /// </summary>
-        [JsonPropertyName("execution_latency_ms")]
-        public long? ExecutionLatencyMs { get; set; }
-
-        /// <summary>
-        /// Gets or sets the result format: "inline" or "cloudfetch".
-        /// </summary>
-        [JsonPropertyName("result_format")]
-        public string? ResultFormat { get; set; }
-
-        /// <summary>
-        /// Gets or sets the number of CloudFetch chunks downloaded.
-        /// </summary>
-        [JsonPropertyName("chunk_count")]
-        public int? ChunkCount { get; set; }
-
-        /// <summary>
-        /// Gets or sets the total bytes downloaded from CloudFetch.
-        /// </summary>
-        [JsonPropertyName("total_bytes_downloaded")]
-        public long? TotalBytesDownloaded { get; set; }
-
-        /// <summary>
-        /// Gets or sets the number of status poll requests made.
-        /// </summary>
-        [JsonPropertyName("poll_count")]
-        public int? PollCount { get; set; }
-
-        /// <summary>
-        /// Gets or sets the driver configuration information.
-        /// Includes driver version, OS, runtime, and feature flags.
-        /// </summary>
-        [JsonPropertyName("driver_configuration")]
-        public DriverConfiguration? DriverConfiguration { get; set; }
-
-        /// <summary>
-        /// Serializes the telemetry metric to JSON string with null fields omitted.
-        /// </summary>
-        /// <returns>JSON string representation of the metric.</returns>
         public string ToJson()
         {
             var options = new JsonSerializerOptions
             {
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 WriteIndented = false
             };
-
             return JsonSerializer.Serialize(this, options);
-        }
-
-        /// <summary>
-        /// Deserializes a JSON string to a TelemetryMetric instance.
-        /// </summary>
-        /// <param name="json">JSON string to deserialize.</param>
-        /// <returns>TelemetryMetric instance.</returns>
-        public static TelemetryMetric FromJson(string json)
-        {
-            var options = new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            };
-
-            return JsonSerializer.Deserialize<TelemetryMetric>(json, options)
-                ?? throw new InvalidOperationException("Failed to deserialize TelemetryMetric from JSON");
         }
     }
 
     /// <summary>
-    /// Represents driver configuration information collected at connection time.
+    /// Frontend log wrapper that contains a single telemetry event.
+    /// Each instance is serialized to JSON and added to the protoLogs array.
     /// </summary>
-    public sealed class DriverConfiguration
+    public sealed class TelemetryFrontendLog
     {
         /// <summary>
-        /// Gets or sets the driver version string.
+        /// Gets or sets the Databricks workspace ID.
+        /// </summary>
+        [JsonPropertyName("workspace_id")]
+        public long WorkspaceId { get; set; }
+
+        /// <summary>
+        /// Gets or sets the unique event ID (UUID) for this log entry.
+        /// </summary>
+        [JsonPropertyName("frontend_log_event_id")]
+        public string? FrontendLogEventId { get; set; }
+
+        /// <summary>
+        /// Gets or sets the log context containing client information.
+        /// </summary>
+        [JsonPropertyName("context")]
+        public FrontendLogContext? Context { get; set; }
+
+        /// <summary>
+        /// Gets or sets the log entry containing the actual telemetry event.
+        /// </summary>
+        [JsonPropertyName("entry")]
+        public FrontendLogEntry? Entry { get; set; }
+
+        /// <summary>
+        /// Creates a new TelemetryFrontendLog wrapping a TelemetryEvent.
+        /// </summary>
+        public static TelemetryFrontendLog Create(
+            long workspaceId,
+            TelemetryEvent telemetryEvent,
+            string userAgent)
+        {
+            return new TelemetryFrontendLog
+            {
+                WorkspaceId = workspaceId,
+                FrontendLogEventId = Guid.NewGuid().ToString(),
+                Context = new FrontendLogContext
+                {
+                    ClientContext = new TelemetryClientContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        UserAgent = userAgent
+                    }
+                },
+                Entry = new FrontendLogEntry
+                {
+                    SqlDriverLog = telemetryEvent
+                }
+            };
+        }
+    }
+
+    /// <summary>
+    /// Context information for the frontend log.
+    /// </summary>
+    public sealed class FrontendLogContext
+    {
+        /// <summary>
+        /// Gets or sets the client context containing timestamp and user agent.
+        /// </summary>
+        [JsonPropertyName("client_context")]
+        public TelemetryClientContext? ClientContext { get; set; }
+    }
+
+    /// <summary>
+    /// Client context containing metadata about the telemetry client.
+    /// </summary>
+    public sealed class TelemetryClientContext
+    {
+        /// <summary>
+        /// Gets or sets the timestamp when this event was created, in Unix milliseconds.
+        /// </summary>
+        [JsonPropertyName("timestamp_millis")]
+        public long TimestampMillis { get; set; }
+
+        /// <summary>
+        /// Gets or sets the user agent string identifying the driver.
+        /// Example: "DatabricksAdbcDriver/1.0.0"
+        /// </summary>
+        [JsonPropertyName("user_agent")]
+        public string? UserAgent { get; set; }
+    }
+
+    /// <summary>
+    /// Entry wrapper containing the SQL driver log.
+    /// </summary>
+    public sealed class FrontendLogEntry
+    {
+        /// <summary>
+        /// Gets or sets the SQL driver telemetry event.
+        /// </summary>
+        [JsonPropertyName("sql_driver_log")]
+        public TelemetryEvent? SqlDriverLog { get; set; }
+    }
+
+    /// <summary>
+    /// Core telemetry event containing driver metrics and information.
+    /// This structure matches the JDBC driver's TelemetryEvent format.
+    /// </summary>
+    public sealed class TelemetryEvent
+    {
+        /// <summary>
+        /// Gets or sets the session ID (connection-level identifier).
+        /// All statements within a connection share the same session_id.
+        /// </summary>
+        [JsonPropertyName("session_id")]
+        public string? SessionId { get; set; }
+
+        /// <summary>
+        /// Gets or sets the SQL statement ID (statement-level identifier).
+        /// Unique per statement execution.
+        /// </summary>
+        [JsonPropertyName("sql_statement_id")]
+        public string? SqlStatementId { get; set; }
+
+        /// <summary>
+        /// Gets or sets the system configuration including driver and OS info.
+        /// </summary>
+        [JsonPropertyName("system_configuration")]
+        public DriverSystemConfiguration? SystemConfiguration { get; set; }
+
+        /// <summary>
+        /// Gets or sets the connection parameters.
+        /// </summary>
+        [JsonPropertyName("driver_connection_params")]
+        public DriverConnectionParameters? DriverConnectionParams { get; set; }
+
+        /// <summary>
+        /// Gets or sets the authentication type used.
+        /// </summary>
+        [JsonPropertyName("auth_type")]
+        public string? AuthType { get; set; }
+
+        /// <summary>
+        /// Gets or sets the SQL execution event details.
+        /// </summary>
+        [JsonPropertyName("sql_operation")]
+        public SqlExecutionEvent? SqlOperation { get; set; }
+
+        /// <summary>
+        /// Gets or sets error information if an error occurred.
+        /// </summary>
+        [JsonPropertyName("error_info")]
+        public DriverErrorInfo? ErrorInfo { get; set; }
+
+        /// <summary>
+        /// Gets or sets the operation latency in milliseconds.
+        /// </summary>
+        [JsonPropertyName("operation_latency_ms")]
+        public long? OperationLatencyMs { get; set; }
+    }
+
+    /// <summary>
+    /// Driver and system configuration information.
+    /// </summary>
+    public sealed class DriverSystemConfiguration
+    {
+        /// <summary>
+        /// Gets or sets the driver name.
+        /// </summary>
+        [JsonPropertyName("driver_name")]
+        public string? DriverName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the driver version.
         /// </summary>
         [JsonPropertyName("driver_version")]
         public string? DriverVersion { get; set; }
 
         /// <summary>
-        /// Gets or sets the operating system.
+        /// Gets or sets the operating system name.
         /// </summary>
-        [JsonPropertyName("driver_os")]
-        public string? DriverOS { get; set; }
+        [JsonPropertyName("os_name")]
+        public string? OsName { get; set; }
 
         /// <summary>
-        /// Gets or sets the .NET runtime version.
+        /// Gets or sets the operating system version.
         /// </summary>
-        [JsonPropertyName("driver_runtime")]
-        public string? DriverRuntime { get; set; }
+        [JsonPropertyName("os_version")]
+        public string? OsVersion { get; set; }
+
+        /// <summary>
+        /// Gets or sets the operating system architecture.
+        /// </summary>
+        [JsonPropertyName("os_arch")]
+        public string? OsArch { get; set; }
+
+        /// <summary>
+        /// Gets or sets the runtime name (e.g., ".NET").
+        /// </summary>
+        [JsonPropertyName("runtime_name")]
+        public string? RuntimeName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the runtime version.
+        /// </summary>
+        [JsonPropertyName("runtime_version")]
+        public string? RuntimeVersion { get; set; }
+
+        /// <summary>
+        /// Gets or sets the locale name.
+        /// </summary>
+        [JsonPropertyName("locale_name")]
+        public string? LocaleName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the character set encoding.
+        /// </summary>
+        [JsonPropertyName("char_set_encoding")]
+        public string? CharSetEncoding { get; set; }
+
+        /// <summary>
+        /// Gets or sets the client application name.
+        /// </summary>
+        [JsonPropertyName("client_app_name")]
+        public string? ClientAppName { get; set; }
+
+        /// <summary>
+        /// Creates a DriverSystemConfiguration with current system information.
+        /// </summary>
+        public static DriverSystemConfiguration CreateDefault(string driverVersion)
+        {
+            return new DriverSystemConfiguration
+            {
+                DriverName = "Databricks ADBC Driver",
+                DriverVersion = driverVersion,
+                OsName = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+                OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
+                RuntimeName = ".NET",
+                RuntimeVersion = Environment.Version.ToString(),
+                LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
+                CharSetEncoding = "UTF-8"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Connection parameters for telemetry.
+    /// </summary>
+    public sealed class DriverConnectionParameters
+    {
+        /// <summary>
+        /// Gets or sets the HTTP path.
+        /// </summary>
+        [JsonPropertyName("http_path")]
+        public string? HttpPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the driver mode (e.g., "thrift").
+        /// </summary>
+        [JsonPropertyName("mode")]
+        public string? Mode { get; set; }
+
+        /// <summary>
+        /// Gets or sets the authentication mechanism.
+        /// </summary>
+        [JsonPropertyName("auth_mech")]
+        public string? AuthMech { get; set; }
+
+        /// <summary>
+        /// Gets or sets whether Arrow format is enabled.
+        /// </summary>
+        [JsonPropertyName("enable_arrow")]
+        public bool? EnableArrow { get; set; }
+
+        /// <summary>
+        /// Gets or sets whether direct results are enabled.
+        /// </summary>
+        [JsonPropertyName("enable_direct_results")]
+        public bool? EnableDirectResults { get; set; }
 
         /// <summary>
         /// Gets or sets whether CloudFetch is enabled.
         /// </summary>
-        [JsonPropertyName("feature_cloudfetch")]
-        public bool? FeatureCloudFetch { get; set; }
+        [JsonPropertyName("enable_cloud_fetch")]
+        public bool? EnableCloudFetch { get; set; }
 
         /// <summary>
         /// Gets or sets whether LZ4 compression is enabled.
         /// </summary>
-        [JsonPropertyName("feature_lz4")]
-        public bool? FeatureLz4 { get; set; }
+        [JsonPropertyName("enable_lz4_compression")]
+        public bool? EnableLz4Compression { get; set; }
+    }
+
+    /// <summary>
+    /// SQL execution event details.
+    /// </summary>
+    public sealed class SqlExecutionEvent
+    {
+        /// <summary>
+        /// Gets or sets the statement type (e.g., "QUERY", "UPDATE").
+        /// </summary>
+        [JsonPropertyName("statement_type")]
+        public string? StatementType { get; set; }
+
+        /// <summary>
+        /// Gets or sets whether results are compressed.
+        /// </summary>
+        [JsonPropertyName("is_compressed")]
+        public bool? IsCompressed { get; set; }
+
+        /// <summary>
+        /// Gets or sets the execution result format (e.g., "INLINE", "CLOUD_FETCH").
+        /// </summary>
+        [JsonPropertyName("execution_result")]
+        public string? ExecutionResult { get; set; }
+
+        /// <summary>
+        /// Gets or sets the retry count for this operation.
+        /// </summary>
+        [JsonPropertyName("retry_count")]
+        public int? RetryCount { get; set; }
+
+        /// <summary>
+        /// Gets or sets the chunk count for CloudFetch results.
+        /// </summary>
+        [JsonPropertyName("chunk_count")]
+        public int? ChunkCount { get; set; }
+
+        /// <summary>
+        /// Gets or sets the total bytes downloaded.
+        /// </summary>
+        [JsonPropertyName("total_bytes_downloaded")]
+        public long? TotalBytesDownloaded { get; set; }
+    }
+
+    /// <summary>
+    /// Error information for telemetry.
+    /// </summary>
+    public sealed class DriverErrorInfo
+    {
+        /// <summary>
+        /// Gets or sets the error name (exception type).
+        /// </summary>
+        [JsonPropertyName("error_name")]
+        public string? ErrorName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the error message.
+        /// </summary>
+        [JsonPropertyName("error_message")]
+        public string? ErrorMessage { get; set; }
+
+        /// <summary>
+        /// Creates a DriverErrorInfo from an exception.
+        /// Note: Stack trace is intentionally omitted for privacy.
+        /// </summary>
+        public static DriverErrorInfo FromException(Exception ex)
+        {
+            return new DriverErrorInfo
+            {
+                ErrorName = ex.GetType().Name,
+                ErrorMessage = ex.Message
+            };
+        }
+    }
+
+    /// <summary>
+    /// Defines the type of telemetry event.
+    /// </summary>
+    public enum TelemetryEventType
+    {
+        /// <summary>
+        /// Connection open event.
+        /// </summary>
+        ConnectionOpen,
+
+        /// <summary>
+        /// Statement execution event.
+        /// </summary>
+        StatementExecution,
+
+        /// <summary>
+        /// Error event.
+        /// </summary>
+        Error
     }
 }

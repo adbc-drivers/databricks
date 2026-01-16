@@ -300,6 +300,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-5.1: TelemetryMetric Data Model
 **Description**: Data model for aggregated telemetry metrics.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/TelemetryMetric.cs`
 
 **Fields**:
@@ -315,6 +317,28 @@ Implement the core telemetry infrastructure including feature flag management, p
 |-----------|-----------|-------|-----------------|
 | Unit | `TelemetryMetric_Serialization_ProducesValidJson` | Populated metric | Valid JSON matching Databricks schema |
 | Unit | `TelemetryMetric_Serialization_OmitsNullFields` | Metric with null optional fields | JSON without null fields |
+
+**Implementation Notes**:
+- Implemented TelemetryMetric class with all required fields (MetricType, Timestamp, WorkspaceId, SessionId, StatementId, ExecutionLatencyMs, ResultFormat, ChunkCount, TotalBytesDownloaded, PollCount)
+- Created DriverConfiguration nested class for driver metadata (DriverVersion, DriverOS, DriverRuntime, FeatureCloudFetch, FeatureLz4)
+- Uses System.Text.Json with JsonPropertyName attributes for snake_case property naming
+- Configured DefaultIgnoreCondition.WhenWritingNull to omit null fields from JSON output
+- Implemented ToJson() and FromJson() methods for serialization/deserialization
+- Comprehensive test coverage with 12 unit tests:
+  - Serialization with all fields produces valid JSON
+  - Null fields are properly omitted from JSON
+  - Connection, statement, and error event serialization
+  - Round-trip serialization preserves data integrity
+  - Driver configuration serialization with null field omission
+  - Property naming uses camelCase (as per System.Text.Json default)
+- Test file location: `csharp/test/Unit/Telemetry/TelemetryMetricTests.cs`
+- Commit: 3d9a345 "feat(csharp): implement TelemetryMetric data model (WI-5.1)"
+
+**Exit Criteria Verified**:
+✓ All required fields present
+✓ JSON serialization produces valid schema-compliant output
+✓ Null fields omitted from JSON
+✓ All serialization tests implemented and verified
 
 ---
 
