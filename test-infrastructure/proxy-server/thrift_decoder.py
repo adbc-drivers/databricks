@@ -18,33 +18,21 @@
 # limitations under the License.
 
 """
-Generic Thrift Binary Protocol Decoder with Field Name Resolution.
+Generic Thrift Binary Protocol Decoder.
 
 This module provides utilities to decode Thrift Binary Protocol messages
-and resolve field IDs to semantic field names using generated Thrift code.
+without requiring specific .thrift IDL files. It works with any Thrift-based
+protocol including HiveServer2, Databricks extensions, and custom protocols.
 
-Features:
-- Generic binary protocol decoding (works without IDL files)
-- Field name resolution using thrift_spec from generated code
-- Support for HiveServer2, Databricks extensions, and custom protocols
+This is particularly useful for:
+- Debugging Thrift traffic in proxy tests
+- Supporting multiple protocol versions (JDBC vs ADBC)
 - Protocol-agnostic logging and inspection
 """
 
 import struct
-import sys
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
-
-# Import generated Thrift types to get field name mappings from thrift_spec
-# This uses the databricks-sql-python generated code
-try:
-    # Add databricks-sql-python to path if available locally
-    sys.path.insert(0, '/Users/e.wang/Documents/dev/databricks-sql-python/src')
-    from databricks.sql.thrift_api.TCLIService import ttypes as thrift_types
-    THRIFT_TYPES_AVAILABLE = True
-except ImportError:
-    THRIFT_TYPES_AVAILABLE = False
-    thrift_types = None
 
 
 class ThriftDecoder:
@@ -123,112 +111,11 @@ class ThriftDecoder:
         "GetTypeInfo",
     }
 
-    # Map method names to their request struct types for field name resolution
-    METHOD_TO_REQUEST_TYPE = {
-        "OpenSession": "TOpenSessionReq",
-        "CloseSession": "TCloseSessionReq",
-        "ExecuteStatement": "TExecuteStatementReq",
-        "GetOperationStatus": "TGetOperationStatusReq",
-        "FetchResults": "TFetchResultsReq",
-        "CloseOperation": "TCloseOperationReq",
-        "CancelOperation": "TCancelOperationReq",
-        "GetResultSetMetadata": "TGetResultSetMetadataReq",
-        "GetSchemas": "TGetSchemasReq",
-        "GetTables": "TGetTablesReq",
-        "GetColumns": "TGetColumnsReq",
-        "GetCatalogs": "TGetCatalogsReq",
-        "GetTableTypes": "TGetTableTypesReq",
-        "GetTypeInfo": "TGetTypeInfoReq",
-    }
-
-    # Map method names to their response struct types for field name resolution
-    METHOD_TO_RESPONSE_TYPE = {
-        "OpenSession": "TOpenSessionResp",
-        "CloseSession": "TCloseSessionResp",
-        "ExecuteStatement": "TExecuteStatementResp",
-        "GetOperationStatus": "TGetOperationStatusResp",
-        "FetchResults": "TFetchResultsResp",
-        "CloseOperation": "TCloseOperationResp",
-        "CancelOperation": "TCancelOperationResp",
-        "GetResultSetMetadata": "TGetResultSetMetadataResp",
-        "GetSchemas": "TGetSchemasResp",
-        "GetTables": "TGetTablesResp",
-        "GetColumns": "TGetColumnsResp",
-        "GetCatalogs": "TGetCatalogsResp",
-        "GetTableTypes": "TGetTableTypesResp",
-        "GetTypeInfo": "TGetTypeInfoResp",
-    }
-
-    def __init__(self, data: bytes, method_name: Optional[str] = None):
-        """
-        Initialize decoder with Thrift message bytes.
-
-        Args:
-            data: Raw Thrift message bytes
-            method_name: Optional method name for field name resolution
-        """
+    def __init__(self, data: bytes):
+        """Initialize decoder with Thrift message bytes."""
         self.stream = BytesIO(data)
         self.pos = 0
         self.data_len = len(data)
-        self.method_name = method_name
-        self.message_type = None
-        # Field name map will be built after we know the message type
-        self.field_name_map = {}
-
-    def _build_field_name_map(
-        self, method_name: Optional[str], message_type: Optional[int]
-    ) -> Dict[int, str]:
-        """
-        Build field ID to field name mapping from thrift_spec.
-
-        Args:
-            method_name: Thrift method name (e.g., "ExecuteStatement")
-            message_type: Message type (1=CALL/request, 2=REPLY/response)
-
-        Returns:
-            Dictionary mapping field_id to field_name
-        """
-        if not THRIFT_TYPES_AVAILABLE or not method_name or message_type is None:
-            return {}
-
-        # Choose the appropriate type mapping based on message type
-        if message_type == self.MESSAGE_TYPE_CALL:
-            # This is a request (CALL)
-            struct_type_name = self.METHOD_TO_REQUEST_TYPE.get(method_name)
-        elif message_type == self.MESSAGE_TYPE_REPLY:
-            # This is a response (REPLY)
-            struct_type_name = self.METHOD_TO_RESPONSE_TYPE.get(method_name)
-        else:
-            # EXCEPTION or ONEWAY - no field mapping needed
-            return {}
-
-        if not struct_type_name:
-            return {}
-
-        # Get the struct class from thrift_types module
-        try:
-            struct_class = getattr(thrift_types, struct_type_name, None)
-            if not struct_class:
-                return {}
-
-            # Extract field names from thrift_spec
-            # thrift_spec format: (field_id, TType, 'field_name', ...)
-            thrift_spec = getattr(struct_class, 'thrift_spec', None)
-            if not thrift_spec:
-                return {}
-
-            field_map = {}
-            for field_id, field_spec in enumerate(thrift_spec):
-                if field_spec is not None:
-                    # field_spec is a tuple: (field_id, type, name, ...)
-                    if len(field_spec) >= 3:
-                        actual_field_id = field_spec[0]
-                        field_name = field_spec[2]
-                        field_map[actual_field_id] = field_name
-
-            return field_map
-        except Exception:
-            return {}
 
     def read_byte(self) -> int:
         """Read a single byte."""
@@ -437,10 +324,10 @@ class ThriftDecoder:
 
     def read_struct(self, max_depth: int = 32) -> Dict[str, Any]:
         """
-        Read a Thrift struct and return field map with resolved field names.
+        Read a Thrift struct and return field map.
 
         Returns:
-            Dictionary mapping field name (or field_id if unknown) to {type, value}
+            Dictionary mapping field_id to {type, value}
         """
         if max_depth <= 0:
             return {"error": "max_depth_exceeded"}
@@ -455,18 +342,11 @@ class ThriftDecoder:
                 field_id = self.read_i16()
                 type_name = self.TYPE_NAMES.get(field_type, f"type_{field_type}")
 
-                # Resolve field name from field ID using thrift_spec
-                field_name = self.field_name_map.get(field_id)
-                if field_name:
-                    field_key = field_name
-                else:
-                    field_key = f"field_{field_id}"
-
                 try:
                     value = self.read_field_value(field_type, max_depth)
-                    fields[field_key] = {"type": type_name, "value": value, "field_id": field_id}
+                    fields[f"field_{field_id}"] = {"type": type_name, "value": value}
                 except Exception as e:
-                    fields[field_key] = {"type": type_name, "error": str(e), "field_id": field_id}
+                    fields[f"field_{field_id}"] = {"type": type_name, "error": str(e)}
                     # Try to skip and continue
                     try:
                         self.skip_field(field_type, max_depth)
@@ -483,7 +363,7 @@ class ThriftDecoder:
 
     def decode_message(self) -> Optional[Dict[str, Any]]:
         """
-        Decode a complete Thrift message with field name resolution.
+        Decode a complete Thrift message.
 
         Returns:
             Dictionary with message information and decoded fields
@@ -494,12 +374,6 @@ class ThriftDecoder:
             message_type_str = self.MESSAGE_TYPE_NAMES.get(
                 message_type, f"UNKNOWN({message_type})"
             )
-
-            # Build field name map now that we know both method name and message type
-            if not self.method_name:
-                self.method_name = method_name
-            self.message_type = message_type
-            self.field_name_map = self._build_field_name_map(method_name, message_type)
 
             # Read the struct (request/response body)
             struct_fields = self.read_struct()
@@ -516,18 +390,6 @@ class ThriftDecoder:
             # Add metadata
             if method_name in self.KNOWN_METHODS:
                 result["protocol"] = "HiveServer2/Databricks"
-
-            # Add field resolution status
-            if THRIFT_TYPES_AVAILABLE and self.field_name_map:
-                result["field_names_resolved"] = True
-                result["resolved_fields_count"] = len(self.field_name_map)
-                # Add info about whether this is a request or response
-                if message_type == self.MESSAGE_TYPE_CALL:
-                    result["struct_type"] = "Request"
-                elif message_type == self.MESSAGE_TYPE_REPLY:
-                    result["struct_type"] = "Response"
-            else:
-                result["field_names_resolved"] = False
 
             return result
 
@@ -593,17 +455,6 @@ def format_thrift_message(
     if "protocol" in decoded:
         lines.append(f"{prefix}Protocol: {decoded['protocol']}")
 
-    # Field resolution status
-    if decoded.get("field_names_resolved"):
-        lines.append(
-            f"{prefix}Field Names: Resolved ({decoded.get('resolved_fields_count', 0)} mappings)"
-        )
-    else:
-        if not THRIFT_TYPES_AVAILABLE:
-            lines.append(f"{prefix}Field Names: Generic (thrift types not available)")
-        else:
-            lines.append(f"{prefix}Field Names: Generic (no mapping for this method)")
-
     # Fields
     fields = decoded.get("fields", {})
     if fields:
@@ -611,7 +462,6 @@ def format_thrift_message(
         for field_name, field_data in sorted(fields.items()):
             if isinstance(field_data, dict) and "type" in field_data:
                 field_type = field_data["type"]
-                field_id = field_data.get("field_id", "")
                 field_value = field_data.get(
                     "value", field_data.get("error", "<no value>")
                 )
@@ -620,9 +470,7 @@ def format_thrift_message(
                 if len(value_str) > max_field_length:
                     value_str = value_str[:max_field_length] + "..."
 
-                # Show field ID if available (helps with debugging)
-                id_suffix = f" [id={field_id}]" if field_id else ""
-                lines.append(f"{prefix}  {field_name}{id_suffix} ({field_type}): {value_str}")
+                lines.append(f"{prefix}  {field_name} ({field_type}): {value_str}")
             else:
                 value_str = str(field_data)
                 if len(value_str) > max_field_length:

@@ -81,10 +81,6 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             var actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
             var expectedFetchResults = baselineFetchResults + 1;
             Assert.Equal(expectedFetchResults, actualFetchResults);
-
-            // NEW: Verify using decoded Thrift fields that FetchResults was called twice
-            // with the same operation handle, proving it's a retry for the same operation
-            await ControlClient.AssertFetchResultsCalledTwiceWithSameOperationAsync();
         }
 
         [Fact]
@@ -131,10 +127,6 @@ namespace AdbcDrivers.Databricks.Tests.ThriftProtocol
             var actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
             var expectedFetchResults = baselineFetchResults + 1;
             Assert.Equal(expectedFetchResults, actualFetchResults);
-
-            // NEW: Verify using decoded Thrift fields that FetchResults was called twice
-            // with the same operation handle, proving it's a retry for the same operation
-            await ControlClient.AssertFetchResultsCalledTwiceWithSameOperationAsync();
         }
 
         [Fact]
