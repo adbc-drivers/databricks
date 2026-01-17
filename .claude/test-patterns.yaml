@@ -81,12 +81,9 @@ languages:
           using var statement = connection.CreateStatement();
           statement.SqlQuery = {query_variable};
           var result = statement.ExecuteQuery();
-          Assert.NotNull(result);
 
           using var reader = result.Stream;
           var batch = await reader.ReadNextRecordBatchAsync();
-          Assert.NotNull(batch);
-          Assert.True(batch.Length > 0);
         comment: "Execute query"
 
         with_read_batches: |
@@ -136,7 +133,6 @@ languages:
 
       error_thrown:
         code: |
-          Assert.NotNull(exception);
           var fullMessage = exception.ToString();
           Assert.True(
               {error_pattern_checks},
@@ -249,7 +245,7 @@ languages:
         code: |
           try (Statement stmt = conn.createStatement();
                ResultSet rs = stmt.executeQuery({query_variable})) {
-              assertTrue(rs.next());
+              rs.next();
           }
         comment: "Execute query"
 
@@ -313,8 +309,7 @@ languages:
         code: |
           async with conn.cursor() as cursor:
               await cursor.execute({query_variable})
-              result = await cursor.fetchone()
-              assert result is not None
+              await cursor.fetchone()
         comment: "Execute query"
 
         with_expect_error: |

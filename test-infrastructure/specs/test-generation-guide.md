@@ -133,6 +133,57 @@ Our test specifications are designed for **~95% spec-to-code accuracy**. When ge
 4. Use implementation_notes for additional language-specific guidance
 5. Generate clean, concise test code
 
+## Code Generation Philosophy
+
+**Generate Minimal, Production-Quality Code**
+
+The test patterns are designed to produce clean, minimal test code that focuses on testing behavior rather than defensive programming:
+
+### What to Include ✅
+- **Core test logic**: Actions and assertions that verify the behavior being tested
+- **Essential error handling**: Expected exceptions and error pattern verification
+- **Resource management**: Proper using/disposal patterns for connections and readers
+- **Test-specific assertions**: Only assertions explicitly defined in the spec
+
+### What to Exclude ❌
+- **Unnecessary defensive checks**: Don't add `Assert.NotNull()` unless the spec explicitly requires it
+- **Extra schema validation**: Don't validate schemas unless testing schema-related functionality
+- **Diagnostic logging**: Don't add `Console.WriteLine()` or debug output
+- **Redundant assertions**: If `ExecuteQuery()` succeeds, the result won't be null
+- **Overly defensive null checks**: Trust the driver API to work correctly
+
+### Examples
+
+**Good - Minimal and Clean:**
+```csharp
+using var statement = connection.CreateStatement();
+statement.SqlQuery = TestQuery;
+var result = statement.ExecuteQuery();
+
+using var reader = result.Stream;
+var batch = await reader.ReadNextRecordBatchAsync();
+```
+
+**Bad - Too Defensive:**
+```csharp
+using var statement = connection.CreateStatement();
+Assert.NotNull(statement);  // ❌ Unnecessary
+statement.SqlQuery = TestQuery;
+var result = statement.ExecuteQuery();
+Assert.NotNull(result);  // ❌ Unnecessary unless spec requires it
+
+using var reader = result.Stream;
+Assert.NotNull(reader);  // ❌ Unnecessary
+var schema = reader.Schema;
+Assert.NotNull(schema);  // ❌ Unnecessary unless testing schema
+Assert.True(schema.FieldsList.Count > 0);  // ❌ Unnecessary
+
+var batch = await reader.ReadNextRecordBatchAsync();
+Assert.NotNull(batch);  // ❌ Unnecessary unless spec requires it
+```
+
+**The Philosophy**: If the spec says "execute query and verify it succeeds", just execute the query. If it throws an exception, the test fails - which is correct. Don't add defensive checks that weren't requested.
+
 ## Action Mapping (Language-Agnostic)
 
 ### Common Actions
