@@ -139,7 +139,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
 
             // Set the start row offset
-            if (startOffset > 0)
+            // Always set the offset when >= 0, including 0, to ensure the server
+            // returns the correct result links during URL refresh
+            if (startOffset >= 0)
             {
                 request.StartRowOffset = startOffset;
             }

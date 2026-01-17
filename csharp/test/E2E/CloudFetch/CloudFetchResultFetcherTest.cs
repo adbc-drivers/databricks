@@ -120,6 +120,32 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
             _mockClient.Verify(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
+        [Fact]
+        public async Task RefreshUrlsAsync_WithOffsetZero_SetsStartRowOffsetInRequest()
+        {
+            // Arrange
+            TFetchResultsReq? capturedRequest = null;
+            var resultLink = CreateTestResultLink(0, 100, "http://test.com/refreshed.arrow", 3600);
+
+            _mockClient.Setup(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
+                .Callback<TFetchResultsReq, CancellationToken>((req, _) => capturedRequest = req)
+                .ReturnsAsync(CreateFetchResultsResponse(new List<TSparkArrowResultLink> { resultLink }, false));
+
+            // Act
+            var results = await _resultFetcher.RefreshUrlsAsync(0, CancellationToken.None);
+
+            // Assert - Verify startRowOffset was explicitly set to 0 in the request
+            Assert.NotNull(capturedRequest);
+            Assert.True(capturedRequest.__isset.startRowOffset,
+                "StartRowOffset field should be set (isset=true) when refreshing offset 0");
+            Assert.Equal(0, capturedRequest.StartRowOffset);
+
+            // Verify we got results back
+            var resultList = results.ToList();
+            Assert.Single(resultList);
+            Assert.Equal(0, resultList[0].StartRowOffset);
+        }
+
         #endregion
 
         #region Core Functionality Tests (Restored)
