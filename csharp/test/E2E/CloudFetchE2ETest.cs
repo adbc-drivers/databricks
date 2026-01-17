@@ -114,11 +114,16 @@ namespace AdbcDrivers.Databricks.Tests
         {
             string[] protocols = { "thrift", "rest" };
 
+            string zeroQuery = "SELECT * FROM range(1000) LIMIT 0";
             string smallQuery = "SELECT * FROM range(1000)";
             string largeQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
             foreach (var protocol in protocols)
             {
+                // LIMIT 0 test cases - edge case for empty result set (PECO-2524)
+                yield return new object[] { zeroQuery, 0, true, true, protocol };
+                yield return new object[] { zeroQuery, 0, false, true, protocol };
+
                 // Small query test cases
                 yield return new object[] { smallQuery, 1000, true, true, protocol };
                 yield return new object[] { smallQuery, 1000, false, true, protocol };
@@ -171,6 +176,7 @@ namespace AdbcDrivers.Databricks.Tests
 
         /// <summary>
         /// Executes a query and validates the row count.
+        /// Validates exact row count to ensure the driver correctly respects LIMIT N in queries (PECO-2524).
         /// </summary>
         private async Task ExecuteAndValidateQuery(AdbcConnection connection, string query, int expectedRowCount, string protocolName)
         {
@@ -206,14 +212,16 @@ namespace AdbcDrivers.Databricks.Tests
             }
             Console.WriteLine($"[TEST] Finished reading {batchCount} batches, {totalRows} total rows");
 
-            Assert.True(totalRows >= expectedRowCount,
-                $"Expected at least {expectedRowCount} rows but got {totalRows} using {protocolName}");
+            // Validate exact row count - driver must respect LIMIT N and trim excess rows (PECO-2524)
+            // For Thrift: sum of all batch.RowCount = total expected rows
+            // For REST API (SEA): manifest.TotalRowCount = total expected rows
+            Assert.Equal(expectedRowCount, totalRows);
 
             Assert.Null(await result.Stream.ReadNextRecordBatchAsync());
             statement.Dispose();
 
             // Also log to the test output helper if available
-            OutputHelper?.WriteLine($"[{protocolName}] Read {totalRows} rows");
+            OutputHelper?.WriteLine($"[{protocolName}] Read exactly {totalRows} rows as expected");
         }
     }
 }
