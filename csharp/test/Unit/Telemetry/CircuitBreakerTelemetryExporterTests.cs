@@ -39,6 +39,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public Exception? ExceptionToThrow { get; set; }
             public List<IReadOnlyList<TelemetryMetric>> ReceivedMetrics { get; } = new List<IReadOnlyList<TelemetryMetric>>();
 
+            public void ResetCallCount() => CallCount = 0;
+
             public Task ExportAsync(IReadOnlyList<TelemetryMetric> metrics, CancellationToken ct = default)
             {
                 CallCount++;
@@ -163,7 +165,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 
             // Reset mock call count
-            mockExporter.CallCount = 0;
+            mockExporter.ResetCallCount();
 
             // Act - Try to export when circuit is open
             await wrapper.ExportAsync(metrics);

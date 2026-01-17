@@ -125,11 +125,16 @@ namespace AdbcDrivers.Databricks.Telemetry
                 // Step 2: Wait for background task to complete (with timeout)
                 try
                 {
-                    await _backgroundFlushTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    Debug.WriteLine("[TRACE] Background flush task did not complete within timeout");
+                    var completedTask = await Task.WhenAny(_backgroundFlushTask, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+                    if (completedTask != _backgroundFlushTask)
+                    {
+                        Debug.WriteLine("[TRACE] Background flush task did not complete within timeout");
+                    }
+                    else
+                    {
+                        // Await to propagate any exceptions
+                        await _backgroundFlushTask.ConfigureAwait(false);
+                    }
                 }
                 catch (OperationCanceledException)
                 {

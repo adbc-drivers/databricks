@@ -48,6 +48,9 @@ using Thrift.Protocol;
 namespace AdbcDrivers.Databricks
 {
     internal class DatabricksConnection : SparkHttpConnection
+#if NET5_0_OR_GREATER
+        , IAsyncDisposable
+#endif
     {
         internal static new readonly string s_assemblyName = ApacheUtility.GetAssemblyName(typeof(DatabricksConnection));
         internal static new readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(DatabricksConnection));
@@ -1056,6 +1059,7 @@ namespace AdbcDrivers.Databricks
             }
         }
 
+#if NET5_0_OR_GREATER
         /// <summary>
         /// Disposes the connection asynchronously.
         /// Releases telemetry resources (Section 9.2):
@@ -1064,7 +1068,7 @@ namespace AdbcDrivers.Databricks
         /// (3) Release feature flag context
         /// All exceptions swallowed at TRACE level.
         /// </summary>
-        protected override async ValueTask DisposeAsyncCore()
+        public async ValueTask DisposeAsync()
         {
             try
             {
@@ -1088,8 +1092,10 @@ namespace AdbcDrivers.Databricks
             }
 
             // Continue with normal connection cleanup
-            await base.DisposeAsyncCore();
+            Dispose();
+            GC.SuppressFinalize(this);
         }
+#endif
 
         protected override void Dispose(bool disposing)
         {

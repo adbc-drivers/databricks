@@ -269,15 +269,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 cancellationToken.ThrowIfCancellationRequested();
 
                 // Track poll count and latency for telemetry
-                var pollStartTime = Stopwatch.GetTimestamp();
+                var pollStopwatch = Stopwatch.StartNew();
                 _pollCount++;
 
                 // Get statement status
                 var response = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
 
                 // Calculate poll latency
-                var pollLatency = Stopwatch.GetElapsedTime(pollStartTime);
-                _pollLatencyMs += (long)pollLatency.TotalMilliseconds;
+                pollStopwatch.Stop();
+                _pollLatencyMs += pollStopwatch.ElapsedMilliseconds;
 
                 // Convert GetStatementResponse to ExecuteStatementResponse
                 var executeResponse = new ExecuteStatementResponse
