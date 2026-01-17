@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+using System.Collections.Generic;
 using System.Linq;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Xunit;

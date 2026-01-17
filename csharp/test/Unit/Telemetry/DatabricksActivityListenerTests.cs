@@ -126,7 +126,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Thread.Sleep(200);
 
             // Assert - Activity should NOT be processed
-            Assert.Equal(0, _mockClient.ExportedMetrics.Count);
+            Assert.Empty(_mockClient.ExportedMetrics);
         }
 
         // Test: ActivityStopped calls MetricsAggregator.ProcessActivity
@@ -196,7 +196,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Thread.Sleep(200);
 
             // Assert - No metrics should be exported when disabled
-            Assert.Equal(0, _mockClient.ExportedMetrics.Count);
+            Assert.Empty(_mockClient.ExportedMetrics);
         }
 
         [Fact]

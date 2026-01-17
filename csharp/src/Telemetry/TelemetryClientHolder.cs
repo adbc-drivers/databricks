@@ -29,11 +29,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         public ITelemetryClient Client { get; }
 
         /// <summary>
-        /// Gets or sets the reference count.
+        /// The reference count.
         /// Tracks the number of active connections using this client.
         /// Must be modified atomically using Interlocked operations.
         /// </summary>
-        public int RefCount { get; set; }
+        public int RefCount;
 
         /// <summary>
         /// Initializes a new instance of TelemetryClientHolder.

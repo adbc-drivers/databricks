@@ -130,9 +130,9 @@ namespace AdbcDrivers.Databricks.Telemetry
         {
             return new ActivityListener
             {
-                // Filter to only listen to Databricks.Adbc.Driver ActivitySource
+                // Filter to only listen to AdbcDrivers.Databricks ActivitySource
                 ShouldListenTo = source =>
-                    source.Name == "Databricks.Adbc.Driver",
+                    source.Name == "AdbcDrivers.Databricks",
 
                 // Sample callback respects feature flag to enable/disable collection
                 Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
