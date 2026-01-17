@@ -22,6 +22,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
@@ -63,6 +64,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
+
+        // Telemetry tracking
+        private int _pollCount;
+        private long _pollLatencyMs;
 
         public StatementExecutionStatement(
             IStatementExecutionClient client,
@@ -186,6 +191,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     }));
             }
 
+            // Add telemetry tags for result metrics
+            AddResultTelemetryTags(response);
+
             // Create appropriate reader based on result disposition
             IArrowArrayStream reader = CreateReader(response, cancellationToken);
 
@@ -195,6 +203,51 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Return query result - use -1 if row count is not available
             long rowCount = response.Manifest?.TotalRowCount ?? -1;
             return new QueryResult(rowCount, reader);
+        }
+
+        /// <summary>
+        /// Adds telemetry tags for statement execution result metrics.
+        /// </summary>
+        private void AddResultTelemetryTags(ExecuteStatementResponse response)
+        {
+            var activity = Activity.Current;
+            if (activity == null) return;
+
+            // Add result format tag
+            bool hasExternalLinks = (response.Manifest?.Chunks != null &&
+                                     response.Manifest.Chunks.Count > 0 &&
+                                     response.Manifest.Chunks[0].ExternalLinks != null &&
+                                     response.Manifest.Chunks[0].ExternalLinks.Count > 0) ||
+                                    (response.Result?.ExternalLinks != null &&
+                                     response.Result.ExternalLinks.Count > 0);
+
+            string resultFormat = hasExternalLinks ? "cloudfetch" : "inline";
+            activity.SetTag(StatementExecutionEvent.ResultFormat, resultFormat);
+
+            // Add chunk count tag
+            int chunkCount = response.Manifest?.Chunks?.Count ?? 0;
+            if (chunkCount > 0)
+            {
+                activity.SetTag(StatementExecutionEvent.ResultChunkCount, chunkCount);
+            }
+
+            // Add bytes downloaded tag (total byte count from manifest)
+            long? totalBytes = response.Manifest?.TotalByteCount;
+            if (totalBytes.HasValue)
+            {
+                activity.SetTag(StatementExecutionEvent.ResultBytesDownloaded, totalBytes.Value);
+            }
+
+            // Add compression enabled tag
+            bool compressionEnabled = !string.IsNullOrEmpty(response.Manifest?.ResultCompression);
+            activity.SetTag(StatementExecutionEvent.ResultCompressionEnabled, compressionEnabled);
+
+            // Add polling metrics tags
+            if (_pollCount > 0)
+            {
+                activity.SetTag(StatementExecutionEvent.PollCount, _pollCount);
+                activity.SetTag(StatementExecutionEvent.PollLatencyMs, _pollLatencyMs);
+            }
         }
 
         /// <summary>
@@ -215,8 +268,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Check for cancellation after delay
                 cancellationToken.ThrowIfCancellationRequested();
 
+                // Track poll count and latency for telemetry
+                var pollStartTime = Stopwatch.GetTimestamp();
+                _pollCount++;
+
                 // Get statement status
                 var response = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
+
+                // Calculate poll latency
+                var pollLatency = Stopwatch.GetElapsedTime(pollStartTime);
+                _pollLatencyMs += (long)pollLatency.TotalMilliseconds;
 
                 // Convert GetStatementResponse to ExecuteStatementResponse
                 var executeResponse = new ExecuteStatementResponse
