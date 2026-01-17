@@ -34,6 +34,22 @@ Each YAML file defines a test suite with:
 test_suite: SuiteName
 priority: Critical | High | Medium | Low
 
+# Common configuration shared across tests
+test_config:
+  simple_query: "SELECT 1"
+  query: "SELECT * FROM table"
+  read_batches: 2
+
+# Implementation guidance for code generation (optional)
+implementation_notes:
+  query_execution: |
+    Language-specific guidance for executing queries.
+    Example: Use Arrow's ReadNextRecordBatchAsync() in C#.
+
+  timing_measurement: |
+    How to measure timing in assertions.
+    Example: Use DateTime.UtcNow in C#.
+
 tests:
   - id: SUITE-NNN
     name: Test Name
@@ -83,14 +99,14 @@ tests:
 | File | Suite | Tests | Priority | Status |
 |------|-------|-------|----------|--------|
 | `cloudfetch.yaml` | CloudFetch | 4 implemented, 6 planned | Critical | ✅ In Progress |
+| `session-lifecycle.yaml` | Session Lifecycle | 13 tests (10 implemented, 3 skipped), 4 planned | Critical | ✅ In Progress |
 
-### Planned (~300 tests across 16 categories)
+### Planned (~300 tests across 15 categories)
 
 These test suites should be created as additional YAML files following the same structure as `cloudfetch.yaml`:
 
 | File (Future) | Suite | Tests | Priority | Description |
 |---------------|-------|-------|----------|-------------|
-| `session-lifecycle.yaml` | Session Lifecycle | 15 | Critical | OpenSession, CloseSession, session expiration, timeouts |
 | `statement-execution.yaml` | Statement Execution | 25 | Critical | Sync/async execution, cancellation, long-running queries |
 | `metadata-operations.yaml` | Metadata Operations | 40 | High | GetCatalogs, GetSchemas, GetTables, GetColumns, GetFunctions, GetTypeInfo, GetPrimaryKeys, GetCrossReference |
 | `arrow-format.yaml` | Arrow Format | 20 | High | Arrow IPC format, compression (LZ4, ZSTD), type handling, schema validation |
@@ -116,14 +132,32 @@ Each YAML file should:
 
 ## Test Actions
 
-### `reset_call_history`
+Actions describe the steps a test performs. Common actions are shared across test suites, while specific test suites may define additional actions for their domain.
+
+### Common Actions
+
+#### `reset_call_history`
 Clear proxy call history before test to ensure clean state for verification.
 
-### `enable_failure_scenario`
+#### `enable_failure_scenario`
 Enable a proxy failure scenario (maps to `mitmproxy_addon.py` SCENARIOS). Optionally provide runtime config.
 
-### `execute_query`
+#### `execute_query`
 Execute the test query with optional driver configuration and batch reading settings.
+
+### Session Lifecycle Actions
+
+#### `open_connection`
+Create a new connection (triggers OpenSession Thrift call).
+
+#### `close_connection`
+Dispose connection (triggers CloseSession Thrift call).
+
+#### `start_long_query`
+Start a query in the background without waiting for completion.
+
+#### `concurrent_close`
+Attempt to close connection from multiple threads simultaneously.
 
 ## Assertions
 
@@ -186,7 +220,16 @@ assertions:
 
 ## Using Specs in Your Language
 
-### C# Example
+For comprehensive guidance on generating tests from specs, see [test-generation-guide.md](./test-generation-guide.md).
+
+The guide covers:
+- Action-to-code mappings for all common actions
+- Assertion-to-code mappings for all assertion types
+- Language-specific examples (C#, Java, Python)
+- Best practices and troubleshooting
+- Complete worked examples with ~95% accuracy
+
+### Quick C# Example
 
 The existing C# tests in `test-infrastructure/tests/csharp/CloudFetchTests.cs` implement these specs:
 

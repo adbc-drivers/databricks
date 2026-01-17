@@ -1,0 +1,356 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Test Patterns for Code Generation
+#
+# This file defines language-specific patterns for generating test code from YAML specs.
+# Each pattern maps actions and assertions to concrete code implementations.
+
+languages:
+  csharp:
+    name: "C#"
+    test_framework: "xUnit"
+
+    # Common imports and setup
+    setup:
+      imports: |
+        using System;
+        using System.Collections.Generic;
+        using System.Linq;
+        using System.Threading.Tasks;
+        using Xunit;
+        using Apache.Arrow;
+
+      test_class_pattern: |
+        public class {TestSuiteName}Tests : ProxiedTestBase
+        {
+            // Tests go here
+        }
+
+      test_method_pattern: |
+        [Fact]
+        public async Task {TestName}()
+        {
+            // Test implementation
+        }
+
+    # Action patterns
+    actions:
+      reset_call_history:
+        code: "await ControlClient.ResetCallHistoryAsync();"
+        comment: "Reset call history"
+
+      enable_failure_scenario:
+        code: "await ControlClient.EnableScenarioAsync(\"{scenario}\");"
+        comment: "Enable failure scenario"
+        with_config: |
+          await ControlClient.EnableScenarioAsync("{scenario}", new Dictionary<string, object>
+          {
+              {config_entries}
+          });
+
+      open_connection:
+        code: "using var connection = CreateProxiedConnection();"
+        comment: "Open connection"
+        with_driver_config: |
+          var parameters = new Dictionary<string, string>
+          {
+              {driver_config_entries}
+          };
+          using var connection = CreateProxiedConnectionWithParameters(parameters);
+
+      close_connection:
+        code: |
+          connection.Dispose();
+          await Task.Delay(100);  // Allow async cleanup
+        comment: "Close connection"
+
+      execute_query:
+        code: |
+          using var statement = connection.CreateStatement();
+          statement.SqlQuery = {query_variable};
+          var result = statement.ExecuteQuery();
+          Assert.NotNull(result);
+
+          using var reader = result.Stream;
+          var batch = await reader.ReadNextRecordBatchAsync();
+          Assert.NotNull(batch);
+          Assert.True(batch.Length > 0);
+        comment: "Execute query"
+
+        with_read_batches: |
+          using var statement = connection.CreateStatement();
+          statement.SqlQuery = {query_variable};
+          var result = statement.ExecuteQuery();
+
+          using var reader = result.Stream;
+          for (int i = 0; i < {read_batches}; i++)
+          {
+              var batch = await reader.ReadNextRecordBatchAsync();
+              if (batch == null || batch.Length == 0)
+                  break;
+          }
+
+        with_expect_error: |
+          var exception = Assert.ThrowsAny<Exception>(() =>
+          {
+              using var statement = connection.CreateStatement();
+              statement.SqlQuery = {query_variable};
+              var result = statement.ExecuteQuery();
+              using var reader = result.Stream;
+              _ = reader.ReadNextRecordBatchAsync().Result;
+          });
+
+      start_long_query:
+        code: |
+          var queryTask = Task.Run(async () =>
+          {
+              using var statement = connection.CreateStatement();
+              statement.SqlQuery = {query_variable};
+              var result = statement.ExecuteQuery();
+              using var reader = result.Stream;
+              await reader.ReadNextRecordBatchAsync();
+          });
+        comment: "Start query in background"
+
+    # Assertion patterns
+    assertions:
+      query_succeeds:
+        code: "// Query succeeds (implicit - no exception thrown)"
+        comment: "Query completes without error"
+
+      result_not_null:
+        code: "Assert.NotNull(result);"
+        comment: "Result is not null"
+
+      error_thrown:
+        code: |
+          Assert.NotNull(exception);
+          var fullMessage = exception.ToString();
+          Assert.True(
+              {error_pattern_checks},
+              $"Expected error matching pattern, but got: {fullMessage}");
+        comment: "Error thrown with expected pattern"
+        pattern_check_template: 'fullMessage.Contains("{pattern}", StringComparison.OrdinalIgnoreCase)'
+
+      thrift_call_count:
+        code: |
+          var {method_lower}Calls = await ControlClient.CountThriftMethodCallsAsync("{method}");
+          Assert.Equal({expected}, {method_lower}Calls);
+        comment: "{method} called exactly {expected} times"
+
+        with_comparison: |
+          var {method_lower}Calls = await ControlClient.CountThriftMethodCallsAsync("{method}");
+          Assert.True({method_lower}Calls {comparison} {expected},
+              $"Expected {comparison} {expected} {method} calls, but got {{{{method_lower}}Calls}}");
+
+      thrift_call_exists:
+        code: |
+          var {method_lower}Calls = await ControlClient.GetThriftMethodCallsAsync("{method}");
+
+          var {field}Counts = {method_lower}Calls
+              .Select(call => ThriftFieldExtractor.Get{FieldType}Value(call, "{field}"))
+              .Where({field} => {field}.HasValue && {where_conditions})
+              .GroupBy({field} => {field}.Value)
+              .Where(group => group.Count() >= {min_count})
+              .ToList();
+
+          Assert.NotEmpty({field}Counts);
+        comment: "Driver called {method} multiple times with same {field}"
+
+      duplicate_cloud_fetch_urls:
+        code: |
+          var allCalls = await ControlClient.GetThriftCallsAsync();
+          var cloudDownloads = allCalls.Calls?
+              .Where(c => c.Type == "cloud_download")
+              .ToList() ?? new List<ThriftCall>();
+
+          var duplicateUrls = cloudDownloads
+              .GroupBy(c => c.Url)
+              .Where(g => g.Count() > 1)
+              .ToList();
+
+          Assert.NotEmpty(duplicateUrls);
+        comment: "Driver retried the same CloudFetch URL"
+
+      retry_backoff_delay:
+        code: |
+          var elapsed = DateTime.UtcNow - startTime;
+          Assert.True(elapsed.TotalSeconds >= {minimum_seconds},
+              $"Expected at least {minimum_seconds}s for retry backoff, but took {{elapsed.TotalSeconds:F3}}s");
+        comment: "Should wait at least {minimum_seconds}s before retry"
+        requires_timing: true
+
+      connection_disposed_successfully:
+        code: "// Connection disposed without hanging (implicit - no timeout)"
+        comment: "Connection cleanup completed"
+
+      thrift_call_count_increased:
+        code: |
+          var final{Method}Count = await ControlClient.CountThriftMethodCallsAsync("{method}");
+          Assert.True(final{Method}Count > initial{Method}Count,
+              $"Expected {method} count to increase from {{initial{Method}Count}}, but got {{final{Method}Count}}");
+        comment: "{method} count increased"
+        requires_initial_count: true
+
+  java:
+    name: "Java"
+    test_framework: "JUnit 5"
+
+    setup:
+      imports: |
+        import org.junit.jupiter.api.Test;
+        import static org.junit.jupiter.api.Assertions.*;
+        import java.sql.*;
+        import java.util.*;
+
+      test_class_pattern: |
+        public class {TestSuiteName}Tests extends ProxiedTestBase {
+            // Tests go here
+        }
+
+      test_method_pattern: |
+        @Test
+        public void {testName}() throws Exception {
+            // Test implementation
+        }
+
+    actions:
+      reset_call_history:
+        code: "proxyClient.resetCallHistory();"
+        comment: "Reset call history"
+
+      enable_failure_scenario:
+        code: "proxyClient.enableScenario(\"{scenario}\");"
+        comment: "Enable failure scenario"
+
+      open_connection:
+        code: "Connection conn = createProxiedConnection();"
+        comment: "Open connection"
+
+      close_connection:
+        code: |
+          conn.close();
+          Thread.sleep(100);  // Allow async cleanup
+        comment: "Close connection"
+
+      execute_query:
+        code: |
+          try (Statement stmt = conn.createStatement();
+               ResultSet rs = stmt.executeQuery({query_variable})) {
+              assertTrue(rs.next());
+          }
+        comment: "Execute query"
+
+        with_expect_error: |
+          assertThrows(SQLException.class, () -> {
+              try (Statement stmt = conn.createStatement();
+                   ResultSet rs = stmt.executeQuery({query_variable})) {
+                  rs.next();
+              }
+          });
+
+    assertions:
+      error_thrown:
+        code: |
+          String fullMessage = exception.toString();
+          assertTrue({error_pattern_checks},
+              "Expected error matching pattern, but got: " + fullMessage);
+        pattern_check_template: 'fullMessage.toLowerCase().contains("{pattern}")'
+
+      thrift_call_count:
+        code: |
+          int {method_lower}Calls = proxyClient.countThriftMethodCalls("{method}");
+          assertEquals({expected}, {method_lower}Calls);
+
+  python:
+    name: "Python"
+    test_framework: "pytest"
+
+    setup:
+      imports: |
+        import pytest
+        from databricks import sql
+
+      test_class_pattern: |
+        class Test{TestSuiteName}(ProxiedTestBase):
+            # Tests go here
+
+      test_method_pattern: |
+        @pytest.mark.asyncio
+        async def test_{test_name}(self):
+            # Test implementation
+
+    actions:
+      reset_call_history:
+        code: "await self.proxy_client.reset_call_history()"
+        comment: "Reset call history"
+
+      enable_failure_scenario:
+        code: "await self.proxy_client.enable_scenario(\"{scenario}\")"
+        comment: "Enable failure scenario"
+
+      open_connection:
+        code: "conn = self.create_proxied_connection()"
+        comment: "Open connection"
+
+      close_connection:
+        code: "await conn.close()"
+        comment: "Close connection"
+
+      execute_query:
+        code: |
+          async with conn.cursor() as cursor:
+              await cursor.execute({query_variable})
+              result = await cursor.fetchone()
+              assert result is not None
+        comment: "Execute query"
+
+        with_expect_error: |
+          with pytest.raises(Exception) as exc_info:
+              async with conn.cursor() as cursor:
+                  await cursor.execute({query_variable})
+                  await cursor.fetchone()
+
+    assertions:
+      error_thrown:
+        code: |
+          full_message = str(exc_info.value)
+          assert {error_pattern_checks}, \
+              f"Expected error matching pattern, but got: {full_message}"
+        pattern_check_template: '"{pattern}".lower() in full_message.lower()'
+
+      thrift_call_count:
+        code: |
+          {method_lower}_calls = await self.proxy_client.count_thrift_method_calls("{method}")
+          assert {method_lower}_calls == {expected}
+
+# Common configuration
+config:
+  test_id_prefix_mapping:
+    CLOUDFETCH: "CloudFetch"
+    SESSION: "Session"
+
+  step_comment_format: "Step {step_num}: {description}"
+
+  query_variable_mapping:
+    test_config.simple_query: "SimpleQuery"
+    test_config.query: "TestQuery"
+
+  field_type_mapping:
+    startRowOffset: "Long"
+    maxRows: "Long"
+    fetchSize: "Long"
+    sessionId: "String"
+    operationHandle: "String"

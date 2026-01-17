@@ -26,6 +26,19 @@ test_config:
   query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
   read_batches: 2  # Read at least 2 batches to trigger CloudFetch
 
+# Implementation guidance for code generation
+implementation_notes:
+  query_execution: |
+    Read result batches using the driver's batch reading API (e.g., Arrow in C#).
+    Always properly dispose of statements and readers.
+    Read batches in a loop until reaching read_batches count or null batch.
+
+  duplicate_detection: |
+    To detect duplicate Thrift calls:
+    - Group calls by the field value being checked (e.g., startRowOffset)
+    - Filter to groups with count >= 2 (duplicates)
+    - Assert that at least one duplicate group exists
+
 tests:
   - id: CLOUDFETCH-001
     name: Expired Link Recovery
