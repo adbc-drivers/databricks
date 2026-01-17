@@ -21,13 +21,19 @@
 test_suite: CloudFetch
 priority: Critical
 
+# Common test configuration
+test_config:
+  query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
+  read_batches: 2  # Read at least 2 batches to trigger CloudFetch
+
 tests:
   - id: CLOUDFETCH-001
     name: Expired Link Recovery
     priority: Critical
     description: |
-      Validates that driver correctly handles expired CloudFetch download links
-      by calling FetchResults again to get a fresh link.
+      Validates that driver correctly handles expired CloudFetch download links.
+      When a CloudFetch link expires (returns special expiry response), the driver
+      should call FetchResults to refresh the link and retry the download.
 
     jira: PECOBLR-1131
     proxy_scenario: cloudfetch_expired_link
@@ -39,34 +45,34 @@ tests:
       - action: enable_failure_scenario
         scenario: cloudfetch_expired_link
 
-      - action: execute_test
-        description: Execute query with expired link scenario enabled
-        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
-        read_rows: 10000  # Read multiple batches to ensure CloudFetch is used
+      - action: execute_query
+        query: test_config.query
+        read_batches: test_config.read_batches
 
     assertions:
-      - type: no_error
-        description: Query completes successfully despite expired link
-
-      - type: result_not_null
-        description: Query returns valid result
+      - type: query_succeeds
+        description: Query completes without error despite expired link
 
       - type: thrift_call_exists
         method: FetchResults
-        field: startRowOffset
-        value: 0
-        description: Driver called FetchResults with offset=0 to refresh expired URL
+        where:
+          - field: startRowOffset
+            operator: greater_than
+            value: 0
+        count: at_least_duplicates  # At least one offset appears twice
+        description: Driver called FetchResults multiple times with same offset to refresh link
 
     notes: |
-      ExecuteStatement returns initial links via directResults (no initial FetchResults call).
-      We only see FetchResults(0) when the driver refreshes the expired URL.
+      When a CloudFetch link expires, the driver detects this and calls FetchResults
+      again with the SAME startRowOffset to get fresh URLs for that batch, then retries.
+      We verify this by checking for duplicate FetchResults calls with the same non-zero offset.
 
   - id: CLOUDFETCH-002
     name: 403 Forbidden Recovery
     priority: Critical
     description: |
-      Validates that driver correctly handles 403 Forbidden errors from CloudFetch
-      by calling FetchResults again to get a new link.
+      Validates that driver correctly handles 403 Forbidden errors from CloudFetch.
+      Similar to expired links, 403 errors require refreshing the download URL.
 
     jira: ES-1624602
     proxy_scenario: cloudfetch_403
@@ -78,34 +84,34 @@ tests:
       - action: enable_failure_scenario
         scenario: cloudfetch_403
 
-      - action: execute_test
-        description: Execute query with 403 scenario enabled
-        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
-        read_rows: 10000  # Read multiple batches to ensure CloudFetch is used
+      - action: execute_query
+        query: test_config.query
+        read_batches: test_config.read_batches
 
     assertions:
-      - type: no_error
-        description: Query completes successfully despite 403 error
-
-      - type: result_not_null
-        description: Query returns valid result
+      - type: query_succeeds
+        description: Query completes without error despite 403 error
 
       - type: thrift_call_exists
         method: FetchResults
-        field: startRowOffset
-        value: 0
-        description: Driver called FetchResults with offset=0 to refresh expired URL
+        where:
+          - field: startRowOffset
+            operator: greater_than
+            value: 0
+        count: at_least_duplicates
+        description: Driver called FetchResults multiple times with same offset to refresh link
 
     notes: |
-      ExecuteStatement returns initial links via directResults (no initial FetchResults call).
-      We only see FetchResults(0) when the driver refreshes after 403 error.
+      403 Forbidden errors are treated like expired links - the driver refreshes the URL
+      by calling FetchResults again with the same offset.
 
   - id: CLOUDFETCH-003
     name: Timeout Retry with Backoff
     priority: Critical
     description: |
       Validates that driver correctly handles CloudFetch download timeouts
-      by retrying with exponential backoff (does NOT refresh URL via FetchResults).
+      by retrying the SAME URL with exponential backoff.
+      Does NOT refresh URL via FetchResults (timeout != expired link).
 
     jira: BL-13239
     proxy_scenario: cloudfetch_timeout
@@ -113,41 +119,42 @@ tests:
     driver_config:
       cloudfetch_timeout_minutes: 1
 
+    scenario_config:
+      duration_seconds: 65  # Exceeds 60s timeout, triggers retry
+
     steps:
       - action: reset_call_history
         description: Clear proxy call history before test
 
       - action: enable_failure_scenario
         scenario: cloudfetch_timeout
-        config:
-          duration_seconds: 65  # Exceeds 60s timeout
+        config: scenario_config
 
-      - action: execute_test
-        description: Execute query with timeout scenario (will timeout at 60s)
-        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
+      - action: execute_query
+        query: test_config.query
         driver_config: driver_config
+        read_batches: 1  # First batch will timeout and retry
 
     assertions:
-      - type: no_error
-        description: Query completes successfully despite timeout
-
-      - type: result_not_null
-        description: Query returns valid result
+      - type: query_succeeds
+        description: Query completes without error despite timeout
 
       - type: duplicate_cloud_fetch_urls
-        description: Driver retried the same CloudFetch URL after timeout
+        count: at_least_one
+        description: Driver retried the same CloudFetch URL after timeout (without refreshing)
 
     notes: |
       This test may take 60+ seconds as it waits for CloudFetch timeout.
-      Driver should use generic retry logic with exponential backoff,
-      NOT refresh the URL via FetchResults (timeout != expired link).
+      Driver uses generic retry logic with exponential backoff on the SAME URL.
+      Does NOT call FetchResults to refresh (timeout != expired link).
 
   - id: CLOUDFETCH-004
     name: Connection Reset During Download
     priority: Critical
     description: |
-      Validates that driver correctly handles connection resets during CloudFetch downloads
-      by retrying with exponential backoff (does NOT refresh URL via FetchResults).
+      Validates that driver correctly handles connection resets during CloudFetch
+      downloads by retrying the SAME URL with exponential backoff.
+      Does NOT refresh URL via FetchResults (connection error != expired link).
 
     jira: BL-13580
     proxy_scenario: cloudfetch_connection_reset
@@ -159,24 +166,21 @@ tests:
       - action: enable_failure_scenario
         scenario: cloudfetch_connection_reset
 
-      - action: execute_test
-        description: Execute query with connection reset scenario enabled
-        execute_query: "SELECT * FROM main.tpcds_sf1_delta.catalog_returns"
-        read_rows: 10000  # Read multiple batches to ensure CloudFetch is used
+      - action: execute_query
+        query: test_config.query
+        read_batches: test_config.read_batches
 
     assertions:
-      - type: no_error
-        description: Query completes successfully despite connection reset
-
-      - type: result_not_null
-        description: Query returns valid result
+      - type: query_succeeds
+        description: Query completes without error despite connection reset
 
       - type: duplicate_cloud_fetch_urls
+        count: at_least_one
         description: Driver retried the same CloudFetch URL after connection reset
 
     notes: |
-      Driver should use generic retry logic with exponential backoff (delays of 1s, 2s, 3s),
-      NOT refresh the URL via FetchResults (connection error != expired link).
+      Driver uses generic retry logic with exponential backoff (delays: 1s, 2s, 3s).
+      Retries the SAME URL - does NOT call FetchResults to refresh.
 
 # Future tests (not yet implemented)
 planned_tests:
