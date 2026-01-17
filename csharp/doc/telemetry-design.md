@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Databricks ADBC Driver: Activity-Based Telemetry Design
+# Databricks ADBC Driver: Activity-Based Telemetry Design V2
 
 ## Executive Summary
 
@@ -1316,32 +1316,107 @@ public async Task ExportAsync(IReadOnlyList<TelemetryMetric> metrics)
 
 #### Exception Classifier
 
+**Implementation Status**: ✅ **COMPLETED** (WI-1.3)
+
+**Location**: `csharp/src/Telemetry/ExceptionClassifier.cs`
+
+The ExceptionClassifier has been implemented with the following behavior:
+
+**Terminal Exceptions** (return true - flush immediately):
+- HTTP 400 Bad Request
+- HTTP 401 Unauthorized
+- HTTP 403 Forbidden
+- HTTP 404 Not Found
+- `AuthenticationException`
+- `UnauthorizedAccessException`
+
+**Retryable Exceptions** (return false - buffer until statement completes):
+- HTTP 429 Too Many Requests
+- HTTP 500 Internal Server Error
+- HTTP 503 Service Unavailable
+- Network errors (HttpRequestException without status code)
+- `TimeoutException`
+- All other exception types (default behavior)
+
+**Key Features**:
+- Handles null exceptions gracefully (returns false)
+- Checks inner exceptions for wrapped HttpRequestException
+- Treats unknown exceptions as retryable by default (safe behavior)
+
 ```csharp
 internal static class ExceptionClassifier
 {
     public static bool IsTerminalException(Exception ex)
     {
-        return ex switch
+        if (ex == null)
         {
-            HttpRequestException httpEx when IsTerminalHttpStatus(httpEx) => true,
-            AuthenticationException => true,
-            UnauthorizedAccessException => true,
-            SqlException sqlEx when IsSyntaxError(sqlEx) => true,
-            _ => false
-        };
+            return false;
+        }
+
+        // Check for authentication exceptions
+        if (ex is AuthenticationException || ex is UnauthorizedAccessException)
+        {
+            return true;
+        }
+
+        // Check for HTTP-based exceptions
+        if (ex is HttpRequestException httpEx)
+        {
+            return IsTerminalHttpStatusCode(httpEx);
+        }
+
+        // Check inner exception for wrapped HTTP exceptions
+        if (ex.InnerException is HttpRequestException innerHttpEx)
+        {
+            return IsTerminalHttpStatusCode(innerHttpEx);
+        }
+
+        // Default: treat as retryable (buffer until statement completes)
+        return false;
     }
 
-    private static bool IsTerminalHttpStatus(HttpRequestException ex)
+    private static bool IsTerminalHttpStatusCode(HttpRequestException httpEx)
     {
-        if (ex.StatusCode.HasValue)
+        if (httpEx.StatusCode == null)
         {
-            var statusCode = (int)ex.StatusCode.Value;
-            return statusCode is 400 or 401 or 403 or 404;
+            // No status code means network error (retryable)
+            return false;
         }
-        return false;
+
+        var statusCode = (int)httpEx.StatusCode.Value;
+
+        // Terminal status codes (flush immediately)
+        switch (statusCode)
+        {
+            case 400: // Bad Request - invalid request format
+            case 401: // Unauthorized - authentication failure
+            case 403: // Forbidden - permission denied
+            case 404: // Not Found - resource not found
+                return true;
+
+            // Retryable status codes (buffer until statement completes)
+            case 429: // Too Many Requests - rate limiting
+            case 500: // Internal Server Error
+            case 503: // Service Unavailable
+                return false;
+
+            default:
+                // Other status codes: treat as retryable by default
+                return false;
+        }
     }
 }
 ```
+
+**Test Coverage**: 100% with 16 test cases covering:
+- All terminal status codes (401, 403, 400, 404)
+- All retryable status codes (429, 503, 500)
+- Authentication exceptions
+- Timeout exceptions
+- Network errors
+- Null and generic exceptions
+- Wrapped exceptions
+- Edge cases (408, 502, 504, etc.)
 
 #### Exception Buffering in MetricsAggregator
 
@@ -1818,26 +1893,26 @@ The Activity-based design was selected because it:
 - [ ] Add unit tests for circuit breaker logic
 
 ### Phase 3: Exception Handling
-- [ ] Create `ExceptionClassifier` for terminal vs retryable
-- [ ] Update `MetricsAggregator` to buffer retryable exceptions
-- [ ] Implement immediate flush for terminal exceptions
-- [ ] Wrap all telemetry code in try-catch blocks
-- [ ] Replace all logging with TRACE/DEBUG levels only
+- [x] Create `ExceptionClassifier` for terminal vs retryable (WI-1.3) ✅
+- [x] Update `MetricsAggregator` to buffer retryable exceptions (WI-5.4) ✅
+- [x] Implement immediate flush for terminal exceptions (WI-5.4) ✅
+- [x] Wrap all telemetry code in try-catch blocks (WI-5.4) ✅
+- [x] Replace all logging with TRACE/DEBUG levels only (WI-5.4) ✅
 - [ ] Ensure circuit breaker sees exceptions before swallowing
-- [ ] Add unit tests for exception classification
+- [x] Add unit tests for exception classification (WI-1.3) ✅
 
 ### Phase 4: Tag Definition System
-- [ ] Create `TagDefinitions/TelemetryTag.cs` (attribute and enums)
-- [ ] Create `TagDefinitions/ConnectionOpenEvent.cs` (connection tag definitions)
-- [ ] Create `TagDefinitions/StatementExecutionEvent.cs` (statement tag definitions)
-- [ ] Create `TagDefinitions/ErrorEvent.cs` (error tag definitions)
-- [ ] Create `TagDefinitions/TelemetryTagRegistry.cs` (central registry)
-- [ ] Add unit tests for tag registry
+- [x] Create `TagDefinitions/TelemetryTag.cs` (attribute and enums) ✅
+- [x] Create `TagDefinitions/ConnectionOpenEvent.cs` (connection tag definitions) ✅
+- [x] Create `TagDefinitions/StatementExecutionEvent.cs` (statement tag definitions) ✅
+- [x] Create `TagDefinitions/ErrorEvent.cs` (error tag definitions) ✅
+- [x] Create `TagDefinitions/TelemetryTagRegistry.cs` (central registry) ✅
+- [x] Add unit tests for tag registry ✅
 
 ### Phase 5: Core Implementation
 - [ ] Create `DatabricksActivityListener` class
-- [ ] Create `MetricsAggregator` class (with exception buffering)
-- [ ] Create `DatabricksTelemetryExporter` class
+- [x] Create `MetricsAggregator` class (with exception buffering) (WI-5.4) ✅
+- [x] Create `DatabricksTelemetryExporter` class ✅
 - [ ] Add necessary tags to existing activities (using defined constants)
 - [ ] Update connection to use per-host management
 
@@ -1848,7 +1923,8 @@ The Activity-based design was selected because it:
 - [ ] Wire up feature flag cache
 
 ### Phase 7: Testing
-- [ ] Unit tests for all new components
+- [x] Unit tests for MetricsAggregator (WI-5.4) ✅
+- [ ] Unit tests for all other new components
 - [ ] Integration tests for per-host management
 - [ ] Integration tests for circuit breaker
 - [ ] Integration tests for graceful shutdown
