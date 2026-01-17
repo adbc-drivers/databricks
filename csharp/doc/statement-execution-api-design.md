@@ -1365,7 +1365,7 @@ else
 
 ## Metadata Implementation via SQL
 
-Since we're using the Statement Execution API (which doesn't have dedicated metadata Thrift calls), we'll implement ADBC metadata operations using SQL SHOW commands. This approach is flexible and leverages Databricks SQL capabilities.
+Since we're using the Statement Execution API (which doesn't have dedicated metadata Thrift calls), we implement ADBC metadata operations using SQL SHOW commands. This approach leverages Databricks SQL capabilities and Unity Catalog metadata.
 
 ### Metadata Query Flow
 
@@ -1376,13 +1376,13 @@ flowchart TD
     Depth -->|Catalogs| Q1[SHOW CATALOGS]
     Q1 --> R1[List of Catalogs]
 
-    Depth -->|DbSchemas| Q2[SHOW SCHEMAS IN catalog]
+    Depth -->|DbSchemas| Q2[SHOW SCHEMAS IN catalog/ALL CATALOGS]
     Q2 --> R2[List of Schemas]
 
-    Depth -->|Tables| Q3[SHOW TABLES IN catalog.schema]
+    Depth -->|Tables| Q3[SHOW TABLES IN CATALOG catalog]
     Q3 --> R3[List of Tables]
 
-    Depth -->|All| Q4[DESCRIBE TABLE catalog.schema.table]
+    Depth -->|All| Q4[SHOW COLUMNS IN CATALOG catalog]
     Q4 --> R4[Column Metadata]
 
     R1 --> Build[Build ADBC Result Schema]
@@ -1400,347 +1400,212 @@ flowchart TD
 
 ### Metadata Query Mapping
 
-| ADBC Method | SQL Query | Notes |
-|-------------|-----------|-------|
-| `GetObjects()` (catalogs) | `SHOW CATALOGS` | Returns catalog list |
-| `GetObjects()` (schemas) | `SHOW SCHEMAS IN catalog_name` | Requires catalog context |
-| `GetObjects()` (tables) | `SHOW TABLES IN catalog_name.schema_name` | Returns table list with type |
-| `GetObjects()` (columns) | `DESCRIBE TABLE catalog_name.schema_name.table_name` | Returns column metadata |
-| `GetTableTypes()` | `SELECT DISTINCT TABLE_TYPE FROM (SHOW TABLES)` | Extracts unique types |
-| `GetTableSchema()` | `DESCRIBE TABLE catalog_name.schema_name.table_name` | Column definitions |
-| `GetPrimaryKeys()` | `DESCRIBE TABLE EXTENDED ... AS JSON` | Parse JSON for constraints (existing impl) |
-| `GetImportedKeys()` | `DESCRIBE TABLE EXTENDED ... AS JSON` | Parse JSON for FK references (existing impl) |
+**Implemented SQL Commands:**
+
+| ADBC Method | SQL Command | Pattern Support | Notes |
+|-------------|-------------|-----------------|-------|
+| `GetObjects()` (catalogs) | `SHOW CATALOGS [LIKE 'pattern']` | ✅ | Uses ADBC pattern → Databricks glob |
+| `GetObjects()` (schemas) | `SHOW SCHEMAS IN {catalog \| ALL CATALOGS} [LIKE 'pattern']` | ✅ | NULL catalog → IN ALL CATALOGS |
+| `GetObjects()` (tables) | `SHOW TABLES IN CATALOG catalog [SCHEMA LIKE 'pattern'] [LIKE 'pattern']` | ✅ | Schema and table patterns |
+| `GetObjects()` (columns) | `SHOW COLUMNS IN CATALOG catalog [SCHEMA LIKE 'pattern'] [TABLE LIKE 'pattern'] [LIKE 'pattern']` | ✅ | Full pattern support |
+| `GetTableTypes()` | Static list: `TABLE`, `VIEW`, `SYSTEM TABLE` | N/A | No query needed |
+| `GetTableSchema()` | `SHOW COLUMNS IN CATALOG catalog SCHEMA LIKE 'schema' TABLE LIKE 'table'` | ✅ | More accurate nullable info than DESCRIBE |
+| `GetPrimaryKeys()` | `SHOW KEYS IN CATALOG catalog IN SCHEMA schema IN TABLE table` | ❌ | Exact identifiers only |
+| `GetImportedKeys()` | `SHOW FOREIGN KEYS IN CATALOG catalog IN SCHEMA schema IN TABLE table` | ❌ | Exact identifiers only |
+| `GetColumnsExtended()` | `DESC TABLE EXTENDED catalog.schema.table AS JSON` | ❌ | JSON parsing for PK/FK info |
+
+**Key Implementation Components:**
+- `SqlCommandBuilder` - Fluent API for building metadata queries
+- `MetadataUtilities` - Pattern conversion (ADBC `%_` → Databricks glob) and identifier quoting
+- `DatabricksTypeMapper` - Maps Databricks types to XDBC types for column metadata
 
 ### Implementation Details
 
-#### 1. **GetObjects() Implementation**
+The actual implementation uses a two-level approach:
+1. **Core metadata methods** - Execute SQL queries and return ADBC-formatted Arrow streams
+2. **Flat metadata methods** - Transform ADBC schemas to Thrift/JDBC-compatible schemas for statement-based queries
+
+#### 1. **SQL Command Builder Usage**
 
 ```csharp
-public override async Task<QueryResult> GetObjects(
-    GetObjectsDepth depth,
-    string? catalogPattern,
-    string? schemaPattern,
-    string? tableNamePattern,
-    IReadOnlyList<string>? tableTypes,
-    string? columnNamePattern,
-    CancellationToken cancellationToken = default)
-{
-    var builder = new GetObjectsBuilder(depth);
+// Pattern-based queries (SHOW CATALOGS/SCHEMAS/TABLES/COLUMNS)
+var commandBuilder = new SqlCommandBuilder()
+    .WithCatalog(catalog)
+    .WithSchemaPattern(schemaPattern)
+    .WithTablePattern(tablePattern)
+    .WithColumnPattern(columnPattern);
 
-    // Step 1: Get catalogs
-    if (depth >= GetObjectsDepth.Catalogs)
-    {
-        var catalogs = await GetCatalogsAsync(catalogPattern, cancellationToken);
-        builder.AddCatalogs(catalogs);
+string sql = commandBuilder.BuildShowColumns(catalog);
+// Output: SHOW COLUMNS IN CATALOG `main` SCHEMA LIKE 'default%' TABLE LIKE 'sales%' LIKE 'amount%'
 
-        // Step 2: Get schemas for each catalog
-        if (depth >= GetObjectsDepth.DbSchemas)
-        {
-            foreach (var catalog in catalogs)
-            {
-                var schemas = await GetSchemasAsync(
-                    catalog.Name,
-                    schemaPattern,
-                    cancellationToken);
-                builder.AddSchemas(catalog.Name, schemas);
+// Exact-identifier queries (SHOW KEYS/FOREIGN KEYS)
+var commandBuilder = new SqlCommandBuilder()
+    .WithCatalog("main")
+    .WithSchema("default")
+    .WithTable("orders");
 
-                // Step 3: Get tables for each schema
-                if (depth >= GetObjectsDepth.Tables)
-                {
-                    foreach (var schema in schemas)
-                    {
-                        var tables = await GetTablesAsync(
-                            catalog.Name,
-                            schema.Name,
-                            tableNamePattern,
-                            tableTypes,
-                            cancellationToken);
-                        builder.AddTables(catalog.Name, schema.Name, tables);
-
-                        // Step 4: Get columns for each table
-                        if (depth == GetObjectsDepth.All)
-                        {
-                            foreach (var table in tables)
-                            {
-                                var columns = await GetColumnsAsync(
-                                    catalog.Name,
-                                    schema.Name,
-                                    table.Name,
-                                    columnNamePattern,
-                                    cancellationToken);
-                                builder.AddColumns(
-                                    catalog.Name,
-                                    schema.Name,
-                                    table.Name,
-                                    columns);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return builder.Build();
-}
-
-private async Task<List<CatalogInfo>> GetCatalogsAsync(
-    string? pattern,
-    CancellationToken cancellationToken)
-{
-    // Execute: SHOW CATALOGS [LIKE 'pattern']
-    string query = pattern != null
-        ? $"SHOW CATALOGS LIKE '{EscapeLikePattern(pattern)}'"
-        : "SHOW CATALOGS";
-
-    var result = await ExecuteMetadataQueryAsync(query, cancellationToken);
-
-    var catalogs = new List<CatalogInfo>();
-    await foreach (var batch in result.Stream.ReadAllAsync(cancellationToken))
-    {
-        var catalogArray = (StringArray)batch.Column("catalog"); // or "namespace"
-        for (int i = 0; i < batch.Length; i++)
-        {
-            catalogs.Add(new CatalogInfo { Name = catalogArray.GetString(i) });
-        }
-    }
-
-    return catalogs;
-}
-
-private async Task<List<SchemaInfo>> GetSchemasAsync(
-    string catalogName,
-    string? pattern,
-    CancellationToken cancellationToken)
-{
-    // Execute: SHOW SCHEMAS IN catalog [LIKE 'pattern']
-    string query = pattern != null
-        ? $"SHOW SCHEMAS IN `{EscapeIdentifier(catalogName)}` LIKE '{EscapeLikePattern(pattern)}'"
-        : $"SHOW SCHEMAS IN `{EscapeIdentifier(catalogName)}`";
-
-    var result = await ExecuteMetadataQueryAsync(query, cancellationToken);
-
-    var schemas = new List<SchemaInfo>();
-    await foreach (var batch in result.Stream.ReadAllAsync(cancellationToken))
-    {
-        var schemaArray = (StringArray)batch.Column("databaseName"); // or "namespace"
-        for (int i = 0; i < batch.Length; i++)
-        {
-            schemas.Add(new SchemaInfo { Name = schemaArray.GetString(i) });
-        }
-    }
-
-    return schemas;
-}
-
-private async Task<List<TableInfo>> GetTablesAsync(
-    string catalogName,
-    string schemaName,
-    string? pattern,
-    IReadOnlyList<string>? tableTypes,
-    CancellationToken cancellationToken)
-{
-    // Execute: SHOW TABLES IN catalog.schema [LIKE 'pattern']
-    string query = pattern != null
-        ? $"SHOW TABLES IN `{EscapeIdentifier(catalogName)}`.`{EscapeIdentifier(schemaName)}` LIKE '{EscapeLikePattern(pattern)}'"
-        : $"SHOW TABLES IN `{EscapeIdentifier(catalogName)}`.`{EscapeIdentifier(schemaName)}`";
-
-    var result = await ExecuteMetadataQueryAsync(query, cancellationToken);
-
-    var tables = new List<TableInfo>();
-    await foreach (var batch in result.Stream.ReadAllAsync(cancellationToken))
-    {
-        var tableArray = (StringArray)batch.Column("tableName");
-        var typeArray = batch.Schema.GetFieldIndex("isTemporary") >= 0
-            ? (BooleanArray)batch.Column("isTemporary")
-            : null;
-
-        for (int i = 0; i < batch.Length; i++)
-        {
-            var tableName = tableArray.GetString(i);
-            var tableType = typeArray?.GetValue(i) == true ? "TEMPORARY" : "TABLE";
-
-            // Filter by table type if specified
-            if (tableTypes == null || tableTypes.Contains(tableType))
-            {
-                tables.Add(new TableInfo
-                {
-                    Name = tableName,
-                    Type = tableType
-                });
-            }
-        }
-    }
-
-    return tables;
-}
-
-private async Task<List<ColumnInfo>> GetColumnsAsync(
-    string catalogName,
-    string schemaName,
-    string tableName,
-    string? pattern,
-    CancellationToken cancellationToken)
-{
-    // Execute: DESCRIBE TABLE catalog.schema.table
-    string fullTableName = $"`{EscapeIdentifier(catalogName)}`.`{EscapeIdentifier(schemaName)}`.`{EscapeIdentifier(tableName)}`";
-    string query = $"DESCRIBE TABLE {fullTableName}";
-
-    var result = await ExecuteMetadataQueryAsync(query, cancellationToken);
-
-    var columns = new List<ColumnInfo>();
-    int ordinal = 0;
-
-    await foreach (var batch in result.Stream.ReadAllAsync(cancellationToken))
-    {
-        var colNameArray = (StringArray)batch.Column("col_name");
-        var dataTypeArray = (StringArray)batch.Column("data_type");
-        var commentArray = batch.Schema.GetFieldIndex("comment") >= 0
-            ? (StringArray)batch.Column("comment")
-            : null;
-
-        for (int i = 0; i < batch.Length; i++)
-        {
-            var colName = colNameArray.GetString(i);
-            var dataType = dataTypeArray.GetString(i);
-
-            // Skip partition info and other metadata rows
-            if (colName.StartsWith("#") || string.IsNullOrEmpty(dataType))
-                continue;
-
-            // Apply pattern filter
-            if (pattern != null && !MatchesPattern(colName, pattern))
-                continue;
-
-            columns.Add(new ColumnInfo
-            {
-                Name = colName,
-                OrdinalPosition = ordinal++,
-                DataType = ParseDataType(dataType),
-                TypeName = dataType,
-                Comment = commentArray?.GetString(i),
-                IsNullable = !dataType.Contains("NOT NULL")
-            });
-        }
-    }
-
-    return columns;
-}
-
-private async Task<QueryResult> ExecuteMetadataQueryAsync(
-    string query,
-    CancellationToken cancellationToken)
-{
-    using var statement = CreateStatement();
-    statement.SqlQuery = query;
-
-    // Use INLINE disposition for metadata (typically small results)
-    if (statement is StatementExecutionStatement restStmt)
-    {
-        restStmt.SetDisposition("inline");
-    }
-
-    return await statement.ExecuteQueryAsync(cancellationToken);
-}
+string sql = commandBuilder.BuildShowPrimaryKeys();
+// Output: SHOW KEYS IN CATALOG `main` IN SCHEMA `default` IN TABLE `orders`
 ```
 
-#### 2. **Extended Column Metadata (Constraints)**
+#### 2. **GetObjects Implementation - Minimal Network Calls**
 
-For primary keys and foreign keys, we can reuse the existing `DESCRIBE TABLE EXTENDED ... AS JSON` approach:
+The GetObjects implementation is optimized to make **minimal network calls** by leveraging server-side pattern matching:
+
+**Network Calls by Depth:**
+
+| Depth | Network Calls | SQL Commands Executed |
+|-------|---------------|----------------------|
+| **Catalogs** | **1** | `SHOW CATALOGS [LIKE 'pattern']` |
+| **DbSchemas** | **2** | 1. `SHOW CATALOGS [LIKE 'pattern']`<br>2. `SHOW SCHEMAS IN ALL CATALOGS [LIKE 'pattern']` |
+| **Tables** | **3** | 1. `SHOW CATALOGS [LIKE 'pattern']`<br>2. `SHOW SCHEMAS IN ALL CATALOGS [LIKE 'pattern']`<br>3. `SHOW TABLES IN CATALOG catalog [SCHEMA LIKE 'pattern'] [LIKE 'pattern']` |
+| **All** | **4** | 1. `SHOW CATALOGS [LIKE 'pattern']`<br>2. `SHOW SCHEMAS IN ALL CATALOGS [LIKE 'pattern']`<br>3. `SHOW TABLES IN CATALOG catalog [SCHEMA LIKE 'pattern'] [LIKE 'pattern']`<br>4. `SHOW COLUMNS IN CATALOG catalog [SCHEMA/TABLE/COLUMN patterns]` |
+
+> **Key insight**: Maximum 4 network calls regardless of result size (whether 10 or 10,000 tables)
+
+**Key Optimizations:**
+
+1. **Server-side filtering**: Patterns are sent to the server, which filters results efficiently
+   ```csharp
+   // Instead of fetching all columns and filtering client-side:
+   // ❌ Bad: Fetch all columns → Filter 10,000 columns in client
+
+   // ✅ Good: Let server filter with LIKE patterns
+   SHOW COLUMNS IN CATALOG `main` SCHEMA LIKE 'analytics%' TABLE LIKE 'fact_%' LIKE 'created_%'
+   // Server returns only matching columns (e.g., 50 columns)
+   ```
+
+2. **Single query per level**: Uses `IN ALL CATALOGS` to fetch all schemas in one query
+   ```csharp
+   // Instead of N queries for N catalogs:
+   // ❌ Bad: SHOW SCHEMAS IN `catalog1`
+   //        SHOW SCHEMAS IN `catalog2`
+   //        ... (N network calls)
+
+   // ✅ Good: SHOW SCHEMAS IN ALL CATALOGS LIKE 'prod_%'
+   // (1 network call, server returns schemas with catalog info)
+   ```
+
+3. **Unified result assembly**: Parse all results once, build hierarchy in-memory
+   ```csharp
+   var catalogMap = new Dictionary<string, Dictionary<string, Dictionary<string, (string, List<ColumnInfo>)>>>();
+
+   // 1. Fetch all catalogs → Add to catalogMap
+   // 2. Fetch all schemas → Merge into catalogMap by catalog
+   // 3. Fetch all tables → Merge into catalogMap by catalog.schema
+   // 4. Fetch all columns → Merge into catalogMap by catalog.schema.table
+
+   // Then build nested Arrow structure from catalogMap
+   ```
+
+4. **Early exit for shallow depths**: Only fetch what's needed
+   ```csharp
+   if (depth == GetObjectsDepth.Catalogs)
+   {
+       // Only 1 query: SHOW CATALOGS
+       // Skip schemas, tables, columns
+   }
+   ```
+
+**Performance Comparison:**
+
+| Scenario | Network Calls (Old Thrift Approach) | Network Calls (SEA Optimized) |
+|----------|--------------------------------------|-------------------------------|
+| Get 3 catalogs | 1 call | 1 call |
+| Get schemas in 3 catalogs | 3 calls | **1 call** (IN ALL CATALOGS) |
+| Get tables in 10 schemas | 10 calls | **1 call** (with patterns) |
+| Get columns for 100 tables | 100 calls | **1 call** (with patterns) |
+| **GetObjects(All) total** | **114 calls** | **4 calls** |
+
+#### 3. **Pattern Conversion**
+
+ADBC patterns use SQL LIKE syntax (`%` = any sequence, `_` = single char) which is converted to Databricks glob patterns:
 
 ```csharp
-protected override async Task<QueryResult> GetColumnsExtendedAsync(
-    CancellationToken cancellationToken = default)
-{
-    string? fullTableName = BuildTableName();
-
-    if (string.IsNullOrEmpty(fullTableName))
-    {
-        // Fallback to basic DESCRIBE TABLE
-        return await GetColumnsAsync(
-            CatalogName,
-            SchemaName,
-            TableName,
-            null,
-            cancellationToken);
-    }
-
-    // Execute: DESCRIBE TABLE EXTENDED catalog.schema.table AS JSON
-    string query = $"DESCRIBE TABLE EXTENDED {fullTableName} AS JSON";
-
-    var result = await ExecuteMetadataQueryAsync(query, cancellationToken);
-
-    // Parse JSON result (reuse existing DescTableExtendedResult parser)
-    var jsonResult = await ReadSingleStringResultAsync(result, cancellationToken);
-    var descResult = JsonSerializer.Deserialize<DescTableExtendedResult>(jsonResult);
-
-    // Build extended column metadata with PK/FK info
-    return CreateExtendedColumnsResult(descResult);
-}
+// MetadataUtilities.ConvertAdbcPatternToDatabricksGlob()
+"sales%" → "sales*"     // Prefix match
+"%sales" → "*sales"     // Suffix match
+"sales_2024" → "sales?2024"  // Single char wildcard
+"test\\_table" → "test_table"  // Escaped underscore (literal)
 ```
 
-#### 3. **Utility Methods**
+#### 4. **Type Mapping**
+
+Column types are mapped using `DatabricksTypeMapper`:
 
 ```csharp
-private string EscapeIdentifier(string identifier)
-{
-    // Escape backticks in identifier names
-    return identifier.Replace("`", "``");
-}
-
-private string EscapeLikePattern(string pattern)
-{
-    // Escape single quotes and wildcards for LIKE clause
-    // Convert SQL wildcards (%, _) to match ADBC patterns
-    return pattern
-        .Replace("'", "''")
-        .Replace("%", "\\%")
-        .Replace("_", "\\_");
-}
-
-private bool MatchesPattern(string value, string pattern)
-{
-    // Convert ADBC pattern (%, _) to regex
-    var regex = "^" + Regex.Escape(pattern)
-        .Replace("\\%", ".*")
-        .Replace("\\_", ".") + "$";
-
-    return Regex.IsMatch(value, regex, RegexOptions.IgnoreCase);
-}
-
-private SqlDbType ParseDataType(string databricksType)
-{
-    // Map Databricks type names to ADBC SqlDbType
-    var upperType = databricksType.ToUpperInvariant();
-
-    if (upperType.StartsWith("STRING") || upperType.StartsWith("VARCHAR"))
-        return SqlDbType.VarChar;
-    if (upperType.StartsWith("INT"))
-        return SqlDbType.Int;
-    if (upperType.StartsWith("BIGINT"))
-        return SqlDbType.BigInt;
-    if (upperType.StartsWith("DOUBLE"))
-        return SqlDbType.Double;
-    if (upperType.StartsWith("DECIMAL"))
-        return SqlDbType.Decimal;
-    if (upperType.StartsWith("TIMESTAMP"))
-        return SqlDbType.Timestamp;
-    if (upperType.StartsWith("DATE"))
-        return SqlDbType.Date;
-    if (upperType.StartsWith("BOOLEAN"))
-        return SqlDbType.Boolean;
-    // ... more mappings
-
-    return SqlDbType.VarChar; // Default fallback
-}
+// Example type mappings (from actual implementation)
+"INT" → XDBC type 4 (SQL_INTEGER)
+"BIGINT" → XDBC type -5 (SQL_BIGINT)
+"DECIMAL(10,2)" → XDBC type 3 (SQL_DECIMAL), precision 10, scale 2
+"STRING" → XDBC type 12 (SQL_VARCHAR)
+"TIMESTAMP" → XDBC type 93 (SQL_TYPE_TIMESTAMP)
+"ARRAY<INT>" → XDBC type 2003 (SQL_ARRAY)
+"STRUCT<f1: INT, f2: STRING>" → XDBC type 2002 (SQL_STRUCT)
 ```
 
-### Performance Considerations
+#### 5. **Dual Schema Support**
 
-1. **Caching**: Consider caching catalog/schema lists for short periods (e.g., 30 seconds)
-2. **Batching**: When fetching columns for multiple tables, consider parallel execution
-3. **Lazy Loading**: For `GetObjects(All)`, fetch columns on-demand rather than eagerly
-4. **Result Size**: Metadata queries are typically small, so use `INLINE` disposition
+Each metadata method has two implementations:
+- **Core method** (`GetColumnsMetadataAsync`) - Returns ADBC schema (lowercase field names, 17 columns)
+- **Flat method** (`GetColumnsFlat`) - Returns Thrift/JDBC schema (uppercase field names, 24 columns)
+
+```csharp
+// ADBC schema (17 columns, lowercase)
+catalog_name, db_schema_name, table_name, column_name, type_name,
+ordinal_position, is_nullable, remarks, xdbc_data_type, xdbc_type_name,
+xdbc_column_size, xdbc_decimal_digits, xdbc_num_prec_radix, xdbc_buffer_length,
+xdbc_char_octet_length, xdbc_sql_data_type, xdbc_datetime_sub
+
+// Thrift/JDBC schema (24 columns, uppercase)
+TABLE_CAT, TABLE_SCHEM, TABLE_NAME, COLUMN_NAME, DATA_TYPE, TYPE_NAME,
+COLUMN_SIZE, BUFFER_LENGTH, DECIMAL_DIGITS, NUM_PREC_RADIX, NULLABLE, REMARKS,
+COLUMN_DEF, SQL_DATA_TYPE, SQL_DATETIME_SUB, CHAR_OCTET_LENGTH, ORDINAL_POSITION,
+IS_NULLABLE, SCOPE_CATALOG, SCOPE_SCHEMA, SCOPE_TABLE, SOURCE_DATA_TYPE,
+IS_AUTO_INCREMENT, BASE_TYPE_NAME
+```
+
+#### 6. **Constraint Metadata**
+
+**Primary Keys:**
+```csharp
+// GetPrimaryKeysAsync uses SqlCommandBuilder
+var commandBuilder = new SqlCommandBuilder()
+    .WithCatalog(catalog)
+    .WithSchema(dbSchema)
+    .WithTable(tableName);
+string sql = commandBuilder.BuildShowPrimaryKeys();
+// Generates: SHOW KEYS IN CATALOG `main` IN SCHEMA `default` IN TABLE `orders`
+
+// Returns ADBC schema: catalog_name, db_schema_name, table_name, column_name, key_sequence, constraint_name
+// GetPrimaryKeysFlat() transforms to Thrift schema: TABLE_CAT, TABLE_SCHEM, TABLE_NAME, COLUMN_NAME, KEY_SEQ, PK_NAME
+```
+
+**Foreign Keys:**
+```csharp
+// GetImportedKeysAsync uses SqlCommandBuilder
+var commandBuilder = new SqlCommandBuilder()
+    .WithCatalog(catalog)
+    .WithSchema(dbSchema)
+    .WithTable(tableName);
+string sql = commandBuilder.BuildShowForeignKeys();
+// Generates: SHOW FOREIGN KEYS IN CATALOG `main` IN SCHEMA `default` IN TABLE `orders`
+
+// Returns ADBC schema with 14 columns including pk_catalog_name, pk_db_schema_name, fk_catalog_name, etc.
+// GetImportedKeys() (internal) returns same schema for Thrift protocol compatibility
+```
+
+**Extended Columns (with PK/FK annotations):**
+```csharp
+// GetColumnsExtendedAsync uses DESC TABLE EXTENDED
+string fullTableName = MetadataUtilities.BuildQualifiedTableName(catalog, dbSchema, tableName);
+string sql = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+
+// Parses JSON result using DescTableExtendedResult class
+// Merges constraint info (primaryKeys, foreignKeys) into column metadata
+// Returns 24-column Thrift schema plus: is_primary_key, is_foreign_key, num_key_cols, parent_catalog, etc.
+// GetColumnsExtendedFlat() provides direct access for statement-based queries
+```
 
 ### Comparison: SQL vs Thrift Metadata
 
@@ -1759,10 +1624,10 @@ Databricks supports these metadata commands:
 
 - `SHOW CATALOGS [LIKE 'pattern']`
 - `SHOW SCHEMAS [IN catalog] [LIKE 'pattern']`
-- `SHOW DATABASES` (alias for SHOW SCHEMAS)
-- `SHOW TABLES [IN catalog.schema] [LIKE 'pattern']`
+- `SHOW SCHEMAS`
+- `SHOW TABLES [IN (CATALOG catalog | ALL CATALOGS)][SCHEMA LIKE 'schema'][LIKE 'pattern']`
 - `SHOW VIEWS [IN catalog.schema] [LIKE 'pattern']`
-- `SHOW COLUMNS IN table`
+- `SHOW COLUMNS [IN (CATALOG catalog | ALL CATALOGS)][SCHEMA LIKE 'schema'][TABLE LIKE 'table'] [LIKE 'pattern']`
 - `SHOW TBLPROPERTIES table`
 - `SHOW PARTITIONS table`
 - `DESCRIBE TABLE [EXTENDED] table [AS JSON]`
