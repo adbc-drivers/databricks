@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Databricks ADBC Driver: Activity-Based Telemetry Design
+# Databricks ADBC Driver: Activity-Based Telemetry Design V2
 
 ## Executive Summary
 
