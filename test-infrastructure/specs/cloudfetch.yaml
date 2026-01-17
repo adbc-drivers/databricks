@@ -40,6 +40,42 @@ implementation_notes:
     - Assert that at least one duplicate group exists
 
 tests:
+  - id: CLOUDFETCH-000
+    name: Normal CloudFetch Success
+    priority: Critical
+    description: |
+      Baseline test that validates CloudFetch works correctly in normal operation
+      without any failure scenarios. Ensures the driver can successfully fetch
+      large result sets using CloudFetch without errors.
+
+    steps:
+      - action: execute_query
+        query: test_config.query
+        read_batches: 1
+        description: Execute query that triggers CloudFetch
+
+    assertions:
+      - type: query_succeeds
+        description: Query completes successfully without errors
+
+      - type: result_not_null
+        description: Query returns valid result
+
+      - type: thrift_call_count
+        method: ExecuteStatement
+        expected: ">= 1"
+        description: ExecuteStatement was called
+
+      - type: thrift_call_count
+        method: FetchResults
+        expected: ">= 1"
+        description: FetchResults was called for normal operation
+
+    notes: |
+      This is the "happy path" test that verifies CloudFetch works correctly
+      without any proxy failure scenarios enabled. All other CloudFetch tests
+      enable specific failure scenarios to test error recovery.
+
   - id: CLOUDFETCH-001
     name: Expired Link Recovery
     priority: Critical
@@ -130,7 +166,7 @@ tests:
     proxy_scenario: cloudfetch_timeout
 
     driver_config:
-      cloudfetch_timeout_minutes: 1
+      adbc.databricks.cloudfetch.timeout_minutes: 1
 
     scenario_config:
       duration_seconds: 65  # Exceeds 60s timeout, triggers retry

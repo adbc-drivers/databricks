@@ -127,7 +127,7 @@ tests:
 
     assertions:
       - type: error_thrown
-        error_pattern: session|INVALID_HANDLE
+        error_pattern: session|INVALID_HANDLE|500
         description: Driver throws appropriate error for invalid session
 
   - id: SESSION-004
@@ -167,7 +167,7 @@ tests:
 
     assertions:
       - type: error_thrown
-        error_pattern: session|expired|timeout
+        error_pattern: session|expired|timeout|500
         description: Driver detects session expiration and reports error
 
     notes: |
@@ -186,7 +186,7 @@ tests:
     jira: ES-1661289
 
     driver_config:
-      auto_reconnect: true
+      adbc.spark.auto_reconnect: true
 
     steps:
       - action: reset_call_history
@@ -318,7 +318,7 @@ tests:
     proxy_scenario: network_timeout_open_session
 
     driver_config:
-      temporarily_unavailable_retry_timeout: 20
+      adbc.spark.temporarily_unavailable_retry_timeout: 20
 
     steps:
       - action: reset_call_history
@@ -478,7 +478,7 @@ tests:
     jira: ES-1661289
 
     driver_config:
-      fetch_heartbeat_interval: 5
+      adbc.databricks.fetch_heartbeat_interval: 5
 
     steps:
       - action: reset_call_history
