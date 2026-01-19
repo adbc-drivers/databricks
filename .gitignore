@@ -43,7 +43,8 @@ go.work.sum
 
 # Editor/IDE
 .idea/
-# .vscode/
+.vscode/
+.vs/
 
 # macOS
 .DS_Store

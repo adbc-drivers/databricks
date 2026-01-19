@@ -56,6 +56,7 @@ namespace AdbcDrivers.Databricks
         private bool enableMultipleCatalogSupport;
         private bool enablePKFK;
         private bool runAsyncInThrift;
+        private Dictionary<string, string>? confOverlay;
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -150,6 +151,15 @@ namespace AdbcDrivers.Databricks
 
             Connection.TrySetGetDirectResults(statement);
 
+            // Set configuration overlay if any parameters were provided
+            if (confOverlay != null && confOverlay.Count > 0)
+            {
+                #pragma warning disable CS0618 // ConfOverlay is marked obsolete but is still functional
+                statement.ConfOverlay = new Dictionary<string, string>(confOverlay);
+                #pragma warning restore CS0618
+                Activity.Current?.SetTag("statement.conf_overlay.count", confOverlay.Count);
+            }
+
             // Log Databricks-specific properties
             Activity.Current?.SetTag("statement.property.enforce_result_persistence_mode", statement.EnforceResultPersistenceMode);
             Activity.Current?.SetTag("statement.property.can_read_arrow_result", statement.CanReadArrowResult);
@@ -182,6 +192,26 @@ namespace AdbcDrivers.Databricks
 
         public override void SetOption(string key, string value)
         {
+            // Check if this is a conf overlay parameter
+            if (key.StartsWith(DatabricksParameters.ConfOverlayPrefix))
+            {
+                // Strip the prefix and add to conf overlay dictionary
+                string confKey = key.Substring(DatabricksParameters.ConfOverlayPrefix.Length);
+
+                if (string.IsNullOrEmpty(confKey))
+                {
+                    throw new ArgumentException($"Invalid conf overlay key: {key}. Key cannot be empty after removing prefix.");
+                }
+
+                if (confOverlay == null)
+                {
+                    confOverlay = new Dictionary<string, string>();
+                }
+
+                confOverlay[confKey] = value;
+                return;
+            }
+
             switch (key)
             {
                 case DatabricksParameters.UseCloudFetch:

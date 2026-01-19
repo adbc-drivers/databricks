@@ -104,6 +104,16 @@ namespace AdbcDrivers.Databricks
         public const string ServerSidePropertyPrefix = "adbc.databricks.ssp_";
 
         /// <summary>
+        /// Prefix for configuration overlay parameters. Properties with this prefix will be passed
+        /// to the server in the confOverlay field of the execute statement request.
+        /// These properties apply to the statement only and will not affect the subsequent state of the Session.
+        /// For example, a property with key "adbc.databricks.conf_overlay_spark.sql.adaptive.enabled"
+        /// and value "true" will result in passing {"spark.sql.adaptive.enabled": "true"} in confOverlay.
+        /// The prefix "adbc.databricks.conf_overlay_" will be stripped when passing to the server.
+        /// </summary>
+        public const string ConfOverlayPrefix = "adbc.databricks.conf_overlay_";
+
+        /// <summary>
         /// Controls whether to retry requests that receive retryable responses (408, 502, 503, 504).
         /// Default value is true (enabled). Set to false to disable retry behavior.
         /// </summary>
