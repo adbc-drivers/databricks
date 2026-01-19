@@ -33,6 +33,7 @@ import (
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	_ "github.com/databricks/databricks-sql-go"
+	dbsqlerr "github.com/databricks/databricks-sql-go/errors"
 )
 
 type connectionImpl struct {
@@ -338,6 +339,13 @@ func (c *connectionImpl) getTablesWithColumns(ctx context.Context, catalog strin
 
 	rows, err := c.conn.QueryContext(ctx, queryBuilder.String())
 	if err != nil {
+		// If we don't have permissions on the catalog, this will
+		// error. Catch that and simply return no tables instead of
+		// blowing up.
+		var dbExecutionErr dbsqlerr.DBExecutionError
+		if errors.As(err, &dbExecutionErr) && dbExecutionErr.SqlState() == "42501" {
+			return tables, nil
+		}
 		return nil, adbc.Error{
 			Code: adbc.StatusInternal,
 			Msg:  fmt.Sprintf("failed to query tables with columns: %v", err),
