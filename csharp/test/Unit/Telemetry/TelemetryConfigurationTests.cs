@@ -409,5 +409,198 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal(3, config.MaxRetries); // default
             Assert.Equal(100, config.RetryDelayMs); // default
         }
+
+        [Fact]
+        public void Validate_DefaultConfiguration_ReturnsNoErrors()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration();
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Empty(errors);
+        }
+
+        [Fact]
+        public void Validate_ValidConfiguration_ReturnsNoErrors()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration
+            {
+                BatchSize = 50,
+                FlushIntervalMs = 1000,
+                MaxRetries = 0,
+                RetryDelayMs = 0,
+                CircuitBreakerThreshold = 1,
+                CircuitBreakerTimeout = TimeSpan.FromSeconds(1)
+            };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Empty(errors);
+        }
+
+        [Fact]
+        public void Validate_ZeroBatchSize_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { BatchSize = 0 };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("BatchSize", errors[0]);
+            Assert.Contains("greater than 0", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_NegativeBatchSize_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { BatchSize = -1 };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("BatchSize", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_ZeroFlushInterval_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { FlushIntervalMs = 0 };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("FlushIntervalMs", errors[0]);
+            Assert.Contains("greater than 0", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_NegativeFlushInterval_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { FlushIntervalMs = -100 };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("FlushIntervalMs", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_NegativeMaxRetries_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { MaxRetries = -1 };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("MaxRetries", errors[0]);
+            Assert.Contains("non-negative", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_NegativeRetryDelay_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { RetryDelayMs = -1 };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("RetryDelayMs", errors[0]);
+            Assert.Contains("non-negative", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_ZeroCircuitBreakerThreshold_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { CircuitBreakerThreshold = 0 };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("CircuitBreakerThreshold", errors[0]);
+            Assert.Contains("greater than 0", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_ZeroCircuitBreakerTimeout_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { CircuitBreakerTimeout = TimeSpan.Zero };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("CircuitBreakerTimeout", errors[0]);
+            Assert.Contains("greater than zero", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_NegativeCircuitBreakerTimeout_ReturnsError()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration { CircuitBreakerTimeout = TimeSpan.FromSeconds(-1) };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Single(errors);
+            Assert.Contains("CircuitBreakerTimeout", errors[0]);
+        }
+
+        [Fact]
+        public void Validate_MultipleInvalidValues_ReturnsAllErrors()
+        {
+            // Arrange
+            var config = new TelemetryConfiguration
+            {
+                BatchSize = 0,
+                FlushIntervalMs = -1,
+                MaxRetries = -1,
+                RetryDelayMs = -1,
+                CircuitBreakerThreshold = 0,
+                CircuitBreakerTimeout = TimeSpan.Zero
+            };
+
+            // Act
+            var errors = config.Validate();
+
+            // Assert
+            Assert.Equal(6, errors.Count);
+            Assert.Contains(errors, e => e.Contains("BatchSize"));
+            Assert.Contains(errors, e => e.Contains("FlushIntervalMs"));
+            Assert.Contains(errors, e => e.Contains("MaxRetries"));
+            Assert.Contains(errors, e => e.Contains("RetryDelayMs"));
+            Assert.Contains(errors, e => e.Contains("CircuitBreakerThreshold"));
+            Assert.Contains(errors, e => e.Contains("CircuitBreakerTimeout"));
+        }
     }
 }

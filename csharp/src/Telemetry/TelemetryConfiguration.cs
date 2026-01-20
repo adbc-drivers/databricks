@@ -142,6 +142,48 @@ namespace AdbcDrivers.Databricks.Telemetry
         }
 
         /// <summary>
+        /// Validates the configuration and returns a list of validation errors.
+        /// Returns an empty list if the configuration is valid.
+        /// </summary>
+        /// <returns>A list of validation error messages. Empty if valid.</returns>
+        public IReadOnlyList<string> Validate()
+        {
+            var errors = new List<string>();
+
+            if (BatchSize <= 0)
+            {
+                errors.Add($"{nameof(BatchSize)} must be greater than 0, but was {BatchSize}.");
+            }
+
+            if (FlushIntervalMs <= 0)
+            {
+                errors.Add($"{nameof(FlushIntervalMs)} must be greater than 0, but was {FlushIntervalMs}.");
+            }
+
+            if (MaxRetries < 0)
+            {
+                errors.Add($"{nameof(MaxRetries)} must be non-negative, but was {MaxRetries}.");
+            }
+
+            if (RetryDelayMs < 0)
+            {
+                errors.Add($"{nameof(RetryDelayMs)} must be non-negative, but was {RetryDelayMs}.");
+            }
+
+            if (CircuitBreakerThreshold <= 0)
+            {
+                errors.Add($"{nameof(CircuitBreakerThreshold)} must be greater than 0, but was {CircuitBreakerThreshold}.");
+            }
+
+            if (CircuitBreakerTimeout <= TimeSpan.Zero)
+            {
+                errors.Add($"{nameof(CircuitBreakerTimeout)} must be greater than zero, but was {CircuitBreakerTimeout}.");
+            }
+
+            return errors;
+        }
+
+        /// <summary>
         /// Creates a TelemetryConfiguration from connection properties.
         /// Properties override environment variables, which override defaults.
         /// Priority: Connection Properties > Environment Variables > Defaults.
