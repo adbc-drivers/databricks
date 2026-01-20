@@ -36,20 +36,28 @@ class DatabricksQuirks(model.DriverQuirks):
         get_objects_constraints_unique=False,
         statement_bind=False,
         statement_bulk_ingest=True,
-        statement_bulk_ingest_catalog=True,
-        statement_bulk_ingest_schema=True,
+        statement_bulk_ingest_catalog=False,
+        statement_bulk_ingest_schema=False,
         statement_bulk_ingest_temporary=False,
         statement_execute_schema=False,
         statement_get_parameter_schema=False,
         statement_prepare=True,
         statement_rows_affected=True,
-        current_catalog="workspace",
-        current_schema="default",
+        current_catalog="main",
+        current_schema="adbc_testing",
         supported_xdbc_fields=[],
     )
     setup = model.DriverSetup(
         database={
-            "uri": model.FromEnv("DATABRICKS_URI"),
+            "databricks.server_hostname": model.FromEnv("DATABRICKS_HOST"),
+            # "databricks.access_token": model.FromEnv("DATABRICKS_ACCESSTOKEN"),
+            "databricks.oauth.client_id": model.FromEnv("DATABRICKS_OAUTH_CLIENT_ID"),
+            "databricks.oauth.client_secret": model.FromEnv(
+                "DATABRICKS_OAUTH_CLIENT_SECRET"
+            ),
+            "databricks.http_path": model.FromEnv("DATABRICKS_HTTPPATH"),
+            "databricks.catalog": "main",
+            "databricks.schema": "adbc_testing",
         },
         connection={},
         statement={},

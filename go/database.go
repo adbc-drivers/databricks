@@ -97,17 +97,27 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	}
 
 	// FIXME: Support other auth methods
-	if d.accessToken == "" {
+	if d.accessToken == "" && d.oauthClientID == "" && d.oauthClientSecret == "" {
 		return nil, adbc.Error{
 			Code: adbc.StatusInvalidArgument,
-			Msg:  "access token is required",
+			Msg:  "[db] access token or OAuth config is required",
+		}
+	} else if d.accessToken != "" && (d.oauthClientID != "" || d.oauthClientSecret != "") {
+		return nil, adbc.Error{
+			Code: adbc.StatusInvalidArgument,
+			Msg:  "[db] cannot specify both access token and OAuth config",
 		}
 	}
 
 	opts := []dbsql.ConnOption{
-		dbsql.WithAccessToken(d.accessToken),
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
+	}
+
+	if d.accessToken != "" {
+		opts = append(opts, dbsql.WithAccessToken(d.accessToken))
+	} else {
+		opts = append(opts, dbsql.WithClientCredentials(d.oauthClientID, d.oauthClientSecret))
 	}
 
 	// Validate and set custom port
@@ -186,7 +196,7 @@ func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, e
 
 	// Test the connection
 	if err := db.PingContext(ctx); err != nil {
-		err = errors.Join(db.Close())
+		err = errors.Join(err, db.Close())
 		return nil, adbc.Error{
 			Code: adbc.StatusInternal,
 			Msg:  fmt.Sprintf("failed to ping database: %v", err),

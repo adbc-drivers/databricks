@@ -40,6 +40,7 @@ import (
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -70,6 +71,11 @@ const (
 	DefaultPort    = 443
 	DefaultSSLMode = "require"
 )
+
+func init() {
+	// databricks-go sends logs to zerolog; set the global log level
+	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+}
 
 type driverImpl struct {
 	driverbase.DriverImplBase
