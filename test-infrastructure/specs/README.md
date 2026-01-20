@@ -47,31 +47,25 @@ tests:
       key: value
 
     steps:
-      - action: reset_call_history
-        description: Clear proxy call history before test
+      - action: establish_baseline
+        execute_query: "SELECT ..."
+        measure:
+          - thrift_method: MethodName
+            save_as: variable_name
 
       - action: enable_failure_scenario
         scenario: scenario_name
         config:  # Optional: Runtime scenario config
           key: value
 
-      - action: execute_query
-        query: test_config.query
-        read_batches: test_config.read_batches
-        driver_config: driver_config  # Optional
+      - action: execute_test
+        execute_query: "SELECT ..."
 
     assertions:
       - type: query_succeeds
-        description: Query completes without error
-
-      - type: thrift_call_exists
+      - type: thrift_call_count
         method: MethodName
-        where:
-          - field: fieldName
-            operator: greater_than
-            value: 0
-        count: at_least_duplicates
-        description: Driver called method multiple times (proves retry/refresh)
+        expected: variable_name + 1
 
     notes: Additional implementation notes
 ```
@@ -82,7 +76,7 @@ tests:
 
 | File | Suite | Tests | Priority | Status |
 |------|-------|-------|----------|--------|
-| `cloudfetch.yaml` | CloudFetch | 4 implemented, 6 planned | Critical | ✅ In Progress |
+| `cloudfetch.yaml` | CloudFetch | 3 implemented, 7 planned | Critical | ✅ In Progress |
 
 ### Planned (~300 tests across 16 categories)
 
@@ -116,49 +110,41 @@ Each YAML file should:
 
 ## Test Actions
 
-### `reset_call_history`
-Clear proxy call history before test to ensure clean state for verification.
+### `establish_baseline`
+Execute query without failures to measure normal behavior. Use `measure` to save metrics for later comparison.
 
 ### `enable_failure_scenario`
 Enable a proxy failure scenario (maps to `mitmproxy_addon.py` SCENARIOS). Optionally provide runtime config.
 
-### `execute_query`
-Execute the test query with optional driver configuration and batch reading settings.
+### `execute_test`
+Execute the test query with failure scenario active.
 
 ## Assertions
 
-Assertions validate expected behavior by checking for specific patterns in proxy call history.
+Assertions validate expected behavior using equations/formulas rather than predefined types. This allows flexible validation for any test scenario.
 
 **Common assertion patterns:**
 
 ```yaml
 assertions:
-  # Query completes successfully
-  - type: query_succeeds
-    description: Query completes without error
+  # No error thrown
+  - type: no_error
 
-  # Result is not null
-  - type: result_not_null
-    description: Query returns valid result
-
-  # Check for duplicate Thrift calls (proves retry/refresh)
-  - type: thrift_call_exists
-    method: FetchResults
-    where:
-      - field: startRowOffset
-        operator: greater_than
-        value: 0
-    count: at_least_duplicates
-    description: Driver called FetchResults multiple times with same offset
-
-  # Check for duplicate cloud fetch URLs (proves retry)
-  - type: duplicate_cloud_fetch_urls
-    count: at_least_one
-    description: Driver retried the same CloudFetch URL
+  # Thrift method call count verification
+  - type: thrift_call_count
+    method: FetchResults  # or GetCatalogs, GetColumns, OpenSession, etc.
+    expected: baseline_count + 1
 
   # Schema validation against golden results
   - type: schema_matches
     golden_file: "golden/get_columns_result.json"
+
+  # Result not null
+  - type: result_not_null
+
+  # CloudFetch download count
+  - type: cloud_download_count
+    expected: baseline_downloads + 1
 ```
 
 **Examples for specific test scenarios:**
@@ -166,7 +152,7 @@ assertions:
 GetColumns metadata test:
 ```yaml
 assertions:
-  - type: query_succeeds
+  - type: no_error
   - type: schema_matches
     golden_file: "golden/get_columns_schema.json"
 ```
@@ -174,15 +160,20 @@ assertions:
 CloudFetch expired link recovery:
 ```yaml
 assertions:
-  - type: query_succeeds
-  - type: thrift_call_exists
+  - type: no_error
+  - type: thrift_call_count
     method: FetchResults
-    where:
-      - field: startRowOffset
-        operator: greater_than
-        value: 0
-    count: at_least_duplicates
+    expected: baseline_fetch_results + 1
 ```
+
+## Measurement Types
+
+Measurements capture baseline metrics during the test for later comparison in assertions.
+
+| Type | Description | Parameters | Save As |
+|------|-------------|------------|---------|
+| `thrift_method` | Count calls to specific Thrift method | `method` (e.g., FetchResults, GetCatalogs, GetColumns, OpenSession) | Variable name |
+| `cloud_downloads` | Count CloudFetch downloads | - | Variable name |
 
 ## Using Specs in Your Language
 
@@ -195,37 +186,34 @@ The existing C# tests in `test-infrastructure/tests/csharp/CloudFetchTests.cs` i
 [Fact]
 public async Task CloudFetchExpiredLink_RefreshesLinkViaFetchResults()
 {
-    // Step 1: reset_call_history
-    await ControlClient.ResetCallHistoryAsync();
+    // Step 1: establish_baseline
+    int baselineFetchResults;
+    using (var connection = CreateProxiedConnection())
+    using (var statement = connection.CreateStatement())
+    {
+        statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+        var result = statement.ExecuteQuery();
+        using var reader = result.Stream;
+        _ = reader.ReadNextRecordBatchAsync().Result;
+        baselineFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+    }
 
     // Step 2: enable_failure_scenario
     await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
 
-    // Step 3: execute_query - read multiple batches
-    using var connection = CreateProxiedConnection();
-    using var statement = connection.CreateStatement();
-    statement.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+    // Step 3: execute_test
+    using var connection2 = CreateProxiedConnection();
+    using var statement2 = connection2.CreateStatement();
+    statement2.SqlQuery = "SELECT * FROM main.tpcds_sf1_delta.catalog_returns";
+    var result2 = statement2.ExecuteQuery();
 
-    var result = statement.ExecuteQuery();
-    using var reader = result.Stream;
+    // Assertions
+    using var reader2 = result2.Stream;
+    var batch = reader2.ReadNextRecordBatchAsync().Result;
+    Assert.NotNull(batch);  // query_succeeds, result_not_null, batch_not_empty
 
-    for (int i = 0; i < 2; i++)
-    {
-        var batch = await reader.ReadNextRecordBatchAsync();
-        if (batch == null || batch.Length == 0)
-            break;
-    }
-
-    // Assertion: thrift_call_exists - Driver called FetchResults multiple times with same offset
-    var fetchResultsCalls = await ControlClient.GetThriftMethodCallsAsync("FetchResults");
-    var offsetCounts = fetchResultsCalls
-        .Select(call => ThriftFieldExtractor.GetLongValue(call, "startRowOffset"))
-        .Where(offset => offset.HasValue && offset.Value > 0)
-        .GroupBy(offset => offset.Value)
-        .Where(group => group.Count() >= 2)
-        .ToList();
-
-    Assert.NotEmpty(offsetCounts);
+    var actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+    Assert.Equal(baselineFetchResults + 1, actualFetchResults);  // thrift_call_count
 }
 ```
 
@@ -235,30 +223,27 @@ public async Task CloudFetchExpiredLink_RefreshesLinkViaFetchResults()
 // CLOUDFETCH-001: Expired Link Recovery
 @Test
 public void testCloudFetchExpiredLinkRecovery() throws Exception {
-    // Step 1: reset_call_history
-    proxyClient.resetCallHistory();
+    // Step 1: establish_baseline
+    int baselineFetchResults;
+    try (Connection conn = createProxiedConnection();
+         Statement stmt = conn.createStatement()) {
+        stmt.execute("SELECT * FROM main.tpcds_sf1_delta.catalog_returns");
+        baselineFetchResults = proxyClient.countThriftMethodCalls("FetchResults");
+    }
 
     // Step 2: enable_failure_scenario
     proxyClient.enableScenario("cloudfetch_expired_link");
 
-    // Step 3: execute_query
+    // Step 3: execute_test
     try (Connection conn = createProxiedConnection();
          Statement stmt = conn.createStatement();
          ResultSet rs = stmt.executeQuery("SELECT * FROM main.tpcds_sf1_delta.catalog_returns")) {
 
-        // Read multiple batches
-        for (int i = 0; i < 2 && rs.next(); i++) {
-            // Continue reading
-        }
+        // Assertions
+        assertTrue(rs.next());  // query_succeeds, result_not_null, batch_not_empty
 
-        // Assertion: Check for duplicate FetchResults calls with same offset
-        List<ThriftCall> fetchResultsCalls = proxyClient.getThriftMethodCalls("FetchResults");
-        Map<Long, Long> offsetCounts = fetchResultsCalls.stream()
-            .map(call -> ThriftFieldExtractor.getLongValue(call, "startRowOffset"))
-            .filter(offset -> offset != null && offset > 0)
-            .collect(Collectors.groupingBy(offset -> offset, Collectors.counting()));
-
-        assertTrue(offsetCounts.values().stream().anyMatch(count -> count >= 2));
+        int actualFetchResults = proxyClient.countThriftMethodCalls("FetchResults");
+        assertEquals(baselineFetchResults + 1, actualFetchResults);  // thrift_call_count
     }
 }
 ```

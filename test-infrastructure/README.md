@@ -150,24 +150,20 @@ tests:
     name: Expired Link Recovery
     proxy_scenario: cloudfetch_expired_link
     steps:
-      - action: reset_call_history
-        description: Clear proxy call history before test
+      - action: establish_baseline
+        execute_query: "SELECT * FROM table"
+        measure:
+          - thrift_method: FetchResults
+            save_as: baseline_count
       - action: enable_failure_scenario
         scenario: cloudfetch_expired_link
-      - action: execute_query
-        query: test_config.query
-        read_batches: test_config.read_batches
+      - action: execute_test
+        execute_query: "SELECT * FROM table"
     assertions:
       - type: query_succeeds
-        description: Query completes without error despite expired link
-      - type: thrift_call_exists
+      - type: thrift_call_count
         method: FetchResults
-        where:
-          - field: startRowOffset
-            operator: greater_than
-            value: 0
-        count: at_least_duplicates
-        description: Driver called FetchResults multiple times with same offset to refresh link
+        expected: baseline_count + 1
 ```
 
 See [specs/README.md](./specs/README.md) for full documentation of test specifications and planned test suites.
@@ -203,37 +199,18 @@ xUnit-based tests in `tests/csharp/` that:
 [Fact]
 public async Task CloudFetchExpiredLink_RefreshesLinkViaFetchResults()
 {
-    // Step 1: Reset call history
-    await ControlClient.ResetCallHistoryAsync();
+    // 1. Establish baseline without failure
+    int baselineFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
 
-    // Step 2: Enable failure scenario
+    // 2. Enable failure scenario
     await ControlClient.EnableScenarioAsync("cloudfetch_expired_link");
 
-    // Step 3: Execute query and read multiple batches
-    using var connection = CreateProxiedConnection();
-    using var statement = connection.CreateStatement();
-    statement.SqlQuery = TestQuery;
+    // 3. Execute query
+    var result = await statement.ExecuteQuery();
 
-    var result = statement.ExecuteQuery();
-    using var reader = result.Stream;
-
-    for (int i = 0; i < 2; i++)
-    {
-        var batch = await reader.ReadNextRecordBatchAsync();
-        if (batch == null || batch.Length == 0)
-            break;
-    }
-
-    // Assertion: Driver called FetchResults multiple times with same non-zero offset
-    var fetchResultsCalls = await ControlClient.GetThriftMethodCallsAsync("FetchResults");
-    var offsetCounts = fetchResultsCalls
-        .Select(call => ThriftFieldExtractor.GetLongValue(call, "startRowOffset"))
-        .Where(offset => offset.HasValue && offset.Value > 0)
-        .GroupBy(offset => offset.Value)
-        .Where(group => group.Count() >= 2)
-        .ToList();
-
-    Assert.NotEmpty(offsetCounts);
+    // 4. Verify driver recovered correctly
+    int actualFetchResults = await ControlClient.CountThriftMethodCallsAsync("FetchResults");
+    Assert.Equal(baselineFetchResults + 1, actualFetchResults); // Driver refreshed link
 }
 ```
 
@@ -465,7 +442,7 @@ When contributing:
 
 1. **Test Specifications**: Follow template in design doc, keep language-agnostic
 2. **Proxy Scenarios**: Add to `mitmproxy_addon.py` with JIRA reference if based on real issue
-3. **C# Tests**: Inherit from `ProxyTestBase`, follow Step 1/2/3 pattern with direct assertions
+3. **C# Tests**: Inherit from `ProxyTestBase`, use baseline comparison pattern
 4. **Documentation**: Update this README and proxy README as needed
 
 ## References
