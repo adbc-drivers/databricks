@@ -78,11 +78,51 @@ func (c *connectionImpl) SetAutocommit(autocommit bool) error {
 
 // CurrentNamespacer interface implementation
 func (c *connectionImpl) GetCurrentCatalog() (string, error) {
-	return c.catalog, nil
+	if c.catalog != "" {
+		return c.catalog, nil
+	}
+
+	if c.conn == nil {
+		return "", adbc.Error{
+			Code: adbc.StatusInvalidState,
+			Msg:  "connection is nil",
+		}
+	}
+
+	var catalog string
+	err := c.conn.QueryRowContext(context.Background(), "SELECT current_catalog()").Scan(&catalog)
+	if err != nil {
+		return "", adbc.Error{
+			Code: adbc.StatusInternal,
+			Msg:  fmt.Sprintf("failed to get current catalog: %v", err),
+		}
+	}
+
+	return catalog, nil
 }
 
 func (c *connectionImpl) GetCurrentDbSchema() (string, error) {
-	return c.dbSchema, nil
+	if c.dbSchema != "" {
+		return c.dbSchema, nil
+	}
+
+	if c.conn == nil {
+		return "", adbc.Error{
+			Code: adbc.StatusInvalidState,
+			Msg:  "connection is nil",
+		}
+	}
+
+	var schema string
+	err := c.conn.QueryRowContext(context.Background(), "SELECT current_schema()").Scan(&schema)
+	if err != nil {
+		return "", adbc.Error{
+			Code: adbc.StatusInternal,
+			Msg:  fmt.Sprintf("failed to get current schema: %v", err),
+		}
+	}
+
+	return schema, nil
 }
 
 func (c *connectionImpl) SetCurrentCatalog(catalog string) error {
@@ -161,6 +201,7 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 
 // DbObjectsEnumerator interface implementation
 func (c *connectionImpl) GetCatalogs(ctx context.Context, catalogFilter *string) (catalogs []string, err error) {
+	catalogs = []string{}
 	query := "SHOW CATALOGS"
 	if catalogFilter != nil {
 		escapedFilter := strings.ReplaceAll(*catalogFilter, "'", "''")
@@ -193,6 +234,7 @@ func (c *connectionImpl) GetCatalogs(ctx context.Context, catalogFilter *string)
 }
 
 func (c *connectionImpl) GetDBSchemasForCatalog(ctx context.Context, catalog string, schemaFilter *string) (schemas []string, err error) {
+	schemas = []string{}
 	escapedCatalog := strings.ReplaceAll(catalog, "`", "``")
 	query := fmt.Sprintf("SHOW SCHEMAS IN `%s`", escapedCatalog)
 	if schemaFilter != nil {
@@ -227,6 +269,11 @@ func (c *connectionImpl) GetDBSchemasForCatalog(ctx context.Context, catalog str
 }
 
 func (c *connectionImpl) GetTablesForDBSchema(ctx context.Context, catalog string, schema string, tableFilter *string, columnFilter *string, includeColumns bool) (tables []driverbase.TableInfo, err error) {
+	if includeColumns {
+		return c.getTablesWithColumns(ctx, catalog, schema, tableFilter, columnFilter)
+	}
+
+	tables = []driverbase.TableInfo{}
 	escapedCatalog := strings.ReplaceAll(catalog, "`", "``")
 	escapedSchema := strings.ReplaceAll(schema, "`", "``")
 	query := fmt.Sprintf("SHOW TABLES IN `%s`.`%s`", escapedCatalog, escapedSchema)
@@ -258,11 +305,103 @@ func (c *connectionImpl) GetTablesForDBSchema(ctx context.Context, catalog strin
 		tableInfo := driverbase.TableInfo{
 			TableName:        tableName,
 			TableType:        "TABLE", // Default to TABLE, could be improved with more detailed queries
-			TableColumns:     nil,     // Schema would need separate query
-			TableConstraints: nil,     // Constraints would need separate query
+			TableColumns:     []driverbase.ColumnInfo{},
+			TableConstraints: []driverbase.ConstraintInfo{},
 		}
 
 		tables = append(tables, tableInfo)
+	}
+
+	return tables, errors.Join(err, rows.Err())
+}
+
+// getTablesWithColumns retrieves complete table and column information using INFORMATION_SCHEMA
+func (c *connectionImpl) getTablesWithColumns(ctx context.Context, catalog string, schema string, tableFilter *string, columnFilter *string) (tables []driverbase.TableInfo, err error) {
+	tables = []driverbase.TableInfo{}
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("SELECT DISTINCT c.TABLE_NAME, c.ordinal_position, c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE FROM ")
+	queryBuilder.WriteString(quoteIdentifier(catalog))
+	queryBuilder.WriteString(".information_schema.COLUMNS c WHERE c.TABLE_SCHEMA = ")
+	queryBuilder.WriteString(quoteString(schema))
+
+	if tableFilter != nil {
+		queryBuilder.WriteString(" AND c.TABLE_NAME LIKE ")
+		queryBuilder.WriteString(quoteString(*tableFilter))
+	}
+	if columnFilter != nil {
+		queryBuilder.WriteString(" AND c.COLUMN_NAME LIKE ")
+		queryBuilder.WriteString(quoteString(*columnFilter))
+	}
+
+	queryBuilder.WriteString(" ORDER BY c.TABLE_NAME, c.ordinal_position")
+
+	rows, err := c.conn.QueryContext(ctx, queryBuilder.String())
+	if err != nil {
+		return nil, adbc.Error{
+			Code: adbc.StatusInternal,
+			Msg:  fmt.Sprintf("failed to query tables with columns: %v", err),
+		}
+	}
+	defer func() {
+		err = errors.Join(err, rows.Close())
+	}()
+
+	var currentTable *driverbase.TableInfo
+
+	for rows.Next() {
+		var tableName, columnName, dataType, isNullable string
+		var ordinalPosition sql.NullInt32
+
+		if err := rows.Scan(
+			&tableName,
+			&ordinalPosition, &columnName,
+			&dataType, &isNullable,
+		); err != nil {
+			return nil, adbc.Error{
+				Code: adbc.StatusInternal,
+				Msg:  fmt.Sprintf("failed to scan table with columns: %v", err),
+			}
+		}
+
+		// Check if we need to create a new table entry
+		if currentTable == nil || currentTable.TableName != tableName {
+			tables = append(tables, driverbase.TableInfo{
+				TableName:        tableName,
+				TableType:        "TABLE",
+				TableColumns:     []driverbase.ColumnInfo{},
+				TableConstraints: []driverbase.ConstraintInfo{},
+			})
+			currentTable = &tables[len(tables)-1]
+		}
+
+		var nullable *int16
+		var isNullablePtr *string
+		switch isNullable {
+		case "YES":
+			n := int16(driverbase.XdbcColumnNullable)
+			nullable = &n
+			isNullablePtr = &isNullable
+		case "NO":
+			n := int16(driverbase.XdbcColumnNoNulls)
+			nullable = &n
+			isNullablePtr = &isNullable
+		}
+
+		columnInfo := driverbase.ColumnInfo{
+			ColumnName:     columnName,
+			XdbcTypeName:   &dataType,
+			XdbcNullable:   nullable,
+			XdbcIsNullable: isNullablePtr,
+		}
+
+		if ordinalPosition.Valid {
+			// Databricks uses 0-based indexing
+			pos := ordinalPosition.Int32 + 1
+			columnInfo.OrdinalPosition = &pos
+		}
+
+		currentTable.TableColumns = append(currentTable.TableColumns, columnInfo)
 	}
 
 	return tables, errors.Join(err, rows.Err())
@@ -292,4 +431,9 @@ func (c *connectionImpl) PrepareDriverInfo(ctx context.Context, infoCodes []adbc
 	}
 
 	return c.DriverInfo.RegisterInfoCode(adbc.InfoVendorVersion, version)
+}
+
+// quoteString escapes string literals using single quotes
+func quoteString(value string) string {
+	return fmt.Sprintf("'%s'", strings.ReplaceAll(value, "'", "''"))
 }
