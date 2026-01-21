@@ -28,6 +28,20 @@ This document outlines the sprint plan for implementing Activity-based telemetry
 - **StatementExecutionConnection**: Uses `System.Diagnostics.Activity` and `ActivityEvent` for session lifecycle tracing
 - **TelemetryTests.cs**: Basic test class exists, inherits from common test infrastructure
 
+### Implementation Status (Verified from Code)
+
+| Work Item | Status | Location |
+|-----------|--------|----------|
+| WI-1.1: TelemetryConfiguration | ✅ **COMPLETED** | `src/Telemetry/TelemetryConfiguration.cs` |
+| WI-1.1 Tests | ✅ **COMPLETED** | `test/Unit/Telemetry/TelemetryConfigurationTests.cs` |
+| WI-1.2: Tag Definition System | ❌ NOT STARTED | - |
+| WI-1.3: ExceptionClassifier | ❌ NOT STARTED | - |
+| WI-2.x: Per-Host Management | ❌ NOT STARTED | - |
+| WI-3.x: Circuit Breaker | ❌ NOT STARTED | - |
+| WI-5.x: Core Components | ❌ NOT STARTED | - |
+| WI-6.x: Integration | ❌ NOT STARTED | - |
+| WI-7.x: E2E Tests | ❌ NOT STARTED | Only stub class exists |
+
 ### What Needs to Be Built
 All telemetry components from the design document need to be implemented from scratch:
 - Feature flag cache and per-host management
@@ -35,12 +49,26 @@ All telemetry components from the design document need to be implemented from sc
 - Activity listener for metrics collection
 - Metrics aggregator with statement-level aggregation
 - Telemetry exporter for Databricks service
+- Data models (TelemetryEvent, TelemetryFrontendLog, TelemetryRequest)
 
 ---
 
 ## Sprint Goal
 
 Implement the core telemetry infrastructure including feature flag management, per-host client management, circuit breaker, and basic metrics collection/export for connection and statement events.
+
+**Key Milestones:**
+1. **Phase 1**: Foundation (Configuration ✅, Tag Definitions)
+2. **Phase 2**: Data Models + Exporter (combined for iterative validation)
+3. **Phase 3**: Exception Handling
+4. **Phase 4**: Circuit Breaker
+5. **Phase 5**: Per-Host Management
+6. **Phase 6**: Core Components (Aggregator, Listener, TelemetryClient)
+7. **Phase 7**: 🚧 **E2E GATE** - All dedicated E2E tests MUST pass before proceeding
+8. **Phase 8**: Integration with DatabricksConnection
+9. **Phase 9**: Full Integration E2E Tests
+
+**Data Model Update:** This sprint uses the JDBC-compatible data model (`TelemetryRequest`, `TelemetryFrontendLog`, `TelemetryEvent`) instead of the original `TelemetryMetric` to ensure backend compatibility.
 
 ---
 
@@ -92,6 +120,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-1.2: Tag Definition System
 **Description**: Create centralized tag definitions with export scope annotations.
 
+**Status**: ❌ **NOT STARTED**
+
 **Location**: `csharp/src/Telemetry/TagDefinitions/`
 
 **Files**:
@@ -120,138 +150,68 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
-### Phase 2: Per-Host Management
+### Phase 2: Data Models + Exporter (Combined)
 
-#### WI-2.1: FeatureFlagCache
-**Description**: Singleton that caches feature flags per host with reference counting.
+> **Priority**: Implement data models and exporter together to validate the JSON format against the real Databricks endpoint. This enables early E2E testing and iteration on the data model until it matches what the backend expects.
 
-**Location**: `csharp/src/Telemetry/FeatureFlagCache.cs`
+#### WI-2.1: Telemetry Data Models & Exporter
+**Description**: Data models for telemetry following JDBC driver format, combined with the HTTP exporter to validate the format against real endpoints.
 
-**Input**:
-- Host string
-- HttpClient for API calls
+**Status**: ❌ **NOT STARTED**
 
-**Output**:
-- Boolean indicating if telemetry is enabled for the host
-- Reference counting for cleanup
+**Location**:
+- `csharp/src/Telemetry/Models/` - Data model classes
+- `csharp/src/Telemetry/DatabricksTelemetryExporter.cs` - HTTP exporter
 
-**Test Expectations**:
+**Data Model Files**:
+- `TelemetryRequest.cs` - Top-level wrapper with uploadTime and protoLogs array
+- `TelemetryFrontendLog.cs` - Individual log entry with workspace_id, context, entry
+- `TelemetryEvent.cs` - Core telemetry data (session_id, statement_id, system_configuration, etc.)
+- `FrontendLogContext.cs` - Context wrapper
+- `TelemetryClientContext.cs` - Client context (timestamp, user_agent)
+- `FrontendLogEntry.cs` - Entry wrapper (contains sql_driver_log)
+- `DriverSystemConfiguration.cs` - Driver and system info
+- `DriverConnectionParameters.cs` - Connection parameters
+- `SqlExecutionEvent.cs` - Statement execution details
+- `DriverErrorInfo.cs` - Error information
 
-| Test Type | Test Name | Input | Expected Output |
-|-----------|-----------|-------|-----------------|
-| Unit | `FeatureFlagCache_GetOrCreateContext_NewHost_CreatesContext` | "host1.databricks.com" | New context with RefCount=1 |
-| Unit | `FeatureFlagCache_GetOrCreateContext_ExistingHost_IncrementsRefCount` | Same host twice | RefCount=2 for single context |
-| Unit | `FeatureFlagCache_ReleaseContext_LastReference_RemovesContext` | Single reference, then release | Context removed from cache |
-| Unit | `FeatureFlagCache_ReleaseContext_MultipleReferences_DecrementsOnly` | Two references, release one | RefCount=1, context still exists |
-| Unit | `FeatureFlagCache_IsTelemetryEnabledAsync_CachedValue_DoesNotFetch` | Pre-cached enabled=true | Returns true without HTTP call |
-| Unit | `FeatureFlagCache_IsTelemetryEnabledAsync_ExpiredCache_RefetchesValue` | Cached value older than 15 minutes | Makes HTTP call to refresh |
-| Integration | `FeatureFlagCache_IsTelemetryEnabledAsync_FetchesFromServer` | Live Databricks host | Returns boolean from feature flag endpoint |
-
----
-
-#### WI-2.2: TelemetryClientManager
-**Description**: Singleton that manages one telemetry client per host with reference counting.
-
-**Location**: `csharp/src/Telemetry/TelemetryClientManager.cs`
-
-**Input**:
-- Host string
-- HttpClient
-- TelemetryConfiguration
-
-**Output**:
-- Shared ITelemetryClient instance per host
-- Reference counting for cleanup
+**Exporter Responsibilities**:
+- Creates TelemetryRequest wrapper with uploadTime and protoLogs array
+- JSON serializes each TelemetryFrontendLog and adds to protoLogs
+- HTTP POST to `/telemetry-ext` (authenticated) or `/telemetry-unauth` (unauthenticated)
+- Retry logic for transient failures
 
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `TelemetryClientManager_GetOrCreateClient_NewHost_CreatesClient` | "host1.databricks.com" | New client with RefCount=1 |
-| Unit | `TelemetryClientManager_GetOrCreateClient_ExistingHost_ReturnsSameClient` | Same host twice | Same client instance, RefCount=2 |
-| Unit | `TelemetryClientManager_ReleaseClientAsync_LastReference_ClosesClient` | Single reference, then release | Client.CloseAsync() called, removed from cache |
-| Unit | `TelemetryClientManager_ReleaseClientAsync_MultipleReferences_KeepsClient` | Two references, release one | RefCount=1, client still active |
-| Unit | `TelemetryClientManager_GetOrCreateClient_ThreadSafe_NoDuplicates` | Concurrent calls from 10 threads | Single client instance created |
+| Unit | `TelemetryRequest_Serialization_ProducesValidJson` | Populated request | Valid JSON with uploadTime and protoLogs |
+| Unit | `TelemetryFrontendLog_Serialization_MatchesJdbcFormat` | Populated log | JSON matching JDBC driver format |
+| Unit | `TelemetryEvent_Serialization_OmitsNullFields` | Event with null optional fields | JSON without null fields |
+| Unit | `TelemetryRequest_ProtoLogs_ContainsSerializedStrings` | Multiple events | protoLogs array contains JSON strings |
+| Unit | `DatabricksTelemetryExporter_ExportAsync_Authenticated_UsesCorrectEndpoint` | Events, authenticated client | POST to /telemetry-ext |
+| Unit | `DatabricksTelemetryExporter_ExportAsync_Unauthenticated_UsesCorrectEndpoint` | Events, unauthenticated client | POST to /telemetry-unauth |
+| Unit | `DatabricksTelemetryExporter_ExportAsync_Success_ReturnsWithoutError` | Valid events, 200 response | Completes without exception |
+| Unit | `DatabricksTelemetryExporter_ExportAsync_TransientFailure_Retries` | 503 then 200 | Retries and succeeds |
+| Unit | `DatabricksTelemetryExporter_ExportAsync_MaxRetries_DoesNotThrow` | Continuous 503 | Completes without exception (swallowed) |
+| **E2E** | `TelemetryExporter_ExportAsync_RealEndpoint_ReturnsSuccess` | Valid TelemetryRequest | HTTP 200 from real endpoint |
+| **E2E** | `TelemetryExporter_ExportAsync_ProtoLogsFormat_MatchesJdbcDriver` | TelemetryFrontendLog | Request body accepted by backend |
+
+**Development Approach**:
+1. Start with minimal data model based on JDBC driver format
+2. Implement exporter with basic HTTP POST
+3. Run E2E test against real endpoint
+4. Iterate on data model until backend accepts the payload
+5. Add remaining fields once basic format is validated
 
 ---
 
-### Phase 3: Circuit Breaker
+### Phase 3: Exception Handling
 
-#### WI-3.1: CircuitBreaker
-**Description**: Implements circuit breaker pattern with three states (Closed, Open, Half-Open).
-
-**Location**: `csharp/src/Telemetry/CircuitBreaker.cs`
-
-**Input**:
-- Async action to execute
-- Circuit breaker configuration (failure threshold, timeout, success threshold)
-
-**Output**:
-- Execution result or CircuitBreakerOpenException
-- State transitions logged at DEBUG level
-
-**Test Expectations**:
-
-| Test Type | Test Name | Input | Expected Output |
-|-----------|-----------|-------|-----------------|
-| Unit | `CircuitBreaker_Closed_SuccessfulExecution_StaysClosed` | Successful action | Executes action, state=Closed |
-| Unit | `CircuitBreaker_Closed_FailuresBelowThreshold_StaysClosed` | 4 failures (threshold=5) | Executes actions, state=Closed |
-| Unit | `CircuitBreaker_Closed_FailuresAtThreshold_TransitionsToOpen` | 5 failures (threshold=5) | state=Open |
-| Unit | `CircuitBreaker_Open_RejectsRequests_ThrowsException` | Action when Open | CircuitBreakerOpenException |
-| Unit | `CircuitBreaker_Open_AfterTimeout_TransitionsToHalfOpen` | Wait for timeout period | state=HalfOpen |
-| Unit | `CircuitBreaker_HalfOpen_Success_TransitionsToClosed` | Successful action in HalfOpen | state=Closed |
-| Unit | `CircuitBreaker_HalfOpen_Failure_TransitionsToOpen` | Failed action in HalfOpen | state=Open |
-
----
-
-#### WI-3.2: CircuitBreakerManager
-**Description**: Singleton that manages circuit breakers per host.
-
-**Location**: `csharp/src/Telemetry/CircuitBreakerManager.cs`
-
-**Input**:
-- Host string
-
-**Output**:
-- CircuitBreaker instance for the host
-
-**Test Expectations**:
-
-| Test Type | Test Name | Input | Expected Output |
-|-----------|-----------|-------|-----------------|
-| Unit | `CircuitBreakerManager_GetCircuitBreaker_NewHost_CreatesBreaker` | "host1.databricks.com" | New CircuitBreaker instance |
-| Unit | `CircuitBreakerManager_GetCircuitBreaker_SameHost_ReturnsSameBreaker` | Same host twice | Same CircuitBreaker instance |
-| Unit | `CircuitBreakerManager_GetCircuitBreaker_DifferentHosts_CreatesSeparateBreakers` | "host1", "host2" | Different CircuitBreaker instances |
-
----
-
-#### WI-3.3: CircuitBreakerTelemetryExporter
-**Description**: Wrapper that protects telemetry exporter with circuit breaker.
-
-**Location**: `csharp/src/Telemetry/CircuitBreakerTelemetryExporter.cs`
-
-**Input**:
-- Host string
-- Inner ITelemetryExporter
-
-**Output**:
-- Exports metrics when circuit is closed
-- Drops metrics when circuit is open (logged at DEBUG)
-
-**Test Expectations**:
-
-| Test Type | Test Name | Input | Expected Output |
-|-----------|-----------|-------|-----------------|
-| Unit | `CircuitBreakerTelemetryExporter_CircuitClosed_ExportsMetrics` | Metrics list, circuit closed | Inner exporter called |
-| Unit | `CircuitBreakerTelemetryExporter_CircuitOpen_DropsMetrics` | Metrics list, circuit open | No export, no exception |
-| Unit | `CircuitBreakerTelemetryExporter_InnerExporterFails_CircuitBreakerTracksFailure` | Inner exporter throws | Circuit breaker failure count incremented |
-
----
-
-### Phase 4: Exception Handling
-
-#### WI-4.1: ExceptionClassifier
+#### WI-3.1: ExceptionClassifier
 **Description**: Classifies exceptions as terminal or retryable.
+
+**Status**: ❌ **NOT STARTED**
 
 **Location**: `csharp/src/Telemetry/ExceptionClassifier.cs`
 
@@ -278,58 +238,149 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
-### Phase 5: Core Telemetry Components
+### Phase 4: Circuit Breaker
 
-#### WI-5.1: TelemetryMetric Data Model
-**Description**: Data model for aggregated telemetry metrics.
+#### WI-4.1: CircuitBreaker
+**Description**: Implements circuit breaker pattern with three states (Closed, Open, Half-Open).
 
-**Location**: `csharp/src/Telemetry/TelemetryMetric.cs`
+**Status**: ❌ **NOT STARTED**
 
-**Fields**:
-- MetricType (connection, statement, error)
-- Timestamp, WorkspaceId
-- SessionId, StatementId
-- ExecutionLatencyMs, ResultFormat, ChunkCount, TotalBytesDownloaded, PollCount
-- DriverConfiguration
+**Location**: `csharp/src/Telemetry/CircuitBreaker.cs`
+
+**Input**:
+- Async action to execute
+- Circuit breaker configuration (failure threshold, timeout, success threshold)
+
+**Output**:
+- Execution result or CircuitBreakerOpenException
+- State transitions logged at DEBUG level
 
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `TelemetryMetric_Serialization_ProducesValidJson` | Populated metric | Valid JSON matching Databricks schema |
-| Unit | `TelemetryMetric_Serialization_OmitsNullFields` | Metric with null optional fields | JSON without null fields |
+| Unit | `CircuitBreaker_Closed_SuccessfulExecution_StaysClosed` | Successful action | Executes action, state=Closed |
+| Unit | `CircuitBreaker_Closed_FailuresBelowThreshold_StaysClosed` | 4 failures (threshold=5) | Executes actions, state=Closed |
+| Unit | `CircuitBreaker_Closed_FailuresAtThreshold_TransitionsToOpen` | 5 failures (threshold=5) | state=Open |
+| Unit | `CircuitBreaker_Open_RejectsRequests_ThrowsException` | Action when Open | CircuitBreakerOpenException |
+| Unit | `CircuitBreaker_Open_AfterTimeout_TransitionsToHalfOpen` | Wait for timeout period | state=HalfOpen |
+| Unit | `CircuitBreaker_HalfOpen_Success_TransitionsToClosed` | Successful action in HalfOpen | state=Closed |
+| Unit | `CircuitBreaker_HalfOpen_Failure_TransitionsToOpen` | Failed action in HalfOpen | state=Open |
 
 ---
 
-#### WI-5.2: DatabricksTelemetryExporter
-**Description**: Exports metrics to Databricks telemetry service via HTTP POST.
+#### WI-4.2: CircuitBreakerManager
+**Description**: Singleton that manages circuit breakers per host.
 
-**Location**: `csharp/src/Telemetry/DatabricksTelemetryExporter.cs`
+**Status**: ❌ **NOT STARTED**
+
+**Location**: `csharp/src/Telemetry/CircuitBreakerManager.cs`
 
 **Input**:
-- List of TelemetryMetric
+- Host string
+
+**Output**:
+- CircuitBreaker instance for the host
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| Unit | `CircuitBreakerManager_GetCircuitBreaker_NewHost_CreatesBreaker` | "host1.databricks.com" | New CircuitBreaker instance |
+| Unit | `CircuitBreakerManager_GetCircuitBreaker_SameHost_ReturnsSameBreaker` | Same host twice | Same CircuitBreaker instance |
+| Unit | `CircuitBreakerManager_GetCircuitBreaker_DifferentHosts_CreatesSeparateBreakers` | "host1", "host2" | Different CircuitBreaker instances |
+
+---
+
+#### WI-4.3: CircuitBreakerTelemetryExporter
+**Description**: Wrapper that protects telemetry exporter with circuit breaker.
+
+**Status**: ❌ **NOT STARTED**
+
+**Location**: `csharp/src/Telemetry/CircuitBreakerTelemetryExporter.cs`
+
+**Input**:
+- Host string
+- Inner ITelemetryExporter
+
+**Output**:
+- Exports events when circuit is closed
+- Drops events when circuit is open (logged at DEBUG)
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| Unit | `CircuitBreakerTelemetryExporter_CircuitClosed_ExportsEvents` | Events list, circuit closed | Inner exporter called |
+| Unit | `CircuitBreakerTelemetryExporter_CircuitOpen_DropsEvents` | Events list, circuit open | No export, no exception |
+| Unit | `CircuitBreakerTelemetryExporter_InnerExporterFails_CircuitBreakerTracksFailure` | Inner exporter throws | Circuit breaker failure count incremented |
+
+---
+
+### Phase 5: Per-Host Management
+
+#### WI-5.1: FeatureFlagCache
+**Description**: Singleton that caches feature flags per host with reference counting.
+
+**Status**: ❌ **NOT STARTED**
+
+**Location**: `csharp/src/Telemetry/FeatureFlagCache.cs`
+
+**Input**:
+- Host string
+- HttpClient for API calls
+
+**Output**:
+- Boolean indicating if telemetry is enabled for the host
+- Reference counting for cleanup
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| Unit | `FeatureFlagCache_GetOrCreateContext_NewHost_CreatesContext` | "host1.databricks.com" | New context with RefCount=1 |
+| Unit | `FeatureFlagCache_GetOrCreateContext_ExistingHost_IncrementsRefCount` | Same host twice | RefCount=2 for single context |
+| Unit | `FeatureFlagCache_ReleaseContext_LastReference_RemovesContext` | Single reference, then release | Context removed from cache |
+| Unit | `FeatureFlagCache_ReleaseContext_MultipleReferences_DecrementsOnly` | Two references, release one | RefCount=1, context still exists |
+| Unit | `FeatureFlagCache_IsTelemetryEnabledAsync_CachedValue_DoesNotFetch` | Pre-cached enabled=true | Returns true without HTTP call |
+| Unit | `FeatureFlagCache_IsTelemetryEnabledAsync_ExpiredCache_RefetchesValue` | Cached value older than 15 minutes | Makes HTTP call to refresh |
+
+---
+
+#### WI-5.2: TelemetryClientManager
+**Description**: Singleton that manages one telemetry client per host with reference counting.
+
+**Status**: ❌ **NOT STARTED**
+
+**Location**: `csharp/src/Telemetry/TelemetryClientManager.cs`
+
+**Input**:
+- Host string
 - HttpClient
 - TelemetryConfiguration
 
 **Output**:
-- HTTP POST to `/telemetry-ext` (authenticated) or `/telemetry-unauth` (unauthenticated)
-- Retry logic for transient failures
+- Shared ITelemetryClient instance per host
+- Reference counting for cleanup
 
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `DatabricksTelemetryExporter_ExportAsync_Authenticated_UsesCorrectEndpoint` | Metrics, authenticated client | POST to /telemetry-ext |
-| Unit | `DatabricksTelemetryExporter_ExportAsync_Unauthenticated_UsesCorrectEndpoint` | Metrics, unauthenticated client | POST to /telemetry-unauth |
-| Unit | `DatabricksTelemetryExporter_ExportAsync_Success_ReturnsWithoutError` | Valid metrics, 200 response | Completes without exception |
-| Unit | `DatabricksTelemetryExporter_ExportAsync_TransientFailure_Retries` | 503 then 200 | Retries and succeeds |
-| Unit | `DatabricksTelemetryExporter_ExportAsync_MaxRetries_DoesNotThrow` | Continuous 503 | Completes without exception (swallowed) |
-| Integration | `DatabricksTelemetryExporter_ExportAsync_RealEndpoint_Succeeds` | Live Databricks endpoint | Successfully exports |
+| Unit | `TelemetryClientManager_GetOrCreateClient_NewHost_CreatesClient` | "host1.databricks.com" | New client with RefCount=1 |
+| Unit | `TelemetryClientManager_GetOrCreateClient_ExistingHost_ReturnsSameClient` | Same host twice | Same client instance, RefCount=2 |
+| Unit | `TelemetryClientManager_ReleaseClientAsync_LastReference_ClosesClient` | Single reference, then release | Client.CloseAsync() called, removed from cache |
+| Unit | `TelemetryClientManager_ReleaseClientAsync_MultipleReferences_KeepsClient` | Two references, release one | RefCount=1, client still active |
+| Unit | `TelemetryClientManager_GetOrCreateClient_ThreadSafe_NoDuplicates` | Concurrent calls from 10 threads | Single client instance created |
 
 ---
 
-#### WI-5.3: MetricsAggregator
-**Description**: Aggregates Activity data by statement_id, handles exception buffering.
+### Phase 6: Core Telemetry Components
+
+#### WI-6.1: MetricsAggregator
+**Description**: Aggregates Activity data by statement_id, handles exception buffering, creates TelemetryEvent objects.
+
+**Status**: ❌ **NOT STARTED**
 
 **Location**: `csharp/src/Telemetry/MetricsAggregator.cs`
 
@@ -338,27 +389,30 @@ Implement the core telemetry infrastructure including feature flag management, p
 - ITelemetryExporter for flushing
 
 **Output**:
-- Aggregated TelemetryMetric per statement
+- Aggregated TelemetryEvent per statement
 - Batched flush on threshold or interval
 
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `MetricsAggregator_ProcessActivity_ConnectionOpen_EmitsImmediately` | Connection.Open activity | Metric queued for export |
-| Unit | `MetricsAggregator_ProcessActivity_Statement_AggregatesByStatementId` | Multiple activities with same statement_id | Single aggregated metric |
-| Unit | `MetricsAggregator_CompleteStatement_EmitsAggregatedMetric` | Call CompleteStatement() | Queues aggregated metric |
-| Unit | `MetricsAggregator_FlushAsync_BatchSizeReached_ExportsMetrics` | 100 metrics (batch size) | Calls exporter |
-| Unit | `MetricsAggregator_FlushAsync_TimeInterval_ExportsMetrics` | Wait 5 seconds | Calls exporter |
-| Unit | `MetricsAggregator_RecordException_Terminal_FlushesImmediately` | Terminal exception | Immediately exports error metric |
+| Unit | `MetricsAggregator_ProcessActivity_ConnectionOpen_EmitsImmediately` | Connection.Open activity | TelemetryEvent queued for export |
+| Unit | `MetricsAggregator_ProcessActivity_Statement_AggregatesByStatementId` | Multiple activities with same statement_id | Single aggregated TelemetryEvent |
+| Unit | `MetricsAggregator_CompleteStatement_EmitsAggregatedEvent` | Call CompleteStatement() | Queues aggregated TelemetryEvent |
+| Unit | `MetricsAggregator_FlushAsync_BatchSizeReached_ExportsEvents` | 100 events (batch size) | Calls exporter |
+| Unit | `MetricsAggregator_FlushAsync_TimeInterval_ExportsEvents` | Wait 5 seconds | Calls exporter |
+| Unit | `MetricsAggregator_RecordException_Terminal_FlushesImmediately` | Terminal exception | Immediately exports error event |
 | Unit | `MetricsAggregator_RecordException_Retryable_BuffersUntilComplete` | Retryable exception | Buffers, exports on CompleteStatement |
 | Unit | `MetricsAggregator_ProcessActivity_ExceptionSwallowed_NoThrow` | Activity processing throws | No exception propagated |
-| Unit | `MetricsAggregator_ProcessActivity_FiltersTags_UsingRegistry` | Activity with sensitive tags | Only safe tags in metric |
+| Unit | `MetricsAggregator_ProcessActivity_FiltersTags_UsingRegistry` | Activity with sensitive tags | Only safe tags in TelemetryEvent |
+| Unit | `MetricsAggregator_WrapInFrontendLog_CreatesValidStructure` | TelemetryEvent | TelemetryFrontendLog with correct workspace_id, context, entry |
 
 ---
 
-#### WI-5.4: DatabricksActivityListener
+#### WI-6.2: DatabricksActivityListener
 **Description**: Listens to Activity events and delegates to MetricsAggregator.
+
+**Status**: ❌ **NOT STARTED**
 
 **Location**: `csharp/src/Telemetry/DatabricksActivityListener.cs`
 
@@ -384,8 +438,10 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
-#### WI-5.5: TelemetryClient
+#### WI-6.3: TelemetryClient
 **Description**: Main telemetry client that coordinates listener, aggregator, and exporter.
+
+**Status**: ❌ **NOT STARTED**
 
 **Location**: `csharp/src/Telemetry/TelemetryClient.cs`
 
@@ -402,16 +458,80 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
 | Unit | `TelemetryClient_Constructor_InitializesComponents` | Valid config | Listener, aggregator, exporter created |
-| Unit | `TelemetryClient_ExportAsync_DelegatesToExporter` | Metrics list | CircuitBreakerTelemetryExporter.ExportAsync called |
-| Unit | `TelemetryClient_CloseAsync_FlushesAndCancels` | N/A | Pending metrics flushed, background task cancelled |
+| Unit | `TelemetryClient_ExportAsync_DelegatesToExporter` | Events list | CircuitBreakerTelemetryExporter.ExportAsync called |
+| Unit | `TelemetryClient_CloseAsync_FlushesAndCancels` | N/A | Pending events flushed, background task cancelled |
 | Unit | `TelemetryClient_CloseAsync_ExceptionSwallowed` | Flush throws | No exception propagated |
 
 ---
 
-### Phase 6: Integration
+### Phase 7: 🚧 E2E GATE - Dedicated Telemetry E2E Tests
 
-#### WI-6.1: DatabricksConnection Telemetry Integration
+> **CRITICAL**: All E2E tests in this phase MUST pass before proceeding to Phase 8 (Integration). This ensures the telemetry components work correctly in isolation before integrating with the main driver workflow.
+
+#### WI-7.1: TelemetryClient Standalone E2E Tests
+**Description**: End-to-end tests for the TelemetryClient in isolation, without full driver integration.
+
+**Status**: ❌ **NOT STARTED**
+
+**Location**: `csharp/test/E2E/Telemetry/TelemetryClientE2ETests.cs`
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| E2E | `TelemetryClient_ExportSingleEvent_SucceedsAgainstRealEndpoint` | Single TelemetryFrontendLog | HTTP 200 from telemetry endpoint |
+| E2E | `TelemetryClient_ExportBatch_SucceedsAgainstRealEndpoint` | Batch of 10 events | HTTP 200, all events exported |
+| E2E | `TelemetryClient_Authenticated_UsesCorrectEndpoint` | Authenticated HttpClient | Uses /telemetry-ext endpoint |
+| E2E | `TelemetryClient_CircuitBreaker_OpensAfterFailures` | Mock endpoint returning 500 | Circuit opens after threshold |
+| E2E | `TelemetryClient_CircuitBreaker_RecoverAfterTimeout` | Failed then healthy endpoint | Circuit closes after recovery |
+| E2E | `TelemetryClient_GracefulClose_FlushesAllPending` | Pending events, then close | All events exported before close completes |
+
+---
+
+#### WI-7.2: FeatureFlagCache E2E Tests
+**Description**: End-to-end tests for feature flag fetching from real Databricks endpoint.
+
+**Status**: ❌ **NOT STARTED**
+
+**Location**: `csharp/test/E2E/Telemetry/FeatureFlagCacheE2ETests.cs`
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| E2E | `FeatureFlagCache_FetchFromRealEndpoint_ReturnsBoolean` | Valid Databricks host | Returns true or false |
+| E2E | `FeatureFlagCache_CachesValue_DoesNotRefetchWithinTTL` | Same host twice | Only one HTTP call made |
+| E2E | `FeatureFlagCache_InvalidHost_ReturnsDefaultFalse` | Invalid host | Returns false (telemetry disabled) |
+| E2E | `FeatureFlagCache_RefCountingWorks_CleanupAfterRelease` | GetOrCreate then Release | Context removed when RefCount=0 |
+
+---
+
+#### WI-7.3: Per-Host Management E2E Tests
+**Description**: End-to-end tests for TelemetryClientManager per-host client sharing.
+
+**Status**: ❌ **NOT STARTED**
+
+**Location**: `csharp/test/E2E/Telemetry/TelemetryClientManagerE2ETests.cs`
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| E2E | `TelemetryClientManager_SameHost_ReturnsSameClient` | Two GetOrCreate for same host | Same ITelemetryClient instance |
+| E2E | `TelemetryClientManager_DifferentHosts_ReturnsDifferentClients` | GetOrCreate for host1, host2 | Different ITelemetryClient instances |
+| E2E | `TelemetryClientManager_LastRelease_ClosesClient` | Single GetOrCreate then Release | Client closed and removed |
+| E2E | `TelemetryClientManager_ConcurrentAccess_ThreadSafe` | 10 concurrent GetOrCreate calls | Single client created, RefCount=10 |
+
+---
+
+### Phase 8: Integration with DatabricksConnection
+
+> **Prerequisite**: All Phase 7 E2E GATE tests must pass before starting this phase.
+
+#### WI-8.1: DatabricksConnection Telemetry Integration
 **Description**: Integrate telemetry components into connection lifecycle.
+
+**Status**: ❌ **NOT STARTED**
 
 **Location**: Modify `csharp/src/DatabricksConnection.cs`
 
@@ -431,8 +551,10 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
-#### WI-6.2: Activity Tag Enhancement
+#### WI-8.2: Activity Tag Enhancement
 **Description**: Add telemetry-specific tags to existing driver activities.
+
+**Status**: ❌ **NOT STARTED**
 
 **Location**: Modify various files in `csharp/src/`
 
@@ -453,10 +575,12 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
-### Phase 7: End-to-End Testing
+### Phase 9: Full Integration End-to-End Testing
 
-#### WI-7.1: E2E Telemetry Tests
-**Description**: Comprehensive end-to-end tests for telemetry flow.
+#### WI-9.1: E2E Telemetry Tests (Full Integration)
+**Description**: Comprehensive end-to-end tests for telemetry flow integrated with DatabricksConnection.
+
+**Status**: ❌ **NOT STARTED**
 
 **Location**: `csharp/test/E2E/TelemetryTests.cs`
 
@@ -479,45 +603,66 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ```mermaid
 graph TD
-    WI_1_1[WI-1.1: TelemetryConfiguration] --> WI_2_1[WI-2.1: FeatureFlagCache]
-    WI_1_1 --> WI_2_2[WI-2.2: TelemetryClientManager]
-    WI_1_1 --> WI_3_1[WI-3.1: CircuitBreaker]
+    WI_1_1[WI-1.1: TelemetryConfiguration ✅] --> WI_2_1[WI-2.1: Data Models + Exporter]
+    WI_1_2[WI-1.2: Tag Definitions] --> WI_6_1[WI-6.1: MetricsAggregator]
 
-    WI_1_2[WI-1.2: Tag Definitions] --> WI_5_3[WI-5.3: MetricsAggregator]
+    WI_2_1 --> WI_2_1_E2E[Phase 2 E2E: Validate Format]
+    WI_2_1_E2E --> WI_3_1[WI-3.1: ExceptionClassifier]
 
-    WI_3_1 --> WI_3_2[WI-3.2: CircuitBreakerManager]
-    WI_3_2 --> WI_3_3[WI-3.3: CircuitBreakerTelemetryExporter]
+    WI_1_1 --> WI_4_1[WI-4.1: CircuitBreaker]
+    WI_4_1 --> WI_4_2[WI-4.2: CircuitBreakerManager]
+    WI_4_2 --> WI_4_3[WI-4.3: CircuitBreakerTelemetryExporter]
+    WI_2_1 --> WI_4_3
 
-    WI_4_1[WI-4.1: ExceptionClassifier] --> WI_5_3
+    WI_1_1 --> WI_5_1[WI-5.1: FeatureFlagCache]
+    WI_1_1 --> WI_5_2[WI-5.2: TelemetryClientManager]
 
-    WI_5_1[WI-5.1: TelemetryMetric] --> WI_5_2[WI-5.2: DatabricksTelemetryExporter]
-    WI_5_1 --> WI_5_3
+    WI_3_1 --> WI_6_1
+    WI_4_3 --> WI_6_1
+    WI_6_1 --> WI_6_2[WI-6.2: ActivityListener]
+    WI_6_2 --> WI_6_3[WI-6.3: TelemetryClient]
 
-    WI_5_2 --> WI_3_3
-    WI_3_3 --> WI_5_3
-    WI_5_3 --> WI_5_4[WI-5.4: DatabricksActivityListener]
-    WI_5_4 --> WI_5_5[WI-5.5: TelemetryClient]
+    WI_5_1 --> WI_7[Phase 7: 🚧 E2E GATE]
+    WI_5_2 --> WI_7
+    WI_6_3 --> WI_7
 
-    WI_2_1 --> WI_6_1[WI-6.1: Connection Integration]
-    WI_2_2 --> WI_6_1
-    WI_5_5 --> WI_6_1
+    WI_7 --> WI_8_1[WI-8.1: Connection Integration]
+    WI_7 --> WI_8_2[WI-8.2: Activity Tags]
 
-    WI_1_2 --> WI_6_2[WI-6.2: Activity Tag Enhancement]
+    WI_8_1 --> WI_9_1[WI-9.1: Full Integration E2E]
+    WI_8_2 --> WI_9_1
 
-    WI_6_1 --> WI_7_1[WI-7.1: E2E Tests]
-    WI_6_2 --> WI_7_1
+    style WI_1_1 fill:#90EE90
+    style WI_2_1_E2E fill:#87CEEB
+    style WI_7 fill:#FFD700
 ```
+
+**Legend:**
+- 🟢 Green: Completed
+- 🔵 Blue: Early E2E validation (Phase 2 - data model validation)
+- 🟡 Yellow: Critical path (Phase 7 E2E GATE - must pass before integration)
 
 ## File Structure
 
 ```
 csharp/src/
 ├── Telemetry/
-│   ├── TelemetryConfiguration.cs
+│   ├── TelemetryConfiguration.cs          ✅ COMPLETED
 │   ├── TelemetryClient.cs
-│   ├── TelemetryMetric.cs
 │   ├── ITelemetryClient.cs
 │   ├── ITelemetryExporter.cs
+│   │
+│   ├── Models/                            # NEW: Data models matching JDBC format
+│   │   ├── TelemetryRequest.cs            # Top-level wrapper with uploadTime, protoLogs
+│   │   ├── TelemetryFrontendLog.cs        # Individual log entry
+│   │   ├── TelemetryEvent.cs              # Core telemetry data (was TelemetryMetric)
+│   │   ├── FrontendLogContext.cs          # Context wrapper
+│   │   ├── TelemetryClientContext.cs      # Client context (timestamp, user_agent)
+│   │   ├── FrontendLogEntry.cs            # Entry wrapper (contains sql_driver_log)
+│   │   ├── DriverSystemConfiguration.cs   # Driver and system info
+│   │   ├── DriverConnectionParameters.cs  # Connection parameters
+│   │   ├── SqlExecutionEvent.cs           # Statement execution details
+│   │   └── DriverErrorInfo.cs             # Error information
 │   │
 │   ├── TagDefinitions/
 │   │   ├── TelemetryTag.cs
@@ -544,37 +689,48 @@ csharp/src/
 │   └── DatabricksTelemetryExporter.cs
 
 csharp/test/
-├── Telemetry/
-│   ├── TelemetryConfigurationTests.cs
-│   ├── TagDefinitions/
-│   │   └── TelemetryTagRegistryTests.cs
-│   ├── FeatureFlagCacheTests.cs
-│   ├── TelemetryClientManagerTests.cs
-│   ├── CircuitBreakerTests.cs
-│   ├── CircuitBreakerManagerTests.cs
-│   ├── ExceptionClassifierTests.cs
-│   ├── TelemetryMetricTests.cs
-│   ├── DatabricksTelemetryExporterTests.cs
-│   ├── MetricsAggregatorTests.cs
-│   └── DatabricksActivityListenerTests.cs
+├── Unit/
+│   └── Telemetry/
+│       ├── TelemetryConfigurationTests.cs  ✅ COMPLETED
+│       ├── Models/
+│       │   ├── TelemetryRequestTests.cs
+│       │   ├── TelemetryFrontendLogTests.cs
+│       │   └── TelemetryEventTests.cs
+│       ├── TagDefinitions/
+│       │   └── TelemetryTagRegistryTests.cs
+│       ├── FeatureFlagCacheTests.cs
+│       ├── TelemetryClientManagerTests.cs
+│       ├── CircuitBreakerTests.cs
+│       ├── CircuitBreakerManagerTests.cs
+│       ├── ExceptionClassifierTests.cs
+│       ├── DatabricksTelemetryExporterTests.cs
+│       ├── MetricsAggregatorTests.cs
+│       └── DatabricksActivityListenerTests.cs
 └── E2E/
-    └── TelemetryTests.cs (enhanced)
+    ├── Telemetry/                         # NEW: Dedicated E2E tests before integration
+    │   ├── TelemetryClientE2ETests.cs
+    │   ├── TelemetryExporterE2ETests.cs
+    │   ├── FeatureFlagCacheE2ETests.cs
+    │   └── TelemetryClientManagerE2ETests.cs
+    └── TelemetryTests.cs                  # Full integration tests
 ```
 
 ## Test Coverage Goals
 
-| Component | Unit Test Coverage Target | Integration/E2E Coverage Target |
-|-----------|---------------------------|--------------------------------|
-| TelemetryConfiguration | > 90% | N/A |
-| Tag Definitions | 100% | N/A |
-| FeatureFlagCache | > 90% | > 80% |
-| TelemetryClientManager | > 90% | > 80% |
-| CircuitBreaker | > 90% | > 80% |
-| ExceptionClassifier | 100% | N/A |
-| MetricsAggregator | > 90% | > 80% |
-| DatabricksActivityListener | > 90% | > 80% |
-| DatabricksTelemetryExporter | > 90% | > 80% |
-| Connection Integration | N/A | > 80% |
+| Component | Unit Test Coverage Target | E2E Gate (Phase 7) | Full Integration E2E (Phase 9) |
+|-----------|---------------------------|-------------------|-------------------------------|
+| TelemetryConfiguration | > 90% ✅ | N/A | N/A |
+| Data Models + Exporter (Phase 2) | > 90% | > 80% | N/A |
+| Tag Definitions | 100% | N/A | N/A |
+| ExceptionClassifier | 100% | N/A | N/A |
+| CircuitBreaker | > 90% | > 80% | N/A |
+| FeatureFlagCache | > 90% | > 80% | N/A |
+| TelemetryClientManager | > 90% | > 80% | N/A |
+| MetricsAggregator | > 90% | > 80% | N/A |
+| DatabricksActivityListener | > 90% | > 80% | N/A |
+| TelemetryClient (standalone) | > 90% | > 80% | N/A |
+| Connection Integration | N/A | N/A | > 80% |
+| Full Pipeline | N/A | N/A | > 80% |
 
 ## Risk Mitigation
 
@@ -593,12 +749,15 @@ csharp/test/
 ## Success Criteria
 
 1. All unit tests pass with > 90% code coverage
-2. All integration tests pass against live Databricks environment
-3. Performance overhead < 1% on query execution
-4. Zero exceptions propagated to driver operations
-5. Telemetry events successfully exported to Databricks service
-6. Circuit breaker correctly isolates failing endpoints
-7. Graceful shutdown flushes all pending metrics
+2. **Phase 2 E2E tests validate data model against real Databricks endpoint**
+3. **All Phase 7 E2E GATE tests pass before starting Phase 8 (Integration)**
+4. All Phase 9 full integration tests pass against live Databricks environment
+5. Performance overhead < 1% on query execution
+6. Zero exceptions propagated to driver operations
+7. Telemetry events successfully exported to Databricks service (JDBC-compatible format)
+8. Circuit breaker correctly isolates failing endpoints
+9. Graceful shutdown flushes all pending events
+10. Per-host client sharing works correctly for multiple connections
 
 ---
 
