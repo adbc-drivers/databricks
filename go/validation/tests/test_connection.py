@@ -157,6 +157,83 @@ class TestConnection(BaseTestConnection):
         assert list(sorted(set(tables))) == list(sorted(tables))
         assert table_id in tables
 
+    def test_get_objects_table_invalid_schema(
+        self,
+        conn: adbc_driver_manager.dbapi.Connection,
+        driver: model.DriverQuirks,
+        get_objects_table,
+    ) -> None:
+        table_id = get_objects_table
+        objects = (
+            conn.adbc_get_objects(
+                depth="tables",
+                catalog_filter=driver.features.current_catalog,
+                db_schema_filter="thiscatalogdoesnotexist",
+            )
+            .read_all()
+            .to_pylist()
+        )
+        tables = [
+            (obj["catalog_name"], schema["db_schema_name"], table["table_name"])
+            for obj in objects
+            for schema in obj["catalog_db_schemas"]
+            for table in schema["db_schema_tables"]
+        ]
+        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert table_id not in tables
+
+    def test_get_objects_table_invalid_table(
+        self,
+        conn: adbc_driver_manager.dbapi.Connection,
+        driver: model.DriverQuirks,
+        get_objects_table,
+    ) -> None:
+        table_id = get_objects_table
+        objects = (
+            conn.adbc_get_objects(
+                depth="tables",
+                catalog_filter=driver.features.current_catalog,
+                db_schema_filter=driver.features.current_schema,
+                table_name_filter="thiscatalogdoesnotexist",
+            )
+            .read_all()
+            .to_pylist()
+        )
+        tables = [
+            (obj["catalog_name"], schema["db_schema_name"], table["table_name"])
+            for obj in objects
+            for schema in obj["catalog_db_schemas"]
+            for table in schema["db_schema_tables"]
+        ]
+        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert table_id not in tables
+
+    def test_get_objects_table_exact_table(
+        self,
+        conn: adbc_driver_manager.dbapi.Connection,
+        driver: model.DriverQuirks,
+        get_objects_table,
+    ) -> None:
+        table_id = get_objects_table
+        objects = (
+            conn.adbc_get_objects(
+                depth="tables",
+                catalog_filter=driver.features.current_catalog,
+                db_schema_filter=driver.features.current_schema,
+                table_name_filter=table_id[2],
+            )
+            .read_all()
+            .to_pylist()
+        )
+        tables = [
+            (obj["catalog_name"], schema["db_schema_name"], table["table_name"])
+            for obj in objects
+            for schema in obj["catalog_db_schemas"]
+            for table in schema["db_schema_tables"]
+        ]
+        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert table_id in tables
+
     def test_get_objects_column_not_exist(
         self,
         conn: adbc_driver_manager.dbapi.Connection,

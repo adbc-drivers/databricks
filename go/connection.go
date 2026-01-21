@@ -320,10 +320,15 @@ func (c *connectionImpl) GetTablesForDBSchema(ctx context.Context, catalog strin
 func (c *connectionImpl) getTablesWithColumns(ctx context.Context, catalog string, schema string, tableFilter *string, columnFilter *string) (tables []driverbase.TableInfo, err error) {
 	tables = []driverbase.TableInfo{}
 
+	lowerCatalog := strings.ToLower(catalog)
+
+	// Skip internal catalogs that do not support metadata queries
+	if lowerCatalog == "__databricks_internal" {
+		return tables, nil
+	}
+
 	var queryBuilder strings.Builder
 	queryBuilder.WriteString("SELECT DISTINCT c.TABLE_NAME, c.ordinal_position, c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE FROM ")
-
-	lowerCatalog := strings.ToLower(catalog)
 	if lowerCatalog == "hive_metastore" || lowerCatalog == "system" {
 		// Hive Metastore and system catalog metadata are only available via the system-level information_schema
 		queryBuilder.WriteString("system.information_schema.COLUMNS c ")
