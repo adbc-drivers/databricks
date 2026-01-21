@@ -43,12 +43,25 @@ $ dotnet test
 
 ### Go
 
-You can build and run unit tests for the Go driver by switching to the `./go`
-folder and running:
+#### Pre-requisites
+
+- [Pixi](https://pixi.prefix.dev)
+
+#### Building
+
+From the `./go` directory, run:
+
+```sh
+pixi run make
+```
+This builds the driver as a shared library in `./build`.
+
+#### Testing
+
+To run the unit tests:
 
 ```shell
-$ go build
-$ go test
+pixi run test
 ```
 
 To run the full suite of tests, you will need a Databricks instance to test against and the following environment variables set:
@@ -56,6 +69,14 @@ To run the full suite of tests, you will need a Databricks instance to test agai
 - `DATABRICKS_HOST`
 - `DATABRICKS_ACCESSTOKEN`
 - `DATABRICKS_HTTPPATH`
+
+To run the validation suite:
+
+```sh
+pixi run validate
+```
+
+Note: The `validate` subcommand requires the same environment variables as `test`.
 
 ## Opening a Pull Request
 
