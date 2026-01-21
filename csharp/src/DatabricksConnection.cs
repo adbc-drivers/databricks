@@ -112,6 +112,7 @@ namespace AdbcDrivers.Databricks
         private string? _host;
         private ITelemetryClient? _telemetryClient;
         private TelemetryConfiguration? _telemetryConfig;
+        private DatabricksActivityListener? _activityListener;
 
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
@@ -1050,6 +1051,10 @@ namespace AdbcDrivers.Databricks
                     _host,
                     _authHttpClient ?? throw new InvalidOperationException("HttpClient not initialized"),
                     _telemetryConfig);
+
+                // Step 6: Create and start activity listener to capture telemetry events
+                _activityListener = new DatabricksActivityListener(_host, _telemetryClient, _telemetryConfig);
+                _activityListener.Start();
             }
             catch (Exception ex)
             {
@@ -1074,14 +1079,22 @@ namespace AdbcDrivers.Databricks
             {
                 if (_host != null)
                 {
-                    // Step 1: Release telemetry client (decrements ref count, closes if last)
+                    // Step 1: Stop activity listener and flush pending metrics
+                    if (_activityListener != null)
+                    {
+                        await _activityListener.StopAsync();
+                        _activityListener.Dispose();
+                        _activityListener = null;
+                    }
+
+                    // Step 2: Release telemetry client (decrements ref count, closes if last)
                     if (_telemetryClient != null)
                     {
                         await TelemetryClientManager.GetInstance().ReleaseClientAsync(_host);
                         _telemetryClient = null;
                     }
 
-                    // Step 2: Release feature flag context (decrements ref count)
+                    // Step 3: Release feature flag context (decrements ref count)
                     FeatureFlagCache.GetInstance().ReleaseContext(_host);
                 }
             }
@@ -1101,6 +1114,10 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
+                // Dispose activity listener (flushes pending metrics synchronously)
+                _activityListener?.Dispose();
+                _activityListener = null;
+
                 _authHttpClient?.Dispose();
             }
             base.Dispose(disposing);
