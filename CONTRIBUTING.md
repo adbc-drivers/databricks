@@ -54,6 +54,7 @@ From the `./go` directory, run:
 ```sh
 pixi run make
 ```
+
 This builds the driver as a shared library in `./build`.
 
 #### Testing
