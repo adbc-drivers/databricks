@@ -120,7 +120,7 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-1.2: Tag Definition System
 **Description**: Create centralized tag definitions with export scope annotations.
 
-**Status**: ❌ **NOT STARTED**
+**Status**: ✅ **COMPLETED**
 
 **Location**: `csharp/src/Telemetry/TagDefinitions/`
 
@@ -147,6 +147,13 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `TelemetryTagRegistry_ShouldExportToDatabricks_SensitiveTag_ReturnsFalse` | EventType.StatementExecution, "db.statement" | false |
 | Unit | `TelemetryTagRegistry_ShouldExportToDatabricks_SafeTag_ReturnsTrue` | EventType.StatementExecution, "statement.id" | true |
 | Unit | `ConnectionOpenEvent_GetDatabricksExportTags_ExcludesServerAddress` | N/A | Set does NOT contain "server.address" |
+
+**Implementation Notes**:
+- Used `IReadOnlyCollection<string>` instead of `IReadOnlySet<string>` for netstandard2.0 compatibility
+- Each event class has its own `ShouldExportToDatabricks(tagName)` method using internal `HashSet<string>` for O(1) lookup
+- Added `TelemetryTagRegistry.FilterForDatabricksExport()` helper for filtering tag collections
+- Added `TelemetryTagRegistry.DetermineEventType()` for mapping Activity operation names to event types
+- Test file: `test/Unit/Telemetry/TagDefinitions/TelemetryTagRegistryTests.cs` with 40 comprehensive tests
 
 ---
 
