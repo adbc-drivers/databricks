@@ -64,7 +64,7 @@ Databricks's URI syntax supports three primary forms:
    - `<server-hostname>`: (required) Server Hostname value.
    - `port-number`: (required) Port value, which is typically 443.
    - `http-path`: (required) HTTP Path value.
-   - Query params: Databricks connection attributes. For complete list of optional parameters, see [Databricks Optional Parameters](https://docs.databricks.com/aws/en/dev-tools/go-sql-driver#optional-parameters)
+   - Query params: Databricks connection attributes. For complete list of optional parameters, see [Databricks Optional Parameters](https://docs.databricks.com/dev-tools/go-sql-driver#optional-parameters)
 
 
 2. OAuth user-to-machine (U2M) authentication:
@@ -79,7 +79,7 @@ Databricks's URI syntax supports three primary forms:
    - `port-number`: (required) Port value, which is typically 443.
    - `http-path`: (required) HTTP Path value.
    - `authType=OauthU2M`: (required) Specifies OAuth user-to-machine authentication.
-   - Query params: Additional Databricks connection attributes. For complete list of optional parameters, see [Databricks Optional Parameters](https://docs.databricks.com/aws/en/dev-tools/go-sql-driver#optional-parameters)
+   - Query params: Additional Databricks connection attributes. For complete list of optional parameters, see [Databricks Optional Parameters](https://docs.databricks.com/dev-tools/go-sql-driver#optional-parameters)
 
 3. OAuth machine-to-machine (M2M) authentication:
 
@@ -95,9 +95,9 @@ Databricks's URI syntax supports three primary forms:
    - `authType=OAuthM2M`: (required) Specifies OAuth machine-to-machine authentication.
    - `<client-id>`: (required) Service principal's UUID or Application ID value.
    - `<client-secret>`: (required) Secret value for the service principal's OAuth secret.
-   - Query params: Additional Databricks connection attributes. For complete list of optional parameters, see [Databricks Optional Parameters](https://docs.databricks.com/aws/en/dev-tools/go-sql-driver#optional-parameters)
+   - Query params: Additional Databricks connection attributes. For complete list of optional parameters, see [Databricks Optional Parameters](https://docs.databricks.com/dev-tools/go-sql-driver#optional-parameters)
 
-This follows the [Databricks SQL Driver for Go](https://docs.databricks.com/aws/en/dev-tools/go-sql-driver#connect-with-a-dsn-connection-string) format with the addition of the `databricks://` scheme.
+This follows the [Databricks SQL Driver for Go](https://docs.databricks.com/dev-tools/go-sql-driver#connect-with-a-dsn-connection-string) format with the addition of the `databricks://` scheme.
 
 :::{note}
 Reserved characters in URI elements must be URI-encoded. For example, `@` becomes `%40`.
