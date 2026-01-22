@@ -92,6 +92,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-1.2: Tag Definition System
 **Description**: Create centralized tag definitions with export scope annotations.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/TagDefinitions/`
 
 **Files**:
@@ -117,6 +119,21 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `TelemetryTagRegistry_ShouldExportToDatabricks_SensitiveTag_ReturnsFalse` | EventType.StatementExecution, "db.statement" | false |
 | Unit | `TelemetryTagRegistry_ShouldExportToDatabricks_SafeTag_ReturnsTrue` | EventType.StatementExecution, "statement.id" | true |
 | Unit | `ConnectionOpenEvent_GetDatabricksExportTags_ExcludesServerAddress` | N/A | Set does NOT contain "server.address" |
+
+**Implementation Notes**:
+- Implemented centralized tag definitions using [Flags] enum TagExportScope (None, ExportLocal, ExportDatabricks, ExportAll)
+- Each event type has dedicated tag definition class with TelemetryTagAttribute annotations
+- Sensitive tags (db.statement, server.address, error.message, error.stack_trace) marked ExportLocal only
+- Safe tags (statement.id, result.format, workspace.id, etc.) marked ExportDatabricks
+- TelemetryTagRegistry provides filtering logic via GetDatabricksExportTags() and ShouldExportToDatabricks()
+- Comprehensive test coverage with 16 unit tests covering all scenarios
+- Test file location: `csharp/test/Unit/Telemetry/TagDefinitions/TelemetryTagRegistryTests.cs`
+
+**Key Design Decisions**:
+1. **Flags enum for TagExportScope**: Allows bitwise combinations (ExportAll = ExportLocal | ExportDatabricks) for flexibility
+2. **Static classes for event definitions**: Each event type (ConnectionOpenEvent, StatementExecutionEvent, ErrorEvent) is a static class with const string tag names and attributes
+3. **GetDatabricksExportTags() method**: Each event class provides a method returning HashSet of tags to export to Databricks
+4. **Explicit whitelisting**: Only tags in the returned set are exported; unknown tags are silently dropped for safety
 
 ---
 
