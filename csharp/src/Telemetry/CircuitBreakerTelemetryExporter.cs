@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.Models;
+using Polly.CircuitBreaker;
 
 namespace AdbcDrivers.Databricks.Telemetry
 {
@@ -121,7 +122,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     await _innerExporter.ExportAsync(logs, ct).ConfigureAwait(false);
                 }).ConfigureAwait(false);
             }
-            catch (CircuitBreakerOpenException)
+            catch (BrokenCircuitException)
             {
                 // Circuit is open - drop events silently
                 // Log at DEBUG level per design doc (circuit breaker state changes)
