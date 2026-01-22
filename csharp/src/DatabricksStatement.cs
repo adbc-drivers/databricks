@@ -49,6 +49,7 @@ namespace AdbcDrivers.Databricks
         // Using 2M rows significantly reduces round trips for medium/large result sets compared to the base 50K default,
         // improving query performance by reducing the number of FetchResults calls needed.
         private const long DatabricksBatchSizeDefault = 2000000;
+        private const string QueryTagsKey = "query_tags";
         private bool useCloudFetch;
         private bool canDecompressLz4;
         private long maxBytesPerFile;
@@ -192,28 +193,16 @@ namespace AdbcDrivers.Databricks
 
         public override void SetOption(string key, string value)
         {
-            // Check if this is a conf overlay parameter
-            if (key.StartsWith(DatabricksParameters.ConfOverlayPrefix))
-            {
-                // Strip the prefix and add to conf overlay dictionary
-                string confKey = key.Substring(DatabricksParameters.ConfOverlayPrefix.Length);
-
-                if (string.IsNullOrEmpty(confKey))
-                {
-                    throw new ArgumentException($"Invalid conf overlay key: {key}. Key cannot be empty after removing prefix.");
-                }
-
-                if (confOverlay == null)
-                {
-                    confOverlay = new Dictionary<string, string>();
-                }
-
-                confOverlay[confKey] = value;
-                return;
-            }
-
             switch (key)
             {
+                case DatabricksParameters.QueryTags:
+                    // Query tags are sent to the server via confOverlay
+                    if (confOverlay == null)
+                    {
+                        confOverlay = new Dictionary<string, string>();
+                    }
+                    confOverlay[QueryTagsKey] = value;
+                    break;
                 case DatabricksParameters.UseCloudFetch:
                     if (bool.TryParse(value, out bool useCloudFetchValue))
                     {

@@ -55,47 +55,29 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// Tests that conf overlay parameters with the correct prefix are captured.
+        /// Tests that query_tags parameter is captured and added to confOverlay.
         /// </summary>
         [Fact]
-        public void SetOption_WithConfOverlayPrefix_AddsToConfOverlay()
+        public void SetOption_WithQueryTags_AddsToConfOverlay()
         {
             // Arrange
             using var statement = CreateStatement();
 
             // Act
-            statement.SetOption("adbc.databricks.conf_overlay_spark.sql.adaptive.enabled", "true");
-            statement.SetOption("adbc.databricks.conf_overlay_query_tags", "team:engineering");
+            statement.SetOption(DatabricksParameters.QueryTags, "team:engineering,app:myapp");
 
             // Assert
             var confOverlay = GetConfOverlay(statement);
             Assert.NotNull(confOverlay);
-            Assert.Equal(2, confOverlay.Count);
-            Assert.Equal("true", confOverlay["spark.sql.adaptive.enabled"]);
-            Assert.Equal("team:engineering", confOverlay["query_tags"]);
+            Assert.Single(confOverlay);
+            Assert.Equal("team:engineering,app:myapp", confOverlay["query_tags"]);
         }
 
         /// <summary>
-        /// Tests that setting an empty key after prefix removal throws ArgumentException.
+        /// Tests that parameters without query_tags don't get added to confOverlay.
         /// </summary>
         [Fact]
-        public void SetOption_WithEmptyKeyAfterPrefix_ThrowsArgumentException()
-        {
-            // Arrange
-            using var statement = CreateStatement();
-
-            // Act & Assert
-            var exception = Assert.Throws<ArgumentException>(() =>
-                statement.SetOption("adbc.databricks.conf_overlay_", "value"));
-
-            Assert.Contains("Key cannot be empty after removing prefix", exception.Message);
-        }
-
-        /// <summary>
-        /// Tests that parameters without conf overlay prefix don't get added to confOverlay.
-        /// </summary>
-        [Fact]
-        public void SetOption_WithoutConfOverlayPrefix_DoesNotAddToConfOverlay()
+        public void SetOption_WithoutQueryTags_DoesNotAddToConfOverlay()
         {
             // Arrange
             using var statement = CreateStatement();
@@ -109,48 +91,23 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// Tests that multiple conf overlay parameters accumulate in the dictionary.
+        /// Tests that query_tags works alongside regular parameters.
         /// </summary>
         [Fact]
-        public void SetOption_MultipleConfOverlayParameters_AccumulatesInDictionary()
+        public void SetOption_MixedQueryTagsAndRegularParameters_BothWork()
         {
             // Arrange
             using var statement = CreateStatement();
 
             // Act
-            statement.SetOption("adbc.databricks.conf_overlay_param1", "value1");
-            statement.SetOption("adbc.databricks.conf_overlay_param2", "value2");
-            statement.SetOption("adbc.databricks.conf_overlay_param3", "value3");
-
-            // Assert
-            var confOverlay = GetConfOverlay(statement);
-            Assert.NotNull(confOverlay);
-            Assert.Equal(3, confOverlay.Count);
-            Assert.Equal("value1", confOverlay["param1"]);
-            Assert.Equal("value2", confOverlay["param2"]);
-            Assert.Equal("value3", confOverlay["param3"]);
-        }
-
-        /// <summary>
-        /// Tests that conf overlay parameters work alongside regular parameters.
-        /// </summary>
-        [Fact]
-        public void SetOption_MixedConfOverlayAndRegularParameters_BothWork()
-        {
-            // Arrange
-            using var statement = CreateStatement();
-
-            // Act - Set both conf overlay and regular parameters using correct parameter name
-            statement.SetOption("adbc.databricks.conf_overlay_query_tags", "k1:v1,k2:v2");
+            statement.SetOption(DatabricksParameters.QueryTags, "k1:v1,k2:v2");
             statement.SetOption(DatabricksParameters.UseCloudFetch, "false");
-            statement.SetOption("adbc.databricks.conf_overlay_spark.sql.adaptive.enabled", "true");
 
-            // Assert - Check conf overlay has only the conf_overlay_ parameters
+            // Assert - Check conf overlay has query_tags
             var confOverlay = GetConfOverlay(statement);
             Assert.NotNull(confOverlay);
-            Assert.Equal(2, confOverlay.Count);
+            Assert.Single(confOverlay);
             Assert.Equal("k1:v1,k2:v2", confOverlay["query_tags"]);
-            Assert.Equal("true", confOverlay["spark.sql.adaptive.enabled"]);
 
             // Assert - Regular parameter was set
             Assert.False(statement.UseCloudFetch);
