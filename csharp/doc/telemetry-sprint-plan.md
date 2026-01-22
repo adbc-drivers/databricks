@@ -92,11 +92,14 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-1.2: Tag Definition System
 **Description**: Create centralized tag definitions with export scope annotations.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/TagDefinitions/`
 
 **Files**:
 - `TelemetryTag.cs` - Attribute and enums for export scope
 - `TelemetryTagRegistry.cs` - Central registry
+- `TelemetryEventType.cs` - Event type enum
 - `ConnectionOpenEvent.cs` - Connection event tags
 - `StatementExecutionEvent.cs` - Statement execution tags
 - `ErrorEvent.cs` - Error event tags
@@ -117,6 +120,20 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `TelemetryTagRegistry_ShouldExportToDatabricks_SensitiveTag_ReturnsFalse` | EventType.StatementExecution, "db.statement" | false |
 | Unit | `TelemetryTagRegistry_ShouldExportToDatabricks_SafeTag_ReturnsTrue` | EventType.StatementExecution, "statement.id" | true |
 | Unit | `ConnectionOpenEvent_GetDatabricksExportTags_ExcludesServerAddress` | N/A | Set does NOT contain "server.address" |
+
+**Implementation Notes**:
+- Used `HashSet<string>` instead of `IReadOnlySet<string>` for netstandard2.0 compatibility
+- All tag definitions use the `[TelemetryTag]` attribute for metadata
+- Sensitive tags (server.address, db.statement, error.stack_trace) are marked with `ExportScope = TagExportScope.ExportLocal`
+- Comprehensive test coverage with 31 unit tests in `TelemetryTagRegistryTests.cs`
+- Test file location: `csharp/test/Unit/Telemetry/TagDefinitions/TelemetryTagRegistryTests.cs`
+
+**Key Design Decisions**:
+1. **Flag-based enum**: `TagExportScope` uses `[Flags]` attribute to support combinations (ExportAll = ExportLocal | ExportDatabricks)
+2. **Privacy by design**: Sensitive tags are explicitly marked as local-only and excluded from `GetDatabricksExportTags()`
+3. **Static helper methods**: Each event class has `GetDatabricksExportTags()` to return the set of exportable tags
+4. **Registry pattern**: `TelemetryTagRegistry.ShouldExportToDatabricks()` provides centralized filtering logic
+5. **Unknown tags dropped**: Tags not in the registry are silently dropped for Databricks export (returns false)
 
 ---
 
