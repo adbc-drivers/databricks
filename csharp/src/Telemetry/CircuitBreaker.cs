@@ -80,8 +80,32 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <param name="config">The configuration for this circuit breaker.</param>
         /// <exception cref="ArgumentNullException">Thrown when config is null.</exception>
         public CircuitBreaker(CircuitBreakerConfig config)
+            : this(config?.FailureThreshold ?? CircuitBreakerConfig.DefaultFailureThreshold,
+                   config?.Timeout ?? CircuitBreakerConfig.DefaultTimeout,
+                   config)
         {
-            _config = config ?? throw new ArgumentNullException(nameof(config));
+        }
+
+        /// <summary>
+        /// Creates a new circuit breaker with the specified parameters.
+        /// </summary>
+        /// <param name="failureThreshold">Number of failures before the circuit opens. Default is 5.</param>
+        /// <param name="timeout">Duration the circuit stays open before transitioning to half-open. Default is 1 minute.</param>
+        public CircuitBreaker(int failureThreshold = CircuitBreakerConfig.DefaultFailureThreshold, TimeSpan? timeout = null)
+            : this(failureThreshold, timeout, null)
+        {
+        }
+
+        /// <summary>
+        /// Private constructor that does the actual initialization.
+        /// </summary>
+        private CircuitBreaker(int failureThreshold, TimeSpan? timeout, CircuitBreakerConfig? config)
+        {
+            _config = config ?? new CircuitBreakerConfig
+            {
+                FailureThreshold = failureThreshold,
+                Timeout = timeout ?? CircuitBreakerConfig.DefaultTimeout
+            };
             var actualTimeout = _config.Timeout;
             _manualControl = new CircuitBreakerManualControl();
 

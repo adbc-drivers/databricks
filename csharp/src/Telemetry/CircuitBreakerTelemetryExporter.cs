@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.Models;
+using Polly.CircuitBreaker;
 
 namespace AdbcDrivers.Databricks.Telemetry
 {
@@ -96,7 +97,10 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         /// <param name="logs">The list of telemetry frontend logs to export.</param>
         /// <param name="ct">Cancellation token.</param>
-        /// <returns>A task representing the asynchronous export operation.</returns>
+        /// <returns>
+        /// A task that resolves to true if the export succeeded or there was nothing to export,
+        /// or false if the export failed (circuit breaker open or error occurred).
+        /// </returns>
         /// <remarks>
         /// This method never throws exceptions (except for cancellation). All errors are:
         /// 1. First seen by the circuit breaker (to track failures)
@@ -104,11 +108,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         ///
         /// When the circuit is open, events are dropped silently and logged at DEBUG level.
         /// </remarks>
-        public async Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+        public async Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
         {
             if (logs == null || logs.Count == 0)
             {
-                return;
+                return true; // Nothing to export, no failure
             }
 
             var circuitBreaker = _circuitBreakerManager.GetCircuitBreaker(_host);
@@ -116,16 +120,19 @@ namespace AdbcDrivers.Databricks.Telemetry
             try
             {
                 // Execute through circuit breaker - it tracks failures BEFORE swallowing
+                bool success = false;
                 await circuitBreaker.ExecuteAsync(async () =>
                 {
-                    await _innerExporter.ExportAsync(logs, ct).ConfigureAwait(false);
+                    success = await _innerExporter.ExportAsync(logs, ct).ConfigureAwait(false);
                 }).ConfigureAwait(false);
+                return success;
             }
-            catch (CircuitBreakerOpenException)
+            catch (BrokenCircuitException)
             {
                 // Circuit is open - drop events silently
                 // Log at DEBUG level per design doc (circuit breaker state changes)
                 Debug.WriteLine($"[DEBUG] CircuitBreakerTelemetryExporter: Circuit breaker OPEN for host '{_host}' - dropping {logs.Count} telemetry events");
+                return false;
             }
             catch (OperationCanceledException)
             {
@@ -137,6 +144,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 // All other exceptions swallowed AFTER circuit breaker saw them
                 // Log at TRACE level to avoid customer anxiety per design doc
                 Debug.WriteLine($"[TRACE] CircuitBreakerTelemetryExporter: Error exporting telemetry for host '{_host}': {ex.Message}");
+                return false;
             }
         }
     }
