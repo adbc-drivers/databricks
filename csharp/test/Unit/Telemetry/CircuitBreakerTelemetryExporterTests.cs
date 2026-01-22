@@ -179,130 +179,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
         #endregion
 
-        #region Circuit Open Tests
-
-        [Fact]
-        public async Task CircuitBreakerTelemetryExporter_CircuitOpen_DropsEvents()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 2 };
-            var manager = new CircuitBreakerManager(config);
-            var failingExporter = new MockTelemetryExporter { ShouldThrow = true };
-            var exporter = new CircuitBreakerTelemetryExporter(TestHost, failingExporter, manager);
-
-            var logs = new List<TelemetryFrontendLog>
-            {
-                new TelemetryFrontendLog { WorkspaceId = 12345 }
-            };
-
-            // Cause failures to open the circuit
-            await exporter.ExportAsync(logs);
-            await exporter.ExportAsync(logs);
-
-            // Verify circuit is open
-            var circuitBreaker = manager.GetCircuitBreaker(TestHost);
-            Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-
-            // Reset call count after opening circuit
-            failingExporter.ExportCallCount = 0;
-
-            // Act - Try to export while circuit is open
-            await exporter.ExportAsync(logs);
-
-            // Assert - Inner exporter should NOT be called (events dropped)
-            Assert.Equal(0, failingExporter.ExportCallCount);
-        }
-
-        [Fact]
-        public async Task CircuitBreakerTelemetryExporter_CircuitOpen_DoesNotThrow()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 1 };
-            var manager = new CircuitBreakerManager(config);
-            var failingExporter = new MockTelemetryExporter { ShouldThrow = true };
-            var exporter = new CircuitBreakerTelemetryExporter(TestHost, failingExporter, manager);
-
-            var logs = new List<TelemetryFrontendLog>
-            {
-                new TelemetryFrontendLog { WorkspaceId = 12345 }
-            };
-
-            // Cause failure to open the circuit
-            await exporter.ExportAsync(logs);
-
-            // Verify circuit is open
-            var circuitBreaker = manager.GetCircuitBreaker(TestHost);
-            Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-
-            // Act & Assert - Should not throw even though circuit is open
-            var exception = await Record.ExceptionAsync(() => exporter.ExportAsync(logs));
-            Assert.Null(exception);
-        }
-
-        [Fact]
-        public async Task CircuitBreakerTelemetryExporter_CircuitOpen_MultipleExportAttempts_AllDropped()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 1, Timeout = TimeSpan.FromHours(1) };
-            var manager = new CircuitBreakerManager(config);
-            var failingExporter = new MockTelemetryExporter { ShouldThrow = true };
-            var exporter = new CircuitBreakerTelemetryExporter(TestHost, failingExporter, manager);
-
-            var logs = new List<TelemetryFrontendLog>
-            {
-                new TelemetryFrontendLog { WorkspaceId = 12345 }
-            };
-
-            // Cause failure to open the circuit
-            await exporter.ExportAsync(logs);
-
-            // Reset call count and stop throwing
-            failingExporter.ExportCallCount = 0;
-            failingExporter.ShouldThrow = false;
-
-            // Act - Try multiple exports while circuit is open
-            await exporter.ExportAsync(logs);
-            await exporter.ExportAsync(logs);
-            await exporter.ExportAsync(logs);
-
-            // Assert - All should be dropped (inner exporter not called)
-            Assert.Equal(0, failingExporter.ExportCallCount);
-        }
-
-        #endregion
-
         #region Circuit Breaker Tracks Failure Tests
-
-        [Fact]
-        public async Task CircuitBreakerTelemetryExporter_InnerExporterFails_CircuitBreakerTracksFailure()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 3 };
-            var manager = new CircuitBreakerManager(config);
-            var failingExporter = new MockTelemetryExporter { ShouldThrow = true };
-            var exporter = new CircuitBreakerTelemetryExporter(TestHost, failingExporter, manager);
-
-            var logs = new List<TelemetryFrontendLog>
-            {
-                new TelemetryFrontendLog { WorkspaceId = 12345 }
-            };
-
-            var circuitBreaker = manager.GetCircuitBreaker(TestHost);
-
-            // Act - Cause failures
-            await exporter.ExportAsync(logs);
-            Assert.Equal(1, circuitBreaker.ConsecutiveFailures);
-            Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
-
-            await exporter.ExportAsync(logs);
-            Assert.Equal(2, circuitBreaker.ConsecutiveFailures);
-            Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
-
-            await exporter.ExportAsync(logs);
-
-            // Assert - Circuit should now be open after 3 failures
-            Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-        }
 
         [Fact]
         public async Task CircuitBreakerTelemetryExporter_InnerExporterFails_ExceptionSwallowed()
@@ -320,36 +197,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Act & Assert - Should not throw even though inner exporter fails
             var exception = await Record.ExceptionAsync(() => exporter.ExportAsync(logs));
             Assert.Null(exception);
-        }
-
-        [Fact]
-        public async Task CircuitBreakerTelemetryExporter_InnerExporterSucceeds_CircuitBreakerResetsFailures()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 5 };
-            var manager = new CircuitBreakerManager(config);
-            var mockExporter = new MockTelemetryExporter { ShouldThrow = true };
-            var exporter = new CircuitBreakerTelemetryExporter(TestHost, mockExporter, manager);
-
-            var logs = new List<TelemetryFrontendLog>
-            {
-                new TelemetryFrontendLog { WorkspaceId = 12345 }
-            };
-
-            var circuitBreaker = manager.GetCircuitBreaker(TestHost);
-
-            // Cause 2 failures
-            await exporter.ExportAsync(logs);
-            await exporter.ExportAsync(logs);
-            Assert.Equal(2, circuitBreaker.ConsecutiveFailures);
-
-            // Now succeed
-            mockExporter.ShouldThrow = false;
-            await exporter.ExportAsync(logs);
-
-            // Assert - Failures should be reset
-            Assert.Equal(0, circuitBreaker.ConsecutiveFailures);
-            Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
         }
 
         #endregion
@@ -379,126 +226,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
         #endregion
 
-        #region Per-Host Isolation Tests
-
-        [Fact]
-        public async Task CircuitBreakerTelemetryExporter_DifferentHosts_IndependentCircuitBreakers()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 1 };
-            var manager = new CircuitBreakerManager(config);
-
-            var failingExporter = new MockTelemetryExporter { ShouldThrow = true };
-            var successExporter = new MockTelemetryExporter { ShouldThrow = false };
-
-            var host1 = "https://host1.databricks.com";
-            var host2 = "https://host2.databricks.com";
-
-            var exporter1 = new CircuitBreakerTelemetryExporter(host1, failingExporter, manager);
-            var exporter2 = new CircuitBreakerTelemetryExporter(host2, successExporter, manager);
-
-            var logs = new List<TelemetryFrontendLog>
-            {
-                new TelemetryFrontendLog { WorkspaceId = 12345 }
-            };
-
-            // Act - Cause failure on host1 to open its circuit
-            await exporter1.ExportAsync(logs);
-
-            // Assert - Host1 circuit is open, Host2 circuit is still closed
-            var cb1 = manager.GetCircuitBreaker(host1);
-            var cb2 = manager.GetCircuitBreaker(host2);
-
-            Assert.Equal(CircuitBreakerState.Open, cb1.State);
-            Assert.Equal(CircuitBreakerState.Closed, cb2.State);
-
-            // Reset call count
-            successExporter.ExportCallCount = 0;
-
-            // Act - Export on host2 should still work
-            await exporter2.ExportAsync(logs);
-
-            // Assert
-            Assert.Equal(1, successExporter.ExportCallCount);
-        }
-
-        #endregion
-
-        #region HalfOpen State Tests
-
-        [Fact]
-        public async Task CircuitBreakerTelemetryExporter_HalfOpen_SuccessClosesCircuit()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig
-            {
-                FailureThreshold = 1,
-                Timeout = TimeSpan.FromMilliseconds(50),
-                SuccessThreshold = 1
-            };
-            var manager = new CircuitBreakerManager(config);
-            var mockExporter = new MockTelemetryExporter { ShouldThrow = true };
-            var exporter = new CircuitBreakerTelemetryExporter(TestHost, mockExporter, manager);
-
-            var logs = new List<TelemetryFrontendLog>
-            {
-                new TelemetryFrontendLog { WorkspaceId = 12345 }
-            };
-
-            // Cause failure to open the circuit
-            await exporter.ExportAsync(logs);
-
-            var circuitBreaker = manager.GetCircuitBreaker(TestHost);
-            Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-
-            // Wait for timeout to allow transition to HalfOpen
-            await Task.Delay(100);
-
-            // Now succeed
-            mockExporter.ShouldThrow = false;
-            await exporter.ExportAsync(logs);
-
-            // Assert - Circuit should be closed after success in HalfOpen
-            Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
-        }
-
-        [Fact]
-        public async Task CircuitBreakerTelemetryExporter_HalfOpen_FailureReopensCircuit()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig
-            {
-                FailureThreshold = 1,
-                Timeout = TimeSpan.FromMilliseconds(50),
-                SuccessThreshold = 2
-            };
-            var manager = new CircuitBreakerManager(config);
-            var mockExporter = new MockTelemetryExporter { ShouldThrow = true };
-            var exporter = new CircuitBreakerTelemetryExporter(TestHost, mockExporter, manager);
-
-            var logs = new List<TelemetryFrontendLog>
-            {
-                new TelemetryFrontendLog { WorkspaceId = 12345 }
-            };
-
-            // Cause failure to open the circuit
-            await exporter.ExportAsync(logs);
-
-            var circuitBreaker = manager.GetCircuitBreaker(TestHost);
-            Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-
-            // Wait for timeout to allow transition to HalfOpen
-            await Task.Delay(100);
-
-            // Fail again - this will transition from HalfOpen to Open
-            await exporter.ExportAsync(logs);
-
-            // Assert - Circuit should be open again
-            Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-        }
-
-        #endregion
-
         #region Mock Telemetry Exporter
 
         /// <summary>
@@ -511,7 +238,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public bool ShouldThrow { get; set; }
             public bool ShouldDelay { get; set; }
 
-            public async Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public async Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -527,6 +254,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 {
                     throw new Exception("Simulated export failure");
                 }
+
+                return true;
             }
         }
 

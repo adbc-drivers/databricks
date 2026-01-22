@@ -707,11 +707,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public int ExportCallCount { get; private set; }
             public IReadOnlyList<TelemetryFrontendLog>? LastExportedLogs { get; private set; }
 
-            public Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 ExportCallCount++;
                 LastExportedLogs = logs;
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             }
         }
 
