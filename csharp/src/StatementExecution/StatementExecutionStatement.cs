@@ -22,6 +22,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
@@ -204,40 +205,55 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private async Task<ExecuteStatementResponse> PollUntilCompleteAsync(string statementId, CancellationToken cancellationToken)
         {
-            while (true)
+            int pollCount = 0;
+            var pollStopwatch = Stopwatch.StartNew();
+
+            try
             {
-                // Check for cancellation before each polling iteration
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // Wait for polling interval
-                await Task.Delay(_pollingIntervalMs, cancellationToken).ConfigureAwait(false);
-
-                // Check for cancellation after delay
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // Get statement status
-                var response = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
-
-                // Convert GetStatementResponse to ExecuteStatementResponse
-                var executeResponse = new ExecuteStatementResponse
+                while (true)
                 {
-                    StatementId = response.StatementId,
-                    Status = response.Status,
-                    Manifest = response.Manifest,
-                    Result = response.Result
-                };
+                    // Check for cancellation before each polling iteration
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                // Check if reached a terminal state
-                var state = response.Status?.State;
-                if (state == "SUCCEEDED" ||
-                    state == "FAILED" ||
-                    state == "CANCELED" ||
-                    state == "CLOSED")
-                {
-                    return executeResponse;
+                    // Wait for polling interval
+                    await Task.Delay(_pollingIntervalMs, cancellationToken).ConfigureAwait(false);
+
+                    // Check for cancellation after delay
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    // Get statement status
+                    var response = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
+                    pollCount++;
+
+                    // Convert GetStatementResponse to ExecuteStatementResponse
+                    var executeResponse = new ExecuteStatementResponse
+                    {
+                        StatementId = response.StatementId,
+                        Status = response.Status,
+                        Manifest = response.Manifest,
+                        Result = response.Result
+                    };
+
+                    // Check if reached a terminal state
+                    var state = response.Status?.State;
+                    if (state == "SUCCEEDED" ||
+                        state == "FAILED" ||
+                        state == "CANCELED" ||
+                        state == "CLOSED")
+                    {
+                        return executeResponse;
+                    }
+
+                    // Continue polling for PENDING and RUNNING states
                 }
+            }
+            finally
+            {
+                pollStopwatch.Stop();
 
-                // Continue polling for PENDING and RUNNING states
+                // Set telemetry tags for polling metrics (Section 4.2 of telemetry-design.md)
+                Activity.Current?.SetTag(StatementExecutionEvent.PollCount, pollCount);
+                Activity.Current?.SetTag(StatementExecutionEvent.PollLatencyMs, pollStopwatch.ElapsedMilliseconds);
             }
         }
 

@@ -27,12 +27,14 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
 using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -554,6 +556,15 @@ namespace AdbcDrivers.Databricks
             activity?.SetTag("connection.feature.use_cloud_fetch", _useCloudFetch);
             activity?.SetTag("connection.feature.use_desc_table_extended", _useDescTableExtended);
             activity?.SetTag("connection.feature.enable_run_async_in_thrift_op", _runAsyncInThrift);
+
+            // Telemetry tags for driver configuration (Section 4.2 of telemetry-design.md)
+            activity?.SetTag(ConnectionOpenEvent.DriverVersion, s_assemblyVersion);
+            activity?.SetTag(ConnectionOpenEvent.DriverOS, RuntimeInformation.OSDescription);
+            activity?.SetTag(ConnectionOpenEvent.DriverRuntime, RuntimeInformation.FrameworkDescription);
+
+            // Feature flags for telemetry
+            activity?.SetTag(ConnectionOpenEvent.FeatureCloudFetch, _useCloudFetch);
+            activity?.SetTag(ConnectionOpenEvent.FeatureLz4, _canDecompressLz4);
 
             // Handle default namespace
             if (session.__isset.initialNamespace)
