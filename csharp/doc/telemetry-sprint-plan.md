@@ -320,6 +320,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-4.1: ExceptionClassifier
 **Description**: Classifies exceptions as terminal or retryable.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/ExceptionClassifier.cs`
 
 **Input**:
@@ -342,6 +344,22 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `ExceptionClassifier_IsTerminalException_500_ReturnsFalse` | HttpRequestException with 500 | false |
 | Unit | `ExceptionClassifier_IsTerminalException_Timeout_ReturnsFalse` | TaskCanceledException (timeout) | false |
 | Unit | `ExceptionClassifier_IsTerminalException_NetworkError_ReturnsFalse` | SocketException | false |
+
+**Implementation Notes**:
+- Static class with single `IsTerminalException(Exception?)` method
+- Terminal exceptions: HTTP 400, 401, 403, 404, `AuthenticationException`, `UnauthorizedAccessException`
+- Retryable exceptions: HTTP 429, 500, 502, 503, 504, `TimeoutException`, network errors
+- Safe default: Returns `false` for null or unknown exceptions
+- Handles wrapped `HttpRequestException` in `InnerException` by recursively checking inner exceptions
+- Supports both .NET 5+ (using `HttpRequestException.StatusCode`) and older frameworks (parsing status code from message)
+- Comprehensive test coverage with 28 unit tests in `ExceptionClassifierTests.cs`
+- Test file location: `csharp/test/Unit/Telemetry/ExceptionClassifierTests.cs`
+
+**Key Design Decisions**:
+1. **Safe default**: Returns `false` (retryable) for unknown exceptions to avoid flushing unnecessarily
+2. **Recursive inner exception check**: Handles wrapped exceptions by checking `InnerException`
+3. **Cross-framework compatibility**: Uses conditional compilation (`#if NET5_0_OR_GREATER`) for status code extraction
+4. **Message-based fallback**: For older .NET frameworks, parses status code from exception message
 
 ---
 
