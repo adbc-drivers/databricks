@@ -516,6 +516,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-5.5: TelemetryClient
 **Description**: Main telemetry client that coordinates listener, aggregator, and exporter.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/TelemetryClient.cs`
 
 **Input**:
@@ -534,6 +536,23 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `TelemetryClient_ExportAsync_DelegatesToExporter` | Metrics list | CircuitBreakerTelemetryExporter.ExportAsync called |
 | Unit | `TelemetryClient_CloseAsync_FlushesAndCancels` | N/A | Pending metrics flushed, background task cancelled |
 | Unit | `TelemetryClient_CloseAsync_ExceptionSwallowed` | Flush throws | No exception propagated |
+
+**Implementation Notes**:
+- Implements `ITelemetryClient` interface with `Host`, `ExportAsync`, and `CloseAsync` members
+- Constructor creates the full telemetry pipeline: DatabricksTelemetryExporter → CircuitBreakerTelemetryExporter → MetricsAggregator → DatabricksActivityListener
+- Starts a background flush task that periodically flushes metrics based on `FlushIntervalMs` configuration
+- `CloseAsync` implements graceful shutdown: cancels background task, stops listener (which flushes pending metrics), waits for background task with 5s timeout, disposes resources
+- All operations in `CloseAsync` wrapped in try-catch to swallow exceptions per telemetry requirement
+- Updated `TelemetryClientManager.CreateClient()` to use `TelemetryClient` instead of `TelemetryClientAdapter`
+- Comprehensive test coverage with 21 unit tests covering constructor, export, close, background flush, and thread safety
+- Test file location: `csharp/test/Unit/Telemetry/TelemetryClientTests.cs`
+
+**Key Design Decisions**:
+1. **Background flush task**: Uses `Task.Run` with internal loop and `Task.Delay` for periodic flushing
+2. **Graceful shutdown**: CloseAsync uses 5-second timeout waiting for background task to prevent hanging
+3. **Cross-framework compatibility**: Uses conditional compilation (`#if NET6_0_OR_GREATER`) for `Task.WaitAsync` vs `Task.WhenAny` fallback
+4. **Exception swallowing**: Every operation in CloseAsync wrapped in try-catch per design requirement
+5. **Idempotent close**: Uses lock and boolean flag to ensure CloseAsync can be called multiple times safely
 
 ---
 

@@ -240,11 +240,9 @@ namespace AdbcDrivers.Databricks.Telemetry
                 return _clientFactory(host, httpClient, config);
             }
 
-            // Default factory: Create CircuitBreakerTelemetryExporter wrapping DatabricksTelemetryExporter
-            // This creates an adapter that implements ITelemetryClient
-            var innerExporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: true, config);
-            var circuitBreakerExporter = new CircuitBreakerTelemetryExporter(host, innerExporter);
-            return new TelemetryClientAdapter(host, circuitBreakerExporter);
+            // Default factory: Create full TelemetryClient that coordinates
+            // listener, aggregator, and exporter with background flush task
+            return new TelemetryClient(host, httpClient, config);
         }
     }
 }
