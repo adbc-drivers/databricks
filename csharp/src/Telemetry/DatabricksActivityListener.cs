@@ -39,8 +39,9 @@ namespace AdbcDrivers.Databricks.Telemetry
     {
         /// <summary>
         /// The ActivitySource name that this listener listens to.
+        /// Must match the assembly name used by DatabricksConnection's ActivityTrace.
         /// </summary>
-        public const string DatabricksActivitySourceName = "Databricks.Adbc.Driver";
+        public const string DatabricksActivitySourceName = "AdbcDrivers.Databricks";
 
         private readonly MetricsAggregator _aggregator;
         private readonly TelemetryConfiguration _config;
