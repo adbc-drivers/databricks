@@ -30,6 +30,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Microsoft.IO;
@@ -439,6 +440,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         new("total_time_ms", overallStopwatch.ElapsedMilliseconds),
                         new("total_time_sec", overallStopwatch.ElapsedMilliseconds / 1000.0)
                     ]);
+
+                    // Set telemetry tags for result metrics (Section 4.2 of telemetry-design.md)
+                    activity?.SetTag(StatementExecutionEvent.ResultChunkCount, successfulDownloads);
+                    activity?.SetTag(StatementExecutionEvent.ResultBytesDownloaded, totalBytes);
 
                     // If there's an error, add the error to the result queue
                     if (HasError)
