@@ -482,7 +482,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public bool ShouldThrowOnExport { get; set; }
             public bool ShouldThrowCancellation { get; set; }
 
-            public Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 if (ShouldThrowCancellation)
                 {
@@ -496,12 +496,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
                 if (logs == null || logs.Count == 0)
                 {
-                    return Task.CompletedTask;
+                    return Task.FromResult(true);
                 }
 
                 Interlocked.Increment(ref _exportCallCount);
                 LastExportedLogs = logs;
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             }
         }
 

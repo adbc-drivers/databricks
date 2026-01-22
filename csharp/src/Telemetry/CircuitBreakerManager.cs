@@ -36,7 +36,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         private static readonly CircuitBreakerManager s_instance = new CircuitBreakerManager();
 
         private readonly ConcurrentDictionary<string, CircuitBreaker> _circuitBreakers;
-        private readonly CircuitBreakerConfig _defaultConfig;
+        private readonly TelemetryConfiguration _defaultConfig;
 
         /// <summary>
         /// Gets the singleton instance of the CircuitBreakerManager.
@@ -47,7 +47,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Creates a new CircuitBreakerManager with default configuration.
         /// </summary>
         internal CircuitBreakerManager()
-            : this(new CircuitBreakerConfig())
+            : this(new TelemetryConfiguration())
         {
         }
 
@@ -55,7 +55,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Creates a new CircuitBreakerManager with the specified default configuration.
         /// </summary>
         /// <param name="defaultConfig">The default configuration for new circuit breakers.</param>
-        internal CircuitBreakerManager(CircuitBreakerConfig defaultConfig)
+        internal CircuitBreakerManager(TelemetryConfiguration defaultConfig)
         {
             _circuitBreakers = new ConcurrentDictionary<string, CircuitBreaker>(StringComparer.OrdinalIgnoreCase);
             _defaultConfig = defaultConfig ?? throw new ArgumentNullException(nameof(defaultConfig));
@@ -82,7 +82,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             var circuitBreaker = _circuitBreakers.GetOrAdd(host, _ =>
             {
                 Debug.WriteLine($"[DEBUG] CircuitBreakerManager: Creating circuit breaker for host '{host}'");
-                return new CircuitBreaker(_defaultConfig);
+                return new CircuitBreaker(_defaultConfig.CircuitBreakerThreshold, _defaultConfig.CircuitBreakerTimeout);
             });
 
             return circuitBreaker;
@@ -101,7 +101,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// with its original configuration is returned. The provided config is only used
         /// when creating a new circuit breaker.
         /// </remarks>
-        public CircuitBreaker GetCircuitBreaker(string host, CircuitBreakerConfig config)
+        public CircuitBreaker GetCircuitBreaker(string host, TelemetryConfiguration config)
         {
             if (string.IsNullOrWhiteSpace(host))
             {
@@ -116,7 +116,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             var circuitBreaker = _circuitBreakers.GetOrAdd(host, _ =>
             {
                 Debug.WriteLine($"[DEBUG] CircuitBreakerManager: Creating circuit breaker for host '{host}' with custom config");
-                return new CircuitBreaker(config);
+                return new CircuitBreaker(config.CircuitBreakerThreshold, config.CircuitBreakerTimeout);
             });
 
             return circuitBreaker;

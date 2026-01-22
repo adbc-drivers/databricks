@@ -782,7 +782,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public int TotalExportedEvents => _totalExportedEvents;
             public IReadOnlyCollection<TelemetryFrontendLog> ExportedLogs => _exportedLogs.ToList();
 
-            public Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 Interlocked.Increment(ref _exportCallCount);
                 Interlocked.Add(ref _totalExportedEvents, logs.Count);
@@ -792,7 +792,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                     _exportedLogs.Add(log);
                 }
 
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             }
         }
 
@@ -801,7 +801,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         /// </summary>
         private class ThrowingTelemetryExporter : ITelemetryExporter
         {
-            public Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 throw new InvalidOperationException("Test exception from exporter");
             }

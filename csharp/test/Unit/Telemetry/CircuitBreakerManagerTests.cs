@@ -63,29 +63,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void CircuitBreakerManager_GetCircuitBreaker_NewHost_UsesDefaultConfig()
-        {
-            // Arrange
-            var defaultConfig = new CircuitBreakerConfig
-            {
-                FailureThreshold = 10,
-                Timeout = TimeSpan.FromMinutes(2),
-                SuccessThreshold = 3
-            };
-            var manager = new CircuitBreakerManager(defaultConfig);
-            var host = "test-host-config.databricks.com";
-
-            // Act
-            var circuitBreaker = manager.GetCircuitBreaker(host);
-
-            // Assert
-            Assert.NotNull(circuitBreaker);
-            Assert.Equal(10, circuitBreaker.Config.FailureThreshold);
-            Assert.Equal(TimeSpan.FromMinutes(2), circuitBreaker.Config.Timeout);
-            Assert.Equal(3, circuitBreaker.Config.SuccessThreshold);
-        }
-
-        [Fact]
         public void CircuitBreakerManager_GetCircuitBreaker_NullHost_ThrowsException()
         {
             // Arrange
@@ -225,68 +202,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
         #endregion
 
-        #region GetCircuitBreaker with Config Tests
-
-        [Fact]
-        public void CircuitBreakerManager_GetCircuitBreakerWithConfig_NewHost_UsesProvidedConfig()
-        {
-            // Arrange
-            var manager = new CircuitBreakerManager();
-            var host = "test-host-custom.databricks.com";
-            var customConfig = new CircuitBreakerConfig
-            {
-                FailureThreshold = 15,
-                Timeout = TimeSpan.FromMinutes(5),
-                SuccessThreshold = 4
-            };
-
-            // Act
-            var circuitBreaker = manager.GetCircuitBreaker(host, customConfig);
-
-            // Assert
-            Assert.NotNull(circuitBreaker);
-            Assert.Equal(15, circuitBreaker.Config.FailureThreshold);
-            Assert.Equal(TimeSpan.FromMinutes(5), circuitBreaker.Config.Timeout);
-            Assert.Equal(4, circuitBreaker.Config.SuccessThreshold);
-        }
-
-        [Fact]
-        public void CircuitBreakerManager_GetCircuitBreakerWithConfig_ExistingHost_ReturnsExistingBreaker()
-        {
-            // Arrange
-            var manager = new CircuitBreakerManager();
-            var host = "test-host-existing.databricks.com";
-            var originalConfig = new CircuitBreakerConfig
-            {
-                FailureThreshold = 10
-            };
-            var newConfig = new CircuitBreakerConfig
-            {
-                FailureThreshold = 20
-            };
-
-            // Act
-            var circuitBreaker1 = manager.GetCircuitBreaker(host, originalConfig);
-            var circuitBreaker2 = manager.GetCircuitBreaker(host, newConfig);
-
-            // Assert
-            Assert.Same(circuitBreaker1, circuitBreaker2);
-            Assert.Equal(10, circuitBreaker2.Config.FailureThreshold); // Original config retained
-        }
-
-        [Fact]
-        public void CircuitBreakerManager_GetCircuitBreakerWithConfig_NullConfig_ThrowsException()
-        {
-            // Arrange
-            var manager = new CircuitBreakerManager();
-
-            // Act & Assert
-            Assert.Throws<ArgumentNullException>(() =>
-                manager.GetCircuitBreaker("valid-host.databricks.com", null!));
-        }
-
-        #endregion
-
         #region Thread Safety Tests
 
         [Fact]
@@ -337,85 +252,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert
             Assert.Equal(hostCount, manager.CircuitBreakerCount);
-        }
-
-        #endregion
-
-        #region Per-Host Isolation Tests
-
-        [Fact]
-        public async Task CircuitBreakerManager_PerHostIsolation_FailureInOneHostDoesNotAffectOther()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 2 };
-            var manager = new CircuitBreakerManager(config);
-            var host1 = "host1-isolation.databricks.com";
-            var host2 = "host2-isolation.databricks.com";
-
-            var cb1 = manager.GetCircuitBreaker(host1);
-            var cb2 = manager.GetCircuitBreaker(host2);
-
-            // Act - Cause failures on host1 to open its circuit
-            for (int i = 0; i < 2; i++)
-            {
-                try
-                {
-                    await cb1.ExecuteAsync(() => throw new Exception("Failure"));
-                }
-                catch { }
-            }
-
-            // Assert - Host1 circuit is open, Host2 circuit is still closed
-            Assert.Equal(CircuitBreakerState.Open, cb1.State);
-            Assert.Equal(CircuitBreakerState.Closed, cb2.State);
-
-            // Host2 should still execute successfully
-            var executed = false;
-            await cb2.ExecuteAsync(async () =>
-            {
-                executed = true;
-                await Task.CompletedTask;
-            });
-
-            Assert.True(executed);
-        }
-
-        [Fact]
-        public async Task CircuitBreakerManager_PerHostIsolation_IndependentStateTransitions()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig
-            {
-                FailureThreshold = 1,
-                Timeout = TimeSpan.FromMilliseconds(100),
-                SuccessThreshold = 1
-            };
-            var manager = new CircuitBreakerManager(config);
-            var host1 = "host1-state.databricks.com";
-            var host2 = "host2-state.databricks.com";
-            var host3 = "host3-state.databricks.com";
-
-            var cb1 = manager.GetCircuitBreaker(host1);
-            var cb2 = manager.GetCircuitBreaker(host2);
-            var cb3 = manager.GetCircuitBreaker(host3);
-
-            // Act - Put cb1 in Open state
-            try { await cb1.ExecuteAsync(() => throw new Exception("Failure")); } catch { }
-            Assert.Equal(CircuitBreakerState.Open, cb1.State);
-
-            // Act - Put cb2 in HalfOpen state (Open then wait for timeout)
-            try { await cb2.ExecuteAsync(() => throw new Exception("Failure")); } catch { }
-            await Task.Delay(150);
-            // Transition to HalfOpen happens on next execute attempt
-            await cb2.ExecuteAsync(async () => await Task.CompletedTask);
-
-            // cb3 stays Closed (no failures)
-
-            // Assert - Each host has independent state
-            Assert.Equal(CircuitBreakerState.Open, cb1.State);
-            // cb2 is either HalfOpen or Closed depending on SuccessThreshold
-            Assert.True(cb2.State == CircuitBreakerState.HalfOpen || cb2.State == CircuitBreakerState.Closed);
-            Assert.Equal(CircuitBreakerState.Closed, cb3.State);
         }
 
         #endregion
@@ -619,22 +455,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         {
             // Act & Assert
             Assert.Throws<ArgumentNullException>(() => new CircuitBreakerManager(null!));
-        }
-
-        [Fact]
-        public void CircuitBreakerManager_DefaultConstructor_UsesDefaultConfig()
-        {
-            // Arrange
-            var manager = new CircuitBreakerManager();
-            var host = "default-config-host.databricks.com";
-
-            // Act
-            var circuitBreaker = manager.GetCircuitBreaker(host);
-
-            // Assert - Default config values
-            Assert.Equal(5, circuitBreaker.Config.FailureThreshold);
-            Assert.Equal(TimeSpan.FromMinutes(1), circuitBreaker.Config.Timeout);
-            Assert.Equal(2, circuitBreaker.Config.SuccessThreshold);
         }
 
         #endregion

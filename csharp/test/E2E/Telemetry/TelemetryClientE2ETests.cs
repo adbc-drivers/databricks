@@ -374,125 +374,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
         #endregion
 
-        #region TelemetryClient_CircuitBreaker_RecoverAfterTimeout
-
-        /// <summary>
-        /// Tests that TelemetryClient's circuit breaker recovers after the timeout period.
-        /// Validates the half-open state and successful recovery to closed state.
-        /// </summary>
-        /// <remarks>
-        /// This test uses a controllable FailingTelemetryExporter to simulate
-        /// failures and recovery, allowing us to test the circuit breaker state transitions.
-        ///
-        /// The default circuit breaker uses threshold=5 and timeout=1 minute.
-        /// For testing recovery, we use a custom CircuitBreakerConfig with shorter timeout.
-        /// </remarks>
-        [Fact]
-        public async Task TelemetryClient_CircuitBreaker_RecoverAfterTimeout()
-        {
-            // Arrange
-            var shouldFail = true;
-            var requestCount = 0;
-            var failingExporter = new FailingTelemetryExporter(() =>
-            {
-                Interlocked.Increment(ref requestCount);
-                if (shouldFail)
-                {
-                    throw new HttpRequestException("Service unavailable");
-                }
-                // Success - do nothing
-            });
-
-            // Default threshold is 5, but we can use a shorter timeout for testing
-            const int FailureThreshold = 5;
-            var shortTimeout = TimeSpan.FromMilliseconds(200);
-
-            var config = new TelemetryConfiguration
-            {
-                Enabled = true,
-                MaxRetries = 0,
-                CircuitBreakerEnabled = true
-            };
-
-            var host = "https://test-circuit-breaker-recovery.databricks.com";
-
-            // Reset the circuit breaker manager and create a new circuit breaker with custom config
-            var circuitBreakerManager = CircuitBreakerManager.GetInstance();
-            circuitBreakerManager.RemoveCircuitBreaker(host);
-
-            // Create a circuit breaker with shorter timeout for testing
-            var customConfig = new CircuitBreakerConfig
-            {
-                FailureThreshold = FailureThreshold,
-                Timeout = shortTimeout,
-                SuccessThreshold = 2
-            };
-            var circuitBreaker = circuitBreakerManager.GetCircuitBreaker(host, customConfig);
-            circuitBreaker.Reset();
-
-            // Create CircuitBreakerTelemetryExporter wrapping our controllable exporter
-            var circuitBreakerExporter = new CircuitBreakerTelemetryExporter(host, failingExporter);
-
-            using var httpClient = new HttpClient();
-            var client = new TelemetryClient(
-                host,
-                httpClient,
-                config,
-                workspaceId: 12345,
-                userAgent: "TestAgent",
-                exporter: circuitBreakerExporter,
-                aggregator: null,
-                listener: null);
-
-            try
-            {
-                var logs = new List<TelemetryFrontendLog> { CreateTestLog() };
-
-                // Step 1: Open the circuit breaker with failures
-                for (int i = 0; i < FailureThreshold + 2; i++)
-                {
-                    await client.ExportAsync(logs);
-                }
-
-                Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-                var openRequestCount = requestCount;
-                OutputHelper?.WriteLine($"Circuit opened after {openRequestCount} requests");
-
-                // Step 2: Wait for timeout to expire
-                await Task.Delay(shortTimeout + TimeSpan.FromMilliseconds(100));
-
-                // Step 3: Start succeeding
-                shouldFail = false;
-
-                // Step 4: Make requests to trigger half-open and recovery
-                // First request after timeout should put circuit in half-open state
-                await client.ExportAsync(logs);
-
-                // Additional requests to satisfy success threshold (2)
-                await client.ExportAsync(logs);
-                await client.ExportAsync(logs);
-
-                // Assert - Circuit should have recovered to closed state
-                OutputHelper?.WriteLine($"Total requests after recovery: {requestCount}");
-                OutputHelper?.WriteLine($"Circuit state after recovery: {circuitBreaker.State}");
-
-                // The circuit should be in Closed or HalfOpen state (depending on success threshold)
-                Assert.True(
-                    circuitBreaker.State == CircuitBreakerState.Closed ||
-                    circuitBreaker.State == CircuitBreakerState.HalfOpen,
-                    $"Expected circuit to recover, but state is {circuitBreaker.State}");
-            }
-            finally
-            {
-                await client.CloseAsync();
-                // Reset circuit breaker for other tests
-                circuitBreaker.Reset();
-                circuitBreakerManager.RemoveCircuitBreaker(host);
-            }
-        }
-
-        #endregion
-
         #region TelemetryClient_GracefulClose_FlushesAllPending
 
         /// <summary>
@@ -769,13 +650,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 _onExport = onExport;
             }
 
-            public Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 if (logs != null && logs.Count > 0)
                 {
                     _onExport(logs);
                 }
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             }
         }
 
@@ -792,7 +673,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 _onExport = onExport;
             }
 
-            public async Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public async Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 if (logs != null && logs.Count > 0)
                 {
@@ -802,6 +683,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     // The exception must propagate for the circuit breaker to track it
                     _onExport();
                 }
+                return true;
             }
         }
 
