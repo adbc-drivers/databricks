@@ -92,11 +92,14 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-1.2: Tag Definition System
 **Description**: Create centralized tag definitions with export scope annotations.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/TagDefinitions/`
 
 **Files**:
 - `TelemetryTag.cs` - Attribute and enums for export scope
 - `TelemetryTagRegistry.cs` - Central registry
+- `TelemetryEventType.cs` - Event type enum
 - `ConnectionOpenEvent.cs` - Connection event tags
 - `StatementExecutionEvent.cs` - Statement execution tags
 - `ErrorEvent.cs` - Error event tags
@@ -117,6 +120,70 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `TelemetryTagRegistry_ShouldExportToDatabricks_SensitiveTag_ReturnsFalse` | EventType.StatementExecution, "db.statement" | false |
 | Unit | `TelemetryTagRegistry_ShouldExportToDatabricks_SafeTag_ReturnsTrue` | EventType.StatementExecution, "statement.id" | true |
 | Unit | `ConnectionOpenEvent_GetDatabricksExportTags_ExcludesServerAddress` | N/A | Set does NOT contain "server.address" |
+
+**Implementation Notes**:
+- Used `HashSet<string>` instead of `IReadOnlySet<string>` for netstandard2.0 compatibility
+- All tag definitions use the `[TelemetryTag]` attribute for metadata
+- Sensitive tags (server.address, db.statement, error.stack_trace) are marked with `ExportScope = TagExportScope.ExportLocal`
+- Comprehensive test coverage with 31 unit tests in `TelemetryTagRegistryTests.cs`
+- Test file location: `csharp/test/Unit/Telemetry/TagDefinitions/TelemetryTagRegistryTests.cs`
+
+**Key Design Decisions**:
+1. **Flag-based enum**: `TagExportScope` uses `[Flags]` attribute to support combinations (ExportAll = ExportLocal | ExportDatabricks)
+2. **Privacy by design**: Sensitive tags are explicitly marked as local-only and excluded from `GetDatabricksExportTags()`
+3. **Static helper methods**: Each event class has `GetDatabricksExportTags()` to return the set of exportable tags
+4. **Registry pattern**: `TelemetryTagRegistry.ShouldExportToDatabricks()` provides centralized filtering logic
+5. **Unknown tags dropped**: Tags not in the registry are silently dropped for Databricks export (returns false)
+
+---
+
+#### WI-1.3: Telemetry Data Models
+**Description**: Data model classes following JDBC driver format for compatibility with Databricks telemetry backend. Implements TelemetryRequest wrapper, TelemetryFrontendLog, TelemetryEvent, and all supporting types.
+
+**Status**: ✅ **COMPLETED**
+
+**Location**: `csharp/src/Telemetry/Models/`
+
+**Files**:
+- `TelemetryRequest.cs` - Top-level wrapper with uploadTime and protoLogs array
+- `TelemetryFrontendLog.cs` - Frontend log event with workspace_id, frontend_log_event_id, context, entry
+- `TelemetryEvent.cs` - SQL driver telemetry event with session_id, sql_statement_id, system_configuration, operation_latency_ms
+- `FrontendLogContext.cs` - Context with client_context and timestamp_millis
+- `FrontendLogEntry.cs` - Entry containing sql_driver_log
+- `TelemetryClientContext.cs` - Client context with user_agent
+- `DriverSystemConfiguration.cs` - System config (driver_name, driver_version, os_name, os_version, os_arch, runtime_name, runtime_version, locale, timezone)
+- `DriverConnectionParameters.cs` - Connection params (cloud_fetch_enabled, lz4_compression_enabled, direct_results_enabled, max_download_threads, auth_type, transport_mode)
+- `SqlExecutionEvent.cs` - Execution details (result_format, chunk_count, bytes_downloaded, compression_enabled, row_count, poll_count, poll_latency_ms, time_to_first_byte_ms, execution_status, statement_type, retry_performed, retry_count)
+- `DriverErrorInfo.cs` - Error details (error_type, error_message, error_code, sql_state, http_status_code, is_terminal, retry_attempted)
+
+**Input**:
+- Telemetry data from driver operations
+
+**Output**:
+- JSON-serializable objects compatible with Databricks telemetry backend
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| Unit | `TelemetryRequest_Serialization_ProducesValidJson` | TelemetryRequest with uploadTime and protoLogs | Valid JSON with correct property names |
+| Unit | `TelemetryRequest_ProtoLogs_ContainsSerializedStrings` | TelemetryRequest with serialized frontendLogs | protoLogs array contains JSON strings |
+| Unit | `TelemetryFrontendLog_Serialization_MatchesJdbcFormat` | TelemetryFrontendLog with all fields | JSON with snake_case property names |
+| Unit | `TelemetryEvent_Serialization_OmitsNullFields` | TelemetryEvent with some null fields | JSON without null properties |
+| Unit | `TelemetryEvent_Contains_RequiredFields` | TelemetryEvent with required fields | JSON with session_id, sql_statement_id, system_configuration, operation_latency_ms |
+
+**Implementation Notes**:
+- Uses `System.Text.Json` with `[JsonPropertyName]` attributes for snake_case serialization
+- Null fields are omitted using `[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]`
+- Default values (e.g., 0 for OperationLatencyMs) are omitted using `[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]`
+- Comprehensive test coverage with 32 unit tests in `TelemetryRequestTests.cs`, `TelemetryFrontendLogTests.cs`, and `TelemetryEventTests.cs`
+- Test file location: `csharp/test/Unit/Telemetry/Models/`
+
+**Key Design Decisions**:
+1. **JDBC Format Compatibility**: All JSON property names use snake_case to match the JDBC driver format
+2. **Nested Structure**: TelemetryRequest → protoLogs (JSON strings) → TelemetryFrontendLog → entry → sql_driver_log → TelemetryEvent
+3. **Null Omission**: Null fields are automatically omitted from serialization to reduce payload size
+4. **Separation of Concerns**: Each model class has a single responsibility and clear documentation
 
 ---
 
@@ -484,6 +551,8 @@ graph TD
     WI_1_1 --> WI_3_1[WI-3.1: CircuitBreaker]
 
     WI_1_2[WI-1.2: Tag Definitions] --> WI_5_3[WI-5.3: MetricsAggregator]
+    WI_1_3[WI-1.3: Telemetry Data Models] --> WI_5_2[WI-5.2: DatabricksTelemetryExporter]
+    WI_1_3 --> WI_5_3
 
     WI_3_1 --> WI_3_2[WI-3.2: CircuitBreakerManager]
     WI_3_2 --> WI_3_3[WI-3.3: CircuitBreakerTelemetryExporter]
@@ -522,9 +591,22 @@ csharp/src/
 │   ├── TagDefinitions/
 │   │   ├── TelemetryTag.cs
 │   │   ├── TelemetryTagRegistry.cs
+│   │   ├── TelemetryEventType.cs
 │   │   ├── ConnectionOpenEvent.cs
 │   │   ├── StatementExecutionEvent.cs
 │   │   └── ErrorEvent.cs
+│   │
+│   ├── Models/
+│   │   ├── TelemetryRequest.cs
+│   │   ├── TelemetryFrontendLog.cs
+│   │   ├── TelemetryEvent.cs
+│   │   ├── FrontendLogContext.cs
+│   │   ├── FrontendLogEntry.cs
+│   │   ├── TelemetryClientContext.cs
+│   │   ├── DriverSystemConfiguration.cs
+│   │   ├── DriverConnectionParameters.cs
+│   │   ├── SqlExecutionEvent.cs
+│   │   └── DriverErrorInfo.cs
 │   │
 │   ├── FeatureFlagCache.cs
 │   ├── FeatureFlagContext.cs
@@ -548,6 +630,10 @@ csharp/test/
 │   ├── TelemetryConfigurationTests.cs
 │   ├── TagDefinitions/
 │   │   └── TelemetryTagRegistryTests.cs
+│   ├── Models/
+│   │   ├── TelemetryRequestTests.cs
+│   │   ├── TelemetryFrontendLogTests.cs
+│   │   └── TelemetryEventTests.cs
 │   ├── FeatureFlagCacheTests.cs
 │   ├── TelemetryClientManagerTests.cs
 │   ├── CircuitBreakerTests.cs
@@ -567,6 +653,7 @@ csharp/test/
 |-----------|---------------------------|--------------------------------|
 | TelemetryConfiguration | > 90% | N/A |
 | Tag Definitions | 100% | N/A |
+| Telemetry Data Models | > 90% | N/A |
 | FeatureFlagCache | > 90% | > 80% |
 | TelemetryClientManager | > 90% | > 80% |
 | CircuitBreaker | > 90% | > 80% |
