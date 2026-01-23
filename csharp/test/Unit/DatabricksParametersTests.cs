@@ -77,9 +77,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public void TestConfOverlayPrefixParameterExists()
+        public void TestQueryTagsParameterExists()
         {
-            Assert.Equal("adbc.databricks.conf_overlay_", DatabricksParameters.ConfOverlayPrefix);
+            Assert.Equal("adbc.databricks.query_tags", DatabricksParameters.QueryTags);
         }
 
         [Fact]
@@ -100,7 +100,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.StartsWith("adbc.databricks.", DatabricksParameters.Protocol);
             Assert.StartsWith("adbc.databricks.", DatabricksParameters.EnableSessionManagement);
             Assert.StartsWith("adbc.databricks.", DatabricksParameters.EnableDirectResults);
-            Assert.StartsWith("adbc.databricks.", DatabricksParameters.ConfOverlayPrefix);
+            Assert.StartsWith("adbc.databricks.", DatabricksParameters.QueryTags);
         }
     }
 }
