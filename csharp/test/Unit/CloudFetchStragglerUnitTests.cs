@@ -27,10 +27,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit
+namespace AdbcDrivers.Databricks.Tests.Unit
 {
     /// <summary>
     /// Comprehensive unit tests for straggler mitigation components.

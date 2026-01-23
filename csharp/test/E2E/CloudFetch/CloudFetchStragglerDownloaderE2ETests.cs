@@ -32,14 +32,14 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Arrow.Adbc.Drivers.Databricks;
-using Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
 using Apache.Hive.Service.Rpc.Thrift;
 using Moq;
 using Moq.Protected;
 using Xunit;
 
-namespace Apache.Arrow.Adbc.Tests.Drivers.Databricks.E2E.CloudFetch
+namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
 {
     /// <summary>
     /// Helper class to track max concurrency (allows mutation in lambda).
