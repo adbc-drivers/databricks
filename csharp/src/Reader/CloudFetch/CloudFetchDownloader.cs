@@ -22,27 +22,31 @@
 */
 
 using System;
-using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Tracing;
-using Microsoft.IO;
+using K4os.Compression.LZ4.Streams;
 
-namespace AdbcDrivers.Databricks.Reader.CloudFetch
+namespace Apache.Arrow.Adbc.Drivers.Databricks.Reader.CloudFetch
 {
     /// <summary>
     /// Downloads files from URLs.
-    /// Uses dependency injection to receive IActivityTracer for tracing support.
     /// </summary>
-    internal sealed class CloudFetchDownloader : ICloudFetchDownloader
+    internal sealed class CloudFetchDownloader : ICloudFetchDownloader, IActivityTracer
     {
-        private readonly IActivityTracer _activityTracer;
+        // Straggler mitigation timing constants
+        private static readonly TimeSpan StragglerMonitoringInterval = TimeSpan.FromSeconds(2);
+        private static readonly TimeSpan MetricsCleanupDelay = TimeSpan.FromSeconds(5);  // Must be > monitoring interval
+        private static readonly TimeSpan CtsDisposalDelay = TimeSpan.FromSeconds(6);  // Must be > metrics cleanup delay
+
+        private readonly ITracingStatement _statement;
         private readonly BlockingCollection<IDownloadResult> _downloadQueue;
         private readonly BlockingCollection<IDownloadResult> _resultQueue;
         private readonly ICloudFetchMemoryBufferManager _memoryManager;
@@ -55,72 +59,43 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly int _maxUrlRefreshAttempts;
         private readonly int _urlExpirationBufferSeconds;
         private readonly SemaphoreSlim _downloadSemaphore;
-        private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
-        private readonly ArrayPool<byte>? _lz4BufferPool;
         private Task? _downloadTask;
         private CancellationTokenSource? _cancellationTokenSource;
         private bool _isCompleted;
         private Exception? _error;
         private readonly object _errorLock = new object();
 
+        // Straggler mitigation fields
+        private readonly bool _isStragglerMitigationEnabled;
+        private readonly StragglerDownloadDetector? _stragglerDetector;
+        private readonly ConcurrentDictionary<long, FileDownloadMetrics>? _activeDownloadMetrics;
+        private readonly ConcurrentDictionary<long, CancellationTokenSource>? _perFileDownloadCancellationTokens;
+        private readonly ConcurrentDictionary<long, bool>? _alreadyCountedStragglers;  // Prevents duplicate counting of same file
+        private readonly ConcurrentDictionary<long, Task>? _metricCleanupTasks;  // Tracks cleanup tasks for proper shutdown
+        private Task? _stragglerMonitoringTask;
+        private CancellationTokenSource? _stragglerMonitoringCts;
+        private volatile bool _hasTriggeredSequentialDownloadFallback;
+        private SemaphoreSlim _sequentialSemaphore = new SemaphoreSlim(1, 1);
+        private volatile bool _isSequentialMode;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class.
         /// </summary>
-        /// <param name="activityTracer">The activity tracer for tracing support (dependency injection).</param>
+        /// <param name="statement">The tracing statement for Activity context.</param>
         /// <param name="downloadQueue">The queue of downloads to process.</param>
         /// <param name="resultQueue">The queue to add completed downloads to.</param>
         /// <param name="memoryManager">The memory buffer manager.</param>
         /// <param name="httpClient">The HTTP client to use for downloads.</param>
         /// <param name="resultFetcher">The result fetcher that manages URLs.</param>
-        /// <param name="config">The CloudFetch configuration.</param>
+        /// <param name="maxParallelDownloads">The maximum number of parallel downloads.</param>
+        /// <param name="isLz4Compressed">Whether the results are LZ4 compressed.</param>
+        /// <param name="maxRetries">The maximum number of retry attempts.</param>
+        /// <param name="retryDelayMs">The delay between retry attempts in milliseconds.</param>
+        /// <param name="maxUrlRefreshAttempts">The maximum number of URL refresh attempts.</param>
+        /// <param name="urlExpirationBufferSeconds">Buffer time in seconds before URL expiration to trigger refresh.</param>
+        /// <param name="stragglerConfig">Optional configuration for straggler mitigation (null = disabled).</param>
         public CloudFetchDownloader(
-            IActivityTracer activityTracer,
-            BlockingCollection<IDownloadResult> downloadQueue,
-            BlockingCollection<IDownloadResult> resultQueue,
-            ICloudFetchMemoryBufferManager memoryManager,
-            HttpClient httpClient,
-            ICloudFetchResultFetcher resultFetcher,
-            CloudFetchConfiguration config)
-        {
-            _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
-            _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
-            _resultQueue = resultQueue ?? throw new ArgumentNullException(nameof(resultQueue));
-            _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
-            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-            _resultFetcher = resultFetcher ?? throw new ArgumentNullException(nameof(resultFetcher));
-
-            if (config == null) throw new ArgumentNullException(nameof(config));
-
-            // Apply CloudFetch timeout configuration to HttpClient
-            _httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);
-
-            _maxParallelDownloads = config.ParallelDownloads;
-            _isLz4Compressed = config.IsLz4Compressed;
-            _maxRetries = config.MaxRetries;
-            _retryDelayMs = config.RetryDelayMs;
-            _maxUrlRefreshAttempts = config.MaxUrlRefreshAttempts;
-            _urlExpirationBufferSeconds = config.UrlExpirationBufferSeconds;
-            _memoryStreamManager = config.MemoryStreamManager;
-            _lz4BufferPool = config.Lz4BufferPool;
-            _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
-            _isCompleted = false;
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class for testing.
-        /// </summary>
-        /// <param name="activityTracer">The activity tracer for tracing support (dependency injection).</param>
-        /// <param name="downloadQueue">The queue of downloads to process.</param>
-        /// <param name="resultQueue">The queue to add completed downloads to.</param>
-        /// <param name="memoryManager">The memory buffer manager.</param>
-        /// <param name="httpClient">The HTTP client to use for downloads.</param>
-        /// <param name="resultFetcher">The result fetcher that manages URLs.</param>
-        /// <param name="maxParallelDownloads">Maximum parallel downloads.</param>
-        /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>
-        /// <param name="maxRetries">Maximum retry attempts (optional, default 3).</param>
-        /// <param name="retryDelayMs">Delay between retries in ms (optional, default 1000).</param>
-        internal CloudFetchDownloader(
-            IActivityTracer activityTracer,
+            ITracingStatement statement,
             BlockingCollection<IDownloadResult> downloadQueue,
             BlockingCollection<IDownloadResult> resultQueue,
             ICloudFetchMemoryBufferManager memoryManager,
@@ -129,25 +104,44 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             int maxParallelDownloads,
             bool isLz4Compressed,
             int maxRetries = 3,
-            int retryDelayMs = 1000)
+            int retryDelayMs = 500,
+            int maxUrlRefreshAttempts = 3,
+            int urlExpirationBufferSeconds = 60,
+            CloudFetchStragglerMitigationConfig? stragglerConfig = null)
         {
-            _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
+            _statement = statement ?? throw new ArgumentNullException(nameof(statement));
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
             _resultQueue = resultQueue ?? throw new ArgumentNullException(nameof(resultQueue));
             _memoryManager = memoryManager ?? throw new ArgumentNullException(nameof(memoryManager));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _resultFetcher = resultFetcher ?? throw new ArgumentNullException(nameof(resultFetcher));
-
-            _maxParallelDownloads = maxParallelDownloads;
+            _maxParallelDownloads = maxParallelDownloads > 0 ? maxParallelDownloads : throw new ArgumentOutOfRangeException(nameof(maxParallelDownloads));
             _isLz4Compressed = isLz4Compressed;
-            _maxRetries = maxRetries;
-            _retryDelayMs = retryDelayMs;
-            _maxUrlRefreshAttempts = CloudFetchConfiguration.DefaultMaxUrlRefreshAttempts;
-            _urlExpirationBufferSeconds = CloudFetchConfiguration.DefaultUrlExpirationBufferSeconds;
-            _memoryStreamManager = null;
-            _lz4BufferPool = null;
+            _maxRetries = maxRetries > 0 ? maxRetries : throw new ArgumentOutOfRangeException(nameof(maxRetries));
+            _retryDelayMs = retryDelayMs > 0 ? retryDelayMs : throw new ArgumentOutOfRangeException(nameof(retryDelayMs));
+            _maxUrlRefreshAttempts = maxUrlRefreshAttempts > 0 ? maxUrlRefreshAttempts : throw new ArgumentOutOfRangeException(nameof(maxUrlRefreshAttempts));
+            _urlExpirationBufferSeconds = urlExpirationBufferSeconds > 0 ? urlExpirationBufferSeconds : throw new ArgumentOutOfRangeException(nameof(urlExpirationBufferSeconds));
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
             _isCompleted = false;
+
+            // Initialize straggler mitigation from config object
+            var config = stragglerConfig ?? CloudFetchStragglerMitigationConfig.Disabled;
+            _isStragglerMitigationEnabled = config.Enabled;
+
+            if (config.Enabled)
+            {
+                _stragglerDetector = new StragglerDownloadDetector(
+                    config.Multiplier,
+                    config.Quantile,
+                    config.Padding,
+                    config.SynchronousFallbackEnabled ? config.MaxStragglersBeforeFallback : int.MaxValue);
+
+                _activeDownloadMetrics = new ConcurrentDictionary<long, FileDownloadMetrics>();
+                _perFileDownloadCancellationTokens = new ConcurrentDictionary<long, CancellationTokenSource>();
+                _alreadyCountedStragglers = new ConcurrentDictionary<long, bool>();
+                _metricCleanupTasks = new ConcurrentDictionary<long, Task>();
+                _hasTriggeredSequentialDownloadFallback = false;
+            }
         }
 
         /// <inheritdoc />
@@ -159,6 +153,27 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <inheritdoc />
         public Exception? Error => _error;
 
+        /// <summary>
+        /// Internal property to check if straggler mitigation is enabled (for testing).
+        /// </summary>
+        internal bool IsStragglerMitigationEnabled => _isStragglerMitigationEnabled;
+
+        /// <summary>
+        /// Internal property to get total stragglers detected (for testing).
+        /// </summary>
+        internal long GetTotalStragglersDetected() => _stragglerDetector?.GetTotalStragglersDetectedInQuery() ?? 0;
+
+        /// <summary>
+        /// Internal property to get count of active downloads being tracked (for testing).
+        /// </summary>
+        internal int GetActiveDownloadCount() => _activeDownloadMetrics?.Count ?? 0;
+
+        /// <summary>
+        /// Internal property to check if tracking dictionaries are initialized (for testing).
+        /// </summary>
+        internal bool AreTrackingDictionariesInitialized() => _activeDownloadMetrics != null && _perFileDownloadCancellationTokens != null;
+
+
         /// <inheritdoc />
         public async Task StartAsync(CancellationToken cancellationToken)
         {
@@ -169,6 +184,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _downloadTask = DownloadFilesAsync(_cancellationTokenSource.Token);
+
+            // Start straggler monitoring if enabled
+            if (_isStragglerMitigationEnabled && _stragglerDetector != null)
+            {
+                _stragglerMonitoringCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                _stragglerMonitoringTask = MonitorForStragglerDownloadsAsync(_stragglerMonitoringCts.Token);
+            }
 
             // Wait for the download task to start
             await Task.Yield();
@@ -184,6 +206,30 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             _cancellationTokenSource?.Cancel();
 
+            // Stop straggler monitoring if running
+            if (_stragglerMonitoringTask != null)
+            {
+                _stragglerMonitoringCts?.Cancel();
+                try
+                {
+                    await _stragglerMonitoringTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected when cancellation is requested
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error stopping straggler monitoring: {ex.Message}");
+                }
+                finally
+                {
+                    _stragglerMonitoringCts?.Dispose();
+                    _stragglerMonitoringCts = null;
+                    _stragglerMonitoringTask = null;
+                }
+            }
+
             try
             {
                 await _downloadTask.ConfigureAwait(false);
@@ -194,16 +240,40 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
             catch (Exception ex)
             {
-                Activity.Current?.AddEvent("cloudfetch.downloader_stop_error", [
-                    new("error_message", ex.Message),
-                    new("error_type", ex.GetType().Name)
-                ]);
+                Debug.WriteLine($"Error stopping downloader: {ex.Message}");
             }
             finally
             {
                 _cancellationTokenSource?.Dispose();
                 _cancellationTokenSource = null;
                 _downloadTask = null;
+
+                // Await all metric cleanup tasks before disposing resources
+                if (_metricCleanupTasks != null && _metricCleanupTasks.Count > 0)
+                {
+                    try
+                    {
+                        await Task.WhenAll(_metricCleanupTasks.Values).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Ignore cleanup task exceptions during shutdown
+                    }
+                    _metricCleanupTasks.Clear();
+                }
+
+                // Cleanup per-file cancellation tokens
+                if (_perFileDownloadCancellationTokens != null)
+                {
+                    foreach (var cts in _perFileDownloadCancellationTokens.Values)
+                    {
+                        cts?.Dispose();
+                    }
+                    _perFileDownloadCancellationTokens.Clear();
+                }
+
+                // Dispose sequential semaphore
+                _sequentialSemaphore?.Dispose();
             }
         }
 
@@ -220,11 +290,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 // Try to take the next result from the queue
                 IDownloadResult result = await Task.Run(() => _resultQueue.Take(cancellationToken), cancellationToken);
-
-                Activity.Current?.AddEvent("cloudfetch.result_dequeued", [
-                    new("chunk_index", result?.ChunkIndex ?? -1),
-                    new("is_end_guard", result == EndOfResultsGuard.Instance)
-                ]);
 
                 // Check if this is the end of results guard
                 if (result == EndOfResultsGuard.Instance)
@@ -261,7 +326,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
         private async Task DownloadFilesAsync(CancellationToken cancellationToken)
         {
-            await _activityTracer.TraceActivityAsync(async activity =>
+            await this.TraceActivityAsync(async activity =>
             {
                 await Task.Yield();
 
@@ -278,21 +343,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     var downloadTaskCompletionSource = new TaskCompletionSource<bool>();
 
                     // Process items from the download queue until it's completed
-                    activity?.AddEvent("cloudfetch.download_loop_start", [
-                        new("download_queue_count", _downloadQueue.Count)
-                    ]);
-
                     foreach (var downloadResult in _downloadQueue.GetConsumingEnumerable(cancellationToken))
                     {
-                        activity?.AddEvent("cloudfetch.download_item_dequeued", [
-                            new("chunk_index", downloadResult?.ChunkIndex ?? -1),
-                            new("is_end_guard", downloadResult == EndOfResultsGuard.Instance)
-                        ]);
-
                         // Check if there's an error before processing more downloads
                         if (HasError)
                         {
-                            activity?.AddEvent("cloudfetch.download_loop_error_break");
                             // Add the failed download result to the queue to signal the error
                             // This will be caught by GetNextDownloadedFileAsync
                             break;
@@ -301,7 +356,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         // Check if this is the end of results guard
                         if (downloadResult == EndOfResultsGuard.Instance)
                         {
-                            activity?.AddEvent("cloudfetch.end_of_results_guard_received");
                             // Wait for all active downloads to complete
                             if (downloadTasks.Count > 0)
                             {
@@ -332,19 +386,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         // Check if the URL is expired or about to expire
                         if (downloadResult.IsExpiredOrExpiringSoon(_urlExpirationBufferSeconds))
                         {
-                            activity?.AddEvent("cloudfetch.url_expired_refreshing", [
-                                new("chunk_index", downloadResult.ChunkIndex),
-                                new("start_row_offset", downloadResult.StartRowOffset)
-                            ]);
-                            // Get refreshed URLs starting from this offset
-                            var refreshedResults = await _resultFetcher.RefreshUrlsAsync(downloadResult.StartRowOffset, cancellationToken);
-                            var refreshedResult = refreshedResults.FirstOrDefault(r => r.StartRowOffset == downloadResult.StartRowOffset);
-                            if (refreshedResult != null)
+                            // Get a refreshed URL before starting the download
+                            var refreshedLink = await _resultFetcher.GetUrlAsync(downloadResult.Link.StartRowOffset, cancellationToken);
+                            if (refreshedLink != null)
                             {
-                                // Update the download result with the refreshed URL
-                                downloadResult.UpdateWithRefreshedUrl(refreshedResult.FileUrl, refreshedResult.ExpirationTime, refreshedResult.HttpHeaders);
+                                // Update the download result with the refreshed link
+                                downloadResult.UpdateWithRefreshedLink(refreshedLink);
                                 activity?.AddEvent("cloudfetch.url_refreshed_before_download", [
-                                    new("offset", refreshedResult.StartRowOffset)
+                                    new("offset", refreshedLink.StartRowOffset)
                                 ]);
                             }
                         }
@@ -352,20 +401,26 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         // Acquire a download slot
                         await _downloadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-                        // Acquire memory for this download (FIFO - acquired in sequential loop)
-                        long size = downloadResult.Size;
-                        await _memoryManager.AcquireMemoryAsync(size, cancellationToken).ConfigureAwait(false);
+                        bool acquiredSequential = false;
+                        if (_isSequentialMode)
+                        {
+                            await _sequentialSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                            acquiredSequential = true;
+                        }
 
-                        activity?.AddEvent("cloudfetch.download_slot_acquired", [
-                            new("chunk_index", downloadResult.ChunkIndex)
-                        ]);
-
-                        // Start the download task
-                        Task downloadTask = DownloadFileAsync(downloadResult, cancellationToken)
-                            .ContinueWith(t =>
-                            {
-                                // Release the download slot
-                                _downloadSemaphore.Release();
+                        Task downloadTask;
+                        try
+                        {
+                            // Start the download task
+                            downloadTask = DownloadFileAsync(downloadResult, cancellationToken)
+                                .ContinueWith(t =>
+                                {
+                                    // Release in reverse order
+                                    if (acquiredSequential)
+                                    {
+                                        _sequentialSemaphore.Release();
+                                    }
+                                    _downloadSemaphore.Release();
 
                                 // Remove the task from the dictionary
                                 downloadTasks.TryRemove(t, out _);
@@ -374,10 +429,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 if (t.IsFaulted)
                                 {
                                     Exception ex = t.Exception?.InnerException ?? new Exception("Unknown error");
-                                    string sanitizedUrl = SanitizeUrl(downloadResult.FileUrl);
+                                    string sanitizedUrl = SanitizeUrl(downloadResult.Link.FileLink);
                                     activity?.AddException(ex, [
                                         new("error.context", "cloudfetch.download_failed"),
-                                        new("offset", downloadResult.StartRowOffset),
+                                        new("offset", downloadResult.Link.StartRowOffset),
                                         new("sanitized_url", sanitizedUrl)
                                     ]);
 
@@ -398,16 +453,22 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 }
                             }, cancellationToken);
 
-                        // Add the task to the dictionary
-                        downloadTasks[downloadTask] = downloadResult;
+                            // Add the task to the dictionary
+                            downloadTasks[downloadTask] = downloadResult;
+                        }
+                        catch
+                        {
+                            // If task creation fails, release semaphores to prevent leak
+                            if (acquiredSequential)
+                            {
+                                _sequentialSemaphore.Release();
+                            }
+                            _downloadSemaphore.Release();
+                            throw;
+                        }
 
                         // Add the result to the result queue add the result here to assure the download sequence.
                         _resultQueue.Add(downloadResult, cancellationToken);
-
-                        activity?.AddEvent("cloudfetch.result_enqueued", [
-                            new("chunk_index", downloadResult.ChunkIndex),
-                            new("result_queue_count", _resultQueue.Count)
-                        ]);
 
                         // If there's an error, stop processing more downloads
                         if (HasError)
@@ -451,17 +512,17 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
         private async Task DownloadFileAsync(IDownloadResult downloadResult, CancellationToken cancellationToken)
         {
-            await _activityTracer.TraceActivityAsync(async activity =>
+            await this.TraceActivityAsync(async activity =>
             {
-                string url = downloadResult.FileUrl;
-                string sanitizedUrl = SanitizeUrl(downloadResult.FileUrl);
+                string url = downloadResult.Link.FileLink;
+                string sanitizedUrl = SanitizeUrl(downloadResult.Link.FileLink);
                 byte[]? fileData = null;
 
                 // Use the size directly from the download result
                 long size = downloadResult.Size;
 
                 // Add tags to the Activity for filtering/searching
-                activity?.SetTag("cloudfetch.offset", downloadResult.StartRowOffset);
+                activity?.SetTag("cloudfetch.offset", downloadResult.Link.StartRowOffset);
                 activity?.SetTag("cloudfetch.sanitized_url", sanitizedUrl);
                 activity?.SetTag("cloudfetch.expected_size_bytes", size);
 
@@ -470,34 +531,46 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 // Log download start
                 activity?.AddEvent("cloudfetch.download_start", [
-                new("offset", downloadResult.StartRowOffset),
+                new("offset", downloadResult.Link.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("expected_size_bytes", size),
                     new("expected_size_kb", size / 1024.0)
             ]);
+
+                // Acquire memory before downloading
+                await _memoryManager.AcquireMemoryAsync(size, cancellationToken).ConfigureAwait(false);
+
+                // Declare variables for cleanup in finally block
+                FileDownloadMetrics? downloadMetrics = null;
+                CancellationTokenSource? perFileCancellationTokenSource = null;
+                long fileOffset = downloadResult.Link.StartRowOffset;
+
+            try
+            {
+                // Initialize straggler tracking if enabled (inside try block for proper cleanup)
+                if (_isStragglerMitigationEnabled && _activeDownloadMetrics != null && _perFileDownloadCancellationTokens != null)
+                {
+                    downloadMetrics = new FileDownloadMetrics(fileOffset, size);
+                    _activeDownloadMetrics[fileOffset] = downloadMetrics;
+
+                    perFileCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    _perFileDownloadCancellationTokens[fileOffset] = perFileCancellationTokenSource;
+                }
+
 
                 // Retry logic for downloading files
                 for (int retry = 0; retry < _maxRetries; retry++)
                 {
                     try
                     {
-                        // Create HTTP request with optional custom headers
-                        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-
-                        // Add custom headers if provided
-                        if (downloadResult.HttpHeaders != null)
-                        {
-                            foreach (var header in downloadResult.HttpHeaders)
-                            {
-                                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                            }
-                        }
+                        // Use per-file cancellation token if available, otherwise use global token
+                        CancellationToken effectiveToken = perFileCancellationTokenSource?.Token ?? cancellationToken;
 
                         // Download the file directly
-                        using HttpResponseMessage response = await _httpClient.SendAsync(
-                            request,
+                        using HttpResponseMessage response = await _httpClient.GetAsync(
+                            url,
                             HttpCompletionOption.ResponseHeadersRead,
-                            cancellationToken).ConfigureAwait(false);
+                            effectiveToken).ConfigureAwait(false);
 
                         // Check if the response indicates an expired URL (typically 403 or 401)
                         if (response.StatusCode == System.Net.HttpStatusCode.Forbidden ||
@@ -510,17 +583,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             }
 
                             // Try to refresh the URL
-                            var refreshedResults = await _resultFetcher.RefreshUrlsAsync(downloadResult.StartRowOffset, cancellationToken);
-                            var refreshedResult = refreshedResults.FirstOrDefault(r => r.StartRowOffset == downloadResult.StartRowOffset);
-                            if (refreshedResult != null)
+                            var refreshedLink = await _resultFetcher.GetUrlAsync(downloadResult.Link.StartRowOffset, cancellationToken);
+                            if (refreshedLink != null)
                             {
-                                // Update the download result with the refreshed URL
-                                downloadResult.UpdateWithRefreshedUrl(refreshedResult.FileUrl, refreshedResult.ExpirationTime, refreshedResult.HttpHeaders);
-                                url = refreshedResult.FileUrl;
+                                // Update the download result with the refreshed link
+                                downloadResult.UpdateWithRefreshedLink(refreshedLink);
+                                url = refreshedLink.FileLink;
                                 sanitizedUrl = SanitizeUrl(url);
 
                                 activity?.AddEvent("cloudfetch.url_refreshed_after_auth_error", [
-                                    new("offset", refreshedResult.StartRowOffset),
+                                    new("offset", refreshedLink.StartRowOffset),
                                     new("sanitized_url", sanitizedUrl)
                                 ]);
 
@@ -541,7 +613,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         if (contentLength.HasValue && contentLength.Value > 0)
                         {
                             activity?.AddEvent("cloudfetch.content_length", [
-                                new("offset", downloadResult.StartRowOffset),
+                                new("offset", downloadResult.Link.StartRowOffset),
                                 new("sanitized_url", sanitizedUrl),
                                 new("content_length_bytes", contentLength.Value),
                                 new("content_length_mb", contentLength.Value / 1024.0 / 1024.0)
@@ -557,12 +629,86 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         // Log the error and retry
                         activity?.AddException(ex, [
                             new("error.context", "cloudfetch.download_retry"),
-                            new("offset", downloadResult.StartRowOffset),
+                            new("offset", downloadResult.Link.StartRowOffset),
                             new("sanitized_url", SanitizeUrl(url)),
                             new("attempt", retry + 1),
                             new("max_retries", _maxRetries)
                         ]);
 
+                        await Task.Delay(_retryDelayMs * (retry + 1), cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (
+                        perFileCancellationTokenSource?.IsCancellationRequested == true
+                        && !cancellationToken.IsCancellationRequested
+                        && retry < _maxRetries - 1  // Edge case protection: don't cancel last retry
+                        && fileData == null)  // Race condition check: only retry if download didn't complete
+                    {
+                        // Straggler cancelled - this counts as one retry
+                        activity?.AddEvent("cloudfetch.straggler_cancelled", [
+                            new("offset", downloadResult.Link.StartRowOffset),
+                            new("sanitized_url", sanitizedUrl),
+                            new("file_size_mb", size / 1024.0 / 1024.0),
+                            new("elapsed_seconds", stopwatch.ElapsedMilliseconds / 1000.0),
+                            new("attempt", retry + 1),
+                            new("max_retries", _maxRetries)
+                        ]);
+
+                        downloadMetrics?.MarkCancelledAsStragler();
+
+                        // Create fresh cancellation token for retry atomically
+                        var newCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        if (_perFileDownloadCancellationTokens != null)
+                        {
+                            var oldCts = _perFileDownloadCancellationTokens.AddOrUpdate(
+                                downloadResult.Link.StartRowOffset,
+                                newCts,
+                                (key, existing) =>
+                                {
+                                    existing?.Dispose();  // Dispose old one atomically
+                                    return newCts;
+                                });
+
+                            // If this was an add (not update), oldCts == newCts, so don't dispose
+                            if (oldCts != newCts)
+                            {
+                                perFileCancellationTokenSource?.Dispose();
+                            }
+
+                            perFileCancellationTokenSource = newCts;
+                        }
+                        else
+                        {
+                            perFileCancellationTokenSource?.Dispose();
+                            perFileCancellationTokenSource = newCts;
+                        }
+
+                        // Check if URL needs refresh (expired or expiring soon)
+                        if (downloadResult.IsExpiredOrExpiringSoon(_urlExpirationBufferSeconds))
+                        {
+                            var refreshedLink = await _resultFetcher.GetUrlAsync(downloadResult.Link.StartRowOffset, cancellationToken);
+                            if (refreshedLink != null)
+                            {
+                                downloadResult.UpdateWithRefreshedLink(refreshedLink);
+                                url = refreshedLink.FileLink;
+                                sanitizedUrl = SanitizeUrl(url);
+
+                                activity?.AddEvent("cloudfetch.url_refreshed_for_straggler_retry", [
+                                    new("offset", refreshedLink.StartRowOffset),
+                                    new("sanitized_url", sanitizedUrl)
+                                ]);
+                            }
+                            else
+                            {
+                                // URL refresh failed, log warning and continue with existing URL
+                                activity?.AddEvent("cloudfetch.url_refresh_failed_for_straggler_retry", [
+                                    new("offset", downloadResult.Link.StartRowOffset),
+                                    new("sanitized_url", sanitizedUrl),
+                                    new("warning", "Failed to refresh expired URL, continuing with existing URL")
+                                ]);
+                            }
+                        }
+
+                        // Apply retry delay
                         await Task.Delay(_retryDelayMs * (retry + 1), cancellationToken).ConfigureAwait(false);
                     }
                 }
@@ -571,7 +717,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 {
                     stopwatch.Stop();
                     activity?.AddEvent("cloudfetch.download_failed_all_retries", [
-                        new("offset", downloadResult.StartRowOffset),
+                        new("offset", downloadResult.Link.StartRowOffset),
                         new("sanitized_url", sanitizedUrl),
                         new("max_retries", _maxRetries),
                         new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
@@ -583,7 +729,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 }
 
                 // Process the downloaded file data
-                Stream dataStream;
+                MemoryStream dataStream;
                 long actualSize = fileData.Length;
 
                 // If the data is LZ4 compressed, decompress it
@@ -592,33 +738,24 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     try
                     {
                         var decompressStopwatch = Stopwatch.StartNew();
-
-                        // Use shared Lz4Utilities for decompression with both RecyclableMemoryStream and ArrayPool
-                        // The returned stream must be disposed by Arrow after reading
-                        // Protocol-agnostic: use resources from config (populated by caller from connection)
-                        // Falls back to creating new instances if not provided (less efficient but works)
-                        var memoryStreamManager = _memoryStreamManager ?? new RecyclableMemoryStreamManager();
-                        var lz4BufferPool = _lz4BufferPool ?? ArrayPool<byte>.Shared;
-                        dataStream = await Lz4Utilities.DecompressLz4Async(
-                            fileData,
-                            memoryStreamManager,
-                            lz4BufferPool,
-                            cancellationToken).ConfigureAwait(false);
-
+                        dataStream = new MemoryStream();
+                        using (var inputStream = new MemoryStream(fileData))
+                        using (var decompressor = LZ4Stream.Decode(inputStream))
+                        {
+                            await decompressor.CopyToAsync(dataStream, 81920, cancellationToken).ConfigureAwait(false);
+                        }
+                        dataStream.Position = 0;
                         decompressStopwatch.Stop();
 
-                        // Calculate throughput metrics
-                        double compressionRatio = (double)dataStream.Length / actualSize;
-
                         activity?.AddEvent("cloudfetch.decompression_complete", [
-                            new("offset", downloadResult.StartRowOffset),
+                            new("offset", downloadResult.Link.StartRowOffset),
                             new("sanitized_url", sanitizedUrl),
                             new("decompression_time_ms", decompressStopwatch.ElapsedMilliseconds),
                             new("compressed_size_bytes", actualSize),
                             new("compressed_size_kb", actualSize / 1024.0),
                             new("decompressed_size_bytes", dataStream.Length),
                             new("decompressed_size_kb", dataStream.Length / 1024.0),
-                            new("compression_ratio", compressionRatio)
+                            new("compression_ratio", (double)dataStream.Length / actualSize)
                         ]);
 
                         actualSize = dataStream.Length;
@@ -628,7 +765,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         stopwatch.Stop();
                         activity?.AddException(ex, [
                             new("error.context", "cloudfetch.decompression"),
-                            new("offset", downloadResult.StartRowOffset),
+                            new("offset", downloadResult.Link.StartRowOffset),
                             new("sanitized_url", sanitizedUrl),
                             new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
                         ]);
@@ -647,7 +784,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 stopwatch.Stop();
                 double throughputMBps = (actualSize / 1024.0 / 1024.0) / (stopwatch.ElapsedMilliseconds / 1000.0);
                 activity?.AddEvent("cloudfetch.download_complete", [
-                    new("offset", downloadResult.StartRowOffset),
+                    new("offset", downloadResult.Link.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("actual_size_bytes", actualSize),
                     new("actual_size_kb", actualSize / 1024.0),
@@ -657,6 +794,59 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 // Set the download as completed with the original size
                 downloadResult.SetCompleted(dataStream, size);
+
+                // Mark download as completed
+                if (downloadMetrics != null)
+                {
+                    downloadMetrics.MarkDownloadCompleted();
+                }
+            }
+            finally
+            {
+                // Delay CTS disposal to avoid race with monitoring thread
+                // Monitoring thread may still be checking this CTS, so schedule disposal after monitoring can complete
+                if (_perFileDownloadCancellationTokens != null)
+                {
+                    if (_perFileDownloadCancellationTokens.TryRemove(fileOffset, out var cts))
+                    {
+                        // Schedule disposal after delay to allow monitoring thread to finish
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(CtsDisposalDelay);
+                            cts?.Dispose();
+                        });
+                    }
+                }
+
+                // Track cleanup task instead of fire-and-forget to ensure proper shutdown
+                if (_activeDownloadMetrics != null && _metricCleanupTasks != null)
+                {
+                    var cleanupTask = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            // Use cancellationToken to respect shutdown - removes immediately if cancelled
+                            await Task.Delay(MetricsCleanupDelay, cancellationToken);
+                            _activeDownloadMetrics?.TryRemove(fileOffset, out _);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // Shutdown requested - remove immediately
+                            _activeDownloadMetrics?.TryRemove(fileOffset, out _);
+                        }
+                        catch
+                        {
+                            // Ignore other exceptions in cleanup task
+                        }
+                        finally
+                        {
+                            // Always remove from tracking dictionary
+                            _metricCleanupTasks?.TryRemove(fileOffset, out _);
+                        }
+                    });
+                    _metricCleanupTasks[fileOffset] = cleanupTask;
+                }
+            }
             }, activityName: "DownloadFile");
         }
 
@@ -688,6 +878,88 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
         }
 
+        private async Task MonitorForStragglerDownloadsAsync(CancellationToken cancellationToken)
+        {
+            await this.TraceActivityAsync(async activity =>
+            {
+                activity?.SetTag("straggler.monitoring_interval_seconds", 2);
+                activity?.SetTag("straggler.enabled", _isStragglerMitigationEnabled);
+
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(StragglerMonitoringInterval, cancellationToken).ConfigureAwait(false);
+
+                        if (_activeDownloadMetrics == null || _stragglerDetector == null || _perFileDownloadCancellationTokens == null)
+                        {
+                            continue;
+                        }
+
+                        // Check for fallback condition
+                        if (_stragglerDetector.ShouldFallbackToSequentialDownloads && !_hasTriggeredSequentialDownloadFallback)
+                        {
+                            _isSequentialMode = true;
+                            _hasTriggeredSequentialDownloadFallback = true;
+                            activity?.AddEvent("cloudfetch.sequential_fallback_triggered", [
+                                new("total_stragglers_in_query", _stragglerDetector.GetTotalStragglersDetectedInQuery()),
+                                new("new_parallelism", 1)
+                            ]);
+                        }
+
+                        // Get snapshot of active downloads
+                        var metricsSnapshot = _activeDownloadMetrics.Values.ToList();
+
+                        // Identify stragglers (pass tracking dict to prevent duplicate counting)
+                        var stragglerOffsets = _stragglerDetector.IdentifyStragglerDownloads(
+                            metricsSnapshot,
+                            DateTime.UtcNow,
+                            _alreadyCountedStragglers);
+                        var stragglerList = stragglerOffsets.ToList();
+
+                        if (stragglerList.Count > 0)
+                        {
+                            activity?.AddEvent("cloudfetch.straggler_check", [
+                                new("active_downloads", metricsSnapshot.Count(m => !m.IsDownloadCompleted)),
+                                new("completed_downloads", metricsSnapshot.Count(m => m.IsDownloadCompleted)),
+                                new("stragglers_identified", stragglerList.Count)
+                            ]);
+
+                            foreach (long offset in stragglerList)
+                            {
+                                if (_perFileDownloadCancellationTokens.TryGetValue(offset, out var cts))
+                                {
+                                    activity?.AddEvent("cloudfetch.straggler_cancelling", [
+                                        new("offset", offset)
+                                    ]);
+
+                                    try
+                                    {
+                                        cts.Cancel();
+                                    }
+                                    catch (ObjectDisposedException)
+                                    {
+                                        // Expected race condition: CTS was disposed between TryGetValue and Cancel
+                                        // This is harmless - the download has already completed
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Expected when stopping
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        activity?.AddException(ex, [new("error.context", "cloudfetch.straggler_monitoring_error")]);
+                        // Continue monitoring despite errors
+                    }
+                }
+            }, activityName: "MonitorStragglerDownloads");
+        }
+
         // Helper method to sanitize URLs for logging (to avoid exposing sensitive information)
         private string SanitizeUrl(string url)
         {
@@ -702,5 +974,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 return "cloud-storage-url";
             }
         }
+
+        // IActivityTracer implementation - delegates to statement
+        ActivityTrace IActivityTracer.Trace => _statement.Trace;
+
+        string? IActivityTracer.TraceParent => _statement.TraceParent;
+
+        public string AssemblyVersion => _statement.AssemblyVersion;
+
+        public string AssemblyName => _statement.AssemblyName;
     }
 }
