@@ -107,5 +107,12 @@ namespace AdbcDrivers.Databricks.Telemetry.Models
         [JsonPropertyName("retry_count")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public int? RetryCount { get; set; }
+
+        /// <summary>
+        /// Average download latency per chunk in milliseconds.
+        /// </summary>
+        [JsonPropertyName("chunk_avg_download_latency_ms")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public long? ChunkAverageDownloadLatencyMs { get; set; }
     }
 }
