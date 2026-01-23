@@ -2,7 +2,7 @@
 
 ## Overview
 
-Refactor ADBC C# metadata implementation to eliminate ~60% code duplication between HiveServer2 (Thrift) and StatementExecution API (SEA) by creating shared abstractions for type mapping, schema construction, and field synthesis across **ALL metadata calls** (GetColumns, GetPrimaryKeys, GetCrossReference, etc.).
+Refactor ADBC C# metadata implementation to eliminate ~65% code duplication between HiveServer2 (Thrift) and StatementExecution API (SEA) by creating shared abstractions for type mapping, schema construction, and field synthesis across **ALL metadata calls** (GetColumns, GetPrimaryKeys, GetCrossReference, etc.).
 
 ## Background
 
@@ -26,7 +26,7 @@ Statement-based (flat):
   → EnhanceGetColumnsResult():
       For each row: SetPrecisionScaleAndTypeName()  ← SAME logic!
       Replaces values with parsed precision/scale
-  → Flat JDBC-style structure
+  → Flat statement-based structure
 ```
 
 **Key Insight**: Both use the **same** underlying Thrift calls and **same** `SetPrecisionScaleAndTypeName()` method. The only difference is output format (hierarchical vs flat).
@@ -43,7 +43,7 @@ Statement-based (flat):
     Same SQL execution
     → DatabricksTypeMapper.GetXdbcDataType()  ← SAME logic!
     → Transform to uppercase column names
-    → Flat JDBC-style structure
+    → Flat statement-based structure
 ```
 
 **The duplication**: `DatabricksTypeMapper` reimplements the same type mapping that `ColumnTypeId` + `SetPrecisionScaleAndTypeName()` already do in Thrift!
@@ -51,7 +51,7 @@ Statement-based (flat):
 ### Problem
 - Type mapping changes require updates in 4+ locations
 - Schema construction logic duplicated between protocols
-- Difficult to maintain consistency (xdbc_* field values must match JDBC spec)
+- Difficult to maintain consistency (xdbc_* field values must match ADBC spec)
 - No shared source of truth for common constants like `ColumnTypeId`
 - **PK/FK metadata also duplicated** across Thrift and SEA
 
@@ -98,16 +98,18 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
 **Reuses**: Existing `SqlTypeNameParser` from HiveServer2Connection for type parsing
 
 #### 2. ColumnMetadataRecord
-**Purpose**: Protocol-agnostic data model for 24 JDBC metadata fields
+**Purpose**: Protocol-agnostic data model for 24 column metadata fields (23 standard + BASE_TYPE_NAME extension)
 
 **Fields**:
 - Identity: `CatalogName`, `SchemaName`, `TableName`, `ColumnName`
-- Type info: `TypeName`, `XdbcTypeName`, `XdbcDataType`
+- Type info: `TypeName`, `XdbcTypeName`, `XdbcDataType`, `BaseTypeName` (extension)
 - Size/precision: `XdbcColumnSize`, `XdbcDecimalDigits`, `XdbcNumPrecRadix`
 - Nullability: `Nullable`, `IsNullable`
 - Additional: `ColumnDefault`, `OrdinalPosition`, `IsAutoIncrement`
 - Scope fields (always null): `ScopeCatalog`, `ScopeSchema`, `ScopeTable`
 - Custom: `CustomProperties` dictionary for Databricks extensions
+
+**Note**: `BaseTypeName` is the 24th field - a Databricks/Spark extension that extracts the base type without parameters (e.g., "DECIMAL" from "DECIMAL(10,2)").
 
 #### 3. Simple Metadata Records
 **Purpose**: Protocol-agnostic data models for catalog/schema/table metadata
@@ -159,49 +161,67 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
 
 **Methods**:
 
-**For Simple Metadata** (used by both GetObjects hierarchical and statement-based flat):
-- `BuildFlatCatalogsSchema(IEnumerable<CatalogMetadataRecord>)` - 1-column JDBC-style schema (TABLE_CAT)
-- `BuildFlatSchemasSchema(IEnumerable<SchemaMetadataRecord>)` - 2-column JDBC-style schema (TABLE_CATALOG, TABLE_SCHEM)
-- `BuildFlatTablesSchema(IEnumerable<TableMetadataRecord>)` - 10-column JDBC-style schema (TABLE_CAT, TABLE_SCHEM, TABLE_NAME, TABLE_TYPE, REMARKS, ...)
+**For Statement-Based Flat Metadata** (statement-based):
+- `BuildFlatCatalogsSchema(IEnumerable<CatalogMetadataRecord>)` - 1-column (TABLE_CAT)
+- `BuildFlatSchemasSchema(IEnumerable<SchemaMetadataRecord>)` - 2-column (TABLE_CATALOG, TABLE_SCHEM)
+- `BuildFlatTablesSchema(IEnumerable<TableMetadataRecord>)` - 10-column (TABLE_CAT, TABLE_SCHEM, TABLE_NAME, TABLE_TYPE, REMARKS, ...)
+- `BuildFlatColumnsSchema(IEnumerable<ColumnMetadataRecord>)` - 24-column (23 standard + BASE_TYPE_NAME extension)
+- `BuildFlatPrimaryKeysSchema(IEnumerable<PrimaryKeyMetadataRecord>)` - 6-column
+- `BuildFlatForeignKeysSchema(IEnumerable<ForeignKeyMetadataRecord>)` - 14-column
 
-**For Column Metadata**:
-- `BuildHierarchicalColumnsSchema(IEnumerable<ColumnMetadataRecord>)` - 19-field nested structure for GetObjects
-- `BuildFlatColumnsSchema(IEnumerable<ColumnMetadataRecord>)` - 24-column JDBC-style flat schema
-
-**For PK/FK Metadata**:
-- `BuildFlatPrimaryKeysSchema(IEnumerable<PrimaryKeyMetadataRecord>)` - 6-column JDBC-style schema
-- `BuildFlatForeignKeysSchema(IEnumerable<ForeignKeyMetadataRecord>)` - 14-column JDBC-style schema
+**For GetObjects Hierarchical Metadata** (nested structures):
+- `BuildColumnsStructArray(IEnumerable<ColumnMetadataRecord>)` - Builds ONLY the `table_columns` StructArray portion (19 fields per ADBC spec)
+  - **Important**: This builds the leaf-level column metadata, NOT the entire catalog→schema→table→column hierarchy
+  - Used within GetObjects to populate the `table_columns` field of each table
+  - The full hierarchy assembly happens in GetObjects itself via nested dictionaries and ListArrays
 
 **Replaces**:
-- Thrift: `GetColumnSchema()` method (lines 1262-1344 in HiveServer2Connection.cs)
-- Thrift: Statement-based array builders in HiveServer2Statement (GetCatalogs, GetSchemas, GetTables, GetColumns, GetPrimaryKeys, GetCrossReference)
-- SEA: ALL `Get*Flat` methods in StatementExecutionConnection (lines 1696-1730, 1836-1880, 2040-2120, 2180-2330, 3009-3100, 3360-3500)
+- Thrift: `GetColumnSchema()` method (lines 1262-1344 in HiveServer2Connection.cs) → `BuildColumnsStructArray()`
+- Thrift: Statement-based array builders in HiveServer2Statement (GetCatalogs, GetSchemas, GetTables, GetColumns, GetPrimaryKeys, GetCrossReference) → `BuildFlat*Schema()` methods
+- SEA: ALL `Get*Flat` methods in StatementExecutionConnection (lines 1696-1730, 1836-1880, 2040-2120, 2180-2330, 3009-3100, 3360-3500) → `BuildFlat*Schema()` methods
+
+**Architectural Note**:
+- **GetObjects** builds hierarchy through nesting (catalog → List<schema> → List<table> → List<column>), NOT by calling flat builders
+- **Statement-based queries** use flat builders directly to return flat statement-based arrays
+- Only the column metadata portion (`BuildColumnsStructArray()`) is shared between both approaches
 
 ## Data Flow
 
 ### HiveServer2 (Thrift) Flow - ALL Metadata
 
-**GetCatalogs/GetSchemas/GetTables (Statement-Based)**:
+**GetCatalogs/GetSchemas/GetTables (Statement-Based Flat)**:
 ```
 1. Execute Thrift calls → TGetCatalogsResp / TGetSchemasResp / TGetTablesResp
 2. Extract raw data: catalogName, schemaName, tableName, tableType, remarks
 3. For each row: MetadataFieldPopulator.PopulateCatalogMetadata() or PopulateSchemaMetadata() or PopulateTableMetadata()
 4. MetadataSchemaBuilder.BuildFlatCatalogsSchema() or BuildFlatSchemasSchema() or BuildFlatTablesSchema()
-5. Return JDBC-style flat structure ✓
+5. Return flat statement-based structure (1/2/10 columns) ✓
 ```
 
-**GetObjects (Hierarchical)** - Uses same data as statement-based:
+**GetObjects (Hierarchical)** - Custom nesting logic:
 ```
 1. Execute Thrift calls → TGetCatalogsResp, TGetSchemasResp, TGetTablesResp, TGetColumnsResp
-2. Extract raw data for each level
-3. For catalogs/schemas/tables: Use same populators as statement-based ← REUSE!
-4. For columns: MetadataFieldPopulator.PopulateColumnMetadata()
-   - ColumnTypeMapper synthesizes all xdbc_* fields
-5. MetadataSchemaBuilder builds hierarchical nested structure
-   - Uses BuildFlatCatalogsSchema, BuildFlatSchemasSchema, BuildFlatTablesSchema internally
-   - Uses BuildHierarchicalColumnsSchema for columns
-6. Return identical output to before refactor ✓
+2. Build intermediate structure:
+   catalogMap = Dictionary<catalog, Dictionary<schema, Dictionary<table, List<ColumnMetadataRecord>>>>
+3. Populate catalogMap:
+   - For catalogs: Extract catalog names
+   - For schemas: Extract catalog+schema pairs
+   - For tables: Extract catalog+schema+table+tableType tuples
+   - For columns: MetadataFieldPopulator.PopulateColumnMetadata()
+     → ColumnTypeMapper synthesizes all xdbc_* fields
+     → Store in catalogMap[catalog][schema][table]
+4. Build nested Arrow structure:
+   a. Create catalog-level StringArray
+   b. For each catalog → Build ListArray<StructArray> of schemas
+      - Each schema has: db_schema_name + ListArray<StructArray> of tables
+   c. For each table → Build StructArray containing:
+      - table_name, table_type
+      - table_columns: MetadataSchemaBuilder.BuildColumnsStructArray(columnRecords) ← 19 fields
+      - table_constraints: Build constraint arrays
+5. Return nested hierarchy: catalog → schemas → tables → columns ✓
 ```
+
+**Key Insight**: GetObjects does NOT use flat builders. It builds hierarchy via nested dictionaries, then creates nested ListArray<StructArray> structures. Only the column portion uses a shared builder (`BuildColumnsStructArray()`).
 
 **GetColumns (Statement-Based Flat)**:
 ```
@@ -210,8 +230,8 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
 3. For each row: MetadataFieldPopulator.PopulateColumnMetadata()
    - ColumnTypeMapper synthesizes all xdbc_* fields  ← SAME mapper as GetObjects!
 4. MetadataSchemaBuilder.BuildFlatColumnsSchema(records)
-   - Different builder for flat format
-5. Return 24-column JDBC-style flat structure ✓
+   - Flat format with uppercase column names (TABLE_CAT, TABLE_SCHEM, etc.)
+5. Return 24-column flat statement-based structure (23 standard + BASE_TYPE_NAME) ✓
 ```
 
 **GetPrimaryKeys/GetCrossReference**:
@@ -220,7 +240,7 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
 2. Extract raw data: catalog, schema, table, column, keySequence
 3. For each row: MetadataFieldPopulator.PopulatePrimaryKeyMetadata() or PopulateForeignKeyMetadata()
 4. MetadataSchemaBuilder.BuildFlatPrimaryKeysSchema() or BuildFlatForeignKeysSchema()
-5. Return JDBC-style flat structure ✓
+5. Return flat statement-based structure ✓
 ```
 
 ### SEA Flow - ALL Metadata
@@ -233,20 +253,30 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
    - SAME populators as Thrift
 4. MetadataSchemaBuilder.BuildFlatCatalogsSchema() or BuildFlatSchemasSchema() or BuildFlatTablesSchema()
    - SAME builders as Thrift
-5. Return JDBC-style flat structure ✓
+5. Return flat statement-based structure ✓
 ```
 
-**GetObjects (Hierarchical)** - Uses same data as statement-based:
+**GetObjects (Hierarchical)** - Custom nesting logic:
 ```
 1. Execute SQL commands → SHOW CATALOGS, SHOW SCHEMAS, SHOW TABLES, SHOW COLUMNS, DESC TABLE EXTENDED
-2. Parse results for each level
-3. For catalogs/schemas/tables: Use same populators as statement-based ← REUSE!
-4. For columns: MetadataFieldPopulator.PopulateColumnMetadata()
-   - SAME ColumnTypeMapper as Thrift
-5. MetadataSchemaBuilder builds hierarchical nested structure
-   - Uses same builders as Thrift
-6. Output matches Thrift format exactly ✓
+2. Build intermediate structure:
+   catalogMap = Dictionary<catalog, Dictionary<schema, Dictionary<table, List<ColumnMetadataRecord>>>>
+3. Populate catalogMap:
+   - For catalogs: Parse SHOW CATALOGS results
+   - For schemas: Parse SHOW SCHEMAS results
+   - For tables: Parse SHOW TABLES results
+   - For columns: MetadataFieldPopulator.PopulateColumnMetadata()
+     → SAME ColumnTypeMapper as Thrift
+     → Store in catalogMap[catalog][schema][table]
+4. Build nested Arrow structure (IDENTICAL LOGIC TO THRIFT):
+   a. Create catalog-level StringArray
+   b. For each catalog → Build ListArray<StructArray> of schemas
+   c. For each table → Build StructArray with:
+      - table_columns: MetadataSchemaBuilder.BuildColumnsStructArray(columnRecords) ← SAME as Thrift
+5. Return nested hierarchy matching Thrift output exactly ✓
 ```
+
+**Key Insight**: Both Thrift and SEA use the SAME hierarchy assembly pattern (catalogMap + nested ListArrays) and the SAME `BuildColumnsStructArray()` for column metadata.
 
 **GetColumns (Statement-Based Flat)**:
 ```
@@ -256,7 +286,7 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
    - SAME ColumnTypeMapper as GetObjects  ← Reuses hierarchical path!
 4. MetadataSchemaBuilder.BuildFlatColumnsSchema(records)
    - SAME builder as Thrift
-5. Return 24-column JDBC-style flat structure ✓
+5. Return 24-column flat statement-based structure (23 standard + BASE_TYPE_NAME) ✓
 ```
 
 **GetPrimaryKeys/GetCrossReference**:
@@ -267,10 +297,14 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
    - SAME populator as Thrift
 4. MetadataSchemaBuilder.BuildFlatPrimaryKeysSchema()
    - SAME builder as Thrift
-5. Return JDBC-style flat structure ✓
+5. Return flat statement-based structure ✓
 ```
 
-**Benefits**: 100% type mapping reuse, 100% schema construction reuse across ALL metadata types (GetCatalogs, GetSchemas, GetTables, GetColumns, GetPrimaryKeys, GetCrossReference), only SQL/Thrift execution is protocol-specific.
+**Benefits**:
+- 100% type mapping reuse via ColumnTypeMapper
+- 100% flat schema construction reuse for statement-based queries
+- GetObjects column metadata (BuildColumnsStructArray) shared between protocols
+- Only protocol-specific: SQL/Thrift execution and GetObjects hierarchy assembly pattern (catalogMap + nested ListArrays)
 
 ## Implementation Steps
 
@@ -286,7 +320,7 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
 - `CatalogMetadataRecord.cs` - 1-field struct for catalog metadata
 - `SchemaMetadataRecord.cs` - 2-field struct for schema metadata
 - `TableMetadataRecord.cs` - 10-field struct for table metadata
-- `ColumnMetadataRecord.cs` - 24-field struct matching JDBC DatabaseMetaData.getColumns()
+- `ColumnMetadataRecord.cs` - 24-field struct (23 standard + BASE_TYPE_NAME extension)
 - `PrimaryKeyMetadataRecord.cs` - 6-field struct for PK metadata
 - `ForeignKeyMetadataRecord.cs` - 14-field struct for FK metadata
 - Add validation methods
@@ -302,14 +336,25 @@ arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ (NEW)
 - Add virtual extension points
 
 **Step 1.4**: Create `MetadataSchemaBuilder.cs`
+
+**For Statement-Based Flat Builders**:
 - Add `BuildFlatCatalogsSchema()` - 1 column (TABLE_CAT)
 - Add `BuildFlatSchemasSchema()` - 2 columns (TABLE_CATALOG, TABLE_SCHEM)
 - Add `BuildFlatTablesSchema()` - 10 columns (TABLE_CAT, TABLE_SCHEM, TABLE_NAME, TABLE_TYPE, REMARKS, ...)
+- Add `BuildFlatColumnsSchema()` - 24 columns (23 standard + BASE_TYPE_NAME)
+- Add `BuildFlatPrimaryKeysSchema()` - 6 columns
+- Add `BuildFlatForeignKeysSchema()` - 14 columns
+
+**For GetObjects Hierarchical Builder**:
 - Extract `GetColumnSchema()` logic from HiveServer2Connection (lines 1262-1344)
-- Support both hierarchical and flat schema formats for columns
-- Add `BuildFlatPrimaryKeysSchema()` for PK metadata
-- Add `BuildFlatForeignKeysSchema()` for FK metadata
-- Support all metadata types
+- Rename to `BuildColumnsStructArray()` - Builds ONLY the table_columns StructArray (19 fields per ADBC spec)
+- Add clear documentation that this builds the leaf-level column metadata, NOT the full hierarchy
+- The full catalog→schema→table→column nesting happens in GetObjects itself
+
+**Important Architectural Note**:
+- GetObjects does NOT use flat builders - it builds hierarchy via nested dictionaries and ListArrays
+- Only `BuildColumnsStructArray()` is shared between GetObjects and statement-based queries
+- Flat builders are ONLY for statement-based metadata calls
 
 **Validation**: All unit tests pass, no production code changes yet
 
@@ -330,7 +375,9 @@ tableInfo?.Precision.Add(mapper.GetColumnSize(typeName));
 
 **Step 2.2**: Update `GetObjects()` in `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/HiveServer2Connection.cs` (lines 500-691)
 - Use `MetadataFieldPopulator` to create `ColumnMetadataRecord` instances
-- Call `MetadataSchemaBuilder.BuildHierarchicalColumnsSchema()` instead of inline logic
+- Replace `GetColumnSchema()` call with `MetadataSchemaBuilder.BuildColumnsStructArray()`
+- **Important**: Keep the existing catalogMap dictionary and nested ListArray logic unchanged
+- Only replace the column metadata array building portion
 
 **Step 2.3**: Update `EnhanceGetColumnsResult()` in `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/HiveServer2Statement.cs` (lines 573-648)
 ```csharp
@@ -430,7 +477,7 @@ internal class DatabricksMetadataFieldPopulator : MetadataFieldPopulator
   - GetCatalogs (1 column)
   - GetSchemas (2 columns)
   - GetTables (10 columns)
-  - GetColumns (24 columns)
+  - GetColumns (24 columns: 23 standard + BASE_TYPE_NAME)
   - GetPrimaryKeys (6 columns)
   - GetCrossReference (14 columns)
   - GetTableTypes (1 column)
@@ -451,39 +498,44 @@ internal class DatabricksMetadataFieldPopulator : MetadataFieldPopulator
 2. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/CatalogMetadataRecord.cs` - Catalog data model (1 field)
 3. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/SchemaMetadataRecord.cs` - Schema data model (2 fields)
 4. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/TableMetadataRecord.cs` - Table data model (10 fields)
-5. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ColumnMetadataRecord.cs` - Column data model (24 fields)
+5. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ColumnMetadataRecord.cs` - Column data model (24 fields: 23 standard + BASE_TYPE_NAME)
 6. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/PrimaryKeyMetadataRecord.cs` - PK data model (6 fields)
 7. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/ForeignKeyMetadataRecord.cs` - FK data model (14 fields)
 8. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/MetadataFieldPopulator.cs` - Field synthesis for ALL metadata types
-9. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/MetadataSchemaBuilder.cs` - Array construction for ALL metadata types
+9. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/MetadataSchemaBuilder.cs` - Array construction (flat builders + BuildColumnsStructArray)
 10. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/Metadata/MetadataPatternConverter.cs` - Pattern utilities
 
 ### Files to Modify (Thrift - arrow-adbc repo)
 1. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/HiveServer2Connection.cs` (lines 500-691, 1262-1344)
-   - Integrate `MetadataFieldPopulator` in GetObjects
-   - Replace `GetColumnSchema()` with `MetadataSchemaBuilder`
+   - Integrate `MetadataFieldPopulator` in GetObjects for column metadata
+   - Replace `GetColumnSchema()` (lines 1262-1344) with `MetadataSchemaBuilder.BuildColumnsStructArray()`
+   - **Critical**: Preserve existing catalogMap dictionary and nested ListArray hierarchy assembly logic
 
 2. `/arrow-adbc/csharp/src/Drivers/Apache/Spark/SparkConnection.cs` (lines 70-114)
    - Replace `SetPrecisionScaleAndTypeName()` switch with `ColumnTypeMapper`
 
 3. `/arrow-adbc/csharp/src/Drivers/Apache/Hive2/HiveServer2Statement.cs`
-   - Replace `EnhanceGetColumnsResult()` (lines 573-648) with `MetadataFieldPopulator`
-   - Update `GetCatalogsAsync()` (line 492-497) to use `MetadataSchemaBuilder`
-   - Update `GetSchemasAsync()` (lines 499-507) to use `MetadataSchemaBuilder`
-   - Update `GetTablesAsync()` (lines 509-520) to use `MetadataSchemaBuilder`
-   - Update `GetPrimaryKeysAsync()` (lines 481-490) to use `MetadataSchemaBuilder`
-   - Update `GetCrossReferenceAsync()` (lines 462-476) to use `MetadataSchemaBuilder`
+   - Replace `EnhanceGetColumnsResult()` (lines 573-648) with `MetadataFieldPopulator` + `BuildFlatColumnsSchema()`
+   - Update `GetCatalogsAsync()` (line 492-497) to use `BuildFlatCatalogsSchema()`
+   - Update `GetSchemasAsync()` (lines 499-507) to use `BuildFlatSchemasSchema()`
+   - Update `GetTablesAsync()` (lines 509-520) to use `BuildFlatTablesSchema()`
+   - Update `GetPrimaryKeysAsync()` (lines 481-490) to use `BuildFlatPrimaryKeysSchema()`
+   - Update `GetCrossReferenceAsync()` (lines 462-476) to use `BuildFlatForeignKeysSchema()`
 
 ### Files to Modify (SEA - databricks repo)
 1. `/databricks/csharp/src/StatementExecution/StatementExecutionConnection.cs`
    - Replace `DatabricksTypeMapper` with `ColumnTypeMapper`
-   - Use `MetadataFieldPopulator` and `MetadataSchemaBuilder`
-   - Update `GetCatalogsFlat()` (lines 1696-1730) - Remove inline array builders
-   - Update `GetSchemasFlat()` (lines 1836-1880) - Remove inline array builders
-   - Update `GetTablesFlat()` (lines 2040-2120) - Remove inline array builders
-   - Update `GetColumnsFlat()` (lines 2180-2330) - Remove inline array builders
-   - Update `GetPrimaryKeysFlat()` (lines 3009-3100) - Remove inline array builders
-   - Update `GetCrossReferenceFlat()` (lines 3360-3500) - Remove inline array builders
+   - Update `GetObjects()` implementation:
+     - Use `MetadataFieldPopulator` for column metadata
+     - Replace inline `BuildColumnsStructArray` logic with `MetadataSchemaBuilder.BuildColumnsStructArray()`
+     - **Important**: Keep existing catalogMap and nesting logic unchanged
+   - Update ALL `Get*Flat()` methods - replace inline array builders with shared builders:
+     - `GetCatalogsFlat()` (lines 1696-1730) → Use `BuildFlatCatalogsSchema()`
+     - `GetSchemasFlat()` (lines 1836-1880) → Use `BuildFlatSchemasSchema()`
+     - `GetTablesFlat()` (lines 2040-2120) → Use `BuildFlatTablesSchema()`
+     - `GetColumnsFlat()` (lines 2180-2330) → Use `BuildFlatColumnsSchema()`
+     - `GetPrimaryKeysFlat()` (lines 3009-3100) → Use `BuildFlatPrimaryKeysSchema()`
+     - `GetCrossReferenceFlat()` (lines 3360-3500) → Use `BuildFlatForeignKeysSchema()`
 
 2. `/databricks/csharp/src/StatementExecution/StatementExecutionStatement.cs`
    - Update metadata command routing to use shared builders
@@ -630,3 +682,93 @@ dotnet run --project BenchmarkTests --configuration Release
 10. ✅ Code reduction ~65% in duplicated areas
 11. ✅ Single location for type mapping changes
 12. ✅ Single location for schema construction across ALL metadata types
+
+## Appendix: GetObjects Hierarchy Assembly
+
+### How GetObjects Actually Builds the Hierarchy
+
+The GetObjects method builds a nested hierarchy, NOT flat arrays. Here's the actual pattern used in both Thrift and SEA:
+
+#### Step 1: Build Intermediate Dictionary Structure
+```csharp
+// Accumulate metadata in nested dictionaries
+var catalogMap = new Dictionary<string, Dictionary<string, Dictionary<string, List<ColumnMetadataRecord>>>>();
+
+// Populate from Thrift/SQL results:
+catalogMap[catalog][schema][table] = new List<ColumnMetadataRecord>();
+```
+
+#### Step 2: Build Nested Arrow Schema
+```csharp
+// ADBC GetObjects Schema (from StandardSchemas.cs):
+catalog_name: string
+catalog_db_schemas: list<struct<
+  db_schema_name: string
+  db_schema_tables: list<struct<
+    table_name: string
+    table_type: string
+    table_columns: list<struct<  ← 19 fields here (BuildColumnsStructArray)
+      column_name: string
+      ordinal_position: int32
+      remarks: string
+      xdbc_data_type: int16
+      ... (15 more fields)
+    >>
+    table_constraints: list<struct<...>>
+  >>
+>>
+```
+
+#### Step 3: Assemble Nested Structure
+```csharp
+// For each catalog
+var catalogBuilder = new StringArray.Builder();
+var catalogDbSchemasBuilder = new ListArray.Builder(dbSchemaStructType);
+
+foreach (var catalog in catalogMap.Keys)
+{
+    catalogBuilder.Append(catalog);
+    
+    // For each schema in this catalog
+    var schemaStructArrays = new List<StructArray>();
+    foreach (var schema in catalogMap[catalog].Keys)
+    {
+        // For each table in this schema
+        var tableStructArrays = new List<StructArray>();
+        foreach (var table in catalogMap[catalog][schema].Keys)
+        {
+            var columnRecords = catalogMap[catalog][schema][table];
+            
+            // Build column metadata using shared builder
+            var columnsArray = MetadataSchemaBuilder.BuildColumnsStructArray(columnRecords);
+            
+            // Build table struct containing columns
+            var tableStruct = new StructArray(
+                tableSchema,
+                new IArrowArray[] { tableNameArray, tableTypeArray, columnsArray, constraintsArray }
+            );
+            tableStructArrays.Add(tableStruct);
+        }
+        
+        // Build schema struct containing tables
+        var schemaStruct = new StructArray(
+            schemaSchema,
+            new IArrowArray[] { schemaNameArray, new ListArray(..., tableStructArrays) }
+        );
+        schemaStructArrays.Add(schemaStruct);
+    }
+    
+    catalogDbSchemasBuilder.Append(new ListArray(..., schemaStructArrays));
+}
+
+// Final result: catalog → List<schema> → List<table> → List<column>
+return new RecordBatch(schema, new IArrowArray[] { catalogBuilder.Build(), catalogDbSchemasBuilder.Build() });
+```
+
+### Key Takeaways
+
+1. **GetObjects uses nested dictionaries** (catalogMap) to accumulate metadata hierarchically
+2. **GetObjects builds nested ListArray<StructArray>** structures, NOT flat arrays
+3. **Only the column portion** uses a shared builder (`BuildColumnsStructArray()`)
+4. **Flat builders are ONLY for statement-based queries** - they return flat statement-based arrays
+5. **The hierarchy assembly logic stays in GetObjects** - it's NOT in MetadataSchemaBuilder
