@@ -28,6 +28,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using Apache.Arrow.Adbc.Tracing;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit
@@ -39,6 +40,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit
     /// </summary>
     public class CloudFetchStragglerUnitTests
     {
+        private class MockActivityTracer : IActivityTracer
+        {
+            public string? TraceParent { get; set; }
+            public ActivityTrace Trace => new ActivityTrace("TestSource", "1.0.0", TraceParent);
+            public string AssemblyVersion => "1.0.0";
+            public string AssemblyName => "TestAssembly";
+        }
+
         #region FileDownloadMetrics Tests
 
         [Fact]
@@ -90,13 +99,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public void StragglerDownloadDetector_MultiplierLessThanOne_ThrowsException()
         {
+            // Arrange
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 0.9,
+                quantile: 0.6,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 10);
+
             // Act & Assert
             var ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
-                new StragglerDownloadDetector(
-                    stragglerThroughputMultiplier: 0.9,
-                    minimumCompletionQuantile: 0.6,
-                    stragglerDetectionPadding: TimeSpan.FromSeconds(5),
-                    maxStragglersBeforeFallback: 10));
+                new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer()));
 
             Assert.Contains("multiplier", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
@@ -104,13 +117,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public void StragglerDownloadDetector_QuantileOutOfRange_ThrowsException()
         {
+            // Arrange
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 1.5,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 10);
+
             // Act & Assert
             var ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
-                new StragglerDownloadDetector(
-                    stragglerThroughputMultiplier: 1.5,
-                    minimumCompletionQuantile: 1.5,
-                    stragglerDetectionPadding: TimeSpan.FromSeconds(5),
-                    maxStragglersBeforeFallback: 10));
+                new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer()));
 
             Assert.Contains("quantile", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
@@ -123,7 +140,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void StragglerDownloadDetector_MedianCalculation_OddCount()
         {
             // Arrange
-            var detector = new StragglerDownloadDetector(1.5, 0.5, TimeSpan.FromSeconds(5), 10);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.5,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 10);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var metrics = new List<FileDownloadMetrics>();
 
             // Create 5 completed downloads with different speeds
@@ -146,7 +169,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void StragglerDownloadDetector_MedianCalculation_EvenCount()
         {
             // Arrange
-            var detector = new StragglerDownloadDetector(1.5, 0.5, TimeSpan.FromSeconds(5), 10);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.5,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 10);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var metrics = new List<FileDownloadMetrics>();
 
             // Create 4 completed downloads
@@ -169,7 +198,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void StragglerDownloadDetector_NoCompletedDownloads_ReturnsEmpty()
         {
             // Arrange
-            var detector = new StragglerDownloadDetector(1.5, 0.6, TimeSpan.FromSeconds(5), 10);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.6,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 10);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var metrics = new List<FileDownloadMetrics>
             {
                 new FileDownloadMetrics(0, 1024 * 1024) // Still in progress
@@ -186,7 +221,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void StragglerDownloadDetector_BelowQuantileThreshold_ReturnsEmpty()
         {
             // Arrange
-            var detector = new StragglerDownloadDetector(1.5, 0.6, TimeSpan.FromSeconds(5), 10);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.6,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 10);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var metrics = new List<FileDownloadMetrics>();
 
             // Create 10 downloads, only 5 completed (50% < 60% threshold)
@@ -212,7 +253,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void StragglerDownloadDetector_FallbackThreshold_Triggered()
         {
             // Arrange
-            var detector = new StragglerDownloadDetector(1.5, 0.6, TimeSpan.FromSeconds(5), maxStragglersBeforeFallback: 3);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.6,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 3);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var metrics = new List<FileDownloadMetrics>();
 
             // Simulate 10 fast downloads + 5 slow stragglers
@@ -248,7 +295,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void StragglerDownloadDetector_EmptyMetricsList_ReturnsEmpty()
         {
             // Arrange
-            var detector = new StragglerDownloadDetector(1.5, 0.6, TimeSpan.FromSeconds(5), 10);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.6,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 10);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var metrics = new List<FileDownloadMetrics>();
 
             // Act
@@ -262,7 +315,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void StragglerDownloadDetector_AllDownloadsCancelled_ReturnsEmpty()
         {
             // Arrange
-            var detector = new StragglerDownloadDetector(1.5, 0.6, TimeSpan.FromSeconds(5), 10);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.6,
+                padding: TimeSpan.FromSeconds(5),
+                maxStragglersBeforeFallback: 10);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var metrics = new List<FileDownloadMetrics>();
 
             for (int i = 0; i < 5; i++)
@@ -287,7 +346,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void DuplicateDetectionPrevention_SameFileCountedOnceAcrossMultipleCycles()
         {
             // Arrange - Create detector with tracking dictionary
-            var detector = new StragglerDownloadDetector(1.5, 0.6, TimeSpan.FromMilliseconds(50), 10);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.6,
+                padding: TimeSpan.FromMilliseconds(50),
+                maxStragglersBeforeFallback: 10);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var trackingDict = new ConcurrentDictionary<long, bool>();
 
             // Create one slow download that will be detected as straggler
@@ -454,7 +519,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void CounterOverflow_UsesLongToPreventWraparound()
         {
             // Arrange - Create detector with lower quantile
-            var detector = new StragglerDownloadDetector(1.5, 0.2, TimeSpan.FromMilliseconds(10), 10000);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.2,
+                padding: TimeSpan.FromMilliseconds(10),
+                maxStragglersBeforeFallback: 10000);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var trackingDict = new ConcurrentDictionary<long, bool>();
 
             // Create metrics with enough completed downloads to meet quantile
@@ -494,7 +565,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public async Task ConcurrentModification_ThreadSafeOperation()
         {
             // Arrange
-            var detector = new StragglerDownloadDetector(1.5, 0.6, TimeSpan.FromMilliseconds(50), 10);
+            var config = new CloudFetchStragglerMitigationConfig(
+                enabled: true,
+                multiplier: 1.5,
+                quantile: 0.6,
+                padding: TimeSpan.FromMilliseconds(50),
+                maxStragglersBeforeFallback: 10);
+            var detector = new StragglerDownloadDetector(config, activityTracer: new MockActivityTracer());
             var metrics = new ConcurrentBag<FileDownloadMetrics>();
             var trackingDict = new ConcurrentDictionary<long, bool>();
 
