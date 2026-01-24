@@ -397,15 +397,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
             // Wait for downloads to complete
             await Task.Delay(3000);
             overallStopwatch.Stop();
-
-            // Assert - Sequential execution means downloads run one after another
-            // With 5 downloads × 100ms each = ~500ms total
-            // With parallelism (5 concurrent), it would be ~100ms total
-            // Allow some overhead for async scheduling
-            Assert.True(overallStopwatch.ElapsedMilliseconds >= 400,
-                $"Sequential mode should take >=400ms for 5×100ms downloads, took {overallStopwatch.ElapsedMilliseconds}ms");
-
-            // Also verify downloads didn't overlap significantly
+            
+            // Also verify downloads didn't overlap
             var times = downloadTimes.OrderBy(t => t.startMs).ToList();
             int overlaps = 0;
             for (int i = 0; i < times.Count - 1; i++)
@@ -417,9 +410,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
                 }
             }
 
-            // In sequential mode, downloads should NOT overlap (or minimal overlap due to async)
-            Assert.True(overlaps <= 1,
-                $"Sequential mode should have minimal overlaps, found {overlaps} out of 4 possible");
+            // In sequential mode, downloads should NOT overlap at all
+            // Sequential semaphore ensures download i+1 cannot start until download i releases the semaphore,
+            // which happens AFTER SendAsync completes. With 20ms tolerance built in, we should see zero overlaps.
+            Assert.Equal(0, overlaps);
 
             // Cleanup
             downloadQueue.Add(EndOfResultsGuard.Instance);
