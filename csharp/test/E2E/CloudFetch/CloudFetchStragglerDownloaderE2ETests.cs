@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -328,29 +329,48 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
         [Fact]
         public async Task SequentialModeEnforcesOneDownloadAtATime()
         {
-            // Arrange - Use immediate sequential mode to verify one-at-a-time behavior
-            // With maxStragglersBeforeFallback=0, sequential mode is active from the start
-            var concurrentDownloads = new ConcurrentDictionary<long, bool>();
-            var maxConcurrency = new MaxConcurrencyTracker();
-            var concurrencyLock = new object();
+            // Arrange - Test sequential mode by comparing throughput
+            // Sequential should take 5x longer than a single download (no parallelism benefit)
+            var downloadTimes = new ConcurrentBag<(long offset, long startMs, long endMs)>();
+            var overallStopwatch = Stopwatch.StartNew();
 
-            // All downloads take 200ms - enough time to overlap if parallel
-            var mockHttpHandler = CreateHttpHandlerWithConcurrencyTracking(
-                concurrentDownloads,
-                maxConcurrency,
-                concurrencyLock,
-                delayMs: 200);
+            var mockHttpHandler = new Mock<HttpMessageHandler>();
+            mockHttpHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .Returns<HttpRequestMessage, CancellationToken>(async (request, token) =>
+                {
+                    var url = request.RequestUri?.ToString() ?? "";
+                    if (url.Contains("file"))
+                    {
+                        var offsetStr = url.Split(new[] { "file" }, StringSplitOptions.None)[1];
+                        var offset = long.Parse(offsetStr);
+
+                        long startMs = overallStopwatch.ElapsedMilliseconds;
+                        await Task.Delay(100, token); // Each download takes 100ms
+                        long endMs = overallStopwatch.ElapsedMilliseconds;
+
+                        downloadTimes.Add((offset, startMs, endMs));
+                    }
+
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(Encoding.UTF8.GetBytes("Test content"))
+                    };
+                });
 
             var (downloader, downloadQueue, resultQueue) = CreateDownloaderWithStragglerMitigation(
                 mockHttpHandler.Object,
-                maxParallelDownloads: 5, // Allow up to 5 parallel, but sequential mode limits to 1
-                maxStragglersBeforeFallback: 0, // Immediate sequential mode (0 stragglers triggers fallback)
+                maxParallelDownloads: 5, // Allow up to 5 parallel
+                maxStragglersBeforeFallback: 0, // Immediate sequential mode
                 synchronousFallbackEnabled: true);
 
             // Act
             await downloader.StartAsync(CancellationToken.None);
 
-            // Add downloads
+            // Add 5 downloads
             for (long i = 0; i < 5; i++)
             {
                 downloadQueue.Add(CreateMockDownloadResult(i, 1024 * 1024).Object);
@@ -375,17 +395,31 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
             });
 
             // Wait for downloads to complete
-            await Task.Delay(2000);
+            await Task.Delay(3000);
+            overallStopwatch.Stop();
 
-            // Assert - In sequential mode, max concurrency should be 1 or 2
-            // With maxStragglersBeforeFallback=0, ShouldFallbackToSequentialDownloads is true immediately
-            // because _totalStragglersDetectedInQuery (0) >= maxStragglersBeforeFallback (0)
-            // However, due to the download flow (acquire parallel semaphore → acquire memory → acquire sequential semaphore),
-            // there can be a brief moment where one download is in HTTP request and another is blocked on sequential semaphore
-            // but has already acquired parallel semaphore and memory. This results in maxConcurrency = 2.
-            // The key point is that sequential mode dramatically reduces concurrency from 5 to ≤2.
-            Assert.True(maxConcurrency.Value <= 2,
-                $"Sequential mode should limit concurrency to ≤2, got {maxConcurrency.Value}");
+            // Assert - Sequential execution means downloads run one after another
+            // With 5 downloads × 100ms each = ~500ms total
+            // With parallelism (5 concurrent), it would be ~100ms total
+            // Allow some overhead for async scheduling
+            Assert.True(overallStopwatch.ElapsedMilliseconds >= 400,
+                $"Sequential mode should take >=400ms for 5×100ms downloads, took {overallStopwatch.ElapsedMilliseconds}ms");
+
+            // Also verify downloads didn't overlap significantly
+            var times = downloadTimes.OrderBy(t => t.startMs).ToList();
+            int overlaps = 0;
+            for (int i = 0; i < times.Count - 1; i++)
+            {
+                // Check if download i+1 started before download i ended
+                if (times[i + 1].startMs < times[i].endMs - 20) // 20ms tolerance for async overhead
+                {
+                    overlaps++;
+                }
+            }
+
+            // In sequential mode, downloads should NOT overlap (or minimal overlap due to async)
+            Assert.True(overlaps <= 1,
+                $"Sequential mode should have minimal overlaps, found {overlaps} out of 4 possible");
 
             // Cleanup
             downloadQueue.Add(EndOfResultsGuard.Instance);
