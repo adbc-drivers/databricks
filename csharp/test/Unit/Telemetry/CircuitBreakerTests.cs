@@ -18,12 +18,13 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry;
+using Polly.CircuitBreaker;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 {
     /// <summary>
-    /// Tests for CircuitBreaker class.
+    /// Tests for CircuitBreaker class (Polly-based implementation).
     /// </summary>
     public class CircuitBreakerTests
     {
@@ -46,7 +47,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Assert
             Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
             Assert.Equal(1, executionCount);
-            Assert.Equal(0, circuitBreaker.ConsecutiveFailures);
         }
 
         [Fact]
@@ -69,17 +69,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Assert
             Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
             Assert.Equal(10, executionCount);
-            Assert.Equal(0, circuitBreaker.ConsecutiveFailures);
         }
 
         [Fact]
-        public async Task CircuitBreaker_Closed_SuccessResetsFailureCounter()
+        public async Task CircuitBreaker_Closed_SuccessAfterFailures_StaysClosed()
         {
             // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 5 };
-            var circuitBreaker = new CircuitBreaker(config);
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 5);
 
-            // Act - Cause some failures then succeed
+            // Act - Cause some failures then succeed (not enough to trip the breaker)
             for (int i = 0; i < 3; i++)
             {
                 try
@@ -89,14 +87,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 catch { }
             }
 
-            Assert.Equal(3, circuitBreaker.ConsecutiveFailures);
-
             // Now succeed
             await circuitBreaker.ExecuteAsync(async () => await Task.CompletedTask);
 
-            // Assert
+            // Assert - Should still be closed since we didn't reach threshold
             Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
-            Assert.Equal(0, circuitBreaker.ConsecutiveFailures);
         }
 
         #endregion
@@ -107,8 +102,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task CircuitBreaker_Closed_FailuresBelowThreshold_StaysClosed()
         {
             // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 5 };
-            var circuitBreaker = new CircuitBreaker(config);
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 5);
 
             // Act - Cause 4 failures (threshold is 5)
             for (int i = 0; i < 4; i++)
@@ -120,17 +114,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 catch { }
             }
 
-            // Assert
+            // Assert - Circuit should still be closed
             Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
-            Assert.Equal(4, circuitBreaker.ConsecutiveFailures);
         }
 
         [Fact]
         public async Task CircuitBreaker_Closed_FailuresAtThreshold_TransitionsToOpen()
         {
             // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 5 };
-            var circuitBreaker = new CircuitBreaker(config);
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 5);
 
             // Act - Cause exactly 5 failures (threshold)
             for (int i = 0; i < 5; i++)
@@ -150,8 +142,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task CircuitBreaker_Closed_FailuresAboveThreshold_StaysOpen()
         {
             // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 5 };
-            var circuitBreaker = new CircuitBreaker(config);
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 5);
 
             // Act - Cause 10 failures
             for (int i = 0; i < 10; i++)
@@ -188,38 +179,42 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         [Fact]
         public async Task CircuitBreaker_Open_RejectsRequests_ThrowsException()
         {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 1, Timeout = TimeSpan.FromMinutes(5) };
-            var circuitBreaker = new CircuitBreaker(config);
+            // Arrange - Polly requires MinimumThroughput >= 2
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 2, timeout: TimeSpan.FromMinutes(5));
 
             // Cause the circuit to open
-            try
+            for (int i = 0; i < 2; i++)
             {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                try
+                {
+                    await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                }
+                catch { }
             }
-            catch { }
 
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 
             // Act & Assert
-            await Assert.ThrowsAsync<CircuitBreakerOpenException>(
+            await Assert.ThrowsAsync<BrokenCircuitException>(
                 () => circuitBreaker.ExecuteAsync(async () => await Task.CompletedTask));
         }
 
         [Fact]
         public async Task CircuitBreaker_Open_RejectsRequests_DoesNotExecuteAction()
         {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 1, Timeout = TimeSpan.FromMinutes(5) };
-            var circuitBreaker = new CircuitBreaker(config);
+            // Arrange - Polly requires MinimumThroughput >= 2
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 2, timeout: TimeSpan.FromMinutes(5));
             var wasExecuted = false;
 
             // Cause the circuit to open
-            try
+            for (int i = 0; i < 2; i++)
             {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                try
+                {
+                    await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                }
+                catch { }
             }
-            catch { }
 
             // Act
             try
@@ -230,67 +225,38 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                     await Task.CompletedTask;
                 });
             }
-            catch (CircuitBreakerOpenException) { }
+            catch (BrokenCircuitException) { }
 
             // Assert
             Assert.False(wasExecuted);
         }
 
         [Fact]
-        public async Task CircuitBreaker_Open_ExceptionContainsOpenedAt()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 1, Timeout = TimeSpan.FromMinutes(1) };
-            var circuitBreaker = new CircuitBreaker(config);
-            var beforeOpen = DateTime.UtcNow;
-
-            // Cause the circuit to open
-            try
-            {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
-            }
-            catch { }
-
-            var afterOpen = DateTime.UtcNow;
-
-            // Act
-            var ex = await Assert.ThrowsAsync<CircuitBreakerOpenException>(
-                () => circuitBreaker.ExecuteAsync(async () => await Task.CompletedTask));
-
-            // Assert
-            Assert.True(ex.OpenedAt >= beforeOpen);
-            Assert.True(ex.OpenedAt <= afterOpen);
-            Assert.Equal(config.Timeout, ex.Timeout);
-        }
-
-        [Fact]
         public async Task CircuitBreaker_Open_AfterTimeout_TransitionsToHalfOpen()
         {
-            // Arrange
-            var config = new CircuitBreakerConfig
-            {
-                FailureThreshold = 1,
-                Timeout = TimeSpan.FromMilliseconds(100)
-            };
-            var circuitBreaker = new CircuitBreaker(config);
+            // Arrange - Polly requires MinimumThroughput >= 2 and BreakDuration >= 500ms
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 2, timeout: TimeSpan.FromMilliseconds(500));
 
             // Cause the circuit to open
-            try
+            for (int i = 0; i < 2; i++)
             {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                try
+                {
+                    await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                }
+                catch { }
             }
-            catch { }
 
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 
             // Wait for timeout to expire
-            await Task.Delay(150);
+            await Task.Delay(600);
 
-            // Act - Execute should succeed and transition to HalfOpen
+            // Act - Execute should succeed and transition through HalfOpen
             await circuitBreaker.ExecuteAsync(async () => await Task.CompletedTask);
 
-            // Assert - Should transition through HalfOpen and possibly to Closed
-            // The state depends on the success threshold
+            // Assert - Should transition through HalfOpen to Closed after success
+            // Polly automatically closes after successful execution in HalfOpen
             Assert.True(circuitBreaker.State == CircuitBreakerState.HalfOpen ||
                        circuitBreaker.State == CircuitBreakerState.Closed);
         }
@@ -302,72 +268,53 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         [Fact]
         public async Task CircuitBreaker_HalfOpen_Success_TransitionsToClosed()
         {
-            // Arrange
-            var config = new CircuitBreakerConfig
-            {
-                FailureThreshold = 1,
-                Timeout = TimeSpan.FromMilliseconds(100),
-                SuccessThreshold = 2
-            };
-            var circuitBreaker = new CircuitBreaker(config);
+            // Arrange - Polly requires MinimumThroughput >= 2 and BreakDuration >= 500ms
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 2, timeout: TimeSpan.FromMilliseconds(500));
 
             // Cause the circuit to open
-            try
+            for (int i = 0; i < 2; i++)
             {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                try
+                {
+                    await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                }
+                catch { }
             }
-            catch { }
 
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 
             // Wait for timeout
-            await Task.Delay(150);
+            await Task.Delay(600);
 
-            // Act - Execute successes to close the circuit
+            // Act - Execute success to close the circuit
             await circuitBreaker.ExecuteAsync(async () => await Task.CompletedTask);
 
-            // Should be in HalfOpen after first success (success count = 1)
-            // or Closed if SuccessThreshold = 1
-            if (config.SuccessThreshold > 1)
-            {
-                Assert.Equal(CircuitBreakerState.HalfOpen, circuitBreaker.State);
-            }
-
-            await circuitBreaker.ExecuteAsync(async () => await Task.CompletedTask);
-
-            // Assert - Should be closed after reaching success threshold
+            // Assert - Should be closed after success in HalfOpen (Polly closes on first success)
             Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
         }
 
         [Fact]
         public async Task CircuitBreaker_HalfOpen_Failure_TransitionsToOpen()
         {
-            // Arrange
-            var config = new CircuitBreakerConfig
-            {
-                FailureThreshold = 1,
-                Timeout = TimeSpan.FromMilliseconds(100),
-                SuccessThreshold = 3
-            };
-            var circuitBreaker = new CircuitBreaker(config);
+            // Arrange - Polly requires MinimumThroughput >= 2 and BreakDuration >= 500ms
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 2, timeout: TimeSpan.FromMilliseconds(500));
 
             // Cause the circuit to open
-            try
+            for (int i = 0; i < 2; i++)
             {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                try
+                {
+                    await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
+                }
+                catch { }
             }
-            catch { }
 
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 
             // Wait for timeout to transition to HalfOpen
-            await Task.Delay(150);
+            await Task.Delay(600);
 
-            // First success to enter HalfOpen
-            await circuitBreaker.ExecuteAsync(async () => await Task.CompletedTask);
-            Assert.Equal(CircuitBreakerState.HalfOpen, circuitBreaker.State);
-
-            // Act - Now fail in HalfOpen state
+            // Act - Fail in HalfOpen state
             try
             {
                 await circuitBreaker.ExecuteAsync(() => throw new Exception("Failure in HalfOpen"));
@@ -376,89 +323,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert - Should transition back to Open
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-        }
-
-        [Fact]
-        public async Task CircuitBreaker_HalfOpen_SuccessBelowThreshold_StaysHalfOpen()
-        {
-            // Arrange
-            var config = new CircuitBreakerConfig
-            {
-                FailureThreshold = 1,
-                Timeout = TimeSpan.FromMilliseconds(100),
-                SuccessThreshold = 5
-            };
-            var circuitBreaker = new CircuitBreaker(config);
-
-            // Cause the circuit to open
-            try
-            {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Simulated failure"));
-            }
-            catch { }
-
-            // Wait for timeout
-            await Task.Delay(150);
-
-            // Act - Execute 3 successes (below threshold of 5)
-            for (int i = 0; i < 3; i++)
-            {
-                await circuitBreaker.ExecuteAsync(async () => await Task.CompletedTask);
-            }
-
-            // Assert - Should still be in HalfOpen
-            Assert.Equal(CircuitBreakerState.HalfOpen, circuitBreaker.State);
-            Assert.Equal(3, circuitBreaker.ConsecutiveSuccesses);
-        }
-
-        #endregion
-
-        #region Configuration Tests
-
-        [Fact]
-        public void CircuitBreakerConfig_DefaultValues_AreCorrect()
-        {
-            // Arrange & Act
-            var config = new CircuitBreakerConfig();
-
-            // Assert
-            Assert.Equal(5, config.FailureThreshold);
-            Assert.Equal(TimeSpan.FromMinutes(1), config.Timeout);
-            Assert.Equal(2, config.SuccessThreshold);
-        }
-
-        [Fact]
-        public void CircuitBreakerConfig_FromTelemetryConfiguration_MapsCorrectly()
-        {
-            // Arrange
-            var telemetryConfig = new TelemetryConfiguration
-            {
-                CircuitBreakerThreshold = 10,
-                CircuitBreakerTimeout = TimeSpan.FromSeconds(30)
-            };
-
-            // Act
-            var config = CircuitBreakerConfig.FromTelemetryConfiguration(telemetryConfig);
-
-            // Assert
-            Assert.Equal(10, config.FailureThreshold);
-            Assert.Equal(TimeSpan.FromSeconds(30), config.Timeout);
-            Assert.Equal(2, config.SuccessThreshold); // Default value
-        }
-
-        [Fact]
-        public void CircuitBreakerConfig_FromTelemetryConfiguration_NullArgument_ThrowsException()
-        {
-            // Act & Assert
-            Assert.Throws<ArgumentNullException>(() =>
-                CircuitBreakerConfig.FromTelemetryConfiguration(null!));
-        }
-
-        [Fact]
-        public void CircuitBreaker_Constructor_NullConfig_ThrowsException()
-        {
-            // Act & Assert
-            Assert.Throws<ArgumentNullException>(() => new CircuitBreaker(null!));
         }
 
         #endregion
@@ -486,19 +350,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         [Fact]
         public async Task CircuitBreaker_ExecuteAsyncGeneric_Open_ThrowsException()
         {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 1 };
-            var circuitBreaker = new CircuitBreaker(config);
+            // Arrange - Polly requires MinimumThroughput >= 2
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 2);
 
             // Cause the circuit to open
-            try
+            for (int i = 0; i < 2; i++)
             {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Failure"));
+                try
+                {
+                    await circuitBreaker.ExecuteAsync(() => throw new Exception("Failure"));
+                }
+                catch { }
             }
-            catch { }
 
             // Act & Assert
-            await Assert.ThrowsAsync<CircuitBreakerOpenException>(
+            await Assert.ThrowsAsync<BrokenCircuitException>(
                 () => circuitBreaker.ExecuteAsync(async () =>
                 {
                     await Task.CompletedTask;
@@ -539,16 +405,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         [Fact]
         public async Task CircuitBreaker_Reset_ClosesCircuit()
         {
-            // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 1 };
-            var circuitBreaker = new CircuitBreaker(config);
+            // Arrange - Polly requires MinimumThroughput >= 2
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 2);
 
             // Cause the circuit to open
-            try
+            for (int i = 0; i < 2; i++)
             {
-                await circuitBreaker.ExecuteAsync(() => throw new Exception("Failure"));
+                try
+                {
+                    await circuitBreaker.ExecuteAsync(() => throw new Exception("Failure"));
+                }
+                catch { }
             }
-            catch { }
 
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 
@@ -557,8 +425,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert
             Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
-            Assert.Equal(0, circuitBreaker.ConsecutiveFailures);
-            Assert.Equal(0, circuitBreaker.ConsecutiveSuccesses);
         }
 
         #endregion
@@ -594,8 +460,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task CircuitBreaker_ConcurrentFailures_ThreadSafe()
         {
             // Arrange
-            var config = new CircuitBreakerConfig { FailureThreshold = 10 };
-            var circuitBreaker = new CircuitBreaker(config);
+            var circuitBreaker = new CircuitBreaker(failureThreshold: 10);
             var failureCount = 0;
             var tasks = new Task[100];
 
@@ -613,7 +478,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                             throw new Exception("Simulated failure");
                         });
                     }
-                    catch (CircuitBreakerOpenException) { }
+                    catch (BrokenCircuitException) { }
                     catch { }
                 });
             }
@@ -622,63 +487,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert - Circuit should eventually open
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-        }
-
-        #endregion
-
-        #region CircuitBreakerOpenException Tests
-
-        [Fact]
-        public void CircuitBreakerOpenException_DefaultConstructor_HasDefaultValues()
-        {
-            // Act
-            var ex = new CircuitBreakerOpenException();
-
-            // Assert
-            Assert.Equal("Circuit breaker is open and rejecting requests.", ex.Message);
-            Assert.Equal(TimeSpan.FromMinutes(1), ex.Timeout);
-        }
-
-        [Fact]
-        public void CircuitBreakerOpenException_MessageConstructor_SetsMessage()
-        {
-            // Arrange
-            var message = "Custom message";
-
-            // Act
-            var ex = new CircuitBreakerOpenException(message);
-
-            // Assert
-            Assert.Equal(message, ex.Message);
-        }
-
-        [Fact]
-        public void CircuitBreakerOpenException_StateConstructor_SetsStateInfo()
-        {
-            // Arrange
-            var openedAt = new DateTime(2025, 1, 22, 12, 0, 0, DateTimeKind.Utc);
-            var timeout = TimeSpan.FromSeconds(30);
-
-            // Act
-            var ex = new CircuitBreakerOpenException(openedAt, timeout);
-
-            // Assert
-            Assert.Equal(openedAt, ex.OpenedAt);
-            Assert.Equal(timeout, ex.Timeout);
-            Assert.Equal(openedAt + timeout, ex.EstimatedRecoveryTime);
-        }
-
-        [Fact]
-        public void CircuitBreakerOpenException_InnerExceptionConstructor_SetsInnerException()
-        {
-            // Arrange
-            var innerException = new Exception("Inner");
-
-            // Act
-            var ex = new CircuitBreakerOpenException("Message", innerException);
-
-            // Assert
-            Assert.Same(innerException, ex.InnerException);
         }
 
         #endregion

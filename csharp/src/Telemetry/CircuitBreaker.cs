@@ -15,9 +15,10 @@
 */
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Polly;
+using Polly.CircuitBreaker;
 
 namespace AdbcDrivers.Databricks.Telemetry
 {
@@ -39,75 +40,96 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <summary>
         /// Testing recovery. Limited requests are allowed through to test if service has recovered.
         /// </summary>
-        HalfOpen = 2
+        HalfOpen = 2,
+
+        /// <summary>
+        /// Circuit has been manually isolated and will not allow requests.
+        /// </summary>
+        Isolated = 3
     }
 
     /// <summary>
-    /// Implements the circuit breaker pattern to protect against failing services.
+    /// Implements the circuit breaker pattern using Polly to protect against failing services.
     /// </summary>
     /// <remarks>
-    /// The circuit breaker has three states:
+    /// The circuit breaker has three main states:
     /// - Closed: Normal operation, requests pass through, failures are tracked.
     /// - Open: After threshold failures, all requests are rejected immediately.
     /// - HalfOpen: After timeout, allows test requests to check if service recovered.
     ///
-    /// State transitions:
-    /// - Closed -> Open: When consecutive failures reach threshold.
-    /// - Open -> HalfOpen: After timeout duration expires.
-    /// - HalfOpen -> Closed: After success threshold is reached.
-    /// - HalfOpen -> Open: If a request fails in HalfOpen state.
-    ///
-    /// Thread-safety is ensured using Interlocked operations.
+    /// This implementation wraps Polly's circuit breaker for battle-tested resilience.
     /// </remarks>
     internal sealed class CircuitBreaker
     {
-        private readonly CircuitBreakerConfig _config;
+        private const int DefaultFailureThreshold = 5;
+        private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(1);
 
-        // State is stored as int for thread-safe Interlocked operations
-        private int _state = (int)CircuitBreakerState.Closed;
+        private readonly ResiliencePipeline _pipeline;
+        private readonly CircuitBreakerManualControl _manualControl;
 
-        // Counters for tracking failures and successes
-        private int _consecutiveFailures;
-        private int _consecutiveSuccesses;
-
-        // Timestamp when the circuit opened (for timeout calculation)
-        private long _openedAtTicks;
-
-        /// <summary>
-        /// Gets the current configuration of the circuit breaker.
-        /// </summary>
-        public CircuitBreakerConfig Config => _config;
+        // Track state transitions for the State property
+        private volatile CircuitBreakerState _lastKnownState = CircuitBreakerState.Closed;
+        private readonly object _stateLock = new object();
 
         /// <summary>
         /// Gets the current state of the circuit breaker.
         /// </summary>
-        public CircuitBreakerState State => (CircuitBreakerState)Volatile.Read(ref _state);
-
-        /// <summary>
-        /// Gets the number of consecutive failures in Closed state.
-        /// </summary>
-        internal int ConsecutiveFailures => Volatile.Read(ref _consecutiveFailures);
-
-        /// <summary>
-        /// Gets the number of consecutive successes in HalfOpen state.
-        /// </summary>
-        internal int ConsecutiveSuccesses => Volatile.Read(ref _consecutiveSuccesses);
-
-        /// <summary>
-        /// Creates a new circuit breaker with default configuration.
-        /// </summary>
-        public CircuitBreaker()
-            : this(new CircuitBreakerConfig())
-        {
-        }
+        public CircuitBreakerState State => _lastKnownState;
 
         /// <summary>
         /// Creates a new circuit breaker with the specified configuration.
         /// </summary>
-        /// <param name="config">The circuit breaker configuration.</param>
-        public CircuitBreaker(CircuitBreakerConfig config)
+        /// <param name="failureThreshold">Number of failures before the circuit opens. Default is 5.</param>
+        /// <param name="timeout">Duration the circuit stays open before transitioning to half-open. Default is 1 minute.</param>
+        public CircuitBreaker(int failureThreshold = DefaultFailureThreshold, TimeSpan? timeout = null)
         {
-            _config = config ?? throw new ArgumentNullException(nameof(config));
+            var actualTimeout = timeout ?? DefaultTimeout;
+            _manualControl = new CircuitBreakerManualControl();
+
+            // Polly has minimum constraints: MinimumThroughput >= 2, BreakDuration >= 500ms
+            var minimumThroughput = Math.Max(2, failureThreshold);
+            var breakDuration = actualTimeout < TimeSpan.FromMilliseconds(500)
+                ? TimeSpan.FromMilliseconds(500)
+                : actualTimeout;
+
+            var options = new CircuitBreakerStrategyOptions
+            {
+                // Use failure ratio of 1.0 (100%) with minimum throughput equal to failure threshold
+                // This effectively makes it behave like consecutive failure counting
+                FailureRatio = 1.0,
+                MinimumThroughput = minimumThroughput,
+                SamplingDuration = TimeSpan.FromSeconds(30),
+                BreakDuration = breakDuration,
+                ManualControl = _manualControl,
+                OnOpened = args =>
+                {
+                    lock (_stateLock)
+                    {
+                        _lastKnownState = CircuitBreakerState.Open;
+                    }
+                    return default;
+                },
+                OnClosed = _ =>
+                {
+                    lock (_stateLock)
+                    {
+                        _lastKnownState = CircuitBreakerState.Closed;
+                    }
+                    return default;
+                },
+                OnHalfOpened = _ =>
+                {
+                    lock (_stateLock)
+                    {
+                        _lastKnownState = CircuitBreakerState.HalfOpen;
+                    }
+                    return default;
+                }
+            };
+
+            _pipeline = new ResiliencePipelineBuilder()
+                .AddCircuitBreaker(options)
+                .Build();
         }
 
         /// <summary>
@@ -115,7 +137,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         /// <param name="action">The async action to execute.</param>
         /// <returns>A task representing the operation.</returns>
-        /// <exception cref="CircuitBreakerOpenException">Thrown when the circuit is open.</exception>
+        /// <exception cref="BrokenCircuitException">Thrown when the circuit is open.</exception>
         public async Task ExecuteAsync(Func<Task> action)
         {
             if (action == null)
@@ -123,23 +145,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            // Check if we can execute
-            if (!CanExecute())
-            {
-                var openedAt = new DateTime(Volatile.Read(ref _openedAtTicks), DateTimeKind.Utc);
-                throw new CircuitBreakerOpenException(openedAt, _config.Timeout);
-            }
-
-            try
-            {
-                await action().ConfigureAwait(false);
-                OnSuccess();
-            }
-            catch (Exception)
-            {
-                OnFailure();
-                throw;
-            }
+            await _pipeline.ExecuteAsync(async ct => await action().ConfigureAwait(false)).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -148,7 +154,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <typeparam name="T">The return type.</typeparam>
         /// <param name="action">The async function to execute.</param>
         /// <returns>A task representing the operation with the result.</returns>
-        /// <exception cref="CircuitBreakerOpenException">Thrown when the circuit is open.</exception>
+        /// <exception cref="BrokenCircuitException">Thrown when the circuit is open.</exception>
         public async Task<T> ExecuteAsync<T>(Func<Task<T>> action)
         {
             if (action == null)
@@ -156,157 +162,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            // Check if we can execute
-            if (!CanExecute())
-            {
-                var openedAt = new DateTime(Volatile.Read(ref _openedAtTicks), DateTimeKind.Utc);
-                throw new CircuitBreakerOpenException(openedAt, _config.Timeout);
-            }
-
-            try
-            {
-                T result = await action().ConfigureAwait(false);
-                OnSuccess();
-                return result;
-            }
-            catch (Exception)
-            {
-                OnFailure();
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Determines if a request can be executed based on current state.
-        /// Also handles state transitions from Open to HalfOpen when timeout expires.
-        /// </summary>
-        private bool CanExecute()
-        {
-            var currentState = State;
-
-            switch (currentState)
-            {
-                case CircuitBreakerState.Closed:
-                    return true;
-
-                case CircuitBreakerState.Open:
-                    // Check if timeout has expired
-                    if (HasTimeoutExpired())
-                    {
-                        // Attempt to transition to HalfOpen
-                        if (TryTransitionTo(CircuitBreakerState.Open, CircuitBreakerState.HalfOpen))
-                        {
-                            // Reset success counter for HalfOpen state
-                            Interlocked.Exchange(ref _consecutiveSuccesses, 0);
-                            Debug.WriteLine("[DEBUG] Circuit breaker transitioning from Open to HalfOpen");
-                        }
-                        return true;
-                    }
-                    return false;
-
-                case CircuitBreakerState.HalfOpen:
-                    return true;
-
-                default:
-                    return false;
-            }
-        }
-
-        /// <summary>
-        /// Records a successful execution.
-        /// </summary>
-        private void OnSuccess()
-        {
-            var currentState = State;
-
-            switch (currentState)
-            {
-                case CircuitBreakerState.Closed:
-                    // Reset failure counter on success
-                    Interlocked.Exchange(ref _consecutiveFailures, 0);
-                    break;
-
-                case CircuitBreakerState.HalfOpen:
-                    // Increment success counter
-                    int successes = Interlocked.Increment(ref _consecutiveSuccesses);
-
-                    // Check if success threshold reached
-                    if (successes >= _config.SuccessThreshold)
-                    {
-                        if (TryTransitionTo(CircuitBreakerState.HalfOpen, CircuitBreakerState.Closed))
-                        {
-                            // Reset counters
-                            Interlocked.Exchange(ref _consecutiveFailures, 0);
-                            Interlocked.Exchange(ref _consecutiveSuccesses, 0);
-                            Debug.WriteLine("[DEBUG] Circuit breaker transitioning from HalfOpen to Closed");
-                        }
-                    }
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// Records a failed execution.
-        /// </summary>
-        private void OnFailure()
-        {
-            var currentState = State;
-
-            switch (currentState)
-            {
-                case CircuitBreakerState.Closed:
-                    // Increment failure counter
-                    int failures = Interlocked.Increment(ref _consecutiveFailures);
-
-                    // Check if failure threshold reached
-                    if (failures >= _config.FailureThreshold)
-                    {
-                        if (TryTransitionTo(CircuitBreakerState.Closed, CircuitBreakerState.Open))
-                        {
-                            // Record when circuit opened
-                            Interlocked.Exchange(ref _openedAtTicks, DateTime.UtcNow.Ticks);
-                            Debug.WriteLine("[DEBUG] Circuit breaker transitioning from Closed to Open");
-                        }
-                    }
-                    break;
-
-                case CircuitBreakerState.HalfOpen:
-                    // Any failure in HalfOpen immediately opens the circuit
-                    if (TryTransitionTo(CircuitBreakerState.HalfOpen, CircuitBreakerState.Open))
-                    {
-                        // Record when circuit opened
-                        Interlocked.Exchange(ref _openedAtTicks, DateTime.UtcNow.Ticks);
-                        // Reset counters
-                        Interlocked.Exchange(ref _consecutiveSuccesses, 0);
-                        Debug.WriteLine("[DEBUG] Circuit breaker transitioning from HalfOpen to Open due to failure");
-                    }
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// Attempts to transition from one state to another atomically.
-        /// </summary>
-        private bool TryTransitionTo(CircuitBreakerState expectedState, CircuitBreakerState newState)
-        {
-            int expected = (int)expectedState;
-            int desired = (int)newState;
-            return Interlocked.CompareExchange(ref _state, desired, expected) == expected;
-        }
-
-        /// <summary>
-        /// Checks if the timeout has expired since the circuit opened.
-        /// </summary>
-        private bool HasTimeoutExpired()
-        {
-            long openedTicks = Volatile.Read(ref _openedAtTicks);
-            if (openedTicks == 0)
-            {
-                return false;
-            }
-
-            var openedAt = new DateTime(openedTicks, DateTimeKind.Utc);
-            return DateTime.UtcNow - openedAt >= _config.Timeout;
+            return await _pipeline.ExecuteAsync(async ct => await action().ConfigureAwait(false)).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -315,10 +171,12 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         internal void Reset()
         {
-            Interlocked.Exchange(ref _state, (int)CircuitBreakerState.Closed);
-            Interlocked.Exchange(ref _consecutiveFailures, 0);
-            Interlocked.Exchange(ref _consecutiveSuccesses, 0);
-            Interlocked.Exchange(ref _openedAtTicks, 0);
+            // Close the circuit if it's open
+            _manualControl.CloseAsync().GetAwaiter().GetResult();
+            lock (_stateLock)
+            {
+                _lastKnownState = CircuitBreakerState.Closed;
+            }
         }
     }
 }
