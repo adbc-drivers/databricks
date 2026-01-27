@@ -40,6 +40,9 @@ jobs:
     needs: check-should-run-pr
     if: needs.check-should-run-pr.outputs.run == 'true'
     runs-on: [self-hosted, Linux, X64, peco-driver]
+    permissions:
+      issues: write
+      pull-requests: write
     steps:
       - name: Generate GitHub App Token
         id: app-token
