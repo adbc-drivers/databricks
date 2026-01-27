@@ -103,6 +103,9 @@ namespace AdbcDrivers.Databricks
 
         private HttpClient? _authHttpClient;
 
+        // Feature flag cache host tracking for cleanup
+        private string? _featureFlagHost;
+
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
         /// If provided by Database, this is shared across all connections for optimal pooling.
@@ -126,12 +129,16 @@ namespace AdbcDrivers.Databricks
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager? memoryStreamManager,
             System.Buffers.ArrayPool<byte>? lz4BufferPool)
-            : base(MergeWithDefaultEnvironmentConfig(properties))
+            : base(MergePropertiesWithFeatureFlags(MergeWithDefaultEnvironmentConfig(properties)))
         {
             // Use provided manager (from Database) or create new instance (for direct construction)
             RecyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             // Use provided pool (from Database) or create new instance (for direct construction)
             Lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
+
+            // Store the host for feature flag context cleanup
+            _featureFlagHost = TryGetHost(Properties);
+
             ValidateProperties();
         }
 
@@ -264,6 +271,115 @@ namespace AdbcDrivers.Databricks
             }
 
             return merged;
+        }
+
+        /// <summary>
+        /// Merges feature flags from server into properties.
+        /// Feature flags have lower priority than user-specified properties.
+        /// Priority: User Properties > Feature Flags > Driver Defaults
+        /// </summary>
+        /// <param name="properties">Properties after environment config merge.</param>
+        /// <returns>Properties with feature flags merged in.</returns>
+        private static IReadOnlyDictionary<string, string> MergePropertiesWithFeatureFlags(IReadOnlyDictionary<string, string> properties)
+        {
+            try
+            {
+                // Extract host from properties
+                var host = TryGetHost(properties);
+                if (string.IsNullOrEmpty(host))
+                {
+                    Debug.WriteLine("[TRACE] FeatureFlag: No host found in properties, skipping feature flag fetch");
+                    return properties;
+                }
+
+                // Extract token for authentication
+                string? token = null;
+                if (properties.TryGetValue(SparkParameters.Token, out var tokenValue))
+                {
+                    token = tokenValue;
+                }
+
+                if (string.IsNullOrEmpty(token))
+                {
+                    Debug.WriteLine("[TRACE] FeatureFlag: No token found in properties, skipping feature flag fetch");
+                    return properties;
+                }
+
+                // Create HttpClient for feature flag API
+                using var httpClient = CreateFeatureFlagHttpClient(host, token);
+
+                // Get or create feature flag context (this makes the initial blocking fetch)
+                var featureFlagCache = FeatureFlagCache.GetInstance();
+                var context = featureFlagCache.GetOrCreateContext(host, httpClient, s_assemblyVersion);
+
+                // Get all flags from cache
+                var featureFlags = context.GetAllFlags();
+
+                if (featureFlags.Count == 0)
+                {
+                    Debug.WriteLine("[TRACE] FeatureFlag: No feature flags returned from server");
+                    return properties;
+                }
+
+                Debug.WriteLine($"[TRACE] FeatureFlag: Merging {featureFlags.Count} feature flags into properties");
+
+                // Merge: feature flags as base, user properties override
+                // This ensures user properties take precedence over server flags
+                return MergeProperties(featureFlags, properties);
+            }
+            catch (Exception ex)
+            {
+                // Feature flag failures should never break the connection
+                Debug.WriteLine($"[TRACE] FeatureFlag: Error fetching feature flags: {ex.Message}");
+                return properties;
+            }
+        }
+
+        /// <summary>
+        /// Creates an HttpClient configured for the feature flag API.
+        /// </summary>
+        /// <param name="host">The Databricks host.</param>
+        /// <param name="token">The authentication token.</param>
+        /// <returns>Configured HttpClient.</returns>
+        private static HttpClient CreateFeatureFlagHttpClient(string host, string token)
+        {
+            var httpClient = new HttpClient
+            {
+                BaseAddress = new Uri($"https://{host}"),
+                Timeout = TimeSpan.FromSeconds(10) // Short timeout for feature flags
+            };
+
+            httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", token);
+
+            // Set User-Agent for connector service
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+                $"DatabricksADBCDriverOSS/{s_assemblyVersion} (FeatureFlagClient)");
+
+            return httpClient;
+        }
+
+        /// <summary>
+        /// Tries to extract the host from properties without throwing.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <returns>The host, or null if not found.</returns>
+        private static string? TryGetHost(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(SparkParameters.HostName, out string? host) && !string.IsNullOrEmpty(host))
+            {
+                return host;
+            }
+
+            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri))
+            {
+                if (Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+                {
+                    return parsedUri.Host;
+                }
+            }
+
+            return null;
         }
 
         private void ValidateProperties()
@@ -971,6 +1087,20 @@ namespace AdbcDrivers.Databricks
             if (disposing)
             {
                 _authHttpClient?.Dispose();
+
+                // Release feature flag context for this host
+                if (!string.IsNullOrEmpty(_featureFlagHost))
+                {
+                    try
+                    {
+                        FeatureFlagCache.GetInstance().ReleaseContext(_featureFlagHost);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Feature flag cleanup failures should never break disposal
+                        Debug.WriteLine($"[TRACE] FeatureFlag: Error releasing context: {ex.Message}");
+                    }
+                }
             }
             base.Dispose(disposing);
         }
