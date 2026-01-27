@@ -67,15 +67,25 @@ Reference the Go (`../go/`) and C# (`../csharp/`) drivers for implementation pat
 
 ### Error Handling
 
-All fallible operations return `crate::Result<T>` which is `Result<T, crate::Error>`.
+The driver uses the `driverbase` error framework for consistent error handling.
 
+**Internal code** (within modules like `auth/`, `client/`, `reader/`) uses `crate::Result<T>`:
 ```rust
-use crate::{Result, Error};
+use crate::error::{DatabricksErrorHelper, Result};
+use driverbase::error::ErrorHelper;
 
-// Use thiserror variants
-Err(Error::Auth("message".to_string()))
-Err(Error::Connection("message".to_string()))
-Err(Error::NotImplemented("feature_name".to_string()))
+// Create errors using the helper
+Err(DatabricksErrorHelper::invalid_argument().message("invalid host URL"))
+Err(DatabricksErrorHelper::io().message("connection refused").context("connect to server"))
+Err(DatabricksErrorHelper::not_implemented().message("feature_name"))
+```
+
+**ADBC trait implementations** (in `connection.rs`, `database.rs`, `statement.rs`) must return `adbc_core::error::Result`:
+```rust
+use adbc_core::error::Result;
+
+// Convert to ADBC error using .to_adbc()
+Err(DatabricksErrorHelper::not_implemented().message("get_objects").to_adbc())
 ```
 
 ### Authentication
@@ -147,9 +157,11 @@ All files must have Apache 2.0 license headers:
 
 ### Error Handling
 
-- Use `thiserror` for error definitions
+- Use `driverbase::error::ErrorHelper` for creating errors
+- Use `DatabricksErrorHelper` methods: `invalid_argument()`, `io()`, `not_implemented()`, `invalid_state()`, etc.
+- Chain `.message("...")` and `.context("...")` for details
+- Use `.to_adbc()` when returning from ADBC trait methods
 - Propagate errors with `?` operator
-- Add context to errors when re-wrapping
 
 ### Async Considerations
 

@@ -17,16 +17,15 @@
 use std::time::{Duration, Instant};
 
 /// Configuration for telemetry collection.
-#[derive(Debug, Clone)]
+///
+/// Telemetry is disabled by default and requires explicit opt-in.
+/// When enabled, the driver collects anonymous usage metrics such as
+/// query execution times and error counts. No query content or
+/// personally identifiable information is collected.
+#[derive(Debug, Clone, Default)]
 pub struct TelemetryConfig {
-    /// Whether telemetry collection is enabled.
+    /// Whether telemetry collection is enabled (default: false).
     pub enabled: bool,
-}
-
-impl Default for TelemetryConfig {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
 }
 
 /// Collects and reports driver telemetry data.
@@ -93,9 +92,9 @@ mod tests {
     use std::thread::sleep;
 
     #[test]
-    fn test_telemetry_config_default() {
+    fn test_telemetry_config_default_disabled() {
         let config = TelemetryConfig::default();
-        assert!(config.enabled);
+        assert!(!config.enabled);
     }
 
     #[test]

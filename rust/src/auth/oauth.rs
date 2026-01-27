@@ -25,6 +25,9 @@ use driverbase::error::ErrorHelper;
 #[derive(Debug, Clone)]
 pub struct OAuthCredentials {
     client_id: String,
+    // Client secret is stored but only used when token fetching is implemented.
+    // TODO: Used in get_auth_header() when OAuth token exchange is implemented.
+    #[allow(dead_code)]
     client_secret: String,
     token_endpoint: Option<String>,
 }
@@ -48,11 +51,6 @@ impl OAuthCredentials {
     /// Returns the client ID.
     pub fn client_id(&self) -> &str {
         &self.client_id
-    }
-
-    /// Returns the client secret.
-    pub fn client_secret(&self) -> &str {
-        &self.client_secret
     }
 
     /// Returns the token endpoint.

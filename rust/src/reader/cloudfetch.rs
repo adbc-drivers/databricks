@@ -106,9 +106,10 @@ mod tests {
     }
 
     #[test]
-    fn test_cloudfetch_reader_empty() {
+    fn test_cloudfetch_reader_empty_links_returns_none() {
         let mut reader = CloudFetchReader::new(CloudFetchConfig::default(), vec![]);
         assert_eq!(reader.link_count(), 0);
+        // When there are no links, next_batch should return Ok(None) immediately
         assert!(reader.next_batch().unwrap().is_none());
     }
 }

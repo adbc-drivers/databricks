@@ -100,6 +100,7 @@ make check
 
 ## Dependencies
 
-- `arrow` - Apache Arrow for columnar data handling
-- `thiserror` - Ergonomic error type definitions
+- `adbc_core` - ADBC trait definitions
+- `driverbase` - Shared ADBC driver utilities and error handling
+- `arrow-array`, `arrow-schema` - Apache Arrow for columnar data handling
 - `tracing` - Structured logging and diagnostics

@@ -23,7 +23,6 @@ use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 use arrow_schema::{ArrowError, Schema};
 use driverbase::error::ErrorHelper;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 /// Represents an active connection to a Databricks SQL endpoint.
 ///
@@ -33,6 +32,8 @@ use std::sync::Arc;
 pub struct Connection {
     uri: Option<String>,
     http_path: Option<String>,
+    // Access token for authentication.
+    // TODO: Used when implementing HTTP client for statement execution.
     #[allow(dead_code)]
     access_token: Option<String>,
     catalog: Option<String>,
@@ -42,13 +43,6 @@ pub struct Connection {
 /// Type alias for our empty reader used in stub implementations.
 type EmptyReader =
     RecordBatchIterator<std::vec::IntoIter<std::result::Result<RecordBatch, ArrowError>>>;
-
-/// Creates an empty RecordBatchIterator for stub implementations.
-#[allow(dead_code)]
-fn empty_reader() -> EmptyReader {
-    let schema = Arc::new(Schema::empty());
-    RecordBatchIterator::new(vec![].into_iter(), schema)
-}
 
 impl Connection {
     /// Creates a new Connection with the given configuration.

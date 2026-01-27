@@ -25,7 +25,7 @@ categories = ["database"]
 
 [dependencies]
 adbc_core = "0.22"
-driverbase = { git = "https://github.com/adbc-drivers/driverbase-rs.git" }
+driverbase = { git = "https://github.com/adbc-drivers/driverbase-rs.git", rev = "a824debf9cbc2236bc12a09c178576b8254c04c4" }
 tracing = "0.1"
 
 # Use arrow versions that match driverbase (which uses v57)

@@ -116,23 +116,27 @@ impl Optionable for Database {
 
     fn get_option_string(&self, key: Self::Option) -> Result<String> {
         match key {
-            OptionDatabase::Uri => self
-                .uri
-                .clone()
-                .ok_or_else(|| DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
+            OptionDatabase::Uri => self.uri.clone().ok_or_else(|| {
+                DatabricksErrorHelper::invalid_state()
+                    .message("option 'uri' is not set")
+                    .to_adbc()
+            }),
             OptionDatabase::Other(ref s) => match s.as_str() {
-                "databricks.http_path" => self
-                    .http_path
-                    .clone()
-                    .ok_or_else(|| DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
-                "databricks.catalog" => self
-                    .catalog
-                    .clone()
-                    .ok_or_else(|| DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
-                "databricks.schema" => self
-                    .schema
-                    .clone()
-                    .ok_or_else(|| DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
+                "databricks.http_path" => self.http_path.clone().ok_or_else(|| {
+                    DatabricksErrorHelper::invalid_state()
+                        .message("option 'databricks.http_path' is not set")
+                        .to_adbc()
+                }),
+                "databricks.catalog" => self.catalog.clone().ok_or_else(|| {
+                    DatabricksErrorHelper::invalid_state()
+                        .message("option 'databricks.catalog' is not set")
+                        .to_adbc()
+                }),
+                "databricks.schema" => self.schema.clone().ok_or_else(|| {
+                    DatabricksErrorHelper::invalid_state()
+                        .message("option 'databricks.schema' is not set")
+                        .to_adbc()
+                }),
                 _ => Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
             },
             _ => Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
