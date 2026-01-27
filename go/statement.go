@@ -32,8 +32,6 @@ import (
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-
-	dbsqlrows "github.com/databricks/databricks-sql-go/rows"
 )
 
 type statementImpl struct {
@@ -126,22 +124,20 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	}
 
 	defer func() {
+		if driverRows == nil {
+			return
+		}
 		if closeErr := driverRows.Close(); closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
 	}()
 
-	// Convert to databricks rows interface to get Arrow batches
-	databricksRows, ok := driverRows.(dbsqlrows.Rows)
-	if !ok {
-		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "driver rows do not support Arrow batches")
-	}
-
 	// Use the IPC stream interface (zero-copy)
-	reader, err := newIPCReaderAdapter(ctx, databricksRows)
+	reader, err := newIPCReaderAdapter(ctx, driverRows)
 	if err != nil {
 		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to create IPC reader adapter: %v", err)
 	}
+	driverRows = nil // Prevent double close in defer
 
 	// Return -1 for rowsAffected (unknown) since we can't count without consuming
 	// The ADBC spec allows -1 to indicate "unknown number of rows affected"
