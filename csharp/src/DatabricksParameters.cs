@@ -160,6 +160,50 @@ namespace AdbcDrivers.Databricks
         public const string CloudFetchPrefetchEnabled = "adbc.databricks.cloudfetch.prefetch_enabled";
 
         /// <summary>
+        /// Whether straggler download mitigation is enabled for CloudFetch operations.
+        /// When enabled, the driver monitors download speeds and cancels stragglers to retry them.
+        /// Default value is false if not specified.
+        /// </summary>
+        public const string CloudFetchStragglerMitigationEnabled = "adbc.databricks.cloudfetch.straggler_mitigation_enabled";
+
+        /// <summary>
+        /// Straggler throughput multiplier for CloudFetch operations.
+        /// A download is considered a straggler if it takes more than (multiplier × expected_time) to complete.
+        /// Default value is 1.5 if not specified.
+        /// Must be greater than or equal to 1.0.
+        /// </summary>
+        public const string CloudFetchStragglerMultiplier = "adbc.databricks.cloudfetch.straggler_multiplier";
+
+        /// <summary>
+        /// Minimum completion quantile before straggler detection starts for CloudFetch operations.
+        /// Detection only begins after this fraction of downloads have completed (e.g., 0.6 = 60%).
+        /// Default value is 0.6 if not specified.
+        /// Must be between 0.0 and 1.0.
+        /// </summary>
+        public const string CloudFetchStragglerQuantile = "adbc.databricks.cloudfetch.straggler_quantile";
+
+        /// <summary>
+        /// Straggler detection padding time in seconds for CloudFetch operations.
+        /// Extra buffer time added before declaring a download as a straggler.
+        /// Default value is 5 seconds if not specified.
+        /// </summary>
+        public const string CloudFetchStragglerPaddingSeconds = "adbc.databricks.cloudfetch.straggler_padding_seconds";
+
+        /// <summary>
+        /// Maximum number of stragglers allowed per query before triggering synchronous fallback.
+        /// When this threshold is exceeded, CloudFetch switches from parallel to sequential downloads.
+        /// Default value is 10 if not specified.
+        /// </summary>
+        public const string CloudFetchMaxStragglersPerQuery = "adbc.databricks.cloudfetch.max_stragglers_per_query";
+
+        /// <summary>
+        /// Whether synchronous (sequential) fallback is enabled after detecting excessive stragglers.
+        /// When enabled, CloudFetch switches to downloading one file at a time after hitting the straggler threshold.
+        /// Default value is false if not specified.
+        /// </summary>
+        public const string CloudFetchSynchronousFallbackEnabled = "adbc.databricks.cloudfetch.synchronous_fallback_enabled";
+
+        /// <summary>
         /// Maximum bytes per fetch request when retrieving query results from servers.
         /// The value can be specified with unit suffixes: B (bytes), KB (kilobytes), MB (megabytes), GB (gigabytes).
         /// If no unit is specified, the value is treated as bytes.
