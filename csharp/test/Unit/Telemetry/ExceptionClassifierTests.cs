@@ -20,6 +20,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Telemetry;
 using Xunit;
 
@@ -36,7 +37,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_401_ReturnsTrue()
         {
             // Arrange
-            var exception = CreateHttpRequestException(HttpStatusCode.Unauthorized);
+            var exception = new HttpExceptionWithStatusCode("Unauthorized", HttpStatusCode.Unauthorized);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -49,7 +50,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_403_ReturnsTrue()
         {
             // Arrange
-            var exception = CreateHttpRequestException(HttpStatusCode.Forbidden);
+            var exception = new HttpExceptionWithStatusCode("Forbidden", HttpStatusCode.Forbidden);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -62,7 +63,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_400_ReturnsTrue()
         {
             // Arrange
-            var exception = CreateHttpRequestException(HttpStatusCode.BadRequest);
+            var exception = new HttpExceptionWithStatusCode("Bad Request", HttpStatusCode.BadRequest);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -75,7 +76,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_404_ReturnsTrue()
         {
             // Arrange
-            var exception = CreateHttpRequestException(HttpStatusCode.NotFound);
+            var exception = new HttpExceptionWithStatusCode("Not Found", HttpStatusCode.NotFound);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -122,7 +123,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_429_ReturnsFalse()
         {
             // Arrange
-            var exception = CreateHttpRequestException((HttpStatusCode)429);
+            var exception = new HttpExceptionWithStatusCode("Too Many Requests", (HttpStatusCode)429);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -135,7 +136,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_503_ReturnsFalse()
         {
             // Arrange
-            var exception = CreateHttpRequestException(HttpStatusCode.ServiceUnavailable);
+            var exception = new HttpExceptionWithStatusCode("Service Unavailable", HttpStatusCode.ServiceUnavailable);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -148,7 +149,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_500_ReturnsFalse()
         {
             // Arrange
-            var exception = CreateHttpRequestException(HttpStatusCode.InternalServerError);
+            var exception = new HttpExceptionWithStatusCode("Internal Server Error", HttpStatusCode.InternalServerError);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -161,7 +162,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_502_ReturnsFalse()
         {
             // Arrange
-            var exception = CreateHttpRequestException(HttpStatusCode.BadGateway);
+            var exception = new HttpExceptionWithStatusCode("Bad Gateway", HttpStatusCode.BadGateway);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -174,7 +175,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_504_ReturnsFalse()
         {
             // Arrange
-            var exception = CreateHttpRequestException(HttpStatusCode.GatewayTimeout);
+            var exception = new HttpExceptionWithStatusCode("Gateway Timeout", HttpStatusCode.GatewayTimeout);
 
             // Act
             var result = ExceptionClassifier.IsTerminalException(exception);
@@ -244,10 +245,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         #region Wrapped Exception Tests
 
         [Fact]
-        public void ExceptionClassifier_IsTerminalException_WrappedHttpRequestException_InInnerException_ReturnsTrue()
+        public void ExceptionClassifier_IsTerminalException_WrappedHttpException_ReturnsTrue()
         {
             // Arrange
-            var innerException = CreateHttpRequestException(HttpStatusCode.Unauthorized);
+            var innerException = new HttpExceptionWithStatusCode("Unauthorized", HttpStatusCode.Unauthorized);
             var wrappedException = new Exception("Wrapper exception", innerException);
 
             // Act
@@ -258,10 +259,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void ExceptionClassifier_IsTerminalException_WrappedRetryableHttpRequestException_InInnerException_ReturnsFalse()
+        public void ExceptionClassifier_IsTerminalException_WrappedRetryableHttpException_ReturnsFalse()
         {
             // Arrange
-            var innerException = CreateHttpRequestException(HttpStatusCode.ServiceUnavailable);
+            var innerException = new HttpExceptionWithStatusCode("Service Unavailable", HttpStatusCode.ServiceUnavailable);
             var wrappedException = new Exception("Wrapper exception", innerException);
 
             // Act
@@ -272,7 +273,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void ExceptionClassifier_IsTerminalException_WrappedAuthException_InInnerException_ReturnsTrue()
+        public void ExceptionClassifier_IsTerminalException_WrappedAuthException_ReturnsTrue()
         {
             // Arrange
             var innerException = new AuthenticationException("Auth failed");
@@ -289,7 +290,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void ExceptionClassifier_IsTerminalException_DeeplyNestedTerminalException_ReturnsTrue()
         {
             // Arrange
-            var innermost = CreateHttpRequestException(HttpStatusCode.Forbidden);
+            var innermost = new HttpExceptionWithStatusCode("Forbidden", HttpStatusCode.Forbidden);
             var middle = new Exception("Middle wrapper", innermost);
             var outer = new Exception("Outer wrapper", middle);
 
@@ -364,80 +365,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert
             Assert.False(result);
-        }
-
-        #endregion
-
-        #region Message-based Status Code Detection Tests
-
-        [Fact]
-        public void ExceptionClassifier_IsTerminalException_HttpRequestExceptionWithStatusCodeInMessage_401_ReturnsTrue()
-        {
-            // Arrange - Simulate older .NET behavior where status code is in message
-            var exception = new HttpRequestException("Response status code does not indicate success: 401 (Unauthorized).");
-
-            // Act
-            var result = ExceptionClassifier.IsTerminalException(exception);
-
-            // Assert
-            Assert.True(result);
-        }
-
-        [Fact]
-        public void ExceptionClassifier_IsTerminalException_HttpRequestExceptionWithStatusCodeInMessage_404_ReturnsTrue()
-        {
-            // Arrange
-            var exception = new HttpRequestException("Response status code does not indicate success: 404 (Not Found).");
-
-            // Act
-            var result = ExceptionClassifier.IsTerminalException(exception);
-
-            // Assert
-            Assert.True(result);
-        }
-
-        [Fact]
-        public void ExceptionClassifier_IsTerminalException_HttpRequestExceptionWithStatusCodeInMessage_503_ReturnsFalse()
-        {
-            // Arrange
-            var exception = new HttpRequestException("Response status code does not indicate success: 503 (Service Unavailable).");
-
-            // Act
-            var result = ExceptionClassifier.IsTerminalException(exception);
-
-            // Assert
-            Assert.False(result);
-        }
-
-        [Fact]
-        public void ExceptionClassifier_IsTerminalException_HttpRequestExceptionWithStatusCodeInMessage_429_ReturnsFalse()
-        {
-            // Arrange
-            var exception = new HttpRequestException("Response status code does not indicate success: 429 (Too Many Requests).");
-
-            // Act
-            var result = ExceptionClassifier.IsTerminalException(exception);
-
-            // Assert
-            Assert.False(result);
-        }
-
-        #endregion
-
-        #region Helper Methods
-
-        /// <summary>
-        /// Creates an HttpRequestException with the specified status code.
-        /// Uses conditional compilation to handle different .NET versions.
-        /// </summary>
-        private static HttpRequestException CreateHttpRequestException(HttpStatusCode statusCode)
-        {
-#if NET5_0_OR_GREATER
-            return new HttpRequestException($"Response status code does not indicate success: {(int)statusCode} ({statusCode}).", null, statusCode);
-#else
-            // For older .NET versions, include status code in message
-            return new HttpRequestException($"Response status code does not indicate success: {(int)statusCode} ({statusCode}).");
-#endif
         }
 
         #endregion
