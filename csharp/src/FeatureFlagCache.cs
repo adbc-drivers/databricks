@@ -16,16 +16,16 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
 
-namespace AdbcDrivers.Databricks.Telemetry
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Singleton that manages feature flag cache per host.
     /// Prevents rate limiting by caching feature flag responses.
+    /// This is a generic cache for all feature flags, not just telemetry.
     /// </summary>
     /// <remarks>
     /// This class implements the per-host caching pattern from the JDBC driver:
@@ -41,7 +41,6 @@ namespace AdbcDrivers.Databricks.Telemetry
         private static readonly FeatureFlagCache s_instance = new FeatureFlagCache();
 
         private readonly ConcurrentDictionary<string, FeatureFlagContext> _contexts;
-        private readonly TimeSpan _defaultCacheDuration;
 
         /// <summary>
         /// Gets the singleton instance of the FeatureFlagCache.
@@ -49,43 +48,42 @@ namespace AdbcDrivers.Databricks.Telemetry
         public static FeatureFlagCache GetInstance() => s_instance;
 
         /// <summary>
-        /// Creates a new FeatureFlagCache with default cache duration (15 minutes).
+        /// Creates a new FeatureFlagCache.
         /// </summary>
         internal FeatureFlagCache()
-            : this(FeatureFlagContext.DefaultCacheDuration)
         {
-        }
-
-        /// <summary>
-        /// Creates a new FeatureFlagCache with the specified default cache duration.
-        /// </summary>
-        /// <param name="defaultCacheDuration">The default cache duration for new contexts.</param>
-        internal FeatureFlagCache(TimeSpan defaultCacheDuration)
-        {
-            if (defaultCacheDuration <= TimeSpan.Zero)
-            {
-                throw new ArgumentOutOfRangeException(nameof(defaultCacheDuration), "Cache duration must be greater than zero.");
-            }
-
             _contexts = new ConcurrentDictionary<string, FeatureFlagContext>(StringComparer.OrdinalIgnoreCase);
-            _defaultCacheDuration = defaultCacheDuration;
         }
 
         /// <summary>
         /// Gets or creates a feature flag context for the host.
         /// Increments reference count.
+        /// Makes initial blocking fetch if context is new.
         /// </summary>
         /// <param name="host">The host (Databricks workspace URL) to get or create a context for.</param>
+        /// <param name="httpClient">
+        /// HttpClient from the connection, pre-configured with:
+        /// - Base address (https://{host})
+        /// - Auth headers (Bearer token)
+        /// - Custom User-Agent for connector service
+        /// </param>
+        /// <param name="driverVersion">The driver version for the API endpoint.</param>
         /// <returns>The feature flag context for the host.</returns>
         /// <exception cref="ArgumentException">Thrown when host is null or whitespace.</exception>
-        public FeatureFlagContext GetOrCreateContext(string host)
+        /// <exception cref="ArgumentNullException">Thrown when httpClient is null.</exception>
+        public FeatureFlagContext GetOrCreateContext(string host, HttpClient httpClient, string driverVersion)
         {
             if (string.IsNullOrWhiteSpace(host))
             {
                 throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
             }
 
-            var context = _contexts.GetOrAdd(host, _ => new FeatureFlagContext(_defaultCacheDuration));
+            if (httpClient == null)
+            {
+                throw new ArgumentNullException(nameof(httpClient));
+            }
+
+            var context = _contexts.GetOrAdd(host, _ => new FeatureFlagContext(host, httpClient, driverVersion));
             context.IncrementRefCount();
 
             Debug.WriteLine($"[TRACE] FeatureFlagCache: GetOrCreateContext for host '{host}', RefCount={context.RefCount}");
@@ -95,14 +93,14 @@ namespace AdbcDrivers.Databricks.Telemetry
 
         /// <summary>
         /// Decrements reference count for the host.
-        /// Removes context when ref count reaches zero.
+        /// Removes context and stops refresh scheduler when ref count reaches zero.
         /// </summary>
         /// <param name="host">The host to release the context for.</param>
         /// <remarks>
         /// This method is thread-safe. If the reference count reaches zero,
-        /// the context is removed from the cache. If multiple threads try to
-        /// release the same context simultaneously, only one will successfully
-        /// remove it.
+        /// the context is removed from the cache and its refresh scheduler is stopped.
+        /// If multiple threads try to release the same context simultaneously,
+        /// only one will successfully remove it.
         /// </remarks>
         public void ReleaseContext(string host)
         {
@@ -118,96 +116,29 @@ namespace AdbcDrivers.Databricks.Telemetry
 
                 if (newRefCount <= 0)
                 {
-                    // Try to remove the context. Use TryRemove with the specific value
+                    // Try to remove the context. Use a compare-and-remove pattern
                     // to avoid race conditions where a new connection added a reference.
                     if (context.RefCount <= 0)
                     {
                         // Note: We check RefCount again because another thread might have
                         // incremented it between our check and the removal attempt.
-#if NET5_0_OR_GREATER
-                        _contexts.TryRemove(new System.Collections.Generic.KeyValuePair<string, FeatureFlagContext>(host, context));
-#else
-                        // For netstandard2.0, we need to be more careful about the removal
-                        // to avoid race conditions.
-                        if (_contexts.TryGetValue(host, out var currentContext) && currentContext == context && currentContext.RefCount <= 0)
+                        if (_contexts.TryGetValue(host, out var currentContext) &&
+                            ReferenceEquals(currentContext, context) &&
+                            currentContext.RefCount <= 0)
                         {
-                            ((System.Collections.Generic.IDictionary<string, FeatureFlagContext>)_contexts).Remove(new System.Collections.Generic.KeyValuePair<string, FeatureFlagContext>(host, context));
+                            // Use IDictionary.Remove to atomically check and remove
+                            var removed = ((IDictionary<string, FeatureFlagContext>)_contexts)
+                                .Remove(new KeyValuePair<string, FeatureFlagContext>(host, context));
+
+                            if (removed)
+                            {
+                                // Stop the refresh scheduler and dispose the context
+                                context.Dispose();
+                                Debug.WriteLine($"[TRACE] FeatureFlagCache: Removed and disposed context for host '{host}'");
+                            }
                         }
-#endif
-                        Debug.WriteLine($"[TRACE] FeatureFlagCache: Removed context for host '{host}'");
                     }
                 }
-            }
-        }
-
-        /// <summary>
-        /// Checks if telemetry is enabled for the host.
-        /// Uses cached value if available and not expired.
-        /// </summary>
-        /// <param name="host">The host to check telemetry status for.</param>
-        /// <param name="featureFlagFetcher">Function to fetch the feature flag from the server.</param>
-        /// <param name="ct">Cancellation token.</param>
-        /// <returns>True if telemetry is enabled, false otherwise.</returns>
-        /// <remarks>
-        /// This method:
-        /// 1. Returns the cached value if available and not expired
-        /// 2. Otherwise fetches the feature flag using the provided fetcher
-        /// 3. Caches the result for future calls
-        ///
-        /// All exceptions from the fetcher are caught and logged at TRACE level.
-        /// On error, returns false (telemetry disabled) as a safe default.
-        /// </remarks>
-        public async Task<bool> IsTelemetryEnabledAsync(
-            string host,
-            Func<CancellationToken, Task<bool>> featureFlagFetcher,
-            CancellationToken ct = default)
-        {
-            if (string.IsNullOrWhiteSpace(host))
-            {
-                return false;
-            }
-
-            if (featureFlagFetcher == null)
-            {
-                return false;
-            }
-
-            try
-            {
-                if (!_contexts.TryGetValue(host, out var context))
-                {
-                    // No context for this host, return false
-                    return false;
-                }
-
-                // Check if we have a valid cached value
-                if (context.TryGetCachedValue(out bool cachedValue))
-                {
-                    Debug.WriteLine($"[TRACE] FeatureFlagCache: Using cached value for host '{host}': {cachedValue}");
-                    return cachedValue;
-                }
-
-                // Cache miss or expired - fetch from server
-                Debug.WriteLine($"[TRACE] FeatureFlagCache: Cache miss for host '{host}', fetching from server");
-                var enabled = await featureFlagFetcher(ct).ConfigureAwait(false);
-
-                // Update the cache
-                context.SetTelemetryEnabled(enabled);
-                Debug.WriteLine($"[TRACE] FeatureFlagCache: Updated cache for host '{host}': {enabled}");
-
-                return enabled;
-            }
-            catch (OperationCanceledException)
-            {
-                // Don't swallow cancellation
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // Swallow all other exceptions per telemetry requirement
-                // Log at TRACE level to avoid customer anxiety
-                Debug.WriteLine($"[TRACE] FeatureFlagCache: Error fetching feature flag for host '{host}': {ex.Message}");
-                return false;
             }
         }
 
@@ -257,11 +188,15 @@ namespace AdbcDrivers.Databricks.Telemetry
         }
 
         /// <summary>
-        /// Clears all cached contexts.
+        /// Clears all cached contexts and disposes them.
         /// This is primarily for testing purposes.
         /// </summary>
         internal void Clear()
         {
+            foreach (var context in _contexts.Values)
+            {
+                context.Dispose();
+            }
             _contexts.Clear();
         }
     }
