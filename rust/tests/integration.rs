@@ -1,52 +1,69 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
+// Copyright (c) 2025 ADBC Drivers Contributors
 //
-//   http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Integration tests for the Databricks ADBC driver.
 
+use adbc_core::options::{OptionDatabase, OptionValue};
+use adbc_core::Connection as _;
+use adbc_core::Database as _;
+use adbc_core::Driver as _;
+use adbc_core::Optionable;
+use adbc_core::Statement as _;
 use databricks_adbc::Driver;
 
 #[test]
 fn test_driver_database_connection_flow() {
     // Create driver
-    let driver = Driver::new();
+    let mut driver = Driver::new();
 
     // Create database with configuration
-    let database = driver.new_database().expect("Failed to create database");
-    let database = database
-        .with_host("https://example.databricks.com")
-        .with_http_path("/sql/1.0/warehouses/abc123")
-        .with_catalog("main")
-        .with_schema("default");
+    let mut database = driver.new_database().expect("Failed to create database");
+    database
+        .set_option(
+            OptionDatabase::Uri,
+            OptionValue::String("https://example.databricks.com".into()),
+        )
+        .expect("Failed to set uri");
+    database
+        .set_option(
+            OptionDatabase::Other("adbc.databricks.http_path".into()),
+            OptionValue::String("/sql/1.0/warehouses/abc123".into()),
+        )
+        .expect("Failed to set http_path");
+
+    // Verify options
+    assert_eq!(
+        database.get_option_string(OptionDatabase::Uri).unwrap(),
+        "https://example.databricks.com"
+    );
 
     // Create connection
-    let connection = database.connect().expect("Failed to connect");
+    let mut connection = database.new_connection().expect("Failed to connect");
 
-    // Verify configuration propagated
-    assert_eq!(connection.host(), Some("https://example.databricks.com"));
-    assert_eq!(connection.http_path(), Some("/sql/1.0/warehouses/abc123"));
-    assert_eq!(connection.catalog(), Some("main"));
-    assert_eq!(connection.schema(), Some("default"));
+    // Get driver info
+    {
+        let info = connection.get_info(None);
+        assert!(info.is_ok());
+    }
 
     // Create statement
     let mut statement = connection
         .new_statement()
         .expect("Failed to create statement");
-    statement.set_sql_query("SELECT 1");
-    assert_eq!(statement.sql_query(), Some("SELECT 1"));
+    statement
+        .set_sql_query("SELECT 1")
+        .expect("Failed to set query");
 }
 
 #[test]
@@ -60,4 +77,18 @@ fn test_auth_providers() {
     // Test OAuth (not yet implemented)
     let oauth = OAuthCredentials::new("client-id", "client-secret");
     assert!(oauth.get_auth_header().is_err());
+}
+
+#[test]
+fn test_adbc_traits_implemented() {
+    // Verify that our types implement the correct ADBC traits
+    fn assert_driver<T: adbc_core::Driver>() {}
+    fn assert_database<T: adbc_core::Database>() {}
+    fn assert_connection<T: adbc_core::Connection>() {}
+    fn assert_statement<T: adbc_core::Statement>() {}
+
+    assert_driver::<databricks_adbc::Driver>();
+    assert_database::<databricks_adbc::Database>();
+    assert_connection::<databricks_adbc::Connection>();
+    assert_statement::<databricks_adbc::Statement>();
 }

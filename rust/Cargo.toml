@@ -1,19 +1,16 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
+# Copyright (c) 2025 ADBC Drivers Contributors
 #
-#   http://www.apache.org/licenses/LICENSE-2.0
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 [package]
 name = "databricks-adbc"
@@ -22,14 +19,19 @@ edition = "2021"
 authors = ["Databricks"]
 license = "Apache-2.0"
 description = "Databricks ADBC Driver for Rust"
-repository = "https://github.com/databricks/databricks-adbc"
+repository = "https://github.com/adbc-drivers/databricks"
 keywords = ["databricks", "adbc", "arrow", "database", "sql"]
 categories = ["database"]
 
 [dependencies]
-arrow = { version = "53", default-features = false }
-thiserror = "1"
+adbc_core = "0.22"
+driverbase = { git = "https://github.com/adbc-drivers/driverbase-rs.git" }
 tracing = "0.1"
+
+# Use arrow versions that match driverbase (which uses v57)
+# The adbc_core crate accepts >=53.1.0, <58
+arrow-array = "57"
+arrow-schema = "57"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

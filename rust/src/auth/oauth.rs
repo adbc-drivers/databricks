@@ -1,25 +1,22 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
+// Copyright (c) 2025 ADBC Drivers Contributors
 //
-//   http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! OAuth 2.0 client credentials authentication.
 
 use super::AuthProvider;
-use crate::error::Error;
-use crate::Result;
+use crate::error::{DatabricksErrorHelper, Result};
+use driverbase::error::ErrorHelper;
 
 /// OAuth 2.0 client credentials authentication provider.
 ///
@@ -67,9 +64,8 @@ impl OAuthCredentials {
 impl AuthProvider for OAuthCredentials {
     fn get_auth_header(&self) -> Result<String> {
         // TODO: Implement token fetching and caching
-        Err(Error::NotImplemented(
-            "OAuth token fetching not yet implemented".to_string(),
-        ))
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("OAuth token fetching not yet implemented"))
     }
 }
 

@@ -1,47 +1,68 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
+// Copyright (c) 2025 ADBC Drivers Contributors
 //
-//   http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Error types for the Databricks ADBC driver.
+//!
+//! This module uses the driverbase error framework to provide consistent,
+//! informative error messages that integrate with the ADBC error model.
 
-use thiserror::Error;
+use driverbase::error::ErrorHelper;
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Authentication error: {0}")]
-    Auth(String),
+/// Error helper for Databricks driver errors.
+///
+/// This type implements the driverbase `ErrorHelper` trait to provide
+/// consistent error formatting with the driver name prefix.
+#[derive(Clone)]
+pub struct DatabricksErrorHelper;
 
-    #[error("Connection error: {0}")]
-    Connection(String),
+impl ErrorHelper for DatabricksErrorHelper {
+    const NAME: &'static str = "Databricks";
+}
 
-    #[error("Statement execution error: {0}")]
-    Statement(String),
+/// The error type for Databricks ADBC driver operations.
+pub type Error = driverbase::error::Error<DatabricksErrorHelper>;
 
-    #[error("HTTP error: {0}")]
-    Http(String),
+/// A convenient alias for Results with Databricks errors.
+pub type Result<T> = std::result::Result<T, Error>;
 
-    #[error("CloudFetch error: {0}")]
-    CloudFetch(String),
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    #[error("Arrow error: {0}")]
-    Arrow(#[from] arrow::error::ArrowError),
+    #[test]
+    fn test_error_display() {
+        let error = DatabricksErrorHelper::invalid_argument().message("invalid host URL");
+        let display = format!("{error}");
+        assert!(display.contains("Databricks"));
+        assert!(display.contains("invalid host URL"));
+    }
 
-    #[error("Invalid configuration: {0}")]
-    InvalidConfig(String),
+    #[test]
+    fn test_error_with_context() {
+        let error = DatabricksErrorHelper::io()
+            .message("connection refused")
+            .context("connect to server");
+        let display = format!("{error}");
+        assert!(display.contains("could not connect to server"));
+        assert!(display.contains("connection refused"));
+    }
 
-    #[error("Not implemented: {0}")]
-    NotImplemented(String),
+    #[test]
+    fn test_error_to_adbc() {
+        let error = DatabricksErrorHelper::not_implemented().message("bulk ingest");
+        let adbc_error = error.to_adbc();
+        assert_eq!(adbc_error.status, adbc_core::error::Status::NotImplemented);
+        assert!(adbc_error.message.contains("Databricks"));
+    }
 }

@@ -1,25 +1,30 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
+// Copyright (c) 2025 ADBC Drivers Contributors
 //
-//   http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Statement implementation for the Databricks ADBC driver.
 
-use crate::error::Error;
-use crate::result::ResultSet;
-use crate::Result;
+use crate::error::DatabricksErrorHelper;
+use adbc_core::error::Result;
+use adbc_core::options::{OptionStatement, OptionValue};
+use adbc_core::Optionable;
+use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+use arrow_schema::{ArrowError, Schema};
+use driverbase::error::ErrorHelper;
+
+/// Type alias for our empty reader used in stub implementations.
+type EmptyReader =
+    RecordBatchIterator<std::vec::IntoIter<std::result::Result<RecordBatch, ArrowError>>>;
 
 /// Represents a SQL statement that can be executed against Databricks.
 ///
@@ -36,36 +41,99 @@ impl Statement {
         Self::default()
     }
 
-    /// Sets the SQL query to execute.
-    pub fn set_sql_query(&mut self, query: impl Into<String>) -> &mut Self {
-        self.query = Some(query.into());
-        self
-    }
-
     /// Returns the current SQL query.
     pub fn sql_query(&self) -> Option<&str> {
         self.query.as_deref()
     }
+}
 
-    /// Executes the statement and returns a result set.
-    pub fn execute_query(&self) -> Result<ResultSet> {
-        if self.query.is_none() {
-            return Err(Error::Statement("No query set".to_string()));
-        }
-        Err(Error::NotImplemented("execute_query".to_string()))
+impl Optionable for Statement {
+    type Option = OptionStatement;
+
+    fn set_option(&mut self, key: Self::Option, _value: OptionValue) -> Result<()> {
+        Err(DatabricksErrorHelper::set_unknown_option(&key).to_adbc())
     }
 
-    /// Executes the statement for its side effects (e.g., INSERT, UPDATE).
-    pub fn execute_update(&self) -> Result<i64> {
-        if self.query.is_none() {
-            return Err(Error::Statement("No query set".to_string()));
-        }
-        Err(Error::NotImplemented("execute_update".to_string()))
+    fn get_option_string(&self, key: Self::Option) -> Result<String> {
+        Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc())
     }
 
-    /// Closes the statement and releases resources.
-    pub fn close(&mut self) -> Result<()> {
-        self.query = None;
+    fn get_option_bytes(&self, key: Self::Option) -> Result<Vec<u8>> {
+        Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc())
+    }
+
+    fn get_option_int(&self, key: Self::Option) -> Result<i64> {
+        Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc())
+    }
+
+    fn get_option_double(&self, key: Self::Option) -> Result<f64> {
+        Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc())
+    }
+}
+
+impl adbc_core::Statement for Statement {
+    fn set_sql_query(&mut self, query: impl AsRef<str>) -> Result<()> {
+        self.query = Some(query.as_ref().to_string());
+        Ok(())
+    }
+
+    fn set_substrait_plan(&mut self, _plan: impl AsRef<[u8]>) -> Result<()> {
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("Substrait plans")
+            .to_adbc())
+    }
+
+    fn prepare(&mut self) -> Result<()> {
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("prepare")
+            .to_adbc())
+    }
+
+    fn get_parameter_schema(&self) -> Result<Schema> {
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("get_parameter_schema")
+            .to_adbc())
+    }
+
+    fn bind(&mut self, _batch: arrow_array::RecordBatch) -> Result<()> {
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("bind parameters")
+            .to_adbc())
+    }
+
+    fn bind_stream(&mut self, _stream: Box<dyn RecordBatchReader + Send>) -> Result<()> {
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("bind_stream")
+            .to_adbc())
+    }
+
+    fn execute(&mut self) -> Result<impl RecordBatchReader + Send> {
+        Err::<EmptyReader, _>(
+            DatabricksErrorHelper::not_implemented()
+                .message("execute")
+                .to_adbc(),
+        )
+    }
+
+    fn execute_update(&mut self) -> Result<Option<i64>> {
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("execute_update")
+            .to_adbc())
+    }
+
+    fn execute_schema(&mut self) -> Result<Schema> {
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("execute_schema")
+            .to_adbc())
+    }
+
+    fn execute_partitions(&mut self) -> Result<adbc_core::PartitionedResult> {
+        Err(DatabricksErrorHelper::not_implemented()
+            .message("execute_partitions")
+            .to_adbc())
+    }
+
+    fn cancel(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -73,25 +141,21 @@ impl Statement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adbc_core::Statement as _;
 
     #[test]
     fn test_statement_set_query() {
         let mut stmt = Statement::new();
-        stmt.set_sql_query("SELECT 1");
+        stmt.set_sql_query("SELECT 1").unwrap();
         assert_eq!(stmt.sql_query(), Some("SELECT 1"));
     }
 
     #[test]
-    fn test_statement_execute_without_query() {
-        let stmt = Statement::new();
-        assert!(stmt.execute_query().is_err());
-    }
-
-    #[test]
-    fn test_statement_close() {
+    fn test_statement_execute() {
         let mut stmt = Statement::new();
-        stmt.set_sql_query("SELECT 1");
-        assert!(stmt.close().is_ok());
-        assert!(stmt.sql_query().is_none());
+        stmt.set_sql_query("SELECT 1").unwrap();
+        // Should fail with "not implemented"
+        let result = stmt.execute();
+        assert!(result.is_err());
     }
 }
