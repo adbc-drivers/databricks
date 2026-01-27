@@ -68,10 +68,11 @@ namespace AdbcDrivers.Databricks
         /// - Custom User-Agent for connector service
         /// </param>
         /// <param name="driverVersion">The driver version for the API endpoint.</param>
+        /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
         /// <returns>The feature flag context for the host.</returns>
         /// <exception cref="ArgumentException">Thrown when host is null or whitespace.</exception>
         /// <exception cref="ArgumentNullException">Thrown when httpClient is null.</exception>
-        public FeatureFlagContext GetOrCreateContext(string host, HttpClient httpClient, string driverVersion)
+        public FeatureFlagContext GetOrCreateContext(string host, HttpClient httpClient, string driverVersion, string? endpointFormat = null)
         {
             if (string.IsNullOrWhiteSpace(host))
             {
@@ -83,7 +84,7 @@ namespace AdbcDrivers.Databricks
                 throw new ArgumentNullException(nameof(httpClient));
             }
 
-            var context = _contexts.GetOrAdd(host, _ => new FeatureFlagContext(host, httpClient, driverVersion));
+            var context = _contexts.GetOrAdd(host, _ => new FeatureFlagContext(host, httpClient, driverVersion, endpointFormat));
             context.IncrementRefCount();
 
             Debug.WriteLine($"[TRACE] FeatureFlagCache: GetOrCreateContext for host '{host}', RefCount={context.RefCount}");
