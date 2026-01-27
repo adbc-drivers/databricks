@@ -37,6 +37,11 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 		return -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no data bound for ingestion")
 	}
 
+	defer func() {
+		s.boundStream.Release()
+		s.boundStream = nil
+	}()
+
 	opts := &s.bulkIngestOptions
 
 	tableName := buildTableName(opts.CatalogName, opts.SchemaName, opts.TableName)
@@ -82,7 +87,6 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 		return totalRows, s.ErrorHelper.Errorf(adbc.StatusInternal, "stream error: %v", err)
 	}
 
-	s.boundStream = nil
 	return totalRows, nil
 }
 
