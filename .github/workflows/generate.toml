@@ -19,8 +19,8 @@ environment = "azure-prod"
 go = true
 
 [secrets]
-DATABRICKS_HOST = { secret = "DATABRICKS_HOST", contexts = ["validate"] }
-DATABRICKS_ACCESSTOKEN = { secret = "DATABRICKS_TOKEN", contexts = ["validate"] }
-DATABRICKS_HTTPPATH = { secret = "TEST_PECO_WAREHOUSE_HTTP_PATH", contexts = ["validate"] }
-DATABRICKS_OAUTH_CLIENT_ID = { secret = "DATABRICKS_TEST_CLIENT_ID", contexts = ["validate"] }
-DATABRICKS_OAUTH_CLIENT_SECRET = { secret = "DATABRICKS_TEST_CLIENT_SECRET", contexts = ["validate"] }
+DATABRICKS_HOST = { secret = "DATABRICKS_HOST", contexts = ["test", "validate"] }
+DATABRICKS_ACCESSTOKEN = { secret = "DATABRICKS_TOKEN", contexts = ["test", "validate"] }
+DATABRICKS_HTTPPATH = { secret = "TEST_PECO_WAREHOUSE_HTTP_PATH", contexts = ["test", "validate"] }
+DATABRICKS_OAUTH_CLIENT_ID = { secret = "DATABRICKS_TEST_CLIENT_ID", contexts = ["test", "validate"] }
+DATABRICKS_OAUTH_CLIENT_SECRET = { secret = "DATABRICKS_TEST_CLIENT_SECRET", contexts = ["test", "validate"] }

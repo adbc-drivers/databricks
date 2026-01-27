@@ -40,14 +40,14 @@ import (
 
 // ipcReaderAdapter uses the new IPC stream interface for Arrow access
 type ipcReaderAdapter struct {
-	rows 	driver.Rows
+	rows          driver.Rows
 	ipcIterator   dbsqlrows.ArrowIPCStreamIterator
 	currentReader *ipc.Reader
 	currentRecord arrow.RecordBatch
 	schema        *arrow.Schema
 	closed        bool
 	refCount      int64
-	err error
+	err           error
 }
 
 // newIPCReaderAdapter creates a RecordReader using direct IPC stream access
@@ -96,7 +96,7 @@ func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordRea
 	}
 
 	adapter := &ipcReaderAdapter{
-		rows: rows,
+		rows:        rows,
 		refCount:    1,
 		ipcIterator: ipcIterator,
 		schema:      schema,
