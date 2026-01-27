@@ -21,6 +21,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
+using Apache.Arrow.Adbc.Tracing;
 
 namespace AdbcDrivers.Databricks
 {
@@ -46,18 +47,24 @@ namespace AdbcDrivers.Databricks
     internal sealed class FeatureFlagContext : IDisposable
     {
         /// <summary>
+        /// Activity source for feature flag tracing.
+        /// </summary>
+        private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks.FeatureFlags");
+
+        /// <summary>
         /// Default refresh interval (15 minutes) if server doesn't specify ttl_seconds.
         /// </summary>
         public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromMinutes(15);
 
         /// <summary>
-        /// Feature flag endpoint format. {0} = driver version.
+        /// Default feature flag endpoint format. {0} = driver version.
         /// NOTE: Using OSS_JDBC endpoint until OSS_ADBC is configured server-side.
         /// </summary>
-        internal const string FeatureFlagEndpointFormat = "/api/2.0/connector-service/feature-flags/OSS_JDBC/{0}";
+        internal const string DefaultFeatureFlagEndpointFormat = "/api/2.0/connector-service/feature-flags/OSS_JDBC/{0}";
 
         private readonly string _host;
         private readonly string _driverVersion;
+        private readonly string _endpointFormat;
         private readonly HttpClient _httpClient;
         private readonly ConcurrentDictionary<string, string> _flags;
         private readonly object _timerLock = new object();
@@ -99,7 +106,8 @@ namespace AdbcDrivers.Databricks
         /// - Custom User-Agent for connector service
         /// </param>
         /// <param name="driverVersion">The driver version for the API endpoint.</param>
-        public FeatureFlagContext(string host, HttpClient httpClient, string driverVersion)
+        /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
+        public FeatureFlagContext(string host, HttpClient httpClient, string driverVersion, string? endpointFormat = null)
         {
             if (string.IsNullOrWhiteSpace(host))
             {
@@ -109,12 +117,13 @@ namespace AdbcDrivers.Databricks
             _host = host;
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _driverVersion = driverVersion ?? "1.0.0";
+            _endpointFormat = endpointFormat ?? DefaultFeatureFlagEndpointFormat;
             _flags = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _refreshInterval = DefaultRefreshInterval;
             _refCount = 0;
 
             // Initial blocking fetch
-            FetchFeatureFlagsBlocking();
+            FetchFeatureFlags("Initial");
 
             // Start background refresh scheduler
             StartRefreshScheduler();
@@ -133,6 +142,7 @@ namespace AdbcDrivers.Databricks
             _host = "test-host";
             _httpClient = null!;
             _driverVersion = "1.0.0";
+            _endpointFormat = DefaultFeatureFlagEndpointFormat;
             _flags = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _refreshInterval = refreshInterval ?? DefaultRefreshInterval;
             _refCount = 0;
@@ -214,7 +224,10 @@ namespace AdbcDrivers.Databricks
                 {
                     _refreshTimer.Dispose();
                     _refreshTimer = null;
-                    Debug.WriteLine($"[TRACE] FeatureFlagContext: Stopped refresh scheduler for host '{_host}'");
+
+                    Activity.Current?.AddEvent("feature_flags.scheduler.stopped", [
+                        new("host", _host)
+                    ]);
                 }
             }
         }
@@ -234,32 +247,70 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Performs the initial blocking fetch of feature flags.
+        /// Fetches feature flags from the API endpoint and processes the response.
+        /// This is a common method used by both initial fetch and background refresh.
         /// </summary>
-        private void FetchFeatureFlagsBlocking()
+        /// <param name="fetchType">Type of fetch for logging purposes (e.g., "Initial" or "Background").</param>
+        private void FetchFeatureFlags(string fetchType)
         {
+            using var activity = s_activitySource.StartActivity($"FetchFeatureFlags.{fetchType}");
+            activity?.SetTag("feature_flags.host", _host);
+            activity?.SetTag("feature_flags.fetch_type", fetchType);
+
             try
             {
-                var endpoint = string.Format(FeatureFlagEndpointFormat, _driverVersion);
-                Debug.WriteLine($"[TRACE] FeatureFlagContext: Initial fetch from '{endpoint}' for host '{_host}'");
+                var endpoint = string.Format(_endpointFormat, _driverVersion);
+                activity?.SetTag("feature_flags.endpoint", endpoint);
 
                 var response = _httpClient.GetAsync(endpoint).ConfigureAwait(false).GetAwaiter().GetResult();
 
-                if (response.IsSuccessStatusCode)
-                {
-                    var content = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
-                    ProcessResponse(content);
-                }
-                else
-                {
-                    Debug.WriteLine($"[TRACE] FeatureFlagContext: Initial fetch failed with status {response.StatusCode} for host '{_host}'");
-                }
+                EnsureSuccessStatusCode(response, fetchType, activity);
+
+                var content = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                ProcessResponse(content, activity);
+
+                activity?.SetStatus(ActivityStatusCode.Ok);
             }
             catch (Exception ex)
             {
                 // Swallow exceptions - telemetry should not break the connection
-                Debug.WriteLine($"[TRACE] FeatureFlagContext: Initial fetch failed for host '{_host}': {ex.Message}");
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddEvent("feature_flags.fetch.failed", [
+                    new("error.message", ex.Message),
+                    new("error.type", ex.GetType().Name)
+                ]);
             }
+        }
+
+        /// <summary>
+        /// Ensures the HTTP response indicates success, otherwise logs and throws an exception.
+        /// </summary>
+        /// <param name="response">The HTTP response message.</param>
+        /// <param name="fetchType">Type of fetch for logging purposes.</param>
+        /// <param name="activity">The current activity for tracing.</param>
+        private void EnsureSuccessStatusCode(HttpResponseMessage response, string fetchType, Activity? activity)
+        {
+            activity?.SetTag("feature_flags.response.status_code", (int)response.StatusCode);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            var errorContent = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+            var errorMessage = $"Feature flag API request failed with status code {(int)response.StatusCode} ({response.StatusCode})";
+
+            if (!string.IsNullOrWhiteSpace(errorContent))
+            {
+                errorMessage = $"{errorMessage}. Response: {errorContent}";
+            }
+
+            activity?.AddEvent("feature_flags.response.error", [
+                new("status_code", (int)response.StatusCode),
+                new("error.message", errorMessage)
+            ]);
+
+            throw new HttpRequestException(errorMessage);
         }
 
         /// <summary>
@@ -275,7 +326,10 @@ namespace AdbcDrivers.Databricks
                     _refreshInterval,
                     _refreshInterval);
 
-                Debug.WriteLine($"[TRACE] FeatureFlagContext: Started refresh scheduler for host '{_host}' with interval {_refreshInterval.TotalSeconds}s");
+                Activity.Current?.AddEvent("feature_flags.scheduler.started", [
+                    new("host", _host),
+                    new("interval_seconds", _refreshInterval.TotalSeconds)
+                ]);
             }
         }
 
@@ -289,34 +343,15 @@ namespace AdbcDrivers.Databricks
                 return;
             }
 
-            try
-            {
-                var endpoint = string.Format(FeatureFlagEndpointFormat, _driverVersion);
-                Debug.WriteLine($"[TRACE] FeatureFlagContext: Background refresh from '{endpoint}' for host '{_host}'");
-
-                var response = _httpClient.GetAsync(endpoint).ConfigureAwait(false).GetAwaiter().GetResult();
-
-                if (response.IsSuccessStatusCode)
-                {
-                    var content = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
-                    ProcessResponse(content);
-                }
-                else
-                {
-                    Debug.WriteLine($"[TRACE] FeatureFlagContext: Background refresh failed with status {response.StatusCode} for host '{_host}'");
-                }
-            }
-            catch (Exception ex)
-            {
-                // Swallow exceptions - telemetry should not break the connection
-                Debug.WriteLine($"[TRACE] FeatureFlagContext: Background refresh failed for host '{_host}': {ex.Message}");
-            }
+            FetchFeatureFlags("Background");
         }
 
         /// <summary>
         /// Processes the JSON response and updates the cache.
         /// </summary>
-        private void ProcessResponse(string content)
+        /// <param name="content">The JSON response content.</param>
+        /// <param name="activity">The current activity for tracing.</param>
+        private void ProcessResponse(string content, Activity? activity)
         {
             try
             {
@@ -332,26 +367,35 @@ namespace AdbcDrivers.Databricks
                         }
                     }
 
-                    Debug.WriteLine($"[TRACE] FeatureFlagContext: Updated {response.Flags.Count} flags for host '{_host}'");
+                    activity?.SetTag("feature_flags.count", response.Flags.Count);
+                    activity?.AddEvent("feature_flags.updated", [
+                        new("flags_count", response.Flags.Count)
+                    ]);
                 }
 
                 // Update refresh interval if server provides a different TTL
                 if (response?.TtlSeconds != null && response.TtlSeconds > 0)
                 {
                     var newInterval = TimeSpan.FromSeconds(response.TtlSeconds.Value);
-                    UpdateRefreshInterval(newInterval);
+                    activity?.SetTag("feature_flags.ttl_seconds", response.TtlSeconds.Value);
+                    UpdateRefreshInterval(newInterval, activity);
                 }
             }
             catch (JsonException ex)
             {
-                Debug.WriteLine($"[TRACE] FeatureFlagContext: Failed to parse response for host '{_host}': {ex.Message}");
+                activity?.AddEvent("feature_flags.parse.failed", [
+                    new("error.message", ex.Message),
+                    new("error.type", ex.GetType().Name)
+                ]);
             }
         }
 
         /// <summary>
         /// Updates the refresh interval if it has changed.
         /// </summary>
-        private void UpdateRefreshInterval(TimeSpan newInterval)
+        /// <param name="newInterval">The new refresh interval.</param>
+        /// <param name="activity">The current activity for tracing.</param>
+        private void UpdateRefreshInterval(TimeSpan newInterval, Activity? activity = null)
         {
             lock (_timerLock)
             {
@@ -360,12 +404,16 @@ namespace AdbcDrivers.Databricks
                     return;
                 }
 
+                var oldInterval = _refreshInterval;
                 _refreshInterval = newInterval;
 
                 if (_refreshTimer != null)
                 {
                     _refreshTimer.Change(newInterval, newInterval);
-                    Debug.WriteLine($"[TRACE] FeatureFlagContext: Updated refresh interval to {newInterval.TotalSeconds}s for host '{_host}'");
+                    activity?.AddEvent("feature_flags.interval.updated", [
+                        new("old_interval_seconds", oldInterval.TotalSeconds),
+                        new("new_interval_seconds", newInterval.TotalSeconds)
+                    ]);
                 }
             }
         }
