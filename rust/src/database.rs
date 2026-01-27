@@ -76,7 +76,7 @@ impl Optionable for Database {
                 }
             }
             OptionDatabase::Other(ref s) => match s.as_str() {
-                "adbc.databricks.http_path" => {
+                "databricks.http_path" => {
                     if let OptionValue::String(v) = value {
                         self.http_path = Some(v);
                         Ok(())
@@ -84,7 +84,7 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "adbc.databricks.access_token" => {
+                "databricks.access_token" => {
                     if let OptionValue::String(v) = value {
                         self.access_token = Some(v);
                         Ok(())
@@ -92,7 +92,7 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "adbc.databricks.catalog" => {
+                "databricks.catalog" => {
                     if let OptionValue::String(v) = value {
                         self.catalog = Some(v);
                         Ok(())
@@ -100,7 +100,7 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "adbc.databricks.schema" => {
+                "databricks.schema" => {
                     if let OptionValue::String(v) = value {
                         self.schema = Some(v);
                         Ok(())
@@ -121,15 +121,15 @@ impl Optionable for Database {
                 .clone()
                 .ok_or_else(|| DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
             OptionDatabase::Other(ref s) => match s.as_str() {
-                "adbc.databricks.http_path" => self
+                "databricks.http_path" => self
                     .http_path
                     .clone()
                     .ok_or_else(|| DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
-                "adbc.databricks.catalog" => self
+                "databricks.catalog" => self
                     .catalog
                     .clone()
                     .ok_or_else(|| DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
-                "adbc.databricks.schema" => self
+                "databricks.schema" => self
                     .schema
                     .clone()
                     .ok_or_else(|| DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
@@ -190,7 +190,7 @@ mod tests {
         )
         .unwrap();
         db.set_option(
-            OptionDatabase::Other("adbc.databricks.http_path".into()),
+            OptionDatabase::Other("databricks.http_path".into()),
             OptionValue::String("/sql/1.0/warehouses/abc123".into()),
         )
         .unwrap();

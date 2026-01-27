@@ -31,10 +31,10 @@ When implementing features, reference these drivers for behavior and API design.
 ## Build Commands
 
 ```bash
-~/.cargo/bin/cargo build           # Build the library
-~/.cargo/bin/cargo test            # Run all tests
-~/.cargo/bin/cargo fmt             # Format code
-~/.cargo/bin/cargo clippy -- -D warnings  # Lint with warnings as errors
+cargo build           # Build the library
+cargo test            # Run all tests
+cargo fmt             # Format code
+cargo clippy -- -D warnings  # Lint with warnings as errors
 ```
 
 ## Architecture
@@ -53,13 +53,15 @@ Driver -> Database -> Connection -> Statement -> ResultSet
 
 ### Module Responsibilities
 
-| Module | Purpose | Reference Implementation |
-|--------|---------|-------------------------|
-| `auth/` | Authentication (PAT, OAuth) | `../csharp/src/Auth/` |
-| `client/` | HTTP communication with Databricks | `../csharp/src/Http/` |
-| `reader/` | Result fetching (CloudFetch) | `../csharp/src/Reader/` |
-| `result/` | Result set abstraction | `../csharp/src/Result/` |
-| `telemetry/` | Metrics collection | `../csharp/src/Telemetry/` |
+| Module | Purpose |
+|--------|---------|
+| `auth/` | Authentication (PAT, OAuth) |
+| `client/` | HTTP communication with Databricks |
+| `reader/` | Result fetching (CloudFetch) |
+| `result/` | Result set abstraction |
+| `telemetry/` | Metrics collection |
+
+Reference the Go (`../go/`) and C# (`../csharp/`) drivers for implementation patterns.
 
 ## Key Types
 
@@ -94,8 +96,8 @@ pub trait AuthProvider: Send + Sync + Debug {
 Results use Apache Arrow types:
 
 ```rust
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow_schema::Schema;
+use arrow_array::RecordBatch;
 ```
 
 ## Implementation Status
@@ -125,8 +127,9 @@ use arrow::record_batch::RecordBatch;
 All files must have Apache 2.0 license headers:
 
 ```rust
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
 // ...
 ```
 
@@ -185,45 +188,13 @@ Key steps:
 
 ### 4. Implementing Statement Execution
 
-Reference: `../csharp/src/StatementExecution/`
-
 Key steps:
-1. POST to `/api/2.0/sql/statements` endpoint
+1. POST to SQL statements endpoint
 2. Poll for completion or use async mode
 3. Parse response for result links (CloudFetch) or inline data
 4. Return ResultSet
 
-## Databricks SQL API
-
-Base URL: `https://{host}/api/2.0/sql/`
-
-### Key Endpoints
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/statements` | POST | Execute SQL statement |
-| `/statements/{id}` | GET | Get statement status/results |
-| `/statements/{id}/cancel` | POST | Cancel running statement |
-
-### Request Headers
-
-```
-Authorization: Bearer {token}
-Content-Type: application/json
-User-Agent: databricks-adbc-rust/{version}
-```
-
-### Statement Request Body
-
-```json
-{
-  "warehouse_id": "extracted_from_http_path",
-  "statement": "SELECT * FROM table",
-  "wait_timeout": "30s",
-  "disposition": "EXTERNAL_LINKS",
-  "format": "ARROW_STREAM"
-}
-```
+Reference the [Databricks SQL Statement Execution API documentation](https://docs.databricks.com/api/workspace/statementexecution) for endpoint details and request/response formats.
 
 ## Testing Against Databricks
 

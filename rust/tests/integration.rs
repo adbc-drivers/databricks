@@ -37,7 +37,7 @@ fn test_driver_database_connection_flow() {
         .expect("Failed to set uri");
     database
         .set_option(
-            OptionDatabase::Other("adbc.databricks.http_path".into()),
+            OptionDatabase::Other("databricks.http_path".into()),
             OptionValue::String("/sql/1.0/warehouses/abc123".into()),
         )
         .expect("Failed to set http_path");
