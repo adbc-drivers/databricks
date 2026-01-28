@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -148,6 +149,10 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	}
 
 	// TLS/SSL handling
+	// Configure a custom transport with proper timeout settings when custom
+	// TLS config is needed. These settings match the defaults from
+	// databricks-sql-go's PooledTransport to ensure reliable connections
+	// for large result set downloads.
 	if d.sslCertPool != nil || d.sslInsecure {
 		tlsConfig := &tls.Config{
 			MinVersion: tls.VersionTLS12,
@@ -162,7 +167,19 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		}
 
 		transport := &http.Transport{
-			TLSClientConfig: tlsConfig,
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSClientConfig:       tlsConfig,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       180 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			MaxIdleConnsPerHost:   10,
+			MaxConnsPerHost:       100,
 		}
 		opts = append(opts, dbsql.WithTransport(transport))
 	}
