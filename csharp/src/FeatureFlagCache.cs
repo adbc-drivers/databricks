@@ -19,6 +19,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
+using System.Net.Http.Headers;
+using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 
 namespace AdbcDrivers.Databricks
 {
@@ -39,6 +41,11 @@ namespace AdbcDrivers.Databricks
     internal sealed class FeatureFlagCache
     {
         private static readonly FeatureFlagCache s_instance = new FeatureFlagCache();
+
+        /// <summary>
+        /// Activity source for feature flag tracing.
+        /// </summary>
+        private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks.FeatureFlagCache");
 
         private readonly ConcurrentDictionary<string, FeatureFlagContext> _contexts;
 
@@ -87,7 +94,12 @@ namespace AdbcDrivers.Databricks
             var context = _contexts.GetOrAdd(host, _ => new FeatureFlagContext(host, httpClient, driverVersion, endpointFormat));
             context.IncrementRefCount();
 
-            Debug.WriteLine($"[TRACE] FeatureFlagCache: GetOrCreateContext for host '{host}', RefCount={context.RefCount}");
+            Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context.acquired",
+                tags: new ActivityTagsCollection
+                {
+                    { "host", host },
+                    { "ref_count", context.RefCount }
+                }));
 
             return context;
         }
@@ -113,7 +125,13 @@ namespace AdbcDrivers.Databricks
             if (_contexts.TryGetValue(host, out var context))
             {
                 var newRefCount = context.DecrementRefCount();
-                Debug.WriteLine($"[TRACE] FeatureFlagCache: ReleaseContext for host '{host}', RefCount={newRefCount}");
+
+                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context.released",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", host },
+                        { "ref_count", newRefCount }
+                    }));
 
                 if (newRefCount <= 0)
                 {
@@ -135,7 +153,9 @@ namespace AdbcDrivers.Databricks
                             {
                                 // Stop the refresh scheduler and dispose the context
                                 context.Dispose();
-                                Debug.WriteLine($"[TRACE] FeatureFlagCache: Removed and disposed context for host '{host}'");
+
+                                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context.disposed",
+                                    tags: new ActivityTagsCollection { { "host", host } }));
                             }
                         }
                     }
@@ -199,6 +219,160 @@ namespace AdbcDrivers.Databricks
                 context.Dispose();
             }
             _contexts.Clear();
+        }
+
+        /// <summary>
+        /// Merges feature flags from server into properties.
+        /// Feature flags have lower priority than user-specified properties.
+        /// Priority: User Properties > Feature Flags > Driver Defaults
+        /// </summary>
+        /// <param name="properties">Properties after environment config merge.</param>
+        /// <param name="assemblyVersion">The driver version for the API endpoint.</param>
+        /// <returns>Properties with feature flags merged in.</returns>
+        public IReadOnlyDictionary<string, string> MergePropertiesWithFeatureFlags(
+            IReadOnlyDictionary<string, string> properties,
+            string assemblyVersion)
+        {
+            using var activity = s_activitySource.StartActivity("MergePropertiesWithFeatureFlags");
+
+            try
+            {
+                // Extract host from properties
+                var host = TryGetHost(properties);
+                if (string.IsNullOrEmpty(host))
+                {
+                    activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
+                        tags: new ActivityTagsCollection { { "reason", "no_host" } }));
+                    return properties;
+                }
+
+                activity?.SetTag("feature_flags.host", host);
+
+                // Extract token for authentication
+                string? token = null;
+                if (properties.TryGetValue(SparkParameters.Token, out var tokenValue))
+                {
+                    token = tokenValue;
+                }
+
+                if (string.IsNullOrEmpty(token))
+                {
+                    activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
+                        tags: new ActivityTagsCollection { { "reason", "no_token" } }));
+                    return properties;
+                }
+
+                // Create HttpClient for feature flag API
+                using var httpClient = CreateFeatureFlagHttpClient(host, token, assemblyVersion);
+
+                // Get or create feature flag context (this makes the initial blocking fetch)
+                var context = GetOrCreateContext(host, httpClient, assemblyVersion);
+
+                // Get all flags from cache
+                var featureFlags = context.GetAllFlags();
+
+                if (featureFlags.Count == 0)
+                {
+                    activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
+                        tags: new ActivityTagsCollection { { "reason", "no_flags_returned" } }));
+                    return properties;
+                }
+
+                activity?.SetTag("feature_flags.count", featureFlags.Count);
+                activity?.AddEvent(new ActivityEvent("feature_flags.merging",
+                    tags: new ActivityTagsCollection { { "flags_count", featureFlags.Count } }));
+
+                // Merge: feature flags as base, user properties override
+                // This ensures user properties take precedence over server flags
+                return MergeProperties(featureFlags, properties);
+            }
+            catch (Exception ex)
+            {
+                // Feature flag failures should never break the connection
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddEvent(new ActivityEvent("feature_flags.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+                return properties;
+            }
+        }
+
+        /// <summary>
+        /// Tries to extract the host from properties without throwing.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <returns>The host, or null if not found.</returns>
+        internal static string? TryGetHost(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(SparkParameters.HostName, out string? host) && !string.IsNullOrEmpty(host))
+            {
+                return host;
+            }
+
+            if (properties.TryGetValue(Apache.Arrow.Adbc.AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri))
+            {
+                if (Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+                {
+                    return parsedUri.Host;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Creates an HttpClient configured for the feature flag API.
+        /// </summary>
+        /// <param name="host">The Databricks host.</param>
+        /// <param name="token">The authentication token.</param>
+        /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
+        /// <returns>Configured HttpClient.</returns>
+        private static HttpClient CreateFeatureFlagHttpClient(string host, string token, string assemblyVersion)
+        {
+            var httpClient = new HttpClient
+            {
+                BaseAddress = new Uri($"https://{host}"),
+                Timeout = TimeSpan.FromSeconds(10) // Short timeout for feature flags
+            };
+
+            httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", token);
+
+            // Set User-Agent for connector service
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+                $"DatabricksADBCDriverOSS/{assemblyVersion} (FeatureFlagClient)");
+
+            return httpClient;
+        }
+
+        /// <summary>
+        /// Merges two property dictionaries. Additional properties override base properties.
+        /// </summary>
+        /// <param name="baseProperties">Base properties (lower priority).</param>
+        /// <param name="additionalProperties">Additional properties (higher priority).</param>
+        /// <returns>Merged properties.</returns>
+        private static IReadOnlyDictionary<string, string> MergeProperties(
+            IReadOnlyDictionary<string, string> baseProperties,
+            IReadOnlyDictionary<string, string> additionalProperties)
+        {
+            var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            // Add base properties first
+            foreach (var kvp in baseProperties)
+            {
+                merged[kvp.Key] = kvp.Value;
+            }
+
+            // Additional properties override base properties
+            foreach (var kvp in additionalProperties)
+            {
+                merged[kvp.Key] = kvp.Value;
+            }
+
+            return merged;
         }
     }
 }
