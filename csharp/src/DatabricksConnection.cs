@@ -103,6 +103,9 @@ namespace AdbcDrivers.Databricks
 
         private HttpClient? _authHttpClient;
 
+        // Feature flag cache host tracking for cleanup
+        private string? _featureFlagHost;
+
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
         /// If provided by Database, this is shared across all connections for optimal pooling.
@@ -126,12 +129,16 @@ namespace AdbcDrivers.Databricks
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager? memoryStreamManager,
             System.Buffers.ArrayPool<byte>? lz4BufferPool)
-            : base(MergeWithDefaultEnvironmentConfig(properties))
+            : base(FeatureFlagCache.GetInstance().MergePropertiesWithFeatureFlags(MergeWithDefaultEnvironmentConfig(properties), s_assemblyVersion))
         {
             // Use provided manager (from Database) or create new instance (for direct construction)
             RecyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             // Use provided pool (from Database) or create new instance (for direct construction)
             Lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
+
+            // Store the host for feature flag context cleanup
+            _featureFlagHost = FeatureFlagCache.TryGetHost(Properties);
+
             ValidateProperties();
         }
 
@@ -971,6 +978,25 @@ namespace AdbcDrivers.Databricks
             if (disposing)
             {
                 _authHttpClient?.Dispose();
+
+                // Release feature flag context for this host
+                if (!string.IsNullOrEmpty(_featureFlagHost))
+                {
+                    try
+                    {
+                        FeatureFlagCache.GetInstance().ReleaseContext(_featureFlagHost);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Feature flag cleanup failures should never break disposal
+                        Activity.Current?.AddEvent(new ActivityEvent("feature_flags.release.error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
+                }
             }
             base.Dispose(disposing);
         }
