@@ -23,6 +23,11 @@
 This driver provides access to [Databricks][databricks], a
 cloud-based platform for data analytics.
 
+:::{note}
+This is an early version of the driver, and contributors are still
+working with Databricks to expand the featureset and improve performance.
+:::
+
 ## Installation
 
 The Databricks driver can be installed with [dbc](https://docs.columnar.tech/dbc):
