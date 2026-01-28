@@ -69,40 +69,17 @@ func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordRea
 		}
 	}
 
-	schema_bytes, err := ipcIterator.SchemaBytes()
-	if err != nil {
-		return nil, adbc.Error{
-			Code: adbc.StatusInternal,
-			Msg:  fmt.Sprintf("failed to get schema bytes: %v", err),
-		}
-	}
-
-	// Read schema from bytes
-	reader, err := ipc.NewReader(bytes.NewReader(schema_bytes))
-	if err != nil {
-		return nil, adbc.Error{
-			Code: adbc.StatusInternal,
-			Msg:  fmt.Sprintf("failed to get schema reader: %v", err),
-		}
-	}
-	defer reader.Release()
-
-	schema := reader.Schema()
-	if schema == nil {
-		return nil, adbc.Error{
-			Code: adbc.StatusInternal,
-			Msg:  "schema is nil",
-		}
-	}
-
 	adapter := &ipcReaderAdapter{
 		rows:        rows,
 		refCount:    1,
 		ipcIterator: ipcIterator,
-		schema:      schema,
 	}
 
-	// Initialize the first reader
+	// Load the first IPC stream to get the schema.
+	// Note: SchemaBytes() may return empty bytes if no direct results were
+	// returned with the query response. The schema is populated lazily
+	// during the first data fetch in databricks-sql-go. By loading the
+	// first reader, we ensure the schema is available.
 	err = adapter.loadNextReader()
 	if err != nil && err != io.EOF {
 		return nil, adbc.Error{
@@ -110,6 +87,46 @@ func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordRea
 			Msg:  fmt.Sprintf("failed to initialize IPC reader: %v", err),
 		}
 	}
+
+	// Get schema from the first reader, or fall back to SchemaBytes() if
+	// the result set is empty (no readers available)
+	if adapter.currentReader != nil {
+		adapter.schema = adapter.currentReader.Schema()
+	} else {
+		// Empty result set - try to get schema from SchemaBytes()
+		schema_bytes, err := ipcIterator.SchemaBytes()
+		if err != nil {
+			return nil, adbc.Error{
+				Code: adbc.StatusInternal,
+				Msg:  fmt.Sprintf("failed to get schema bytes: %v", err),
+			}
+		}
+
+		if len(schema_bytes) == 0 {
+			return nil, adbc.Error{
+				Code: adbc.StatusInternal,
+				Msg:  "schema bytes are empty and no data available",
+			}
+		}
+
+		reader, err := ipc.NewReader(bytes.NewReader(schema_bytes))
+		if err != nil {
+			return nil, adbc.Error{
+				Code: adbc.StatusInternal,
+				Msg:  fmt.Sprintf("failed to read schema: %v", err),
+			}
+		}
+		adapter.schema = reader.Schema()
+		reader.Release()
+	}
+
+	if adapter.schema == nil {
+		return nil, adbc.Error{
+			Code: adbc.StatusInternal,
+			Msg:  "schema is nil",
+		}
+	}
+
 	return adapter, nil
 }
 
