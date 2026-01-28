@@ -21,6 +21,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
+using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Tracing;
 
 namespace AdbcDrivers.Databricks
@@ -50,6 +51,11 @@ namespace AdbcDrivers.Databricks
         /// Activity source for feature flag tracing.
         /// </summary>
         private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks.FeatureFlags");
+
+        /// <summary>
+        /// Assembly version for the driver.
+        /// </summary>
+        private static readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(FeatureFlagContext));
 
         /// <summary>
         /// Default refresh interval (15 minutes) if server doesn't specify ttl_seconds.
@@ -141,7 +147,7 @@ namespace AdbcDrivers.Databricks
         {
             _host = "test-host";
             _httpClient = null!;
-            _driverVersion = "1.0.0";
+            _driverVersion = s_assemblyVersion;
             _endpointFormat = DefaultFeatureFlagEndpointFormat;
             _flags = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _refreshInterval = refreshInterval ?? DefaultRefreshInterval;
