@@ -40,12 +40,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <summary>
         /// Testing recovery. Limited requests are allowed through to test if service has recovered.
         /// </summary>
-        HalfOpen = 2,
-
-        /// <summary>
-        /// Circuit has been manually isolated and will not allow requests.
-        /// </summary>
-        Isolated = 3
+        HalfOpen = 2
     }
 
     /// <summary>
