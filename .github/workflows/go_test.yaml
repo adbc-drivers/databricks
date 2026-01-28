@@ -91,14 +91,14 @@ jobs:
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -112,7 +112,7 @@ jobs:
           check-latest: true
           go-version-file: go/go.mod
 
-      - uses: prefix-dev/setup-pixi@82d477f15f3a381dbcc8adc1206ce643fe110fb7  # v0.9.3
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
           pixi-version: v0.63.2
           run-install: false
@@ -201,14 +201,14 @@ jobs:
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -222,7 +222,7 @@ jobs:
           check-latest: true
           go-version-file: go/go.mod
 
-      - uses: prefix-dev/setup-pixi@82d477f15f3a381dbcc8adc1206ce643fe110fb7  # v0.9.3
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
           pixi-version: v0.63.2
           run-install: false
@@ -330,14 +330,14 @@ jobs:
       packages: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -351,7 +351,7 @@ jobs:
           check-latest: true
           go-version-file: go/go.mod
 
-      - uses: prefix-dev/setup-pixi@82d477f15f3a381dbcc8adc1206ce643fe110fb7  # v0.9.3
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
           pixi-version: v0.63.2
           run-install: false
@@ -393,14 +393,14 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -413,7 +413,7 @@ jobs:
           check-latest: true
           go-version: "stable"
 
-      - uses: prefix-dev/setup-pixi@82d477f15f3a381dbcc8adc1206ce643fe110fb7  # v0.9.3
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
           pixi-version: v0.63.2
           run-install: false
@@ -478,7 +478,7 @@ jobs:
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
         with:
           go-version: 'stable'
-      - uses: prefix-dev/setup-pixi@82d477f15f3a381dbcc8adc1206ce643fe110fb7  # v0.9.3
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
           pixi-version: v0.63.2
           run-install: false
@@ -499,13 +499,13 @@ jobs:
           echo "Installing ${driver_pkg}"
           ./dbc install --no-verify "${driver_pkg}"
           echo "Installed ${driver_pkg}"
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 1
           persist-credentials: false
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -536,14 +536,14 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -556,7 +556,7 @@ jobs:
           check-latest: true
           go-version: "stable"
 
-      - uses: prefix-dev/setup-pixi@82d477f15f3a381dbcc8adc1206ce643fe110fb7  # v0.9.3
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
           pixi-version: v0.63.2
           run-install: false
