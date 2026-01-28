@@ -33,6 +33,7 @@ import (
 	"github.com/adbc-drivers/driverbase-go/validation"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -867,6 +868,7 @@ func (suite *DatabricksTests) TestDecimalTypes() {
 }
 
 func (suite *DatabricksTests) TestMultiBatch() {
+	// Regression test for issue reported directly to us
 	query := fmt.Sprintf("CREATE OR REPLACE TABLE `%s`.`%s`.`test_multi_batch` (founder STRING, born STRING)", suite.Quirks.catalogName, suite.Quirks.schemaName)
 	suite.Require().NoError(suite.stmt.SetSqlQuery(query))
 	_, err := suite.stmt.ExecuteUpdate(suite.ctx)
@@ -877,7 +879,7 @@ func (suite *DatabricksTests) TestMultiBatch() {
 		born    string
 	}
 
-	for _, r := range []row{
+	rows := []row{
 		{"Ali Ghodsi", "Iran"},
 		{"Ion Stoica", "Romania"},
 		{"Matei Zaharia", "Romania"},
@@ -885,7 +887,8 @@ func (suite *DatabricksTests) TestMultiBatch() {
 		{"Reynold Xin", "China"},
 		{"Andy Konwinski", "USA"},
 		{"Arsalan Tavakoli-Shiraji", "Iran"},
-	} {
+	}
+	for _, r := range rows {
 		query = fmt.Sprintf("INSERT INTO `%s`.`%s`.`test_multi_batch` VALUES ('%s', '%s')", suite.Quirks.catalogName, suite.Quirks.schemaName, r.founder, r.born)
 		suite.Require().NoError(suite.stmt.SetSqlQuery(query))
 		_, err = suite.stmt.ExecuteUpdate(suite.ctx)
@@ -898,14 +901,30 @@ func (suite *DatabricksTests) TestMultiBatch() {
 	suite.Require().NoError(err)
 	defer rdr.Release()
 
-	// Databricks appears to put each into its own batch
-	suite.True(rdr.Next())
-	suite.True(rdr.Next())
-	suite.True(rdr.Next())
-	suite.True(rdr.Next())
-	suite.True(rdr.Next())
-	suite.True(rdr.Next())
-	suite.True(rdr.Next())
-	suite.False(rdr.Next())
+	// This used to only return one row.
+	rowCount := 0
+	seen := map[string]string{}
+	for rdr.Next() {
+		batch := rdr.RecordBatch()
+		rowCount += int(batch.NumRows())
+
+		founder := batch.Column(0).(*array.String)
+		born := batch.Column(1).(*array.String)
+
+		for i := range int(batch.NumRows()) {
+			seen[founder.Value(i)] = born.Value(i)
+		}
+	}
 	suite.NoError(rdr.Err())
+	suite.Equal(len(rows), rowCount)
+
+	suite.EqualValues(map[string]string{
+		"Ali Ghodsi":               "Iran",
+		"Ion Stoica":               "Romania",
+		"Matei Zaharia":            "Romania",
+		"Patrick Wendell":          "USA",
+		"Reynold Xin":              "China",
+		"Andy Konwinski":           "USA",
+		"Arsalan Tavakoli-Shiraji": "Iran",
+	}, seen)
 }
