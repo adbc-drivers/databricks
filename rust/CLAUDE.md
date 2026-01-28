@@ -37,6 +37,13 @@ cargo fmt             # Format code
 cargo clippy -- -D warnings  # Lint with warnings as errors
 ```
 
+## Pull Requests
+
+When creating PRs, always target the upstream repository `adbc-drivers/databricks`, not the personal fork. Use:
+```bash
+gh pr create --repo adbc-drivers/databricks
+```
+
 ## Architecture
 
 ### Core ADBC Flow
