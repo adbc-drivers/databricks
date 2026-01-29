@@ -99,10 +99,12 @@ jobs:
   check-should-run-pr:
     # CRITICAL: Must wait for remove-label-on-new-commit to finish first
     # to avoid race condition where label check happens before removal
+    # Note: needs is conditional - only enforced on 'synchronize' events
     needs: [remove-label-on-new-commit]
     if: |
       always() &&
-      github.event_name == 'pull_request'
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'labeled' || needs.remove-label-on-new-commit.result != 'failure')
     runs-on: [self-hosted, Linux, X64, peco-driver]
     outputs:
       run: ${{ steps.check.outputs.run }}
@@ -119,7 +121,10 @@ jobs:
           fi
   trigger-tests-pr:
     needs: check-should-run-pr
-    if: needs.check-should-run-pr.outputs.run == 'true'
+    if: |
+      always() &&
+      needs.check-should-run-pr.result == 'success' &&
+      needs.check-should-run-pr.outputs.run == 'true'
     runs-on: [self-hosted, Linux, X64, peco-driver]
     permissions:
       issues: write
