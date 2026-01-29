@@ -34,3 +34,4 @@ go/validation/queries/*/*.sql
 # adbc.h is vendored
 go/pkg/adbc.h
 test-infrastructure/proxy-server/generated/**
+rust/Cargo.lock

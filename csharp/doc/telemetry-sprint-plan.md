@@ -247,6 +247,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-3.1: CircuitBreaker
 **Description**: Implements circuit breaker pattern with three states (Closed, Open, Half-Open).
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/CircuitBreaker.cs`
 
 **Input**:
@@ -268,6 +270,24 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `CircuitBreaker_Open_AfterTimeout_TransitionsToHalfOpen` | Wait for timeout period | state=HalfOpen |
 | Unit | `CircuitBreaker_HalfOpen_Success_TransitionsToClosed` | Successful action in HalfOpen | state=Closed |
 | Unit | `CircuitBreaker_HalfOpen_Failure_TransitionsToOpen` | Failed action in HalfOpen | state=Open |
+
+**Implementation Notes**:
+- Created three files: `CircuitBreaker.cs`, `CircuitBreakerConfig.cs`, `CircuitBreakerOpenException.cs`
+- Thread-safe state management using `Interlocked` operations and `Volatile` reads
+- State stored as `int` for atomic compare-exchange operations
+- Tracks consecutive failures in Closed state and consecutive successes in HalfOpen state
+- Timeout-based transition from Open to HalfOpen checked on each execution attempt
+- Default configuration: 5 failure threshold, 1 minute timeout, 2 success threshold
+- `CircuitBreakerConfig.FromTelemetryConfiguration()` for integration with TelemetryConfiguration
+- Comprehensive test coverage with 29 unit tests including thread safety tests
+- Test file location: `csharp/test/Unit/Telemetry/CircuitBreakerTests.cs`
+
+**Key Design Decisions**:
+1. **State as int**: Used `int` type for state to enable atomic `Interlocked.CompareExchange` operations
+2. **Opened timestamp**: Stores `DateTime.UtcNow.Ticks` as `long` for atomic operations
+3. **HalfOpen re-entry**: Multiple concurrent requests can enter HalfOpen after timeout, allowing parallel recovery testing
+4. **Exception propagation**: Exceptions from user actions are re-thrown after state tracking
+5. **Reset method**: Internal method for testing to reset circuit breaker state
 
 ---
 
@@ -320,6 +340,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-4.1: ExceptionClassifier
 **Description**: Classifies exceptions as terminal or retryable.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/ExceptionClassifier.cs`
 
 **Input**:
@@ -342,6 +364,22 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `ExceptionClassifier_IsTerminalException_500_ReturnsFalse` | HttpRequestException with 500 | false |
 | Unit | `ExceptionClassifier_IsTerminalException_Timeout_ReturnsFalse` | TaskCanceledException (timeout) | false |
 | Unit | `ExceptionClassifier_IsTerminalException_NetworkError_ReturnsFalse` | SocketException | false |
+
+**Implementation Notes**:
+- Static class with single `IsTerminalException(Exception?)` method
+- Terminal exceptions: HTTP 400, 401, 403, 404, `AuthenticationException`, `UnauthorizedAccessException`
+- Retryable exceptions: HTTP 429, 500, 502, 503, 504, `TimeoutException`, network errors
+- Safe default: Returns `false` for null or unknown exceptions
+- Handles wrapped `HttpRequestException` in `InnerException` by recursively checking inner exceptions
+- Supports both .NET 5+ (using `HttpRequestException.StatusCode`) and older frameworks (parsing status code from message)
+- Comprehensive test coverage with 28 unit tests in `ExceptionClassifierTests.cs`
+- Test file location: `csharp/test/Unit/Telemetry/ExceptionClassifierTests.cs`
+
+**Key Design Decisions**:
+1. **Safe default**: Returns `false` (retryable) for unknown exceptions to avoid flushing unnecessarily
+2. **Recursive inner exception check**: Handles wrapped exceptions by checking `InnerException`
+3. **Cross-framework compatibility**: Uses conditional compilation (`#if NET5_0_OR_GREATER`) for status code extraction
+4. **Message-based fallback**: For older .NET frameworks, parses status code from exception message
 
 ---
 
