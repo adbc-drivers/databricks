@@ -18,6 +18,78 @@ on:
   merge_group:  # Trigger when added to merge queue
 jobs:
   # =============================================================================
+  # Security: Auto-remove label when new commits are pushed
+  # =============================================================================
+  remove-label-on-new-commit:
+    if: github.event_name == 'pull_request' && github.event.action == 'synchronize'
+    runs-on: [self-hosted, Linux, X64, peco-driver]
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Check if integration-test label exists
+        id: check-label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = context.payload.pull_request.labels.map(l => l.name);
+            const hasLabel = labels.includes('integration-test');
+            console.log(`integration-test label exists: ${hasLabel}`);
+            return hasLabel;
+
+      - name: Remove integration-test label
+        if: steps.check-label.outputs.result == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: 'integration-test'
+              });
+              console.log('✅ Removed integration-test label');
+            } catch (error) {
+              if (error.status === 404) {
+                console.log('ℹ️ Label already removed or does not exist');
+              } else {
+                throw error;
+              }
+            }
+
+      - name: Comment on PR about label removal
+        if: steps.check-label.outputs.result == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const isFromFork = pr.head.repo.full_name !== pr.base.repo.full_name;
+            const repoType = isFromFork ? '**fork PR**' : 'PR';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🔒 **Integration test approval reset**
+
+New commits were pushed to this ${repoType}. The \`integration-test\` label has been automatically removed for security.
+
+**A maintainer must re-review the changes and re-add the label to trigger tests again.**
+
+<details>
+<summary>Why is this necessary?</summary>
+
+- New code requires fresh security review
+- Prevents approved PRs from adding malicious code later
+- Ensures all tested code has been explicitly approved
+
+</details>
+
+**Latest commit**: ${pr.head.sha.substring(0, 7)}`
+            });
+
+  # =============================================================================
   # For PRs: Only run if "integration-test" label exists
   # =============================================================================
   check-should-run-pr:
