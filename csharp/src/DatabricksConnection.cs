@@ -27,11 +27,14 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
@@ -103,6 +106,16 @@ namespace AdbcDrivers.Databricks
 
         private HttpClient? _authHttpClient;
 
+        // Feature flag cache host tracking for cleanup
+        private string? _featureFlagHost;
+
+        // Telemetry fields
+        private string? _telemetryHost;
+        private TelemetryConfiguration? _telemetryConfig;
+        private ITelemetryClient? _telemetryClient;
+        private HttpClient? _telemetryHttpClient;
+        private bool _telemetryInitialized;
+
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
         /// If provided by Database, this is shared across all connections for optimal pooling.
@@ -126,12 +139,16 @@ namespace AdbcDrivers.Databricks
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager? memoryStreamManager,
             System.Buffers.ArrayPool<byte>? lz4BufferPool)
-            : base(MergeWithDefaultEnvironmentConfig(properties))
+            : base(FeatureFlagCache.GetInstance().MergePropertiesWithFeatureFlags(MergeWithDefaultEnvironmentConfig(properties), s_assemblyVersion))
         {
             // Use provided manager (from Database) or create new instance (for direct construction)
             RecyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             // Use provided pool (from Database) or create new instance (for direct construction)
             Lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
+
+            // Store the host for feature flag context cleanup
+            _featureFlagHost = FeatureFlagCache.TryGetHost(Properties);
+
             ValidateProperties();
         }
 
@@ -645,6 +662,15 @@ namespace AdbcDrivers.Databricks
             activity?.SetTag("connection.feature.use_desc_table_extended", _useDescTableExtended);
             activity?.SetTag("connection.feature.enable_run_async_in_thrift_op", _runAsyncInThrift);
 
+            // Telemetry tags for driver configuration (Section 4.2 of telemetry-design.md)
+            activity?.SetTag(ConnectionOpenEvent.DriverVersion, s_assemblyVersion);
+            activity?.SetTag(ConnectionOpenEvent.DriverOS, RuntimeInformation.OSDescription);
+            activity?.SetTag(ConnectionOpenEvent.DriverRuntime, RuntimeInformation.FrameworkDescription);
+
+            // Feature flags for telemetry
+            activity?.SetTag(ConnectionOpenEvent.FeatureCloudFetch, _useCloudFetch);
+            activity?.SetTag(ConnectionOpenEvent.FeatureLz4, _canDecompressLz4);
+
             // Handle default namespace
             if (session.__isset.initialNamespace)
             {
@@ -664,6 +690,121 @@ namespace AdbcDrivers.Databricks
                 ]);
                 await SetSchema(_defaultNamespace.SchemaName);
             }
+
+            // Initialize telemetry (Section 6.2 of telemetry-design.md)
+            await InitializeTelemetryAsync(activity);
+        }
+
+        /// <summary>
+        /// Initializes telemetry components if enabled by both local configuration and server feature flag.
+        /// All exceptions are swallowed per telemetry requirement to avoid impacting driver operations.
+        /// </summary>
+        /// <param name="activity">Optional activity for tracing.</param>
+        private async Task InitializeTelemetryAsync(Activity? activity = null)
+        {
+            try
+            {
+                // Parse telemetry configuration from connection properties
+                _telemetryConfig = TelemetryConfiguration.FromProperties(Properties);
+
+                // Check if telemetry is disabled locally
+                if (!_telemetryConfig.Enabled)
+                {
+                    activity?.SetTag("telemetry.enabled", false);
+                    activity?.SetTag("telemetry.disabled_reason", "disabled_by_local_config");
+                    Debug.WriteLine("[TRACE] Telemetry: Disabled by local configuration");
+                    return;
+                }
+
+                // Get the host for telemetry
+                _telemetryHost = GetHost();
+
+                // Create HTTP client for telemetry with authentication
+                _telemetryHttpClient = CreateTelemetryHttpClient();
+
+                // Get or create feature flag context (increments ref count)
+                var featureFlagCache = FeatureFlagCache.GetInstance();
+                var featureFlagContext = featureFlagCache.GetOrCreateContext(
+                    _telemetryHost,
+                    _telemetryHttpClient,
+                    s_assemblyVersion,
+                    TelemetryConfiguration.FeatureFlagEndpointFormat);
+
+                // Check if telemetry is enabled via server feature flag
+                bool serverFeatureFlagEnabled = featureFlagContext.IsFeatureEnabled(TelemetryConfiguration.FeatureFlagName);
+
+                if (!serverFeatureFlagEnabled)
+                {
+                    activity?.SetTag("telemetry.enabled", false);
+                    activity?.SetTag("telemetry.disabled_reason", "disabled_by_server_feature_flag");
+                    Debug.WriteLine("[TRACE] Telemetry: Disabled by server feature flag");
+                    return;
+                }
+
+                // Create telemetry client (increments ref count)
+                var clientManager = TelemetryClientManager.GetInstance();
+                _telemetryClient = clientManager.GetOrCreateClient(
+                    _telemetryHost,
+                    _telemetryHttpClient,
+                    _telemetryConfig);
+
+                _telemetryInitialized = true;
+                activity?.SetTag("telemetry.enabled", true);
+                Debug.WriteLine($"[TRACE] Telemetry: Initialized successfully for host '{_telemetryHost}'");
+
+                // Satisfy async method requirement (actual async work removed during refactor)
+                await Task.CompletedTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Don't swallow cancellation
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Swallow all telemetry exceptions per requirement (Section 8.1)
+                // Log at TRACE level to avoid customer anxiety
+                activity?.SetTag("telemetry.enabled", false);
+                activity?.SetTag("telemetry.disabled_reason", "initialization_error");
+                Debug.WriteLine($"[TRACE] Telemetry: Initialization error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Creates an HTTP client for telemetry with proper authentication headers.
+        /// </summary>
+        private HttpClient CreateTelemetryHttpClient()
+        {
+            var handler = HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator);
+            var httpClient = new HttpClient(handler);
+
+            // Set authentication header based on auth type
+            Properties.TryGetValue(SparkParameters.Token, out string? token);
+            if (!string.IsNullOrEmpty(token))
+            {
+                httpClient.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            }
+
+            // Set the base address to the host
+            httpClient.BaseAddress = new Uri($"https://{_telemetryHost}");
+
+            return httpClient;
+        }
+
+        /// <summary>
+        /// Fetches the telemetry feature flag from the server.
+        /// </summary>
+        /// <param name="ct">Cancellation token.</param>
+        /// <returns>True if telemetry is enabled on the server, false otherwise.</returns>
+        private async Task<bool> FetchTelemetryFeatureFlagAsync(CancellationToken ct)
+        {
+            // For now, return true to enable telemetry by default
+            // In the future, this should call the feature flag endpoint:
+            // GET /api/2.0/feature-flags/client/{featureFlagName}
+            // where featureFlagName is TelemetryConfiguration.FeatureFlagName
+            await Task.CompletedTask;
+            return true;
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
@@ -970,9 +1111,91 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
+                // Release telemetry resources (Section 9.2 of telemetry-design.md)
+                // All telemetry exceptions are swallowed per requirement
+                ReleaseTelemetryResources();
+
                 _authHttpClient?.Dispose();
+
+                // Release feature flag context for this host
+                if (!string.IsNullOrEmpty(_featureFlagHost))
+                {
+                    try
+                    {
+                        FeatureFlagCache.GetInstance().ReleaseContext(_featureFlagHost);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Feature flag cleanup failures should never break disposal
+                        Activity.Current?.AddEvent(new ActivityEvent("feature_flags.release.error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
+                }
             }
             base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Releases telemetry resources including the telemetry client and feature flag context.
+        /// All exceptions are swallowed per telemetry requirement to avoid impacting driver disposal.
+        /// </summary>
+        private void ReleaseTelemetryResources()
+        {
+            if (!_telemetryInitialized || string.IsNullOrEmpty(_telemetryHost))
+            {
+                // Clean up HTTP client even if telemetry wasn't fully initialized
+                _telemetryHttpClient?.Dispose();
+                _telemetryHttpClient = null;
+                return;
+            }
+
+            try
+            {
+                // Release telemetry client (decrements ref count, closes if last)
+                // Use blocking call since Dispose is synchronous
+                var clientManager = TelemetryClientManager.GetInstance();
+                clientManager.ReleaseClientAsync(_telemetryHost).GetAwaiter().GetResult();
+
+                Debug.WriteLine($"[TRACE] Telemetry: Released client for host '{_telemetryHost}'");
+            }
+            catch (Exception ex)
+            {
+                // Swallow all exceptions per telemetry requirement
+                Debug.WriteLine($"[TRACE] Telemetry: Error releasing client: {ex.Message}");
+            }
+
+            try
+            {
+                // Release feature flag context (decrements ref count, removes if last)
+                var featureFlagCache = FeatureFlagCache.GetInstance();
+                featureFlagCache.ReleaseContext(_telemetryHost);
+
+                Debug.WriteLine($"[TRACE] Telemetry: Released feature flag context for host '{_telemetryHost}'");
+            }
+            catch (Exception ex)
+            {
+                // Swallow all exceptions per telemetry requirement
+                Debug.WriteLine($"[TRACE] Telemetry: Error releasing feature flag context: {ex.Message}");
+            }
+
+            try
+            {
+                // Dispose telemetry HTTP client
+                _telemetryHttpClient?.Dispose();
+                _telemetryHttpClient = null;
+            }
+            catch (Exception ex)
+            {
+                // Swallow all exceptions per telemetry requirement
+                Debug.WriteLine($"[TRACE] Telemetry: Error disposing HTTP client: {ex.Message}");
+            }
+
+            _telemetryClient = null;
+            _telemetryInitialized = false;
         }
     }
 }
