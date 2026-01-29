@@ -1,0 +1,272 @@
+/*
+* Copyright (c) 2025 ADBC Drivers Contributors
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*     http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/
+
+using System.Text.Json;
+using AdbcDrivers.Databricks.Telemetry.Models;
+using Xunit;
+
+namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
+{
+    /// <summary>
+    /// Tests for TelemetryFrontendLog serialization and structure.
+    /// </summary>
+    public class TelemetryFrontendLogTests
+    {
+        [Fact]
+        public void TelemetryFrontendLog_Serialization_MatchesJdbcFormat()
+        {
+            // Arrange
+            var frontendLog = new TelemetryFrontendLog
+            {
+                WorkspaceId = 12345678901234L,
+                FrontendLogEventId = "event-uuid-123",
+                Context = new FrontendLogContext
+                {
+                    TimestampMillis = 1700000000000L,
+                    ClientContext = new TelemetryClientContext
+                    {
+                        UserAgent = "AdbcDatabricksDriver/1.0.0"
+                    }
+                },
+                Entry = new FrontendLogEntry
+                {
+                    SqlDriverLog = new TelemetryEvent
+                    {
+                        SessionId = "session-123",
+                        SqlStatementId = "statement-456"
+                    }
+                }
+            };
+
+            // Act
+            var json = JsonSerializer.Serialize(frontendLog);
+            var parsed = JsonDocument.Parse(json);
+            var root = parsed.RootElement;
+
+            // Assert - verify JDBC format property names (snake_case)
+            Assert.True(root.TryGetProperty("workspace_id", out var workspaceId));
+            Assert.Equal(12345678901234L, workspaceId.GetInt64());
+
+            Assert.True(root.TryGetProperty("frontend_log_event_id", out var eventId));
+            Assert.Equal("event-uuid-123", eventId.GetString());
+
+            Assert.True(root.TryGetProperty("context", out var context));
+            Assert.True(context.TryGetProperty("timestamp_millis", out _));
+            Assert.True(context.TryGetProperty("client_context", out var clientContext));
+            Assert.True(clientContext.TryGetProperty("user_agent", out _));
+
+            Assert.True(root.TryGetProperty("entry", out var entry));
+            Assert.True(entry.TryGetProperty("sql_driver_log", out _));
+        }
+
+        [Fact]
+        public void TelemetryFrontendLog_NullContext_OmittedInSerialization()
+        {
+            // Arrange
+            var frontendLog = new TelemetryFrontendLog
+            {
+                WorkspaceId = 12345L,
+                FrontendLogEventId = "event-123",
+                Context = null,
+                Entry = null
+            };
+
+            // Act
+            var json = JsonSerializer.Serialize(frontendLog);
+
+            // Assert - null fields should be omitted
+            Assert.DoesNotContain("context", json);
+            Assert.DoesNotContain("entry", json);
+        }
+
+        [Fact]
+        public void TelemetryFrontendLog_PropertyNames_AreSnakeCase()
+        {
+            // Arrange
+            var frontendLog = new TelemetryFrontendLog
+            {
+                WorkspaceId = 12345L,
+                FrontendLogEventId = "event-123"
+            };
+
+            // Act
+            var json = JsonSerializer.Serialize(frontendLog);
+
+            // Assert - property names should be snake_case
+            Assert.Contains("\"workspace_id\":", json);
+            Assert.Contains("\"frontend_log_event_id\":", json);
+            Assert.DoesNotContain("\"WorkspaceId\":", json);
+            Assert.DoesNotContain("\"FrontendLogEventId\":", json);
+        }
+
+        [Fact]
+        public void TelemetryFrontendLog_Deserialization_WorksCorrectly()
+        {
+            // Arrange
+            var json = @"{
+                ""workspace_id"": 999,
+                ""frontend_log_event_id"": ""test-event"",
+                ""context"": {
+                    ""timestamp_millis"": 1700000000000,
+                    ""client_context"": {
+                        ""user_agent"": ""TestAgent/1.0""
+                    }
+                },
+                ""entry"": {
+                    ""sql_driver_log"": {
+                        ""session_id"": ""session-abc""
+                    }
+                }
+            }";
+
+            // Act
+            var frontendLog = JsonSerializer.Deserialize<TelemetryFrontendLog>(json);
+
+            // Assert
+            Assert.NotNull(frontendLog);
+            Assert.Equal(999L, frontendLog.WorkspaceId);
+            Assert.Equal("test-event", frontendLog.FrontendLogEventId);
+            Assert.NotNull(frontendLog.Context);
+            Assert.Equal(1700000000000L, frontendLog.Context.TimestampMillis);
+            Assert.NotNull(frontendLog.Context.ClientContext);
+            Assert.Equal("TestAgent/1.0", frontendLog.Context.ClientContext.UserAgent);
+            Assert.NotNull(frontendLog.Entry);
+            Assert.NotNull(frontendLog.Entry.SqlDriverLog);
+            Assert.Equal("session-abc", frontendLog.Entry.SqlDriverLog.SessionId);
+        }
+
+        [Fact]
+        public void TelemetryFrontendLog_FullStructure_SerializesCorrectly()
+        {
+            // Arrange
+            var frontendLog = new TelemetryFrontendLog
+            {
+                WorkspaceId = 12345678901234L,
+                FrontendLogEventId = "550e8400-e29b-41d4-a716-446655440000",
+                Context = new FrontendLogContext
+                {
+                    TimestampMillis = 1700000000000L,
+                    ClientContext = new TelemetryClientContext
+                    {
+                        UserAgent = "AdbcDatabricksDriver/1.0.0 (.NET 8.0; Windows 10)"
+                    }
+                },
+                Entry = new FrontendLogEntry
+                {
+                    SqlDriverLog = new TelemetryEvent
+                    {
+                        SessionId = "session-uuid-123",
+                        SqlStatementId = "statement-uuid-456",
+                        OperationLatencyMs = 150,
+                        SystemConfiguration = new DriverSystemConfiguration
+                        {
+                            DriverName = "Databricks ADBC Driver",
+                            DriverVersion = "1.0.0",
+                            OsName = "Windows",
+                            RuntimeName = ".NET",
+                            RuntimeVersion = "8.0.0"
+                        },
+                        SqlExecutionEvent = new SqlExecutionEvent
+                        {
+                            ResultFormat = "cloudfetch",
+                            ChunkCount = 5,
+                            BytesDownloaded = 1024000,
+                            CompressionEnabled = true
+                        }
+                    }
+                }
+            };
+
+            // Act
+            var json = JsonSerializer.Serialize(frontendLog);
+            var roundTrip = JsonSerializer.Deserialize<TelemetryFrontendLog>(json);
+
+            // Assert
+            Assert.NotNull(roundTrip);
+            Assert.Equal(frontendLog.WorkspaceId, roundTrip.WorkspaceId);
+            Assert.Equal(frontendLog.FrontendLogEventId, roundTrip.FrontendLogEventId);
+            Assert.NotNull(roundTrip.Context);
+            Assert.NotNull(roundTrip.Entry);
+            Assert.NotNull(roundTrip.Entry.SqlDriverLog);
+            Assert.Equal("session-uuid-123", roundTrip.Entry.SqlDriverLog.SessionId);
+            Assert.Equal("statement-uuid-456", roundTrip.Entry.SqlDriverLog.SqlStatementId);
+            Assert.Equal(150, roundTrip.Entry.SqlDriverLog.OperationLatencyMs);
+        }
+
+        [Fact]
+        public void TelemetryFrontendLog_DefaultValues_AreCorrect()
+        {
+            // Act
+            var frontendLog = new TelemetryFrontendLog();
+
+            // Assert
+            Assert.Equal(0L, frontendLog.WorkspaceId);
+            Assert.Equal(string.Empty, frontendLog.FrontendLogEventId);
+            Assert.Null(frontendLog.Context);
+            Assert.Null(frontendLog.Entry);
+        }
+
+        [Fact]
+        public void FrontendLogContext_NullClientContext_OmittedInSerialization()
+        {
+            // Arrange
+            var context = new FrontendLogContext
+            {
+                TimestampMillis = 1700000000000L,
+                ClientContext = null
+            };
+
+            // Act
+            var json = JsonSerializer.Serialize(context);
+
+            // Assert
+            Assert.Contains("\"timestamp_millis\":", json);
+            Assert.DoesNotContain("client_context", json);
+        }
+
+        [Fact]
+        public void FrontendLogEntry_NullSqlDriverLog_OmittedInSerialization()
+        {
+            // Arrange
+            var entry = new FrontendLogEntry
+            {
+                SqlDriverLog = null
+            };
+
+            // Act
+            var json = JsonSerializer.Serialize(entry);
+
+            // Assert
+            Assert.Equal("{}", json);
+        }
+
+        [Fact]
+        public void TelemetryClientContext_NullUserAgent_OmittedInSerialization()
+        {
+            // Arrange
+            var clientContext = new TelemetryClientContext
+            {
+                UserAgent = null
+            };
+
+            // Act
+            var json = JsonSerializer.Serialize(clientContext);
+
+            // Assert
+            Assert.Equal("{}", json);
+        }
+    }
+}

@@ -1,0 +1,41 @@
+# Copyright (c) 2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Enhancement/Feature Request
+description: Suggest something that could be made better, or a new feature.
+labels: ["enhancement"]
+type: "feature"
+body:
+  - type: input
+    id: driver-version
+    attributes:
+      label: Driver Version
+      description: What version of the ADBC driver are you using?
+      placeholder: e.g. v1.0.0
+    validations:
+      required: false
+  - type: input
+    id: driver-type
+    attributes:
+      label: Driver Type
+      description: How did you install the ADBC driver? Or if you know, is this the C#, Go, or Rust driver?
+      placeholder: e.g. via dbc
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: What feature or improvement would you like to see?
+    validations:
+      required: false

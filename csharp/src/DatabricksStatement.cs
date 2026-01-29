@@ -49,6 +49,7 @@ namespace AdbcDrivers.Databricks
         // Using 2M rows significantly reduces round trips for medium/large result sets compared to the base 50K default,
         // improving query performance by reducing the number of FetchResults calls needed.
         private const long DatabricksBatchSizeDefault = 2000000;
+        private const string QueryTagsKey = "query_tags";
         private bool useCloudFetch;
         private bool canDecompressLz4;
         private long maxBytesPerFile;
@@ -56,6 +57,7 @@ namespace AdbcDrivers.Databricks
         private bool enableMultipleCatalogSupport;
         private bool enablePKFK;
         private bool runAsyncInThrift;
+        private Dictionary<string, string>? confOverlay;
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -150,6 +152,15 @@ namespace AdbcDrivers.Databricks
 
             Connection.TrySetGetDirectResults(statement);
 
+            // Set configuration overlay if any parameters were provided
+            if (confOverlay != null && confOverlay.Count > 0)
+            {
+                #pragma warning disable CS0618 // ConfOverlay is marked obsolete but is still functional
+                statement.ConfOverlay = new Dictionary<string, string>(confOverlay);
+                #pragma warning restore CS0618
+                Activity.Current?.SetTag("statement.conf_overlay.count", confOverlay.Count);
+            }
+
             // Log Databricks-specific properties
             Activity.Current?.SetTag("statement.property.enforce_result_persistence_mode", statement.EnforceResultPersistenceMode);
             Activity.Current?.SetTag("statement.property.can_read_arrow_result", statement.CanReadArrowResult);
@@ -184,6 +195,14 @@ namespace AdbcDrivers.Databricks
         {
             switch (key)
             {
+                case DatabricksParameters.QueryTags:
+                    // Query tags are sent to the server via confOverlay
+                    if (confOverlay == null)
+                    {
+                        confOverlay = new Dictionary<string, string>();
+                    }
+                    confOverlay[QueryTagsKey] = value;
+                    break;
                 case DatabricksParameters.UseCloudFetch:
                     if (bool.TryParse(value, out bool useCloudFetchValue))
                     {

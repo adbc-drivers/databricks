@@ -77,6 +77,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
+        public void TestQueryTagsParameterExists()
+        {
+            Assert.Equal("adbc.databricks.query_tags", DatabricksParameters.QueryTags);
+        }
+
+        [Fact]
         public void TestAllRestParametersUseCorrectPrefix()
         {
             // Verify REST-specific parameters use "adbc.databricks.rest." prefix
@@ -94,6 +100,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.StartsWith("adbc.databricks.", DatabricksParameters.Protocol);
             Assert.StartsWith("adbc.databricks.", DatabricksParameters.EnableSessionManagement);
             Assert.StartsWith("adbc.databricks.", DatabricksParameters.EnableDirectResults);
+            Assert.StartsWith("adbc.databricks.", DatabricksParameters.QueryTags);
         }
     }
 }

@@ -33,6 +33,8 @@
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
     <!-- System -->
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
+    <!-- Resilience -->
+    <PackageVersion Include="Polly" Version="8.5.0" />
     <!-- Source Link -->
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="8.0.0" />
   </ItemGroup>

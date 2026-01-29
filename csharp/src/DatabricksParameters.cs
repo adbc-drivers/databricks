@@ -104,6 +104,13 @@ namespace AdbcDrivers.Databricks
         public const string ServerSidePropertyPrefix = "adbc.databricks.ssp_";
 
         /// <summary>
+        /// Query tags to be sent with the statement execution.
+        /// Tags are sent to the server in the confOverlay and apply to the statement only.
+        /// Format: comma-separated key:value pairs, e.g., "team:analytics,app:myapp"
+        /// </summary>
+        public const string QueryTags = "adbc.databricks.query_tags";
+
+        /// <summary>
         /// Controls whether to retry requests that receive retryable responses (408, 502, 503, 504).
         /// Default value is true (enabled). Set to false to disable retry behavior.
         /// </summary>

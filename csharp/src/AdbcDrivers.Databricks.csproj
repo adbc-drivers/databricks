@@ -8,6 +8,7 @@
     <PackageReference Include="K4os.Compression.LZ4" />
     <PackageReference Include="K4os.Compression.LZ4.Streams" />
     <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" />
+    <PackageReference Include="Polly" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="readme.md">
