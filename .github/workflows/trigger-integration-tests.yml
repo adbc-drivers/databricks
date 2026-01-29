@@ -67,26 +67,30 @@ jobs:
             const isFromFork = pr.head.repo.full_name !== pr.base.repo.full_name;
             const repoType = isFromFork ? '**fork PR**' : 'PR';
 
+            const body = [
+              '🔒 **Integration test approval reset**',
+              '',
+              `New commits were pushed to this ${repoType}. The \`integration-test\` label has been automatically removed for security.`,
+              '',
+              '**A maintainer must re-review the changes and re-add the label to trigger tests again.**',
+              '',
+              '<details>',
+              '<summary>Why is this necessary?</summary>',
+              '',
+              '- New code requires fresh security review',
+              '- Prevents approved PRs from adding malicious code later',
+              '- Ensures all tested code has been explicitly approved',
+              '',
+              '</details>',
+              '',
+              `**Latest commit**: ${pr.head.sha.substring(0, 7)}`
+            ].join('\n');
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `🔒 **Integration test approval reset**
-
-New commits were pushed to this ${repoType}. The \`integration-test\` label has been automatically removed for security.
-
-**A maintainer must re-review the changes and re-add the label to trigger tests again.**
-
-<details>
-<summary>Why is this necessary?</summary>
-
-- New code requires fresh security review
-- Prevents approved PRs from adding malicious code later
-- Ensures all tested code has been explicitly approved
-
-</details>
-
-**Latest commit**: ${pr.head.sha.substring(0, 7)}`
+              body: body
             });
 
   # =============================================================================
