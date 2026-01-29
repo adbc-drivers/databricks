@@ -111,14 +111,25 @@ jobs:
     steps:
       - name: Check for integration-test label
         id: check
-        run: |
-          if [[ "${{ contains(github.event.pull_request.labels.*.name, 'integration-test') }}" == "true" ]]; then
-            echo "✅ integration-test label found - will trigger tests"
-            echo "run=true" >> $GITHUB_OUTPUT
-          else
-            echo "⏭️ integration-test label not found - skipping tests"
-            echo "run=false" >> $GITHUB_OUTPUT
-          fi
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Fetch current PR labels from API (not stale event payload)
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const hasLabel = pr.labels.some(label => label.name === 'integration-test');
+
+            if (hasLabel) {
+              console.log('✅ integration-test label found - will trigger tests');
+              core.setOutput('run', 'true');
+            } else {
+              console.log('⏭️ integration-test label not found - skipping tests');
+              core.setOutput('run', 'false');
+            }
   trigger-tests-pr:
     needs: check-should-run-pr
     if: |
