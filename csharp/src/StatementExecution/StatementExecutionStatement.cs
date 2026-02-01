@@ -60,9 +60,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // HTTP client for CloudFetch downloads
         private readonly HttpClient _httpClient;
 
+        // Connection reference for metadata operations
+        private readonly StatementExecutionConnection _connection;
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
+
+        // Metadata command parameters
+        private bool _isMetadataCommand;
+        private string? _metadataCatalogName;
+        private string? _metadataSchemaName;
+        private string? _metadataTableName;
+        private string? _metadataColumnName;
+        private string? _metadataTableTypes;
+        private string? _foreignCatalogName;
+        private string? _foreignSchemaName;
+        private string? _foreignTableName;
+        private bool _escapePatternWildcards = false;
 
         public StatementExecutionStatement(
             IStatementExecutionClient client,
@@ -96,6 +111,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         }
 
         /// <summary>
@@ -105,6 +121,73 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             get => _sqlQuery;
             set => _sqlQuery = value;
+        }
+
+        /// <summary>
+        /// Sets a statement option.
+        /// </summary>
+        public override void SetOption(string key, string value)
+        {
+            switch (key)
+            {
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.IsMetadataCommand:
+                    _isMetadataCommand = bool.TryParse(value, out var isMetadata) && isMetadata;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.CatalogName:
+                    _metadataCatalogName = value;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.SchemaName:
+                    _metadataSchemaName = value;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.TableName:
+                    _metadataTableName = value;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.ColumnName:
+                    _metadataColumnName = value;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.TableTypes:
+                    _metadataTableTypes = value;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.ForeignCatalogName:
+                    _foreignCatalogName = value;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.ForeignSchemaName:
+                    _foreignSchemaName = value;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.ForeignTableName:
+                    _foreignTableName = value;
+                    break;
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.EscapePatternWildcards:
+                    _escapePatternWildcards = bool.TryParse(value, out var escape) && escape;
+                    break;
+
+                // These options are readonly in SEA (set at connection level)
+                // Accept but ignore them to avoid NotImplemented exceptions for compatibility
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.PollTimeMilliseconds:
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.BatchSize:
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.BatchSizeStopCondition:
+                case Apache.Arrow.Adbc.Drivers.Apache.ApacheParameters.QueryTimeoutSeconds:
+                    // Silently ignore - these are connection-level settings in SEA
+                    break;
+
+                default:
+                    throw AdbcException.NotImplemented($"Option '{key}' is not implemented.");
+            }
+        }
+
+        /// <summary>
+        /// Escapes wildcard characters in pattern names when EscapePatternWildcards is enabled.
+        /// Converts % and _ to \% and \_ to treat them as literals rather than wildcards.
+        /// </summary>
+        /// <param name="name">The name/pattern to potentially escape</param>
+        /// <returns>The escaped name if EscapePatternWildcards is true, otherwise the original name</returns>
+        private string? EscapePatternWildcardsInName(string? name)
+        {
+            if (!_escapePatternWildcards || name == null)
+                return name;
+
+            // Escape both _ and %
+            return name.Replace("_", "\\_").Replace("%", "\\%");
         }
 
         /// <summary>
@@ -120,6 +203,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public async Task<QueryResult> ExecuteQueryAsync(CancellationToken cancellationToken = default)
         {
+            // Check if this is a metadata command
+            if (_isMetadataCommand)
+            {
+                return await ExecuteMetadataCommandQuery(cancellationToken).ConfigureAwait(false);
+            }
+
             if (string.IsNullOrEmpty(_sqlQuery))
             {
                 throw new InvalidOperationException("SQL query is required");
@@ -337,8 +426,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// Maps Databricks SQL type names to Arrow types.
         /// </summary>
-        private IArrowType MapDatabricksTypeToArrowType(string typeName)
+        private IArrowType MapDatabricksTypeToArrowType(string? typeName)
         {
+            if (string.IsNullOrEmpty(typeName))
+            {
+                return StringType.Default;
+            }
+
             // Handle parameterized types (e.g., DECIMAL(10,2), VARCHAR(100))
             var baseType = typeName.Split('(')[0].ToUpperInvariant();
 
@@ -407,7 +501,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
             {
-                Statement = _sqlQuery,
+                Statement = _sqlQuery!,
                 WarehouseId = _warehouseId,
                 SessionId = _sessionId,
                 Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
@@ -449,6 +543,194 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // For updates, we don't need to read the results - just return the row count
             long rowCount = response.Manifest?.TotalRowCount ?? 0;
             return new UpdateResult(rowCount);
+        }
+
+        /// <summary>
+        /// Executes a metadata command query based on the SqlQuery property value.
+        /// Routes to the appropriate metadata method (GetCatalogs, GetSchemas, etc.)
+        /// </summary>
+        private async Task<QueryResult> ExecuteMetadataCommandQuery(CancellationToken cancellationToken)
+        {
+            return await this.TraceActivityAsync(async activity =>
+            {
+                const string GetCatalogsCommandName = "getcatalogs";
+                const string GetSchemasCommandName = "getschemas";
+                const string GetTablesCommandName = "gettables";
+                const string GetColumnsCommandName = "getcolumns";
+                const string GetColumnsExtendedCommandName = "getcolumnsextended";
+                const string GetPrimaryKeysCommandName = "getprimarykeys";
+                const string GetImportedKeysCommandName = "getimportedkeys";
+                const string GetCrossReferenceCommandName = "getcrossreference";
+                const string GetTableTypesCommandName = "gettabletypes";
+
+                const string SupportedMetadataCommands = "GetCatalogs, GetSchemas, GetTables, GetColumns, GetColumnsExtended, GetPrimaryKeys, GetImportedKeys, GetCrossReference, GetTableTypes";
+
+                var command = SqlQuery?.ToLowerInvariant();
+                activity?.SetTag("metadata_command", command ?? "(null)");
+
+                return command switch
+                {
+                    GetCatalogsCommandName => await GetCatalogsAsync(cancellationToken).ConfigureAwait(false),
+                    GetSchemasCommandName => await GetSchemasAsync(cancellationToken).ConfigureAwait(false),
+                    GetTablesCommandName => await GetTablesAsync(cancellationToken).ConfigureAwait(false),
+                    GetColumnsCommandName => await GetColumnsAsync(cancellationToken).ConfigureAwait(false),
+                    GetColumnsExtendedCommandName => await GetColumnsExtendedAsync(cancellationToken).ConfigureAwait(false),
+                    GetPrimaryKeysCommandName => await GetPrimaryKeysAsync(cancellationToken).ConfigureAwait(false),
+                    GetImportedKeysCommandName => await GetImportedKeysAsync(cancellationToken).ConfigureAwait(false),
+                    GetCrossReferenceCommandName => await GetCrossReferenceAsync(cancellationToken).ConfigureAwait(false),
+                    GetTableTypesCommandName => await GetTableTypesAsync(cancellationToken).ConfigureAwait(false),
+                    null or "" => throw new ArgumentNullException(nameof(SqlQuery), $"Metadata command for property 'SqlQuery' must not be empty or null. Supported metadata commands: {SupportedMetadataCommands}"),
+                    _ => throw new NotSupportedException($"Metadata command '{SqlQuery}' is not supported. Supported metadata commands: {SupportedMetadataCommands}"),
+                };
+            });
+        }
+
+        /// <summary>
+        /// Gets catalogs metadata.
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing catalog information</returns>
+        protected virtual async Task<QueryResult> GetCatalogsAsync(CancellationToken cancellationToken = default)
+        {
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetCatalogsFlat(
+                EscapePatternWildcardsInName(_metadataCatalogName ?? _connection.DefaultCatalog)), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets schemas metadata
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing schema information</returns>
+        protected virtual async Task<QueryResult> GetSchemasAsync(CancellationToken cancellationToken = default)
+        {
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetSchemasFlat(
+                EscapePatternWildcardsInName(_metadataCatalogName ?? _connection.DefaultCatalog),
+                EscapePatternWildcardsInName(_metadataSchemaName)), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets tables metadata
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing table information</returns>
+        protected virtual async Task<QueryResult> GetTablesAsync(CancellationToken cancellationToken = default)
+        {
+            // Replace null catalog with default catalog
+            List<string>? tableTypesList = _metadataTableTypes?.Split(',').ToList();
+            var stream = await Task.Run(() => _connection.GetTablesFlat(
+                EscapePatternWildcardsInName(_metadataCatalogName ?? _connection.DefaultCatalog),
+                EscapePatternWildcardsInName(_metadataSchemaName),
+                EscapePatternWildcardsInName(_metadataTableName),
+                tableTypesList), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets columns metadata
+        /// Returns flat structure matching Thrift HiveServer2 behavior.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing column information</returns>
+        protected virtual async Task<QueryResult> GetColumnsAsync(CancellationToken cancellationToken = default)
+        {
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetColumnsFlat(
+                EscapePatternWildcardsInName(_metadataCatalogName ?? _connection.DefaultCatalog),
+                EscapePatternWildcardsInName(_metadataSchemaName),
+                EscapePatternWildcardsInName(_metadataTableName),
+                EscapePatternWildcardsInName(_metadataColumnName)), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets extended columns metadata including PK/FK information using DESC TABLE EXTENDED.
+        /// Returns flat structure with extended metadata columns (24 base + 8 PK/FK metadata columns).
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing extended column information with PK/FK metadata</returns>
+        protected virtual async Task<QueryResult> GetColumnsExtendedAsync(CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrEmpty(_metadataTableName))
+            {
+                throw new ArgumentNullException(nameof(_metadataTableName), "Table name is required for GetColumnsExtended");
+            }
+
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetColumnsExtendedFlat(
+                _metadataCatalogName ?? _connection.DefaultCatalog,
+                _metadataSchemaName,
+                _metadataTableName!), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets primary keys metadata
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing primary key information</returns>
+        protected virtual async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken = default)
+        {
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetPrimaryKeysFlat(
+                _metadataCatalogName ?? _connection.DefaultCatalog,
+                _metadataSchemaName,
+                _metadataTableName!), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets imported keys (foreign keys) metadata
+        /// Returns flat structure with Thrift HiveServer2-compatible naming for consistency with Thrift protocol.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing imported key information</returns>
+        protected virtual async Task<QueryResult> GetImportedKeysAsync(CancellationToken cancellationToken = default)
+        {
+            // Replace null catalog with default catalog
+            var stream = await Task.Run(() => _connection.GetImportedKeys(
+                _metadataCatalogName ?? _connection.DefaultCatalog,
+                _metadataSchemaName,
+                _metadataTableName!), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets cross reference (foreign key relationships) metadata
+        /// Returns flat structure with 14 columns including DEFERRABILITY, matching Thrift HiveServer2 behavior.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing cross reference information</returns>
+        protected virtual async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken = default)
+        {
+            // Replace null catalogs with default catalog
+            var stream = await Task.Run(() => _connection.GetCrossReferenceFlat(
+                _metadataCatalogName ?? _connection.DefaultCatalog,
+                _metadataSchemaName,
+                _metadataTableName,
+                _foreignCatalogName ?? _connection.DefaultCatalog,
+                _foreignSchemaName,
+                _foreignTableName), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
+        }
+
+        /// <summary>
+        /// Gets table types metadata
+        /// Returns list of supported table types (TABLE, VIEW, SYSTEM TABLE).
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Query result containing table type information</returns>
+        protected virtual async Task<QueryResult> GetTableTypesAsync(CancellationToken cancellationToken = default)
+        {
+            var stream = await Task.Run(() => _connection.GetTableTypes(), cancellationToken).ConfigureAwait(false);
+            return new QueryResult(-1, stream);
         }
 
         /// <summary>

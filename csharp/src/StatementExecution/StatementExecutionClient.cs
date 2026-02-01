@@ -232,7 +232,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new DatabricksException("Failed to deserialize ExecuteStatementResponse");
             }
 
-            // Check for FAILED state and throw exception (like JDBC driver does)
+            // Check for FAILED state and throw exception
             if (executeResponse.Status?.State == "FAILED")
             {
                 var errorMessage = $"Statement execution failed. State: {executeResponse.Status.State}";
