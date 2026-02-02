@@ -17,14 +17,17 @@
 //! This module provides:
 //! - `ResultReaderFactory`: Creates appropriate reader based on response type
 //! - `CloudFetchReader`: Streams Arrow data via cloud storage downloads
+//! - `InlineArrowProvider`: Handles inline Arrow data embedded in responses
 
 pub mod cloudfetch;
+pub mod inline;
 
 use crate::client::{DatabricksClient, DatabricksHttpClient, ExecuteResponse};
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
 use crate::reader::cloudfetch::link_fetcher::{SeaChunkLinkFetcher, SeaChunkLinkFetcherHandle};
 use crate::reader::cloudfetch::streaming_provider::StreamingCloudFetchProvider;
+use crate::reader::inline::InlineArrowProvider;
 use crate::types::cloudfetch::{CloudFetchConfig, CloudFetchLink};
 use crate::types::sea::{CompressionCodec, ResultManifest, StatementState};
 use arrow_array::RecordBatch;
@@ -90,8 +93,9 @@ impl ResultReaderFactory {
             .map(|s| CompressionCodec::from_manifest(Some(s)))
             .unwrap_or_default();
 
-        // CloudFetch: external_links present
+        // Check result data for CloudFetch or inline results
         if let Some(ref result) = response.result {
+            // Priority 1: CloudFetch (external_links present)
             if let Some(ref external_links) = result.external_links {
                 if !external_links.is_empty() {
                     let total_chunk_count =
@@ -106,16 +110,17 @@ impl ResultReaderFactory {
                 }
             }
 
+            // Priority 2: Inline Arrow (attachment present)
+            if let Some(ref inline_data) = result.inline_arrow_data {
+                if !inline_data.is_empty() {
+                    return self.create_inline_reader(inline_data, compression);
+                }
+            }
+
             // Internal links without external = CloudFetch not available
             if result.next_chunk_internal_link.is_some() {
                 return Err(DatabricksErrorHelper::not_implemented()
                     .message("CloudFetch not available. Internal links not supported."));
-            }
-
-            // Inline results (future)
-            if result.has_inline_data {
-                return Err(DatabricksErrorHelper::not_implemented()
-                    .message("Inline results not yet supported"));
             }
         }
 
@@ -184,10 +189,9 @@ impl ResultReaderFactory {
             "STRING" => DataType::Utf8,
             "BINARY" => DataType::Binary,
             "DATE" => DataType::Date32,
-            "TIMESTAMP" | "TIMESTAMP_NTZ" => DataType::Timestamp(
-                arrow_schema::TimeUnit::Microsecond,
-                None,
-            ),
+            "TIMESTAMP" | "TIMESTAMP_NTZ" => {
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+            }
             // For complex types and unknown types, fall back to string
             // The actual Arrow IPC data will have the correct type
             _ => {
@@ -241,6 +245,22 @@ impl ResultReaderFactory {
             self.runtime_handle.clone(),
         )))
     }
+
+    fn create_inline_reader(
+        &self,
+        inline_data: &[u8],
+        compression: CompressionCodec,
+    ) -> Result<Box<dyn ResultReader + Send>> {
+        tracing::debug!(
+            "Creating inline Arrow reader: {} bytes, compression={:?}",
+            inline_data.len(),
+            compression
+        );
+
+        let provider = InlineArrowProvider::new(inline_data.to_vec(), compression)?;
+
+        Ok(Box::new(InlineArrowReader::new(provider)))
+    }
 }
 
 /// Trait for result readers.
@@ -277,6 +297,34 @@ impl ResultReader for CloudFetchResultReader {
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         self.runtime_handle.block_on(self.provider.next_batch())
+    }
+}
+
+/// Reader for inline Arrow results.
+///
+/// Wraps `InlineArrowProvider` to implement the `ResultReader` trait.
+struct InlineArrowReader {
+    provider: InlineArrowProvider,
+    /// Cached schema (extracted from first batch on creation)
+    schema: Option<SchemaRef>,
+}
+
+impl InlineArrowReader {
+    fn new(provider: InlineArrowProvider) -> Self {
+        let schema = provider.schema().cloned();
+        Self { provider, schema }
+    }
+}
+
+impl ResultReader for InlineArrowReader {
+    fn schema(&self) -> Result<SchemaRef> {
+        self.schema.clone().ok_or_else(|| {
+            DatabricksErrorHelper::invalid_state().message("Schema not available for inline result")
+        })
+    }
+
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.provider.next_batch()
     }
 }
 
