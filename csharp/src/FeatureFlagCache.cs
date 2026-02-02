@@ -20,6 +20,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using Apache.Arrow.Adbc.Drivers.Apache;
+using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 
 namespace AdbcDrivers.Databricks
@@ -223,34 +225,34 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Merges feature flags from server into properties.
-        /// Feature flags have lower priority than user-specified properties.
-        /// Priority: User Properties > Feature Flags > Driver Defaults
+        /// Feature flags (remote properties) have lower priority than user-specified properties (local properties).
+        /// Priority: Local Properties > Remote Properties (Feature Flags) > Driver Defaults
         /// </summary>
-        /// <param name="properties">Properties after environment config merge.</param>
+        /// <param name="localProperties">Local properties from user configuration and environment.</param>
         /// <param name="assemblyVersion">The driver version for the API endpoint.</param>
-        /// <returns>Properties with feature flags merged in.</returns>
+        /// <returns>Properties with remote feature flags merged in (local properties take precedence).</returns>
         public IReadOnlyDictionary<string, string> MergePropertiesWithFeatureFlags(
-            IReadOnlyDictionary<string, string> properties,
+            IReadOnlyDictionary<string, string> localProperties,
             string assemblyVersion)
         {
             using var activity = s_activitySource.StartActivity("MergePropertiesWithFeatureFlags");
 
             try
             {
-                // Extract host from properties
-                var host = TryGetHost(properties);
+                // Extract host from local properties
+                var host = TryGetHost(localProperties);
                 if (string.IsNullOrEmpty(host))
                 {
                     activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
                         tags: new ActivityTagsCollection { { "reason", "no_host" } }));
-                    return properties;
+                    return localProperties;
                 }
 
                 activity?.SetTag("feature_flags.host", host);
 
                 // Extract token for authentication
                 string? token = null;
-                if (properties.TryGetValue(SparkParameters.Token, out var tokenValue))
+                if (localProperties.TryGetValue(SparkParameters.Token, out var tokenValue))
                 {
                     token = tokenValue;
                 }
@@ -259,32 +261,32 @@ namespace AdbcDrivers.Databricks
                 {
                     activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
                         tags: new ActivityTagsCollection { { "reason", "no_token" } }));
-                    return properties;
+                    return localProperties;
                 }
 
                 // Create HttpClient for feature flag API
-                using var httpClient = CreateFeatureFlagHttpClient(host, token, assemblyVersion);
+                using var httpClient = CreateFeatureFlagHttpClient(host, token, assemblyVersion, localProperties);
 
                 // Get or create feature flag context (this makes the initial blocking fetch)
                 var context = GetOrCreateContext(host, httpClient, assemblyVersion);
 
-                // Get all flags from cache
-                var featureFlags = context.GetAllFlags();
+                // Get all flags from cache (remote properties)
+                var remoteProperties = context.GetAllFlags();
 
-                if (featureFlags.Count == 0)
+                if (remoteProperties.Count == 0)
                 {
                     activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
                         tags: new ActivityTagsCollection { { "reason", "no_flags_returned" } }));
-                    return properties;
+                    return localProperties;
                 }
 
-                activity?.SetTag("feature_flags.count", featureFlags.Count);
+                activity?.SetTag("feature_flags.count", remoteProperties.Count);
                 activity?.AddEvent(new ActivityEvent("feature_flags.merging",
-                    tags: new ActivityTagsCollection { { "flags_count", featureFlags.Count } }));
+                    tags: new ActivityTagsCollection { { "flags_count", remoteProperties.Count } }));
 
-                // Merge: feature flags as base, user properties override
-                // This ensures user properties take precedence over server flags
-                return MergeProperties(featureFlags, properties);
+                // Merge: remote properties (feature flags) as base, local properties override
+                // This ensures local properties take precedence over remote flags
+                return MergeProperties(remoteProperties, localProperties);
             }
             catch (Exception ex)
             {
@@ -296,20 +298,22 @@ namespace AdbcDrivers.Databricks
                         { "error.type", ex.GetType().Name },
                         { "error.message", ex.Message }
                     }));
-                return properties;
+                return localProperties;
             }
         }
 
         /// <summary>
         /// Tries to extract the host from properties without throwing.
+        /// Handles cases where user puts protocol in host (e.g., "https://myhost.databricks.com").
         /// </summary>
         /// <param name="properties">Connection properties.</param>
-        /// <returns>The host, or null if not found.</returns>
+        /// <returns>The host (without protocol), or null if not found.</returns>
         internal static string? TryGetHost(IReadOnlyDictionary<string, string> properties)
         {
             if (properties.TryGetValue(SparkParameters.HostName, out string? host) && !string.IsNullOrEmpty(host))
             {
-                return host;
+                // Handle case where user puts protocol in host
+                return StripProtocol(host);
             }
 
             if (properties.TryGetValue(Apache.Arrow.Adbc.AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri))
@@ -324,26 +328,84 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Creates an HttpClient configured for the feature flag API.
+        /// Strips protocol prefix from a host string if present.
         /// </summary>
-        /// <param name="host">The Databricks host.</param>
+        /// <param name="host">The host string that may contain a protocol.</param>
+        /// <returns>The host without protocol prefix.</returns>
+        private static string StripProtocol(string host)
+        {
+            // Try to parse as URI first to handle full URLs
+            if (Uri.TryCreate(host, UriKind.Absolute, out Uri? parsedUri) &&
+                (parsedUri.Scheme == Uri.UriSchemeHttp || parsedUri.Scheme == Uri.UriSchemeHttps))
+            {
+                return parsedUri.Host;
+            }
+
+            // Fallback: strip common protocol prefixes manually
+            if (host.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                return host.Substring(8);
+            }
+            if (host.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                return host.Substring(7);
+            }
+
+            return host;
+        }
+
+        /// <summary>
+        /// Default timeout for feature flag API requests in seconds.
+        /// </summary>
+        private const int DefaultFeatureFlagTimeoutSeconds = 10;
+
+        /// <summary>
+        /// Creates an HttpClient configured for the feature flag API.
+        /// Respects proxy settings and TLS options from connection properties.
+        /// </summary>
+        /// <param name="host">The Databricks host (without protocol).</param>
         /// <param name="token">The authentication token.</param>
         /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
+        /// <param name="properties">Connection properties for proxy and TLS configuration.</param>
         /// <returns>Configured HttpClient.</returns>
-        private static HttpClient CreateFeatureFlagHttpClient(string host, string token, string assemblyVersion)
+        private static HttpClient CreateFeatureFlagHttpClient(
+            string host,
+            string token,
+            string assemblyVersion,
+            IReadOnlyDictionary<string, string> properties)
         {
-            var httpClient = new HttpClient
+            // Create HttpClientHandler with TLS and proxy settings from properties
+            var tlsOptions = HiveServer2TlsImpl.GetHttpTlsOptions(properties);
+            var proxyConfigurator = HiveServer2ProxyConfigurator.FromProperties(properties);
+            var handler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
+
+            // Get timeout from properties or use default
+            var timeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(
+                properties,
+                DatabricksParameters.FeatureFlagTimeoutSeconds,
+                DefaultFeatureFlagTimeoutSeconds);
+
+            var httpClient = new HttpClient(handler)
             {
                 BaseAddress = new Uri($"https://{host}"),
-                Timeout = TimeSpan.FromSeconds(10) // Short timeout for feature flags
+                Timeout = TimeSpan.FromSeconds(timeoutSeconds)
             };
 
             httpClient.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", token);
 
-            // Set User-Agent for connector service
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
-                $"DatabricksADBCDriverOSS/{assemblyVersion} (FeatureFlagClient)");
+            // Use same User-Agent format as other Databricks HTTP clients
+            // Format: DatabricksJDBCDriverOSS/{version} (ADBC)
+            string userAgent = $"DatabricksJDBCDriverOSS/{assemblyVersion} (ADBC)";
+
+            // Check if a client has provided a user-agent entry
+            string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
+            if (!string.IsNullOrWhiteSpace(userAgentEntry))
+            {
+                userAgent = $"{userAgent} {userAgentEntry}";
+            }
+
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
 
             return httpClient;
         }
