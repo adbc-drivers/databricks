@@ -95,11 +95,25 @@ impl ResultReaderFactory {
 
         // Check result data for CloudFetch or inline results
         if let Some(ref result) = response.result {
+            // Log what result data we have for debugging the decision path
+            tracing::debug!(
+                "Result data present: external_links={}, inline_arrow_data={} bytes, next_chunk_internal_link={}",
+                result.external_links.as_ref().map(|l| l.len()).unwrap_or(0),
+                result.inline_arrow_data.as_ref().map(|d| d.len()).unwrap_or(0),
+                result.next_chunk_internal_link.is_some()
+            );
+
             // Priority 1: CloudFetch (external_links present)
             if let Some(ref external_links) = result.external_links {
                 if !external_links.is_empty() {
                     let total_chunk_count =
                         response.manifest.as_ref().and_then(|m| m.total_chunk_count);
+
+                    tracing::info!(
+                        "Using CloudFetch reader: {} external links, total_chunks={:?}",
+                        external_links.len(),
+                        total_chunk_count
+                    );
 
                     return self.create_cloudfetch_reader(
                         statement_id,
@@ -113,6 +127,11 @@ impl ResultReaderFactory {
             // Priority 2: Inline Arrow (attachment present)
             if let Some(ref inline_data) = result.inline_arrow_data {
                 if !inline_data.is_empty() {
+                    tracing::info!(
+                        "Using inline Arrow reader: {} bytes of Arrow IPC data",
+                        inline_data.len()
+                    );
+
                     return self.create_inline_reader(inline_data, compression);
                 }
             }
@@ -126,8 +145,14 @@ impl ResultReaderFactory {
 
         // No result data - check if this is a valid empty result or an error state
         match response.status.state {
-            StatementState::Succeeded => {
+            StatementState::Succeeded | StatementState::Closed => {
                 // Valid empty result set - extract schema from manifest
+                // Note: Closed state is valid for inline results where the server delivers
+                // the data (or empty result) and immediately closes the statement.
+                tracing::info!(
+                    "Using empty reader: no result data present for {:?} statement",
+                    response.status.state
+                );
                 let schema = self.extract_schema_from_manifest(response.manifest.as_ref())?;
                 Ok(Box::new(EmptyReader::new(schema)))
             }
@@ -146,9 +171,6 @@ impl ResultReaderFactory {
             }
             StatementState::Canceled => {
                 Err(DatabricksErrorHelper::io().message("Statement was canceled"))
-            }
-            StatementState::Closed => {
-                Err(DatabricksErrorHelper::io().message("Statement was closed"))
             }
         }
     }
