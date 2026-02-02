@@ -93,43 +93,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public void FeatureFlagContext_IsFeatureEnabled_True()
-        {
-            // Arrange
-            var flags = new Dictionary<string, string>
-            {
-                ["enabled_flag"] = "true",
-                ["enabled_flag_caps"] = "TRUE",
-                ["enabled_flag_mixed"] = "True"
-            };
-            var context = new FeatureFlagContext(flags);
-
-            // Act & Assert
-            Assert.True(context.IsFeatureEnabled("enabled_flag"));
-            Assert.True(context.IsFeatureEnabled("enabled_flag_caps"));
-            Assert.True(context.IsFeatureEnabled("enabled_flag_mixed"));
-        }
-
-        [Fact]
-        public void FeatureFlagContext_IsFeatureEnabled_False()
-        {
-            // Arrange
-            var flags = new Dictionary<string, string>
-            {
-                ["disabled_flag"] = "false",
-                ["other_value"] = "yes",
-                ["numeric_value"] = "1"
-            };
-            var context = new FeatureFlagContext(flags);
-
-            // Act & Assert
-            Assert.False(context.IsFeatureEnabled("disabled_flag"));
-            Assert.False(context.IsFeatureEnabled("other_value"));
-            Assert.False(context.IsFeatureEnabled("numeric_value"));
-            Assert.False(context.IsFeatureEnabled("nonexistent"));
-        }
-
-        [Fact]
         public void FeatureFlagContext_GetAllFlags_ReturnsAllFlags()
         {
             // Arrange
@@ -566,7 +529,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             // Assert
             Assert.Equal("value1", context.GetFlagValue("flag1"));
-            Assert.True(context.IsFeatureEnabled("flag2"));
+            Assert.Equal("true", context.GetFlagValue("flag2"));
 
             // Cleanup
             cache.Clear();
@@ -747,7 +710,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                     // Read
                     var value = context.GetFlagValue("flag1");
                     var all = context.GetAllFlags();
-                    var enabled = context.IsFeatureEnabled("flag2");
+                    var flag2Value = context.GetFlagValue("flag2");
 
                     // Write
                     context.SetFlag($"new_flag_{index}", $"value_{index}");

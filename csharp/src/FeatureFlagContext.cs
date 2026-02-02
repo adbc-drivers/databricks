@@ -179,18 +179,6 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Checks if a feature flag is enabled (value is "true").
-        /// Returns false if flag is not found or value is not "true".
-        /// </summary>
-        /// <param name="flagName">The feature flag name.</param>
-        /// <returns>True if the flag value is "true", false otherwise.</returns>
-        public bool IsFeatureEnabled(string flagName)
-        {
-            var value = GetFlagValue(flagName);
-            return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-        }
-
-        /// <summary>
         /// Gets all cached feature flags as a dictionary.
         /// Can be used to merge with user properties.
         /// </summary>
@@ -270,7 +258,10 @@ namespace AdbcDrivers.Databricks
 
                 var response = _httpClient.GetAsync(endpoint).ConfigureAwait(false).GetAwaiter().GetResult();
 
-                EnsureSuccessStatusCode(response, fetchType, activity);
+                activity?.SetTag("feature_flags.response.status_code", (int)response.StatusCode);
+
+                // Use the standard EnsureSuccessOrThrow extension method
+                response.EnsureSuccessOrThrow();
 
                 var content = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
                 ProcessResponse(content, activity);
@@ -286,37 +277,6 @@ namespace AdbcDrivers.Databricks
                     new("error.type", ex.GetType().Name)
                 ]);
             }
-        }
-
-        /// <summary>
-        /// Ensures the HTTP response indicates success, otherwise logs and throws an exception.
-        /// </summary>
-        /// <param name="response">The HTTP response message.</param>
-        /// <param name="fetchType">Type of fetch for logging purposes.</param>
-        /// <param name="activity">The current activity for tracing.</param>
-        private void EnsureSuccessStatusCode(HttpResponseMessage response, string fetchType, Activity? activity)
-        {
-            activity?.SetTag("feature_flags.response.status_code", (int)response.StatusCode);
-
-            if (response.IsSuccessStatusCode)
-            {
-                return;
-            }
-
-            var errorContent = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
-            var errorMessage = $"Feature flag API request failed with status code {(int)response.StatusCode} ({response.StatusCode})";
-
-            if (!string.IsNullOrWhiteSpace(errorContent))
-            {
-                errorMessage = $"{errorMessage}. Response: {errorContent}";
-            }
-
-            activity?.AddEvent("feature_flags.response.error", [
-                new("status_code", (int)response.StatusCode),
-                new("error.message", errorMessage)
-            ]);
-
-            throw new HttpRequestException(errorMessage);
         }
 
         /// <summary>

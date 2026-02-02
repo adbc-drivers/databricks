@@ -357,6 +357,12 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         public const string EnableSessionManagement = "adbc.databricks.rest.enable_session_management";
 
+        /// <summary>
+        /// Timeout in seconds for feature flag API requests.
+        /// Default value is 10 seconds if not specified.
+        /// </summary>
+        public const string FeatureFlagTimeoutSeconds = "adbc.databricks.feature_flag_timeout_seconds";
+
     }
 
     /// <summary>
