@@ -17,7 +17,6 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 
@@ -112,29 +111,10 @@ namespace AdbcDrivers.Databricks.Http
                 Timeout = TimeSpan.FromSeconds(timeoutSeconds)
             };
 
-            // Use same User-Agent format as other Databricks HTTP clients
-            string userAgent = $"DatabricksJDBCDriverOSS/{assemblyVersion} (ADBC)";
-            string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
-            if (!string.IsNullOrWhiteSpace(userAgentEntry))
-            {
-                userAgent = $"{userAgent} {userAgentEntry}";
-            }
-
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+                UserAgentHelper.GetUserAgent(assemblyVersion, properties));
 
             return httpClient;
-        }
-
-        /// <summary>
-        /// Creates an HttpClient for OAuth token operations.
-        /// Includes TLS and proxy settings with configurable timeout.
-        /// </summary>
-        /// <param name="properties">Connection properties.</param>
-        /// <param name="timeout">Timeout for OAuth operations.</param>
-        /// <returns>Configured HttpClient for OAuth.</returns>
-        public static HttpClient CreateOAuthHttpClient(IReadOnlyDictionary<string, string> properties, TimeSpan timeout)
-        {
-            return CreateBasicHttpClient(properties, timeout);
         }
     }
 }
