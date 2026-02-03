@@ -19,9 +19,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
-using System.Net.Http.Headers;
+using AdbcDrivers.Databricks.Auth;
 using Apache.Arrow.Adbc.Drivers.Apache;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 
 namespace AdbcDrivers.Databricks
@@ -250,22 +249,15 @@ namespace AdbcDrivers.Databricks
 
                 activity?.SetTag("feature_flags.host", host);
 
-                // Extract token for authentication
-                string? token = null;
-                if (localProperties.TryGetValue(SparkParameters.Token, out var tokenValue))
-                {
-                    token = tokenValue;
-                }
+                // Create HttpClient for feature flag API, supporting both token-based and OAuth M2M auth
+                using var httpClient = CreateFeatureFlagHttpClient(host, assemblyVersion, localProperties);
 
-                if (string.IsNullOrEmpty(token))
+                if (httpClient == null)
                 {
                     activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
-                        tags: new ActivityTagsCollection { { "reason", "no_token" } }));
+                        tags: new ActivityTagsCollection { { "reason", "no_auth_credentials" } }));
                     return localProperties;
                 }
-
-                // Create HttpClient for feature flag API
-                using var httpClient = CreateFeatureFlagHttpClient(host, token, assemblyVersion, localProperties);
 
                 // Get or create feature flag context (this makes the initial blocking fetch)
                 var context = GetOrCreateContext(host, httpClient, assemblyVersion);
@@ -355,59 +347,36 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Default timeout for feature flag API requests in seconds.
-        /// </summary>
-        private const int DefaultFeatureFlagTimeoutSeconds = 10;
-
-        /// <summary>
         /// Creates an HttpClient configured for the feature flag API.
+        /// Supports both token-based authentication (PAT) and OAuth M2M (client_credentials).
         /// Respects proxy settings and TLS options from connection properties.
         /// </summary>
         /// <param name="host">The Databricks host (without protocol).</param>
-        /// <param name="token">The authentication token.</param>
         /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
-        /// <param name="properties">Connection properties for proxy and TLS configuration.</param>
-        /// <returns>Configured HttpClient.</returns>
-        private static HttpClient CreateFeatureFlagHttpClient(
+        /// <param name="properties">Connection properties for proxy, TLS, and auth configuration.</param>
+        /// <returns>Configured HttpClient, or null if no valid authentication is available.</returns>
+        private static HttpClient? CreateFeatureFlagHttpClient(
             string host,
-            string token,
             string assemblyVersion,
             IReadOnlyDictionary<string, string> properties)
         {
-            // Create HttpClientHandler with TLS and proxy settings from properties
-            var tlsOptions = HiveServer2TlsImpl.GetHttpTlsOptions(properties);
-            var proxyConfigurator = HiveServer2ProxyConfigurator.FromProperties(properties);
-            var handler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
-
-            // Get timeout from properties or use default
+            // Get access token first - need to determine timeout for OAuth operations
+            const int DefaultFeatureFlagTimeoutSeconds = 10;
             var timeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(
                 properties,
                 DatabricksParameters.FeatureFlagTimeoutSeconds,
                 DefaultFeatureFlagTimeoutSeconds);
 
-            var httpClient = new HttpClient(handler)
+            // Determine the access token based on authentication type
+            string? accessToken = AuthHelper.GetAccessToken(host, properties, TimeSpan.FromSeconds(timeoutSeconds));
+
+            if (string.IsNullOrEmpty(accessToken))
             {
-                BaseAddress = new Uri($"https://{host}"),
-                Timeout = TimeSpan.FromSeconds(timeoutSeconds)
-            };
-
-            httpClient.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", token);
-
-            // Use same User-Agent format as other Databricks HTTP clients
-            // Format: DatabricksJDBCDriverOSS/{version} (ADBC)
-            string userAgent = $"DatabricksJDBCDriverOSS/{assemblyVersion} (ADBC)";
-
-            // Check if a client has provided a user-agent entry
-            string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
-            if (!string.IsNullOrWhiteSpace(userAgentEntry))
-            {
-                userAgent = $"{userAgent} {userAgentEntry}";
+                return null;
             }
 
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
-
-            return httpClient;
+            // Use centralized factory to create HttpClient with proper TLS/proxy config
+            return Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, assemblyVersion, accessToken);
         }
 
         /// <summary>
