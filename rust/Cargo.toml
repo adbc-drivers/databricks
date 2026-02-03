@@ -32,9 +32,37 @@ tracing = "0.1"
 # The adbc_core crate accepts >=53.1.0, <58
 arrow-array = "57"
 arrow-schema = "57"
+arrow-ipc = "57"
+
+# HTTP client and async runtime
+reqwest = { version = "0.12", features = ["json", "gzip", "stream"] }
+tokio = { version = "1", features = ["full", "sync"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# LZ4 decompression for CloudFetch
+lz4_flex = "0.11"
+
+# Concurrent data structures
+dashmap = "5"
+
+# Async utilities
+futures = "0.3"
+tokio-util = "0.7"
+async-trait = "0.1"
+
+# Error handling
+thiserror = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
+tracing-subscriber = "0.3"
 
 [lib]
 name = "databricks_adbc"
