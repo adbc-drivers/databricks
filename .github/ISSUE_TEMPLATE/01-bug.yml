@@ -1,0 +1,69 @@
+# Copyright (c) 2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Bug Report
+description: For when something went wrong.
+labels: ["bug"]
+type: "bug"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for filing a bug report.
+  - type: input
+    id: driver-version
+    attributes:
+      label: Driver Version
+      description: What version of the ADBC driver are you using?
+      placeholder: e.g. v1.0.0
+    validations:
+      required: false
+  - type: input
+    id: driver-type
+    attributes:
+      label: Driver Type
+      description: How did you install the ADBC driver? Or if you know, is this the C#, Go, or Rust driver?
+      placeholder: e.g. via dbc
+    validations:
+      required: false
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: stack-trace
+    attributes:
+      label: Stack Trace
+      description: Please provide a stack trace if possible.  This will be automatically formatted into code, so there is no need for backticks.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: How can we reproduce the bug?
+      description: For example, can we access the dataset? Is there code that reproduces it?
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment/Setup
+      description: |
+        Tell us about other packages, operating system, and any other details about your environment.
+    validations:
+      required: false
