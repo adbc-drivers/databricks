@@ -25,6 +25,15 @@ use driverbase::error::ErrorHelper;
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// Safety buffer (in seconds) before link expiration.
+/// Links are considered expired this many seconds before their actual expiration time
+/// to avoid race conditions during download.
+pub const LINK_EXPIRY_BUFFER_SECS: i64 = 30;
+
+/// Default timeout (in seconds) for waiting for a chunk to be ready.
+/// Used as a fallback when `chunk_ready_timeout` is not configured.
+pub const DEFAULT_CHUNK_READY_TIMEOUT_SECS: u64 = 30;
+
 /// Configuration for CloudFetch streaming.
 #[derive(Debug, Clone)]
 pub struct CloudFetchConfig {
@@ -86,9 +95,12 @@ pub struct CloudFetchLink {
 }
 
 impl CloudFetchLink {
-    /// Check if link is expired (with 30s safety buffer).
+    /// Check if link is expired (with safety buffer).
+    ///
+    /// Uses `LINK_EXPIRY_BUFFER_SECS` as a safety margin to avoid race conditions
+    /// where a link expires during download.
     pub fn is_expired(&self) -> bool {
-        Utc::now() + chrono::Duration::seconds(30) >= self.expiration
+        Utc::now() + chrono::Duration::seconds(LINK_EXPIRY_BUFFER_SECS) >= self.expiration
     }
 
     /// Convert from SEA API response type.

@@ -23,7 +23,9 @@
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
 use crate::reader::cloudfetch::link_fetcher::ChunkLinkFetcher;
-use crate::types::cloudfetch::{ChunkEntry, ChunkState, CloudFetchConfig};
+use crate::types::cloudfetch::{
+    ChunkEntry, ChunkState, CloudFetchConfig, DEFAULT_CHUNK_READY_TIMEOUT_SECS,
+};
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use dashmap::DashMap;
@@ -567,7 +569,7 @@ impl StreamingCloudFetchProvider {
             let timeout = self
                 .config
                 .chunk_ready_timeout
-                .unwrap_or(std::time::Duration::from_secs(60));
+                .unwrap_or(std::time::Duration::from_secs(DEFAULT_CHUNK_READY_TIMEOUT_SECS));
 
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
