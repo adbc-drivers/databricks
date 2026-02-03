@@ -130,7 +130,7 @@ Examples:
 
 To see documentation for previous versions of this driver, see the following:
 
-- [v0.1.0](./v0.1.0.md)
+- [v0.1.2](./v0.1.2.md)
 
 {{ footnotes|safe }}
 
