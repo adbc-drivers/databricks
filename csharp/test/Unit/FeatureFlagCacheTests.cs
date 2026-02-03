@@ -47,7 +47,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 ["flag1"] = "value1",
                 ["flag2"] = "value2"
             };
-            var context = FeatureFlagContext.CreateForTesting(flags);
+            var context = CreateTestContext(flags);
 
             // Act & Assert
             Assert.Equal("value1", context.GetFlagValue("flag1"));
@@ -58,7 +58,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_GetFlagValue_NotFound_ReturnsNull()
         {
             // Arrange
-            var context = FeatureFlagContext.CreateForTesting();
+            var context = CreateTestContext();
 
             // Act & Assert
             Assert.Null(context.GetFlagValue("nonexistent"));
@@ -68,7 +68,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_GetFlagValue_NullOrEmpty_ReturnsNull()
         {
             // Arrange
-            var context = FeatureFlagContext.CreateForTesting();
+            var context = CreateTestContext();
 
             // Act & Assert
             Assert.Null(context.GetFlagValue(null!));
@@ -84,7 +84,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             {
                 ["MyFlag"] = "value"
             };
-            var context = FeatureFlagContext.CreateForTesting(flags);
+            var context = CreateTestContext(flags);
 
             // Act & Assert
             Assert.Equal("value", context.GetFlagValue("myflag"));
@@ -102,7 +102,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 ["flag2"] = "value2",
                 ["flag3"] = "value3"
             };
-            var context = FeatureFlagContext.CreateForTesting(flags);
+            var context = CreateTestContext(flags);
 
             // Act
             var allFlags = context.GetAllFlags();
@@ -118,7 +118,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_GetAllFlags_ReturnsSnapshot()
         {
             // Arrange
-            var context = FeatureFlagContext.CreateForTesting();
+            var context = CreateTestContext();
             context.SetFlag("flag1", "value1");
 
             // Act
@@ -134,7 +134,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_GetAllFlags_Empty_ReturnsEmptyDictionary()
         {
             // Arrange
-            var context = FeatureFlagContext.CreateForTesting();
+            var context = CreateTestContext();
 
             // Act
             var allFlags = context.GetAllFlags();
@@ -151,7 +151,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_DefaultTtl_Is15Minutes()
         {
             // Arrange
-            var context = FeatureFlagContext.CreateForTesting();
+            var context = CreateTestContext();
 
             // Assert
             Assert.Equal(TimeSpan.FromMinutes(15), context.Ttl);
@@ -163,7 +163,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         {
             // Arrange
             var customTtl = TimeSpan.FromMinutes(5);
-            var context = FeatureFlagContext.CreateForTesting(null, customTtl);
+            var context = CreateTestContext(null, customTtl);
 
             // Assert
             Assert.Equal(customTtl, context.Ttl);
@@ -178,7 +178,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_Dispose_CanBeCalledMultipleTimes()
         {
             // Arrange
-            var context = FeatureFlagContext.CreateForTesting();
+            var context = CreateTestContext();
 
             // Act - should not throw
             context.Dispose();
@@ -194,7 +194,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_SetFlag_AddsOrUpdatesFlag()
         {
             // Arrange
-            var context = FeatureFlagContext.CreateForTesting();
+            var context = CreateTestContext();
 
             // Act
             context.SetFlag("flag1", "value1");
@@ -215,7 +215,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 ["flag1"] = "value1",
                 ["flag2"] = "value2"
             };
-            var context = FeatureFlagContext.CreateForTesting(flags);
+            var context = CreateTestContext(flags);
 
             // Act
             context.ClearFlags();
@@ -651,7 +651,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 ["flag1"] = "value1",
                 ["flag2"] = "value2"
             };
-            var context = FeatureFlagContext.CreateForTesting(flags);
+            var context = CreateTestContext(flags);
             var tasks = new Task[100];
 
             // Act - Concurrent reads and writes
@@ -681,6 +681,36 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         #endregion
 
         #region Helper Methods
+
+        /// <summary>
+        /// Creates a FeatureFlagContext for unit testing with pre-populated flags.
+        /// Does not make API calls or start background refresh.
+        /// </summary>
+        private static FeatureFlagContext CreateTestContext(
+            IReadOnlyDictionary<string, string>? initialFlags = null,
+            TimeSpan? ttl = null)
+        {
+            var context = new FeatureFlagContext(
+                host: "test-host",
+                httpClient: null,
+                driverVersion: DriverVersion,
+                endpointFormat: null);
+
+            if (ttl.HasValue)
+            {
+                context.Ttl = ttl.Value;
+            }
+
+            if (initialFlags != null)
+            {
+                foreach (var kvp in initialFlags)
+                {
+                    context.SetFlag(kvp.Key, kvp.Value);
+                }
+            }
+
+            return context;
+        }
 
         private static HttpClient CreateMockHttpClient(FeatureFlagsResponse response)
         {

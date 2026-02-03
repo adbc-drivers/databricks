@@ -89,7 +89,7 @@ namespace AdbcDrivers.Databricks
                     return _ttl;
                 }
             }
-            private set
+            internal set
             {
                 lock (_ttlLock)
                 {
@@ -109,9 +109,10 @@ namespace AdbcDrivers.Databricks
         public TimeSpan RefreshInterval => Ttl;
 
         /// <summary>
-        /// Private constructor - use CreateAsync factory method.
+        /// Internal constructor - use CreateAsync factory method for production code.
+        /// Made internal to allow test code to create instances without HTTP calls.
         /// </summary>
-        private FeatureFlagContext(string host, HttpClient? httpClient, string driverVersion, string? endpointFormat)
+        internal FeatureFlagContext(string host, HttpClient? httpClient, string driverVersion, string? endpointFormat)
         {
             _host = host;
             _httpClient = httpClient;
@@ -161,37 +162,6 @@ namespace AdbcDrivers.Databricks
 
             // Start background refresh task
             context.StartBackgroundRefresh();
-
-            return context;
-        }
-
-        /// <summary>
-        /// Creates a new context for unit testing with pre-populated flags.
-        /// Does not make API calls or start background refresh.
-        /// This factory method is intended for use in unit tests only.
-        /// </summary>
-        /// <param name="initialFlags">Initial flags to populate.</param>
-        /// <param name="ttl">Optional TTL.</param>
-        /// <returns>A FeatureFlagContext instance configured for testing.</returns>
-        internal static FeatureFlagContext CreateForTesting(
-            IReadOnlyDictionary<string, string>? initialFlags = null,
-            TimeSpan? ttl = null)
-        {
-            var context = new FeatureFlagContext(
-                host: "test-host",
-                httpClient: null,
-                driverVersion: s_assemblyVersion,
-                endpointFormat: DefaultFeatureFlagEndpointFormat);
-
-            context._ttl = ttl ?? DefaultTtl;
-
-            if (initialFlags != null)
-            {
-                foreach (var kvp in initialFlags)
-                {
-                    context._flags[kvp.Key] = kvp.Value;
-                }
-            }
 
             return context;
         }
