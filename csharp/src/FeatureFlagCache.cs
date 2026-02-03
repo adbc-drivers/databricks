@@ -52,6 +52,11 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks.FeatureFlagCache");
 
+        /// <summary>
+        /// Default cache TTL (15 minutes) for sliding expiration.
+        /// </summary>
+        public static readonly TimeSpan DefaultCacheTtl = TimeSpan.FromMinutes(15);
+
         private readonly IMemoryCache _cache;
         private readonly SemaphoreSlim _createLock = new SemaphoreSlim(1, 1);
         private bool _disposed;
@@ -90,6 +95,7 @@ namespace AdbcDrivers.Databricks
         /// </param>
         /// <param name="driverVersion">The driver version for the API endpoint.</param>
         /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
+        /// <param name="cacheTtl">Optional cache TTL for sliding expiration. If null, uses DefaultCacheTtl.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>The feature flag context for the host.</returns>
         /// <exception cref="ArgumentException">Thrown when host is null or whitespace.</exception>
@@ -99,6 +105,7 @@ namespace AdbcDrivers.Databricks
             HttpClient httpClient,
             string driverVersion,
             string? endpointFormat = null,
+            TimeSpan? cacheTtl = null,
             CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(host))
@@ -112,6 +119,7 @@ namespace AdbcDrivers.Databricks
             }
 
             var cacheKey = GetCacheKey(host);
+            var effectiveCacheTtl = cacheTtl ?? DefaultCacheTtl;
 
             // Try to get existing context (fast path)
             if (_cache.TryGetValue(cacheKey, out FeatureFlagContext? context) && context != null)
@@ -140,9 +148,10 @@ namespace AdbcDrivers.Databricks
                     endpointFormat,
                     cancellationToken).ConfigureAwait(false);
 
-                // Set cache options with TTL from context
+                // Set cache options with sliding expiration
+                // Using sliding expiration so that reads extend the expiration window
                 var cacheOptions = new MemoryCacheEntryOptions()
-                    .SetAbsoluteExpiration(context.Ttl)
+                    .SetSlidingExpiration(effectiveCacheTtl)
                     .RegisterPostEvictionCallback(OnCacheEntryEvicted);
 
                 _cache.Set(cacheKey, context, cacheOptions);
@@ -151,7 +160,7 @@ namespace AdbcDrivers.Databricks
                     tags: new ActivityTagsCollection
                     {
                         { "host", host },
-                        { "ttl_seconds", context.Ttl.TotalSeconds }
+                        { "cache_ttl_seconds", effectiveCacheTtl.TotalSeconds }
                     }));
 
                 return context;
@@ -170,9 +179,10 @@ namespace AdbcDrivers.Databricks
             string host,
             HttpClient httpClient,
             string driverVersion,
-            string? endpointFormat = null)
+            string? endpointFormat = null,
+            TimeSpan? cacheTtl = null)
         {
-            return GetOrCreateContextAsync(host, httpClient, driverVersion, endpointFormat)
+            return GetOrCreateContextAsync(host, httpClient, driverVersion, endpointFormat, cacheTtl)
                 .ConfigureAwait(false)
                 .GetAwaiter()
                 .GetResult();
@@ -338,8 +348,17 @@ namespace AdbcDrivers.Databricks
                     return localProperties;
                 }
 
+                // Extract cache TTL from properties (if configured)
+                TimeSpan? cacheTtl = null;
+                if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheTtlSeconds, out string? cacheTtlSecondsStr) &&
+                    int.TryParse(cacheTtlSecondsStr, out int cacheTtlSeconds) &&
+                    cacheTtlSeconds > 0)
+                {
+                    cacheTtl = TimeSpan.FromSeconds(cacheTtlSeconds);
+                }
+
                 // Get or create feature flag context asynchronously (waits for initial fetch)
-                var context = await GetOrCreateContextAsync(host, httpClient, assemblyVersion, cancellationToken: cancellationToken).ConfigureAwait(false);
+                var context = await GetOrCreateContextAsync(host, httpClient, assemblyVersion, cacheTtl: cacheTtl, cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 // Get all flags from cache (remote properties)
                 var remoteProperties = context.GetAllFlags();

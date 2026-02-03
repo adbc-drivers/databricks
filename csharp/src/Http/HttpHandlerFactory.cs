@@ -182,8 +182,7 @@ namespace AdbcDrivers.Databricks.Http
         /// <param name="host">The Databricks host.</param>
         /// <param name="authHttpClient">HTTP client for auth operations (required for OAuth).</param>
         /// <param name="identityFederationClientId">Identity federation client ID (optional).</param>
-        /// <param name="enableTokenRefresh">Whether to enable JWT token refresh for access_token grant type.</param>
-        /// <param name="authHttpClientOut">Output: the auth HTTP client if created.</param>
+        /// <param name="authHttpClientOut">Output: the auth HTTP client (pass-through from input, used by CreateHandlers to return in HandlerResult).</param>
         /// <returns>Handler with auth handlers added, or null if required auth is not available.</returns>
         private static HttpMessageHandler? AddAuthHandlers(
             HttpMessageHandler handler,
@@ -191,7 +190,6 @@ namespace AdbcDrivers.Databricks.Http
             string host,
             HttpClient? authHttpClient,
             string? identityFederationClientId,
-            bool enableTokenRefresh,
             out HttpClient? authHttpClientOut)
         {
             authHttpClientOut = authHttpClient;
@@ -231,8 +229,8 @@ namespace AdbcDrivers.Databricks.Http
                         return null; // No access token
                     }
 
-                    if (enableTokenRefresh &&
-                        properties.TryGetValue(DatabricksParameters.TokenRenewLimit, out string? tokenRenewLimitStr) &&
+                    // Enable token refresh if configured and token is JWT with expiry
+                    if (properties.TryGetValue(DatabricksParameters.TokenRenewLimit, out string? tokenRenewLimitStr) &&
                         int.TryParse(tokenRenewLimitStr, out int tokenRenewLimit) &&
                         tokenRenewLimit > 0 &&
                         JwtTokenDecoder.TryGetExpirationTime(accessToken, out DateTime expiryTime))
@@ -337,7 +335,6 @@ namespace AdbcDrivers.Databricks.Http
                 config.Host,
                 authHttpClient,
                 config.IdentityFederationClientId,
-                enableTokenRefresh: true,
                 out authHttpClient);
 
             return new HandlerResult
@@ -388,14 +385,13 @@ namespace AdbcDrivers.Databricks.Http
             // Get identity federation client ID
             properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId);
 
-            // Add auth handlers (no token refresh for feature flags)
+            // Add auth handlers
             return AddAuthHandlers(
                 baseHandler,
                 properties,
                 host,
                 authHttpClient,
                 identityFederationClientId,
-                enableTokenRefresh: false,
                 out _);
         }
     }

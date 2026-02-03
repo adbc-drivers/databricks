@@ -363,6 +363,13 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         public const string FeatureFlagTimeoutSeconds = "adbc.databricks.feature_flag_timeout_seconds";
 
+        /// <summary>
+        /// Sliding expiration TTL in seconds for feature flag cache entries.
+        /// When a cache entry is read, its expiration is extended by this duration.
+        /// Default value is 900 seconds (15 minutes) if not specified.
+        /// </summary>
+        public const string FeatureFlagCacheTtlSeconds = "adbc.databricks.feature_flag_cache_ttl_seconds";
+
     }
 
     /// <summary>
