@@ -80,18 +80,17 @@ namespace AdbcDrivers.Databricks.Http
 
         /// <summary>
         /// Creates an HttpClient for feature flag API calls.
-        /// Includes TLS, proxy settings, and configurable timeout.
+        /// Includes TLS, proxy settings, and full authentication handler chain.
+        /// Supports PAT, OAuth M2M, OAuth U2M, and Workload Identity Federation.
         /// </summary>
         /// <param name="properties">Connection properties.</param>
         /// <param name="host">The Databricks host (without protocol).</param>
         /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
-        /// <param name="accessToken">The access token for authentication.</param>
-        /// <returns>Configured HttpClient for feature flags.</returns>
-        public static HttpClient CreateFeatureFlagHttpClient(
+        /// <returns>Configured HttpClient for feature flags, or null if no valid authentication is available.</returns>
+        public static HttpClient? CreateFeatureFlagHttpClient(
             IReadOnlyDictionary<string, string> properties,
             string host,
-            string assemblyVersion,
-            string accessToken)
+            string assemblyVersion)
         {
             const int DefaultFeatureFlagTimeoutSeconds = 10;
 
@@ -100,11 +99,18 @@ namespace AdbcDrivers.Databricks.Http
                 DatabricksParameters.FeatureFlagTimeoutSeconds,
                 DefaultFeatureFlagTimeoutSeconds);
 
-            var httpClient = CreateBasicHttpClient(properties, TimeSpan.FromSeconds(timeoutSeconds));
-            httpClient.BaseAddress = new Uri($"https://{host}");
+            // Create handler with full auth chain (including WIF support)
+            var handler = HttpHandlerFactory.CreateFeatureFlagHandler(properties, host, timeoutSeconds);
+            if (handler == null)
+            {
+                return null;
+            }
 
-            httpClient.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", accessToken);
+            var httpClient = new HttpClient(handler)
+            {
+                BaseAddress = new Uri($"https://{host}"),
+                Timeout = TimeSpan.FromSeconds(timeoutSeconds)
+            };
 
             // Use same User-Agent format as other Databricks HTTP clients
             string userAgent = $"DatabricksJDBCDriverOSS/{assemblyVersion} (ADBC)";

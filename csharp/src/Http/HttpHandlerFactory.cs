@@ -127,6 +127,151 @@ namespace AdbcDrivers.Databricks.Http
         }
 
         /// <summary>
+        /// Checks if OAuth authentication is configured in properties.
+        /// </summary>
+        private static bool IsOAuthEnabled(IReadOnlyDictionary<string, string> properties)
+        {
+            return properties.TryGetValue(SparkParameters.AuthType, out string? authType) &&
+                SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue) &&
+                authTypeValue == SparkAuthType.OAuth;
+        }
+
+        /// <summary>
+        /// Gets the OAuth grant type from properties.
+        /// </summary>
+        private static DatabricksOAuthGrantType GetOAuthGrantType(IReadOnlyDictionary<string, string> properties)
+        {
+            properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantTypeStr);
+            DatabricksOAuthGrantTypeParser.TryParse(grantTypeStr, out DatabricksOAuthGrantType grantType);
+            return grantType;
+        }
+
+        /// <summary>
+        /// Creates an OAuthClientCredentialsProvider for M2M authentication.
+        /// Returns null if client ID or secret is missing.
+        /// </summary>
+        private static OAuthClientCredentialsProvider? CreateOAuthClientCredentialsProvider(
+            IReadOnlyDictionary<string, string> properties,
+            HttpClient authHttpClient,
+            string host)
+        {
+            properties.TryGetValue(DatabricksParameters.OAuthClientId, out string? clientId);
+            properties.TryGetValue(DatabricksParameters.OAuthClientSecret, out string? clientSecret);
+            properties.TryGetValue(DatabricksParameters.OAuthScope, out string? scope);
+
+            if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(clientSecret))
+            {
+                return null;
+            }
+
+            return new OAuthClientCredentialsProvider(
+                authHttpClient,
+                clientId,
+                clientSecret,
+                host,
+                scope: scope ?? "sql",
+                timeoutMinutes: 1);
+        }
+
+        /// <summary>
+        /// Adds authentication handlers to the handler chain.
+        /// Returns the new handler chain with auth handlers added, or null if auth is required but not available.
+        /// </summary>
+        /// <param name="handler">The current handler chain.</param>
+        /// <param name="properties">Connection properties.</param>
+        /// <param name="host">The Databricks host.</param>
+        /// <param name="authHttpClient">HTTP client for auth operations (required for OAuth).</param>
+        /// <param name="identityFederationClientId">Identity federation client ID (optional).</param>
+        /// <param name="enableTokenRefresh">Whether to enable JWT token refresh for access_token grant type.</param>
+        /// <param name="authHttpClientOut">Output: the auth HTTP client if created.</param>
+        /// <returns>Handler with auth handlers added, or null if required auth is not available.</returns>
+        private static HttpMessageHandler? AddAuthHandlers(
+            HttpMessageHandler handler,
+            IReadOnlyDictionary<string, string> properties,
+            string host,
+            HttpClient? authHttpClient,
+            string? identityFederationClientId,
+            bool enableTokenRefresh,
+            out HttpClient? authHttpClientOut)
+        {
+            authHttpClientOut = authHttpClient;
+
+            if (IsOAuthEnabled(properties))
+            {
+                if (authHttpClient == null)
+                {
+                    return null; // OAuth requires auth HTTP client
+                }
+
+                ITokenExchangeClient tokenExchangeClient = new TokenExchangeClient(authHttpClient, host);
+
+                // Mandatory token exchange should be the inner handler so that it happens
+                // AFTER the OAuth handlers (e.g. after M2M sets the access token)
+                handler = new MandatoryTokenExchangeDelegatingHandler(
+                    handler,
+                    tokenExchangeClient,
+                    identityFederationClientId);
+
+                var grantType = GetOAuthGrantType(properties);
+
+                if (grantType == DatabricksOAuthGrantType.ClientCredentials)
+                {
+                    var tokenProvider = CreateOAuthClientCredentialsProvider(properties, authHttpClient, host);
+                    if (tokenProvider == null)
+                    {
+                        return null; // Missing client credentials
+                    }
+                    handler = new OAuthDelegatingHandler(handler, tokenProvider);
+                }
+                else if (grantType == DatabricksOAuthGrantType.AccessToken)
+                {
+                    string? accessToken = AuthHelper.GetTokenFromProperties(properties);
+                    if (string.IsNullOrEmpty(accessToken))
+                    {
+                        return null; // No access token
+                    }
+
+                    if (enableTokenRefresh &&
+                        properties.TryGetValue(DatabricksParameters.TokenRenewLimit, out string? tokenRenewLimitStr) &&
+                        int.TryParse(tokenRenewLimitStr, out int tokenRenewLimit) &&
+                        tokenRenewLimit > 0 &&
+                        JwtTokenDecoder.TryGetExpirationTime(accessToken, out DateTime expiryTime))
+                    {
+                        handler = new TokenRefreshDelegatingHandler(
+                            handler,
+                            tokenExchangeClient,
+                            accessToken,
+                            expiryTime,
+                            tokenRenewLimit);
+                    }
+                    else
+                    {
+                        handler = new StaticBearerTokenHandler(handler, accessToken);
+                    }
+                }
+                else
+                {
+                    return null; // Unknown grant type
+                }
+            }
+            else
+            {
+                // Non-OAuth authentication: use static Bearer token if provided
+                string? accessToken = AuthHelper.GetTokenFromProperties(properties);
+                if (!string.IsNullOrEmpty(accessToken))
+                {
+                    handler = new StaticBearerTokenHandler(handler, accessToken);
+                }
+                else
+                {
+                    return null; // No auth available
+                }
+            }
+
+            return handler;
+        }
+
+        /// <summary>
         /// Creates HTTP handlers with OAuth and other delegating handlers.
         ///
         /// Handler chain order (outermost to innermost):
@@ -175,98 +320,83 @@ namespace AdbcDrivers.Databricks.Http
                 authHandler = new ThriftErrorMessageHandler(authHandler);
             }
 
+            // Create auth HTTP client for OAuth if needed
             HttpClient? authHttpClient = null;
-
-            // Check if OAuth authentication is configured
-            bool useOAuth = config.Properties.TryGetValue(SparkParameters.AuthType, out string? authType) &&
-                SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue) &&
-                authTypeValue == SparkAuthType.OAuth;
-
-            if (useOAuth)
+            if (IsOAuthEnabled(config.Properties))
             {
-                // Create auth HTTP client for token operations
                 authHttpClient = new HttpClient(authHandler)
                 {
                     Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes)
                 };
-
-                ITokenExchangeClient tokenExchangeClient = new TokenExchangeClient(authHttpClient, config.Host);
-
-                // Mandatory token exchange should be the inner handler so that it happens
-                // AFTER the OAuth handlers (e.g. after M2M sets the access token)
-                handler = new MandatoryTokenExchangeDelegatingHandler(
-                    handler,
-                    tokenExchangeClient,
-                    config.IdentityFederationClientId);
-
-                // Determine grant type (defaults to AccessToken if not specified)
-                config.Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantTypeStr);
-                DatabricksOAuthGrantTypeParser.TryParse(grantTypeStr, out DatabricksOAuthGrantType grantType);
-
-                // Add OAuth client credentials handler if OAuth M2M authentication is being used
-                if (grantType == DatabricksOAuthGrantType.ClientCredentials)
-                {
-                    config.Properties.TryGetValue(DatabricksParameters.OAuthClientId, out string? clientId);
-                    config.Properties.TryGetValue(DatabricksParameters.OAuthClientSecret, out string? clientSecret);
-                    config.Properties.TryGetValue(DatabricksParameters.OAuthScope, out string? scope);
-
-                    var tokenProvider = new OAuthClientCredentialsProvider(
-                        authHttpClient,
-                        clientId!,
-                        clientSecret!,
-                        config.Host,
-                        scope: scope ?? "sql",
-                        timeoutMinutes: 1
-                    );
-
-                    handler = new OAuthDelegatingHandler(handler, tokenProvider);
-                }
-                // For access_token grant type, get the access token from properties
-                else if (grantType == DatabricksOAuthGrantType.AccessToken)
-                {
-                    // Get the access token from properties
-                    string? accessToken = AuthHelper.GetTokenFromProperties(config.Properties);
-
-                    if (!string.IsNullOrEmpty(accessToken))
-                    {
-                        // Check if token renewal is configured and token is JWT
-                        if (config.Properties.TryGetValue(DatabricksParameters.TokenRenewLimit, out string? tokenRenewLimitStr) &&
-                            int.TryParse(tokenRenewLimitStr, out int tokenRenewLimit) &&
-                            tokenRenewLimit > 0 &&
-                            JwtTokenDecoder.TryGetExpirationTime(accessToken, out DateTime expiryTime))
-                        {
-                            // Use TokenRefreshDelegatingHandler for JWT tokens with renewal configured
-                            handler = new TokenRefreshDelegatingHandler(
-                                handler,
-                                tokenExchangeClient,
-                                accessToken,
-                                expiryTime,
-                                tokenRenewLimit);
-                        }
-                        else
-                        {
-                            // Use StaticBearerTokenHandler for tokens without renewal
-                            handler = new StaticBearerTokenHandler(handler, accessToken);
-                        }
-                    }
-                }
             }
-            else
-            {
-                // Non-OAuth authentication: use static Bearer token if provided
-                string? accessToken = AuthHelper.GetTokenFromProperties(config.Properties);
 
-                if (!string.IsNullOrEmpty(accessToken))
-                {
-                    handler = new StaticBearerTokenHandler(handler, accessToken);
-                }
-            }
+            // Add auth handlers
+            var resultHandler = AddAuthHandlers(
+                handler,
+                config.Properties,
+                config.Host,
+                authHttpClient,
+                config.IdentityFederationClientId,
+                enableTokenRefresh: true,
+                out authHttpClient);
 
             return new HandlerResult
             {
-                Handler = handler,
+                Handler = resultHandler ?? handler, // Fall back to handler without auth if auth not configured
                 AuthHttpClient = authHttpClient
             };
+        }
+
+        /// <summary>
+        /// Creates an HTTP handler chain specifically for feature flag API calls.
+        /// This is a simplified version of CreateHandlers that includes auth but not
+        /// tracing, retry, or Thrift error handlers.
+        ///
+        /// Handler chain order (outermost to innermost):
+        /// 1. OAuth handlers (OAuthDelegatingHandler or StaticBearerTokenHandler) - token management
+        /// 2. MandatoryTokenExchangeDelegatingHandler (if OAuth) - workload identity federation
+        /// 3. Base HTTP handler - actual network communication
+        ///
+        /// This properly supports all authentication methods including:
+        /// - PAT (Personal Access Token)
+        /// - OAuth M2M (client_credentials)
+        /// - OAuth U2M (access_token)
+        /// - Workload Identity Federation (via MandatoryTokenExchangeDelegatingHandler)
+        /// </summary>
+        /// <param name="properties">Connection properties containing configuration.</param>
+        /// <param name="host">The Databricks host (without protocol).</param>
+        /// <param name="timeoutSeconds">HTTP client timeout in seconds.</param>
+        /// <returns>Configured HttpMessageHandler, or null if no valid authentication is available.</returns>
+        public static HttpMessageHandler? CreateFeatureFlagHandler(
+            IReadOnlyDictionary<string, string> properties,
+            string host,
+            int timeoutSeconds)
+        {
+            HttpMessageHandler baseHandler = HttpClientFactory.CreateHandler(properties);
+
+            // Create auth HTTP client for OAuth if needed
+            HttpClient? authHttpClient = null;
+            if (IsOAuthEnabled(properties))
+            {
+                HttpMessageHandler baseAuthHandler = HttpClientFactory.CreateHandler(properties);
+                authHttpClient = new HttpClient(baseAuthHandler)
+                {
+                    Timeout = TimeSpan.FromSeconds(timeoutSeconds)
+                };
+            }
+
+            // Get identity federation client ID
+            properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId);
+
+            // Add auth handlers (no token refresh for feature flags)
+            return AddAuthHandlers(
+                baseHandler,
+                properties,
+                host,
+                authHttpClient,
+                identityFederationClientId,
+                enableTokenRefresh: false,
+                out _);
         }
     }
 }

@@ -47,7 +47,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 ["flag1"] = "value1",
                 ["flag2"] = "value2"
             };
-            var context = new FeatureFlagContext(flags);
+            var context = FeatureFlagContext.CreateForTesting(flags);
 
             // Act & Assert
             Assert.Equal("value1", context.GetFlagValue("flag1"));
@@ -58,7 +58,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_GetFlagValue_NotFound_ReturnsNull()
         {
             // Arrange
-            var context = new FeatureFlagContext();
+            var context = FeatureFlagContext.CreateForTesting();
 
             // Act & Assert
             Assert.Null(context.GetFlagValue("nonexistent"));
@@ -68,7 +68,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_GetFlagValue_NullOrEmpty_ReturnsNull()
         {
             // Arrange
-            var context = new FeatureFlagContext();
+            var context = FeatureFlagContext.CreateForTesting();
 
             // Act & Assert
             Assert.Null(context.GetFlagValue(null!));
@@ -84,7 +84,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             {
                 ["MyFlag"] = "value"
             };
-            var context = new FeatureFlagContext(flags);
+            var context = FeatureFlagContext.CreateForTesting(flags);
 
             // Act & Assert
             Assert.Equal("value", context.GetFlagValue("myflag"));
@@ -102,7 +102,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 ["flag2"] = "value2",
                 ["flag3"] = "value3"
             };
-            var context = new FeatureFlagContext(flags);
+            var context = FeatureFlagContext.CreateForTesting(flags);
 
             // Act
             var allFlags = context.GetAllFlags();
@@ -118,7 +118,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_GetAllFlags_ReturnsSnapshot()
         {
             // Arrange
-            var context = new FeatureFlagContext();
+            var context = FeatureFlagContext.CreateForTesting();
             context.SetFlag("flag1", "value1");
 
             // Act
@@ -134,7 +134,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_GetAllFlags_Empty_ReturnsEmptyDictionary()
         {
             // Arrange
-            var context = new FeatureFlagContext();
+            var context = FeatureFlagContext.CreateForTesting();
 
             // Act
             var allFlags = context.GetAllFlags();
@@ -145,93 +145,40 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
         #endregion
 
-        #region FeatureFlagContext Tests - Reference Counting
+        #region FeatureFlagContext Tests - TTL
 
         [Fact]
-        public void FeatureFlagContext_RefCount_StartsAtZero()
+        public void FeatureFlagContext_DefaultTtl_Is15Minutes()
         {
-            // Arrange & Act
-            var context = new FeatureFlagContext();
+            // Arrange
+            var context = FeatureFlagContext.CreateForTesting();
 
             // Assert
-            Assert.Equal(0, context.RefCount);
+            Assert.Equal(TimeSpan.FromMinutes(15), context.Ttl);
+            Assert.Equal(TimeSpan.FromMinutes(15), context.RefreshInterval); // Alias
         }
 
         [Fact]
-        public void FeatureFlagContext_IncrementRefCount_IncrementsCorrectly()
+        public void FeatureFlagContext_CustomTtl()
         {
             // Arrange
-            var context = new FeatureFlagContext();
+            var customTtl = TimeSpan.FromMinutes(5);
+            var context = FeatureFlagContext.CreateForTesting(null, customTtl);
 
-            // Act & Assert
-            Assert.Equal(1, context.IncrementRefCount());
-            Assert.Equal(1, context.RefCount);
-            Assert.Equal(2, context.IncrementRefCount());
-            Assert.Equal(2, context.RefCount);
-        }
-
-        [Fact]
-        public void FeatureFlagContext_DecrementRefCount_DecrementsCorrectly()
-        {
-            // Arrange
-            var context = new FeatureFlagContext();
-            context.IncrementRefCount();
-            context.IncrementRefCount();
-
-            // Act & Assert
-            Assert.Equal(2, context.RefCount);
-            Assert.Equal(1, context.DecrementRefCount());
-            Assert.Equal(1, context.RefCount);
-            Assert.Equal(0, context.DecrementRefCount());
-            Assert.Equal(0, context.RefCount);
+            // Assert
+            Assert.Equal(customTtl, context.Ttl);
+            Assert.Equal(customTtl, context.RefreshInterval);
         }
 
         #endregion
 
-        #region FeatureFlagContext Tests - Refresh Interval
-
-        [Fact]
-        public void FeatureFlagContext_DefaultRefreshInterval_Is15Minutes()
-        {
-            // Arrange
-            var context = new FeatureFlagContext();
-
-            // Assert
-            Assert.Equal(TimeSpan.FromMinutes(15), context.RefreshInterval);
-        }
-
-        [Fact]
-        public void FeatureFlagContext_CustomRefreshInterval()
-        {
-            // Arrange
-            var customInterval = TimeSpan.FromMinutes(5);
-            var context = new FeatureFlagContext(null, customInterval);
-
-            // Assert
-            Assert.Equal(customInterval, context.RefreshInterval);
-        }
-
-        #endregion
-
-        #region FeatureFlagContext Tests - Shutdown and Dispose
-
-        [Fact]
-        public void FeatureFlagContext_Shutdown_CanBeCalledMultipleTimes()
-        {
-            // Arrange
-            var context = new FeatureFlagContext();
-
-            // Act - should not throw
-            context.Shutdown();
-            context.Shutdown();
-            context.Shutdown();
-        }
+        #region FeatureFlagContext Tests - Dispose
 
         [Fact]
         public void FeatureFlagContext_Dispose_CanBeCalledMultipleTimes()
         {
             // Arrange
-            var context = new FeatureFlagContext();
+            var context = FeatureFlagContext.CreateForTesting();
 
             // Act - should not throw
             context.Dispose();
@@ -247,7 +194,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FeatureFlagContext_SetFlag_AddsOrUpdatesFlag()
         {
             // Arrange
-            var context = new FeatureFlagContext();
+            var context = FeatureFlagContext.CreateForTesting();
 
             // Act
             context.SetFlag("flag1", "value1");
@@ -268,7 +215,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 ["flag1"] = "value1",
                 ["flag2"] = "value2"
             };
-            var context = new FeatureFlagContext(flags);
+            var context = FeatureFlagContext.CreateForTesting(flags);
 
             // Act
             context.ClearFlags();
@@ -308,7 +255,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             // Assert
             Assert.NotNull(context);
-            Assert.Equal(1, context.RefCount);
             Assert.True(cache.HasContext("test-host-1.databricks.com"));
 
             // Cleanup
@@ -316,7 +262,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public void FeatureFlagCache_GetOrCreateContext_ExistingHost_IncrementsRefCount()
+        public void FeatureFlagCache_GetOrCreateContext_ExistingHost_ReturnsSameContext()
         {
             // Arrange
             var cache = new FeatureFlagCache();
@@ -329,7 +275,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             // Assert
             Assert.Same(context1, context2);
-            Assert.Equal(2, context1.RefCount);
 
             // Cleanup
             cache.Clear();
@@ -348,8 +293,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             // Assert
             Assert.NotSame(context1, context2);
-            Assert.Equal(1, context1.RefCount);
-            Assert.Equal(1, context2.RefCount);
             Assert.Equal(2, cache.CachedHostCount);
 
             // Cleanup
@@ -402,7 +345,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             // Assert
             Assert.Same(context1, context2);
-            Assert.Equal(2, context1.RefCount);
             Assert.Equal(1, cache.CachedHostCount);
 
             // Cleanup
@@ -411,20 +353,19 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
         #endregion
 
-        #region FeatureFlagCache_ReleaseContext Tests
+        #region FeatureFlagCache_RemoveContext Tests
 
         [Fact]
-        public void FeatureFlagCache_ReleaseContext_LastReference_RemovesContext()
+        public void FeatureFlagCache_RemoveContext_RemovesContext()
         {
             // Arrange
             var cache = new FeatureFlagCache();
             var host = "test-host-3.databricks.com";
             var httpClient = CreateMockHttpClient(new FeatureFlagsResponse());
-            var context = cache.GetOrCreateContext(host, httpClient, DriverVersion);
-            Assert.Equal(1, context.RefCount);
+            cache.GetOrCreateContext(host, httpClient, DriverVersion);
 
             // Act
-            cache.ReleaseContext(host);
+            cache.RemoveContext(host);
 
             // Assert
             Assert.False(cache.HasContext(host));
@@ -432,76 +373,26 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public void FeatureFlagCache_ReleaseContext_MultipleReferences_DecrementsOnly()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var host = "test-host-4.databricks.com";
-            var httpClient = CreateMockHttpClient(new FeatureFlagsResponse());
-            var context = cache.GetOrCreateContext(host, httpClient, DriverVersion);
-            cache.GetOrCreateContext(host, httpClient, DriverVersion); // Second reference
-            Assert.Equal(2, context.RefCount);
-
-            // Act
-            cache.ReleaseContext(host);
-
-            // Assert
-            Assert.True(cache.HasContext(host));
-            Assert.Equal(1, context.RefCount);
-
-            // Cleanup
-            cache.Clear();
-        }
-
-        [Fact]
-        public void FeatureFlagCache_ReleaseContext_UnknownHost_DoesNothing()
+        public void FeatureFlagCache_RemoveContext_UnknownHost_DoesNothing()
         {
             // Arrange
             var cache = new FeatureFlagCache();
 
             // Act - should not throw
-            cache.ReleaseContext("unknown-host.databricks.com");
+            cache.RemoveContext("unknown-host.databricks.com");
 
             // Assert
             Assert.Equal(0, cache.CachedHostCount);
         }
 
         [Fact]
-        public void FeatureFlagCache_ReleaseContext_NullHost_DoesNothing()
+        public void FeatureFlagCache_RemoveContext_NullHost_DoesNothing()
         {
             // Arrange
             var cache = new FeatureFlagCache();
 
             // Act - should not throw
-            cache.ReleaseContext(null!);
-        }
-
-        [Fact]
-        public void FeatureFlagCache_ReleaseContext_AllReleased_RemovesContext()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var host = "test-host-5.databricks.com";
-            var httpClient = CreateMockHttpClient(new FeatureFlagsResponse());
-
-            // Create 3 references
-            cache.GetOrCreateContext(host, httpClient, DriverVersion);
-            cache.GetOrCreateContext(host, httpClient, DriverVersion);
-            cache.GetOrCreateContext(host, httpClient, DriverVersion);
-            Assert.Equal(1, cache.CachedHostCount);
-
-            // Act - Release all
-            cache.ReleaseContext(host);
-            Assert.True(cache.HasContext(host)); // Still has 2 references
-
-            cache.ReleaseContext(host);
-            Assert.True(cache.HasContext(host)); // Still has 1 reference
-
-            cache.ReleaseContext(host);
-
-            // Assert
-            Assert.False(cache.HasContext(host));
-            Assert.Equal(0, cache.CachedHostCount);
+            cache.RemoveContext(null!);
         }
 
         #endregion
@@ -551,7 +442,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var context = cache.GetOrCreateContext("test-ttl.databricks.com", httpClient, DriverVersion);
 
             // Assert
-            Assert.Equal(TimeSpan.FromSeconds(300), context.RefreshInterval);
+            Assert.Equal(TimeSpan.FromSeconds(300), context.Ttl);
 
             // Cleanup
             cache.Clear();
@@ -633,6 +524,97 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
         #endregion
 
+        #region Async Initial Fetch Tests
+
+        [Fact]
+        public async Task FeatureFlagCache_GetOrCreateContextAsync_AwaitsInitialFetch_FlagsAvailableImmediately()
+        {
+            // Arrange
+            var cache = new FeatureFlagCache();
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>
+                {
+                    new FeatureFlagEntry { Name = "async_flag1", Value = "async_value1" },
+                    new FeatureFlagEntry { Name = "async_flag2", Value = "async_value2" }
+                },
+                TtlSeconds = 300
+            };
+            var httpClient = CreateMockHttpClient(response);
+
+            // Act - Use async method explicitly
+            var context = await cache.GetOrCreateContextAsync("test-async.databricks.com", httpClient, DriverVersion);
+
+            // Assert - Flags should be immediately available after await completes
+            // This verifies that GetOrCreateContextAsync waits for the initial fetch
+            Assert.Equal("async_value1", context.GetFlagValue("async_flag1"));
+            Assert.Equal("async_value2", context.GetFlagValue("async_flag2"));
+            Assert.Equal(2, context.GetAllFlags().Count);
+
+            // Cleanup
+            cache.Clear();
+        }
+
+        [Fact]
+        public async Task FeatureFlagCache_GetOrCreateContextAsync_WithDelayedResponse_StillAwaitsInitialFetch()
+        {
+            // Arrange - Create a mock that simulates network delay
+            var cache = new FeatureFlagCache();
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>
+                {
+                    new FeatureFlagEntry { Name = "delayed_flag", Value = "delayed_value" }
+                },
+                TtlSeconds = 300
+            };
+            var httpClient = CreateDelayedMockHttpClient(response, delayMs: 100);
+
+            // Act - Measure time to verify we actually waited
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var context = await cache.GetOrCreateContextAsync("test-delayed.databricks.com", httpClient, DriverVersion);
+            stopwatch.Stop();
+
+            // Assert - Should have waited for the delayed response
+            Assert.True(stopwatch.ElapsedMilliseconds >= 50, "Should have waited for the delayed fetch");
+
+            // Flags should be available immediately after await
+            Assert.Equal("delayed_value", context.GetFlagValue("delayed_flag"));
+
+            // Cleanup
+            cache.Clear();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_AwaitsInitialFetch_FlagsPopulated()
+        {
+            // Arrange
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>
+                {
+                    new FeatureFlagEntry { Name = "create_async_flag", Value = "create_async_value" }
+                },
+                TtlSeconds = 600
+            };
+            var httpClient = CreateMockHttpClient(response);
+
+            // Act - Call CreateAsync directly
+            var context = await FeatureFlagContext.CreateAsync(
+                "test-create-async.databricks.com",
+                httpClient,
+                DriverVersion);
+
+            // Assert - Flags should be populated after CreateAsync completes
+            Assert.Equal("create_async_value", context.GetFlagValue("create_async_flag"));
+            Assert.Equal(TimeSpan.FromSeconds(600), context.Ttl);
+
+            // Cleanup
+            context.Dispose();
+        }
+
+        #endregion
+
         #region Thread Safety Tests
 
         [Fact]
@@ -655,38 +637,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             // Assert - All should be the same context
             var firstContext = contexts[0];
             Assert.All(contexts, ctx => Assert.Same(firstContext, ctx));
-            Assert.Equal(100, firstContext.RefCount);
 
             // Cleanup
             cache.Clear();
-        }
-
-        [Fact]
-        public async Task FeatureFlagCache_ConcurrentReleaseContext_ThreadSafe()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var host = "concurrent-release-host.databricks.com";
-            var httpClient = CreateMockHttpClient(new FeatureFlagsResponse());
-
-            // Create 100 references
-            for (int i = 0; i < 100; i++)
-            {
-                cache.GetOrCreateContext(host, httpClient, DriverVersion);
-            }
-
-            var tasks = new Task[100];
-
-            // Act - Release all concurrently
-            for (int i = 0; i < 100; i++)
-            {
-                tasks[i] = Task.Run(() => cache.ReleaseContext(host));
-            }
-
-            await Task.WhenAll(tasks);
-
-            // Assert - Context should be removed
-            Assert.False(cache.HasContext(host));
         }
 
         [Fact]
@@ -698,7 +651,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 ["flag1"] = "value1",
                 ["flag2"] = "value2"
             };
-            var context = new FeatureFlagContext(flags);
+            var context = FeatureFlagContext.CreateForTesting(flags);
             var tasks = new Task[100];
 
             // Act - Concurrent reads and writes
@@ -758,6 +711,31 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         private static HttpClient CreateMockHttpClient(HttpStatusCode statusCode)
         {
             return CreateMockHttpClient(statusCode, "");
+        }
+
+        private static HttpClient CreateDelayedMockHttpClient(FeatureFlagsResponse response, int delayMs)
+        {
+            var json = JsonSerializer.Serialize(response);
+            var mockHandler = new Mock<HttpMessageHandler>();
+            mockHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .Returns(async (HttpRequestMessage request, CancellationToken token) =>
+                {
+                    await Task.Delay(delayMs, token);
+                    return new HttpResponseMessage
+                    {
+                        StatusCode = HttpStatusCode.OK,
+                        Content = new StringContent(json)
+                    };
+                });
+
+            return new HttpClient(mockHandler.Object)
+            {
+                BaseAddress = new Uri("https://test.databricks.com")
+            };
         }
 
         #endregion

@@ -15,31 +15,35 @@
 */
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
-using AdbcDrivers.Databricks.Auth;
+using System.Threading;
+using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace AdbcDrivers.Databricks
 {
     /// <summary>
-    /// Singleton that manages feature flag cache per host.
-    /// Prevents rate limiting by caching feature flag responses.
-    /// This is a generic cache for all feature flags, not just telemetry.
+    /// Singleton that manages feature flag cache per host using IMemoryCache.
+    /// Prevents rate limiting by caching feature flag responses with TTL-based expiration.
     /// </summary>
     /// <remarks>
-    /// This class implements the per-host caching pattern from the JDBC driver:
+    /// <para>
+    /// This class implements a per-host caching pattern:
     /// - Feature flags are cached by host to prevent rate limiting
-    /// - Reference counting tracks number of connections per host
-    /// - Cache is automatically cleaned up when all connections to a host close
-    /// - Thread-safe using ConcurrentDictionary
-    ///
+    /// - TTL-based expiration using server's ttl_seconds
+    /// - Background refresh task runs based on TTL within each FeatureFlagContext
+    /// - Automatic cleanup via IMemoryCache eviction
+    /// - Thread-safe using IMemoryCache and SemaphoreSlim for async locking
+    /// </para>
+    /// <para>
     /// JDBC Reference: DatabricksDriverFeatureFlagsContextFactory.java
+    /// </para>
     /// </remarks>
-    internal sealed class FeatureFlagCache
+    internal sealed class FeatureFlagCache : IDisposable
     {
         private static readonly FeatureFlagCache s_instance = new FeatureFlagCache();
 
@@ -48,7 +52,9 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks.FeatureFlagCache");
 
-        private readonly ConcurrentDictionary<string, FeatureFlagContext> _contexts;
+        private readonly IMemoryCache _cache;
+        private readonly SemaphoreSlim _createLock = new SemaphoreSlim(1, 1);
+        private bool _disposed;
 
         /// <summary>
         /// Gets the singleton instance of the FeatureFlagCache.
@@ -56,17 +62,24 @@ namespace AdbcDrivers.Databricks
         public static FeatureFlagCache GetInstance() => s_instance;
 
         /// <summary>
-        /// Creates a new FeatureFlagCache.
+        /// Creates a new FeatureFlagCache with default MemoryCache.
         /// </summary>
-        internal FeatureFlagCache()
+        internal FeatureFlagCache() : this(new MemoryCache(new MemoryCacheOptions()))
         {
-            _contexts = new ConcurrentDictionary<string, FeatureFlagContext>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
-        /// Gets or creates a feature flag context for the host.
-        /// Increments reference count.
-        /// Makes initial blocking fetch if context is new.
+        /// Creates a new FeatureFlagCache with custom IMemoryCache (for testing).
+        /// </summary>
+        /// <param name="cache">The memory cache to use.</param>
+        internal FeatureFlagCache(IMemoryCache cache)
+        {
+            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        }
+
+        /// <summary>
+        /// Gets or creates a feature flag context for the host asynchronously.
+        /// Waits for initial fetch to complete before returning.
         /// </summary>
         /// <param name="host">The host (Databricks workspace URL) to get or create a context for.</param>
         /// <param name="httpClient">
@@ -77,10 +90,16 @@ namespace AdbcDrivers.Databricks
         /// </param>
         /// <param name="driverVersion">The driver version for the API endpoint.</param>
         /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>The feature flag context for the host.</returns>
         /// <exception cref="ArgumentException">Thrown when host is null or whitespace.</exception>
         /// <exception cref="ArgumentNullException">Thrown when httpClient is null.</exception>
-        public FeatureFlagContext GetOrCreateContext(string host, HttpClient httpClient, string driverVersion, string? endpointFormat = null)
+        public async Task<FeatureFlagContext> GetOrCreateContextAsync(
+            string host,
+            HttpClient httpClient,
+            string driverVersion,
+            string? endpointFormat = null,
+            CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(host))
             {
@@ -92,82 +111,115 @@ namespace AdbcDrivers.Databricks
                 throw new ArgumentNullException(nameof(httpClient));
             }
 
-            var context = _contexts.GetOrAdd(host, _ => new FeatureFlagContext(host, httpClient, driverVersion, endpointFormat));
-            context.IncrementRefCount();
+            var cacheKey = GetCacheKey(host);
 
-            Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context.acquired",
-                tags: new ActivityTagsCollection
-                {
-                    { "host", host },
-                    { "ref_count", context.RefCount }
-                }));
-
-            return context;
-        }
-
-        /// <summary>
-        /// Decrements reference count for the host.
-        /// Removes context and stops refresh scheduler when ref count reaches zero.
-        /// </summary>
-        /// <param name="host">The host to release the context for.</param>
-        /// <remarks>
-        /// This method is thread-safe. If the reference count reaches zero,
-        /// the context is removed from the cache and its refresh scheduler is stopped.
-        /// If multiple threads try to release the same context simultaneously,
-        /// only one will successfully remove it.
-        /// </remarks>
-        public void ReleaseContext(string host)
-        {
-            if (string.IsNullOrWhiteSpace(host))
+            // Try to get existing context (fast path)
+            if (_cache.TryGetValue(cacheKey, out FeatureFlagContext? context) && context != null)
             {
-                return;
+                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.cache_hit",
+                    tags: new ActivityTagsCollection { { "host", host } }));
+
+                return context;
             }
 
-            if (_contexts.TryGetValue(host, out var context))
+            // Cache miss - create new context with async lock to prevent duplicate creation
+            await _createLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                var newRefCount = context.DecrementRefCount();
+                // Double-check after acquiring lock
+                if (_cache.TryGetValue(cacheKey, out context) && context != null)
+                {
+                    return context;
+                }
 
-                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context.released",
+                // Create context asynchronously - this waits for initial fetch to complete
+                context = await FeatureFlagContext.CreateAsync(
+                    host,
+                    httpClient,
+                    driverVersion,
+                    endpointFormat,
+                    cancellationToken).ConfigureAwait(false);
+
+                // Set cache options with TTL from context
+                var cacheOptions = new MemoryCacheEntryOptions()
+                    .SetAbsoluteExpiration(context.Ttl)
+                    .RegisterPostEvictionCallback(OnCacheEntryEvicted);
+
+                _cache.Set(cacheKey, context, cacheOptions);
+
+                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context_created",
                     tags: new ActivityTagsCollection
                     {
                         { "host", host },
-                        { "ref_count", newRefCount }
+                        { "ttl_seconds", context.Ttl.TotalSeconds }
                     }));
 
-                if (newRefCount <= 0)
-                {
-                    // Try to remove the context. Use a compare-and-remove pattern
-                    // to avoid race conditions where a new connection added a reference.
-                    if (context.RefCount <= 0)
-                    {
-                        // Note: We check RefCount again because another thread might have
-                        // incremented it between our check and the removal attempt.
-                        if (_contexts.TryGetValue(host, out var currentContext) &&
-                            ReferenceEquals(currentContext, context) &&
-                            currentContext.RefCount <= 0)
-                        {
-                            // Use IDictionary.Remove to atomically check and remove
-                            var removed = ((IDictionary<string, FeatureFlagContext>)_contexts)
-                                .Remove(new KeyValuePair<string, FeatureFlagContext>(host, context));
-
-                            if (removed)
-                            {
-                                // Stop the refresh scheduler and dispose the context
-                                context.Dispose();
-
-                                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context.disposed",
-                                    tags: new ActivityTagsCollection { { "host", host } }));
-                            }
-                        }
-                    }
-                }
+                return context;
             }
+            finally
+            {
+                _createLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Synchronous wrapper for GetOrCreateContextAsync.
+        /// Used for backward compatibility with synchronous callers.
+        /// </summary>
+        public FeatureFlagContext GetOrCreateContext(
+            string host,
+            HttpClient httpClient,
+            string driverVersion,
+            string? endpointFormat = null)
+        {
+            return GetOrCreateContextAsync(host, httpClient, driverVersion, endpointFormat)
+                .ConfigureAwait(false)
+                .GetAwaiter()
+                .GetResult();
+        }
+
+        /// <summary>
+        /// Callback invoked when a cache entry is evicted.
+        /// Disposes the context to clean up resources (stops background refresh task).
+        /// </summary>
+        private static void OnCacheEntryEvicted(object key, object? value, EvictionReason reason, object? state)
+        {
+            if (value is FeatureFlagContext context)
+            {
+                context.Dispose();
+
+                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context_evicted",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", context.Host },
+                        { "reason", reason.ToString() }
+                    }));
+            }
+        }
+
+        /// <summary>
+        /// Gets the cache key for a host.
+        /// </summary>
+        private static string GetCacheKey(string host)
+        {
+            return $"feature_flags:{host.ToLowerInvariant()}";
         }
 
         /// <summary>
         /// Gets the number of hosts currently cached.
+        /// Note: IMemoryCache doesn't expose count directly, so this returns -1 if not available.
         /// </summary>
-        internal int CachedHostCount => _contexts.Count;
+        internal int CachedHostCount
+        {
+            get
+            {
+                if (_cache is MemoryCache memoryCache)
+                {
+                    return memoryCache.Count;
+                }
+                return -1;
+            }
+        }
 
         /// <summary>
         /// Checks if a context exists for the specified host.
@@ -181,12 +233,12 @@ namespace AdbcDrivers.Databricks
                 return false;
             }
 
-            return _contexts.ContainsKey(host);
+            return _cache.TryGetValue(GetCacheKey(host), out _);
         }
 
         /// <summary>
         /// Gets the context for the specified host, if it exists.
-        /// Does not create a new context or modify reference count.
+        /// Does not create a new context.
         /// </summary>
         /// <param name="host">The host to get the context for.</param>
         /// <param name="context">The context if found, null otherwise.</param>
@@ -200,39 +252,66 @@ namespace AdbcDrivers.Databricks
                 return false;
             }
 
-            if (_contexts.TryGetValue(host, out var foundContext))
-            {
-                context = foundContext;
-                return true;
-            }
-
-            return false;
+            return _cache.TryGetValue(GetCacheKey(host), out context);
         }
 
         /// <summary>
-        /// Clears all cached contexts and disposes them.
+        /// Removes a context from the cache.
+        /// </summary>
+        /// <param name="host">The host to remove.</param>
+        internal void RemoveContext(string host)
+        {
+            if (!string.IsNullOrWhiteSpace(host))
+            {
+                _cache.Remove(GetCacheKey(host));
+            }
+        }
+
+        /// <summary>
+        /// Clears all cached contexts.
         /// This is primarily for testing purposes.
         /// </summary>
         internal void Clear()
         {
-            foreach (var context in _contexts.Values)
+            if (_cache is MemoryCache memoryCache)
             {
-                context.Dispose();
+                memoryCache.Compact(1.0); // Remove all entries
             }
-            _contexts.Clear();
         }
 
         /// <summary>
-        /// Merges feature flags from server into properties.
+        /// Disposes the cache and all cached contexts.
+        /// </summary>
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+
+            _createLock.Dispose();
+
+            if (_cache is IDisposable disposableCache)
+            {
+                disposableCache.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Merges feature flags from server into properties asynchronously.
         /// Feature flags (remote properties) have lower priority than user-specified properties (local properties).
         /// Priority: Local Properties > Remote Properties (Feature Flags) > Driver Defaults
         /// </summary>
         /// <param name="localProperties">Local properties from user configuration and environment.</param>
         /// <param name="assemblyVersion">The driver version for the API endpoint.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>Properties with remote feature flags merged in (local properties take precedence).</returns>
-        public IReadOnlyDictionary<string, string> MergePropertiesWithFeatureFlags(
+        public async Task<IReadOnlyDictionary<string, string>> MergePropertiesWithFeatureFlagsAsync(
             IReadOnlyDictionary<string, string> localProperties,
-            string assemblyVersion)
+            string assemblyVersion,
+            CancellationToken cancellationToken = default)
         {
             using var activity = s_activitySource.StartActivity("MergePropertiesWithFeatureFlags");
 
@@ -249,7 +328,7 @@ namespace AdbcDrivers.Databricks
 
                 activity?.SetTag("feature_flags.host", host);
 
-                // Create HttpClient for feature flag API, supporting both token-based and OAuth M2M auth
+                // Create HttpClient for feature flag API
                 using var httpClient = CreateFeatureFlagHttpClient(host, assemblyVersion, localProperties);
 
                 if (httpClient == null)
@@ -259,8 +338,8 @@ namespace AdbcDrivers.Databricks
                     return localProperties;
                 }
 
-                // Get or create feature flag context (this makes the initial blocking fetch)
-                var context = GetOrCreateContext(host, httpClient, assemblyVersion);
+                // Get or create feature flag context asynchronously (waits for initial fetch)
+                var context = await GetOrCreateContextAsync(host, httpClient, assemblyVersion, cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 // Get all flags from cache (remote properties)
                 var remoteProperties = context.GetAllFlags();
@@ -292,6 +371,20 @@ namespace AdbcDrivers.Databricks
                     }));
                 return localProperties;
             }
+        }
+
+        /// <summary>
+        /// Synchronous wrapper for MergePropertiesWithFeatureFlagsAsync.
+        /// Used for backward compatibility with synchronous callers.
+        /// </summary>
+        public IReadOnlyDictionary<string, string> MergePropertiesWithFeatureFlags(
+            IReadOnlyDictionary<string, string> localProperties,
+            string assemblyVersion)
+        {
+            return MergePropertiesWithFeatureFlagsAsync(localProperties, assemblyVersion)
+                .ConfigureAwait(false)
+                .GetAwaiter()
+                .GetResult();
         }
 
         /// <summary>
@@ -348,7 +441,11 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Creates an HttpClient configured for the feature flag API.
-        /// Supports both token-based authentication (PAT) and OAuth M2M (client_credentials).
+        /// Supports all authentication methods including:
+        /// - PAT (Personal Access Token)
+        /// - OAuth M2M (client_credentials)
+        /// - OAuth U2M (access_token)
+        /// - Workload Identity Federation (via MandatoryTokenExchangeDelegatingHandler)
         /// Respects proxy settings and TLS options from connection properties.
         /// </summary>
         /// <param name="host">The Databricks host (without protocol).</param>
@@ -360,23 +457,9 @@ namespace AdbcDrivers.Databricks
             string assemblyVersion,
             IReadOnlyDictionary<string, string> properties)
         {
-            // Get access token first - need to determine timeout for OAuth operations
-            const int DefaultFeatureFlagTimeoutSeconds = 10;
-            var timeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(
-                properties,
-                DatabricksParameters.FeatureFlagTimeoutSeconds,
-                DefaultFeatureFlagTimeoutSeconds);
-
-            // Determine the access token based on authentication type
-            string? accessToken = AuthHelper.GetAccessToken(host, properties, TimeSpan.FromSeconds(timeoutSeconds));
-
-            if (string.IsNullOrEmpty(accessToken))
-            {
-                return null;
-            }
-
-            // Use centralized factory to create HttpClient with proper TLS/proxy config
-            return Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, assemblyVersion, accessToken);
+            // Use centralized factory to create HttpClient with full auth handler chain
+            // This properly supports Workload Identity Federation via MandatoryTokenExchangeDelegatingHandler
+            return Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, assemblyVersion);
         }
 
         /// <summary>
