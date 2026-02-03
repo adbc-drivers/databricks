@@ -67,6 +67,9 @@ namespace AdbcDrivers.Databricks.Tests
                 OutputHelper?.WriteLine($"  - {flag.Key}: {flag.Value}");
             }
 
+            // Log the TTL from the server
+            OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] TTL from server: {context.Ttl.TotalSeconds} seconds");
+
             // Note: We don't assert flags.Count > 0 because the server may return empty flags
             // in some environments, but we verify the infrastructure works
 
@@ -116,26 +119,21 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         /// <summary>
-        /// Tests that the feature flag cache is properly cleaned up when all connections close.
-        /// Verifies that the context is removed when reference count reaches zero.
+        /// Tests that the feature flag cache persists after connections close (TTL-based expiration).
+        /// With the IMemoryCache implementation, contexts stay in cache until TTL expires,
+        /// not when connections close.
         /// </summary>
         [SkippableFact]
-        public async Task TestFeatureFlagCacheCleanupOnConnectionClose()
+        public async Task TestFeatureFlagCachePersistsAfterConnectionClose()
         {
             // Arrange
             var cache = FeatureFlagCache.GetInstance();
             var hostName = GetNormalizedHostName();
             Skip.If(string.IsNullOrEmpty(hostName), "Cannot determine host name from test configuration");
 
-            // First, clear any existing contexts to ensure clean state
-            // Note: We can't call Clear() on the singleton in production code, but we can
-            // verify the reference counting behavior by creating and disposing connections
+            OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Initial cache count: {cache.CachedHostCount}");
 
-            int initialCacheCount = cache.CachedHostCount;
-            int refCountBeforeDispose = 0;
-            OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Initial cache count: {initialCacheCount}");
-
-            // Act - Create and close a single connection
+            // Act - Create and close a connection
             using (var connection = NewConnection(TestConfiguration))
             {
                 // Connection is active, cache should have a context for this host
@@ -144,48 +142,29 @@ namespace AdbcDrivers.Databricks.Tests
                 // Verify context exists during connection
                 Assert.True(cache.TryGetContext(hostName!, out var context), "Context should exist while connection is active");
                 Assert.NotNull(context);
-                OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Context ref count during connection: {context.RefCount}");
 
                 // Verify flags were fetched
                 var flags = context.GetAllFlags();
                 OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Flags fetched: {flags.Count}");
+                OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] TTL: {context.Ttl.TotalSeconds} seconds");
 
                 // Execute a query to ensure the connection is fully initialized
                 using var statement = connection.CreateStatement();
                 statement.SqlQuery = "SELECT 1";
                 var result = await statement.ExecuteQueryAsync();
                 Assert.NotNull(result.Stream);
-
-                // Capture ref count before disposal for verification
-                refCountBeforeDispose = context.RefCount;
-                OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Ref count before dispose: {refCountBeforeDispose}");
             }
             // Connection is disposed here
 
-            // Verify the cleanup behavior after disposal
-            // The cache should either:
-            // 1. Remove the context entirely (if this was the only connection), OR
-            // 2. Decrement the ref count (if other connections to the same host exist)
-            if (cache.TryGetContext(hostName!, out var contextAfterDispose))
-            {
-                int refCountAfterDispose = contextAfterDispose.RefCount;
-                OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Context still exists after dispose with ref count: {refCountAfterDispose}");
+            // With TTL-based caching, the context should still exist in the cache
+            // (it only gets removed when TTL expires or cache is explicitly cleared)
+            Assert.True(cache.TryGetContext(hostName!, out var contextAfterDispose),
+                "Context should still exist in cache after connection close (TTL-based expiration)");
+            Assert.NotNull(contextAfterDispose);
 
-                // Verify ref count was decremented
-                Assert.True(refCountAfterDispose < refCountBeforeDispose,
-                    $"Ref count should be decremented after connection disposal. Before: {refCountBeforeDispose}, After: {refCountAfterDispose}");
-            }
-            else
-            {
-                // Context was removed - this means ref count reached zero and cache was cleared
-                OutputHelper?.WriteLine("[FeatureFlagCacheE2ETest] Context was cleaned up after connection disposal (cache cleared)");
-
-                // Verify the context is truly gone from the cache
-                Assert.False(cache.HasContext(hostName!), "Cache should not have context for this host after cleanup");
-            }
-
+            OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Context still exists after connection close with TTL: {contextAfterDispose.Ttl.TotalSeconds}s");
             OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Final cache count: {cache.CachedHostCount}");
-            OutputHelper?.WriteLine("[FeatureFlagCacheE2ETest] Feature flag cache cleanup test completed");
+            OutputHelper?.WriteLine("[FeatureFlagCacheE2ETest] Feature flag cache TTL-based persistence test completed");
         }
 
         /// <summary>

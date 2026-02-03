@@ -21,27 +21,24 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache;
 using Apache.Arrow.Adbc.Tracing;
 
 namespace AdbcDrivers.Databricks
 {
     /// <summary>
-    /// Holds feature flag state and reference count for a host.
-    /// Manages background refresh scheduling.
-    /// Uses the HttpClient provided by the connection for API calls.
+    /// Holds feature flag state for a host.
+    /// Cached by FeatureFlagCache with TTL-based expiration.
     /// </summary>
     /// <remarks>
     /// Each host (Databricks workspace) has one FeatureFlagContext instance
     /// that is shared across all connections to that host. The context:
     /// - Caches all feature flags returned by the server
-    /// - Schedules background refreshes at intervals specified by server's ttl_seconds
-    /// - Uses reference counting for proper cleanup
+    /// - Tracks TTL from server response for cache expiration
+    /// - Runs a background refresh task based on TTL
     ///
-    /// Thread-safety is ensured using:
-    /// - ConcurrentDictionary for flag storage
-    /// - Interlocked operations for reference count
-    /// - Lock-based synchronization for timer management
+    /// Thread-safety is ensured using ConcurrentDictionary for flag storage.
     ///
     /// JDBC Reference: DatabricksDriverFeatureFlagsContext.java
     /// </remarks>
@@ -58,9 +55,9 @@ namespace AdbcDrivers.Databricks
         private static readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(FeatureFlagContext));
 
         /// <summary>
-        /// Default refresh interval (15 minutes) if server doesn't specify ttl_seconds.
+        /// Default TTL (15 minutes) if server doesn't specify ttl_seconds.
         /// </summary>
-        public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromMinutes(15);
+        public static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(15);
 
         /// <summary>
         /// Default feature flag endpoint format. {0} = driver version.
@@ -71,38 +68,63 @@ namespace AdbcDrivers.Databricks
         private readonly string _host;
         private readonly string _driverVersion;
         private readonly string _endpointFormat;
-        private readonly HttpClient _httpClient;
+        private readonly HttpClient? _httpClient;
         private readonly ConcurrentDictionary<string, string> _flags;
-        private readonly object _timerLock = new object();
+        private readonly CancellationTokenSource _refreshCts;
+        private readonly object _ttlLock = new object();
 
-        private Timer? _refreshTimer;
-        private TimeSpan _refreshInterval;
-        private int _refCount;
+        private Task? _refreshTask;
+        private TimeSpan _ttl;
         private bool _disposed;
 
         /// <summary>
-        /// Gets the current refresh interval (from server ttl_seconds).
+        /// Gets the current TTL (from server ttl_seconds).
         /// </summary>
-        public TimeSpan RefreshInterval
+        public TimeSpan Ttl
         {
             get
             {
-                lock (_timerLock)
+                lock (_ttlLock)
                 {
-                    return _refreshInterval;
+                    return _ttl;
+                }
+            }
+            private set
+            {
+                lock (_ttlLock)
+                {
+                    _ttl = value;
                 }
             }
         }
 
         /// <summary>
-        /// Gets the current reference count (number of connections using this context).
+        /// Gets the host this context is for.
         /// </summary>
-        public int RefCount => Volatile.Read(ref _refCount);
+        public string Host => _host;
+
+        /// <summary>
+        /// Gets the current refresh interval (alias for Ttl).
+        /// </summary>
+        public TimeSpan RefreshInterval => Ttl;
+
+        /// <summary>
+        /// Private constructor - use CreateAsync factory method.
+        /// </summary>
+        private FeatureFlagContext(string host, HttpClient? httpClient, string driverVersion, string? endpointFormat)
+        {
+            _host = host;
+            _httpClient = httpClient;
+            _driverVersion = driverVersion ?? "1.0.0";
+            _endpointFormat = endpointFormat ?? DefaultFeatureFlagEndpointFormat;
+            _flags = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _ttl = DefaultTtl;
+            _refreshCts = new CancellationTokenSource();
+        }
 
         /// <summary>
         /// Creates a new context with the given HTTP client.
-        /// Makes initial blocking fetch to populate cache.
-        /// Starts background refresh scheduler.
+        /// Performs initial async fetch to populate cache, then starts background refresh task.
         /// </summary>
         /// <param name="host">The Databricks host.</param>
         /// <param name="httpClient">
@@ -113,53 +135,65 @@ namespace AdbcDrivers.Databricks
         /// </param>
         /// <param name="driverVersion">The driver version for the API endpoint.</param>
         /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
-        public FeatureFlagContext(string host, HttpClient httpClient, string driverVersion, string? endpointFormat = null)
+        /// <param name="cancellationToken">Cancellation token for the initial fetch.</param>
+        /// <returns>A fully initialized FeatureFlagContext.</returns>
+        public static async Task<FeatureFlagContext> CreateAsync(
+            string host,
+            HttpClient httpClient,
+            string driverVersion,
+            string? endpointFormat = null,
+            CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(host))
             {
                 throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
             }
 
-            _host = host;
-            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-            _driverVersion = driverVersion ?? "1.0.0";
-            _endpointFormat = endpointFormat ?? DefaultFeatureFlagEndpointFormat;
-            _flags = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            _refreshInterval = DefaultRefreshInterval;
-            _refCount = 0;
+            if (httpClient == null)
+            {
+                throw new ArgumentNullException(nameof(httpClient));
+            }
 
-            // Initial blocking fetch
-            FetchFeatureFlags("Initial");
+            var context = new FeatureFlagContext(host, httpClient, driverVersion, endpointFormat);
 
-            // Start background refresh scheduler
-            StartRefreshScheduler();
+            // Initial async fetch - wait for it to complete
+            await context.FetchFeatureFlagsAsync("Initial", cancellationToken).ConfigureAwait(false);
+
+            // Start background refresh task
+            context.StartBackgroundRefresh();
+
+            return context;
         }
 
         /// <summary>
-        /// Creates a new context for testing with pre-populated flags.
+        /// Creates a new context for unit testing with pre-populated flags.
         /// Does not make API calls or start background refresh.
+        /// This factory method is intended for use in unit tests only.
         /// </summary>
         /// <param name="initialFlags">Initial flags to populate.</param>
-        /// <param name="refreshInterval">Optional refresh interval.</param>
-        internal FeatureFlagContext(
+        /// <param name="ttl">Optional TTL.</param>
+        /// <returns>A FeatureFlagContext instance configured for testing.</returns>
+        internal static FeatureFlagContext CreateForTesting(
             IReadOnlyDictionary<string, string>? initialFlags = null,
-            TimeSpan? refreshInterval = null)
+            TimeSpan? ttl = null)
         {
-            _host = "test-host";
-            _httpClient = null!;
-            _driverVersion = s_assemblyVersion;
-            _endpointFormat = DefaultFeatureFlagEndpointFormat;
-            _flags = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            _refreshInterval = refreshInterval ?? DefaultRefreshInterval;
-            _refCount = 0;
+            var context = new FeatureFlagContext(
+                host: "test-host",
+                httpClient: null,
+                driverVersion: s_assemblyVersion,
+                endpointFormat: DefaultFeatureFlagEndpointFormat);
+
+            context._ttl = ttl ?? DefaultTtl;
 
             if (initialFlags != null)
             {
                 foreach (var kvp in initialFlags)
                 {
-                    _flags[kvp.Key] = kvp.Value;
+                    context._flags[kvp.Key] = kvp.Value;
                 }
             }
+
+            return context;
         }
 
         /// <summary>
@@ -190,44 +224,43 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Increments the reference count.
+        /// Starts the background refresh task that periodically fetches flags based on TTL.
         /// </summary>
-        /// <returns>The new reference count.</returns>
-        public int IncrementRefCount()
+        private void StartBackgroundRefresh()
         {
-            return Interlocked.Increment(ref _refCount);
-        }
-
-        /// <summary>
-        /// Decrements the reference count.
-        /// </summary>
-        /// <returns>The new reference count.</returns>
-        public int DecrementRefCount()
-        {
-            return Interlocked.Decrement(ref _refCount);
-        }
-
-        /// <summary>
-        /// Stops the background refresh scheduler.
-        /// </summary>
-        public void Shutdown()
-        {
-            lock (_timerLock)
+            _refreshTask = Task.Run(async () =>
             {
-                if (_refreshTimer != null)
+                while (!_refreshCts.Token.IsCancellationRequested)
                 {
-                    _refreshTimer.Dispose();
-                    _refreshTimer = null;
+                    try
+                    {
+                        // Wait for TTL duration before refreshing
+                        await Task.Delay(Ttl, _refreshCts.Token).ConfigureAwait(false);
 
-                    Activity.Current?.AddEvent("feature_flags.scheduler.stopped", [
-                        new("host", _host)
-                    ]);
+                        if (!_refreshCts.Token.IsCancellationRequested)
+                        {
+                            await FetchFeatureFlagsAsync("Background", _refreshCts.Token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Normal cancellation, exit the loop
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log error but continue the refresh loop
+                        Activity.Current?.AddEvent("feature_flags.background_refresh.error", [
+                            new("error.message", ex.Message),
+                            new("error.type", ex.GetType().Name)
+                        ]);
+                    }
                 }
-            }
+            }, _refreshCts.Token);
         }
 
         /// <summary>
-        /// Disposes the context and stops the background refresh scheduler.
+        /// Disposes the context and stops the background refresh task.
         /// </summary>
         public void Dispose()
         {
@@ -236,17 +269,36 @@ namespace AdbcDrivers.Databricks
                 return;
             }
 
-            Shutdown();
             _disposed = true;
+
+            // Cancel the background refresh task
+            _refreshCts.Cancel();
+
+            // Wait briefly for the task to complete (don't block indefinitely)
+            try
+            {
+                _refreshTask?.Wait(TimeSpan.FromSeconds(1));
+            }
+            catch (AggregateException)
+            {
+                // Task was cancelled, ignore
+            }
+
+            _refreshCts.Dispose();
         }
 
         /// <summary>
-        /// Fetches feature flags from the API endpoint and processes the response.
-        /// This is a common method used by both initial fetch and background refresh.
+        /// Fetches feature flags from the API endpoint asynchronously.
         /// </summary>
         /// <param name="fetchType">Type of fetch for logging purposes (e.g., "Initial" or "Background").</param>
-        private void FetchFeatureFlags(string fetchType)
+        /// <param name="cancellationToken">Cancellation token.</param>
+        private async Task FetchFeatureFlagsAsync(string fetchType, CancellationToken cancellationToken)
         {
+            if (_httpClient == null)
+            {
+                return;
+            }
+
             using var activity = s_activitySource.StartActivity($"FetchFeatureFlags.{fetchType}");
             activity?.SetTag("feature_flags.host", _host);
             activity?.SetTag("feature_flags.fetch_type", fetchType);
@@ -256,17 +308,22 @@ namespace AdbcDrivers.Databricks
                 var endpoint = string.Format(_endpointFormat, _driverVersion);
                 activity?.SetTag("feature_flags.endpoint", endpoint);
 
-                var response = _httpClient.GetAsync(endpoint).ConfigureAwait(false).GetAwaiter().GetResult();
+                var response = await _httpClient.GetAsync(endpoint, cancellationToken).ConfigureAwait(false);
 
                 activity?.SetTag("feature_flags.response.status_code", (int)response.StatusCode);
 
                 // Use the standard EnsureSuccessOrThrow extension method
                 response.EnsureSuccessOrThrow();
 
-                var content = response.Content.ReadAsStringAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 ProcessResponse(content, activity);
 
                 activity?.SetStatus(ActivityStatusCode.Ok);
+            }
+            catch (OperationCanceledException)
+            {
+                // Propagate cancellation
+                throw;
             }
             catch (Exception ex)
             {
@@ -277,39 +334,6 @@ namespace AdbcDrivers.Databricks
                     new("error.type", ex.GetType().Name)
                 ]);
             }
-        }
-
-        /// <summary>
-        /// Starts the background refresh scheduler.
-        /// </summary>
-        private void StartRefreshScheduler()
-        {
-            lock (_timerLock)
-            {
-                _refreshTimer = new Timer(
-                    RefreshCallback,
-                    null,
-                    _refreshInterval,
-                    _refreshInterval);
-
-                Activity.Current?.AddEvent("feature_flags.scheduler.started", [
-                    new("host", _host),
-                    new("interval_seconds", _refreshInterval.TotalSeconds)
-                ]);
-            }
-        }
-
-        /// <summary>
-        /// Timer callback for background refresh.
-        /// </summary>
-        private void RefreshCallback(object? state)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            FetchFeatureFlags("Background");
         }
 
         /// <summary>
@@ -339,12 +363,11 @@ namespace AdbcDrivers.Databricks
                     ]);
                 }
 
-                // Update refresh interval if server provides a different TTL
+                // Update TTL if server provides a different value
                 if (response?.TtlSeconds != null && response.TtlSeconds > 0)
                 {
-                    var newInterval = TimeSpan.FromSeconds(response.TtlSeconds.Value);
+                    Ttl = TimeSpan.FromSeconds(response.TtlSeconds.Value);
                     activity?.SetTag("feature_flags.ttl_seconds", response.TtlSeconds.Value);
-                    UpdateRefreshInterval(newInterval, activity);
                 }
             }
             catch (JsonException ex)
@@ -353,34 +376,6 @@ namespace AdbcDrivers.Databricks
                     new("error.message", ex.Message),
                     new("error.type", ex.GetType().Name)
                 ]);
-            }
-        }
-
-        /// <summary>
-        /// Updates the refresh interval if it has changed.
-        /// </summary>
-        /// <param name="newInterval">The new refresh interval.</param>
-        /// <param name="activity">The current activity for tracing.</param>
-        private void UpdateRefreshInterval(TimeSpan newInterval, Activity? activity = null)
-        {
-            lock (_timerLock)
-            {
-                if (_refreshInterval == newInterval)
-                {
-                    return;
-                }
-
-                var oldInterval = _refreshInterval;
-                _refreshInterval = newInterval;
-
-                if (_refreshTimer != null)
-                {
-                    _refreshTimer.Change(newInterval, newInterval);
-                    activity?.AddEvent("feature_flags.interval.updated", [
-                        new("old_interval_seconds", oldInterval.TotalSeconds),
-                        new("new_interval_seconds", newInterval.TotalSeconds)
-                    ]);
-                }
             }
         }
 
