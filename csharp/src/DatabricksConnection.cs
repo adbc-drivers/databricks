@@ -533,7 +533,7 @@ namespace AdbcDrivers.Databricks
                 isLz4Compressed = metadataResp.Lz4Compressed;
             }
 
-            HttpClient httpClient = new HttpClient(HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator));
+            HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
             return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
         }
 

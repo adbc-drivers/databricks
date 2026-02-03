@@ -225,15 +225,7 @@ namespace AdbcDrivers.Databricks.Http
                 else if (grantType == DatabricksOAuthGrantType.AccessToken)
                 {
                     // Get the access token from properties
-                    string accessToken = string.Empty;
-                    if (config.Properties.TryGetValue(SparkParameters.AccessToken, out string? token))
-                    {
-                        accessToken = token ?? string.Empty;
-                    }
-                    else if (config.Properties.TryGetValue(SparkParameters.Token, out string? fallbackToken))
-                    {
-                        accessToken = fallbackToken ?? string.Empty;
-                    }
+                    string? accessToken = AuthHelper.GetTokenFromProperties(config.Properties);
 
                     if (!string.IsNullOrEmpty(accessToken))
                     {
@@ -262,16 +254,7 @@ namespace AdbcDrivers.Databricks.Http
             else
             {
                 // Non-OAuth authentication: use static Bearer token if provided
-                // Try access_token first, then fall back to token
-                string accessToken = string.Empty;
-                if (config.Properties.TryGetValue(SparkParameters.AccessToken, out string? token))
-                {
-                    accessToken = token ?? string.Empty;
-                }
-                else if (config.Properties.TryGetValue(SparkParameters.Token, out string? fallbackToken))
-                {
-                    accessToken = fallbackToken ?? string.Empty;
-                }
+                string? accessToken = AuthHelper.GetTokenFromProperties(config.Properties);
 
                 if (!string.IsNullOrEmpty(accessToken))
                 {

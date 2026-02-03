@@ -1,0 +1,134 @@
+/*
+* Copyright (c) 2025 ADBC Drivers Contributors
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*     http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/
+
+using System;
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using Apache.Arrow.Adbc.Drivers.Apache;
+using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
+
+namespace AdbcDrivers.Databricks.Http
+{
+    /// <summary>
+    /// Centralized factory for creating HttpClient instances with proper TLS and proxy configuration.
+    /// All HttpClient creation should go through this factory to ensure consistent configuration.
+    /// </summary>
+    internal static class HttpClientFactory
+    {
+        /// <summary>
+        /// Creates an HttpClientHandler with TLS and proxy settings from connection properties.
+        /// This is the base handler used by all HttpClient instances.
+        /// </summary>
+        /// <param name="properties">Connection properties containing TLS and proxy configuration.</param>
+        /// <returns>Configured HttpClientHandler.</returns>
+        public static HttpClientHandler CreateHandler(IReadOnlyDictionary<string, string> properties)
+        {
+            var tlsOptions = HiveServer2TlsImpl.GetHttpTlsOptions(properties);
+            var proxyConfigurator = HiveServer2ProxyConfigurator.FromProperties(properties);
+            return HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
+        }
+
+        /// <summary>
+        /// Creates a basic HttpClient with TLS and proxy settings.
+        /// Use this for simple HTTP operations that don't need auth handlers or retries.
+        /// </summary>
+        /// <param name="properties">Connection properties containing TLS and proxy configuration.</param>
+        /// <param name="timeout">Optional timeout. If not specified, uses default HttpClient timeout.</param>
+        /// <returns>Configured HttpClient.</returns>
+        public static HttpClient CreateBasicHttpClient(IReadOnlyDictionary<string, string> properties, TimeSpan? timeout = null)
+        {
+            var handler = CreateHandler(properties);
+            var httpClient = new HttpClient(handler);
+
+            if (timeout.HasValue)
+            {
+                httpClient.Timeout = timeout.Value;
+            }
+
+            return httpClient;
+        }
+
+        /// <summary>
+        /// Creates an HttpClient for CloudFetch downloads.
+        /// Includes TLS and proxy settings but no auth headers (CloudFetch uses pre-signed URLs).
+        /// </summary>
+        /// <param name="properties">Connection properties containing TLS and proxy configuration.</param>
+        /// <returns>Configured HttpClient for CloudFetch.</returns>
+        public static HttpClient CreateCloudFetchHttpClient(IReadOnlyDictionary<string, string> properties)
+        {
+            int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(
+                properties,
+                DatabricksParameters.CloudFetchTimeoutMinutes,
+                DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
+
+            return CreateBasicHttpClient(properties, TimeSpan.FromMinutes(timeoutMinutes));
+        }
+
+        /// <summary>
+        /// Creates an HttpClient for feature flag API calls.
+        /// Includes TLS, proxy settings, and configurable timeout.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <param name="host">The Databricks host (without protocol).</param>
+        /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
+        /// <param name="accessToken">The access token for authentication.</param>
+        /// <returns>Configured HttpClient for feature flags.</returns>
+        public static HttpClient CreateFeatureFlagHttpClient(
+            IReadOnlyDictionary<string, string> properties,
+            string host,
+            string assemblyVersion,
+            string accessToken)
+        {
+            const int DefaultFeatureFlagTimeoutSeconds = 10;
+
+            var timeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(
+                properties,
+                DatabricksParameters.FeatureFlagTimeoutSeconds,
+                DefaultFeatureFlagTimeoutSeconds);
+
+            var httpClient = CreateBasicHttpClient(properties, TimeSpan.FromSeconds(timeoutSeconds));
+            httpClient.BaseAddress = new Uri($"https://{host}");
+
+            httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", accessToken);
+
+            // Use same User-Agent format as other Databricks HTTP clients
+            string userAgent = $"DatabricksJDBCDriverOSS/{assemblyVersion} (ADBC)";
+            string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
+            if (!string.IsNullOrWhiteSpace(userAgentEntry))
+            {
+                userAgent = $"{userAgent} {userAgentEntry}";
+            }
+
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+
+            return httpClient;
+        }
+
+        /// <summary>
+        /// Creates an HttpClient for OAuth token operations.
+        /// Includes TLS and proxy settings with configurable timeout.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <param name="timeout">Timeout for OAuth operations.</param>
+        /// <returns>Configured HttpClient for OAuth.</returns>
+        public static HttpClient CreateOAuthHttpClient(IReadOnlyDictionary<string, string> properties, TimeSpan timeout)
+        {
+            return CreateBasicHttpClient(properties, timeout);
+        }
+    }
+}
