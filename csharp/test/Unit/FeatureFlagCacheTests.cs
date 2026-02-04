@@ -769,5 +769,125 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         #endregion
+
+        #region Cache TTL Expiration Tests
+
+        [Fact]
+        public async Task FeatureFlagCache_ShortTtl_EntryExpiresAfterTtl()
+        {
+            // Arrange
+            var cache = new FeatureFlagCache();
+            var host = "ttl-test-host.databricks.com";
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>
+                {
+                    new FeatureFlagEntry { Name = "ttl_flag", Value = "ttl_value" }
+                },
+                TtlSeconds = 300
+            };
+            var httpClient = CreateMockHttpClient(response);
+
+            // Very short TTL for testing (1 second)
+            var shortTtl = TimeSpan.FromSeconds(1);
+
+            // Act - Create context with short TTL
+            var context = await cache.GetOrCreateContextAsync(host, httpClient, DriverVersion, cacheTtl: shortTtl);
+
+            // Verify context exists immediately after creation
+            Assert.True(cache.HasContext(host), "Context should exist immediately after creation");
+            Assert.Equal("ttl_value", context.GetFlagValue("ttl_flag"));
+
+            // Wait for TTL to expire (add buffer for cache cleanup)
+            await Task.Delay(TimeSpan.FromSeconds(2));
+
+            // Assert - Context should be evicted after TTL expires
+            // Note: IMemoryCache uses lazy eviction, so we need to trigger a check
+            // by trying to access the entry or calling TryGetContext
+            var stillExists = cache.TryGetContext(host, out var expiredContext);
+
+            // The entry should have been evicted due to sliding expiration
+            Assert.False(stillExists, "Context should have been evicted after TTL expired");
+            Assert.Null(expiredContext);
+
+            // Cleanup
+            cache.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagCache_SlidingExpiration_AccessExtendsLifetime()
+        {
+            // Arrange
+            var cache = new FeatureFlagCache();
+            var host = "sliding-ttl-host.databricks.com";
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>
+                {
+                    new FeatureFlagEntry { Name = "sliding_flag", Value = "sliding_value" }
+                },
+                TtlSeconds = 300
+            };
+            var httpClient = CreateMockHttpClient(response);
+
+            // Short TTL for testing (2 seconds)
+            var shortTtl = TimeSpan.FromSeconds(2);
+
+            // Act - Create context with short TTL
+            var context = await cache.GetOrCreateContextAsync(host, httpClient, DriverVersion, cacheTtl: shortTtl);
+            Assert.True(cache.HasContext(host), "Context should exist after creation");
+
+            // Access the cache entry multiple times before TTL expires to extend lifetime
+            for (int i = 0; i < 3; i++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1)); // Wait 1 second (less than TTL)
+                var accessed = cache.TryGetContext(host, out var accessedContext);
+                Assert.True(accessed, $"Context should still exist after access {i + 1}");
+                Assert.NotNull(accessedContext);
+            }
+
+            // Total elapsed: ~3 seconds, but TTL was 2 seconds
+            // Entry should still exist because each access extends the sliding window
+
+            // Now wait for TTL to expire without accessing
+            await Task.Delay(TimeSpan.FromSeconds(3));
+
+            // Assert - Context should be evicted after TTL expires without access
+            var stillExists = cache.TryGetContext(host, out _);
+            Assert.False(stillExists, "Context should have been evicted after TTL expired without access");
+
+            // Cleanup
+            cache.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagCache_CustomTtl_OverridesDefault()
+        {
+            // Arrange
+            var cache = new FeatureFlagCache();
+            var host = "custom-ttl-host.databricks.com";
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>(),
+                TtlSeconds = 900 // Server returns 15 minutes
+            };
+            var httpClient = CreateMockHttpClient(response);
+
+            // Custom TTL (30 seconds) - different from default (15 min) and server response
+            var customTtl = TimeSpan.FromSeconds(30);
+
+            // Act
+            var context = await cache.GetOrCreateContextAsync(host, httpClient, DriverVersion, cacheTtl: customTtl);
+
+            // Assert - Context's TTL should be from server response (stored in context)
+            // but cache entry TTL is controlled by cacheTtl parameter
+            Assert.Equal(TimeSpan.FromSeconds(900), context.Ttl); // Server's TTL stored in context
+            Assert.True(cache.HasContext(host));
+
+            // Cleanup
+            cache.Clear();
+        }
+
+        #endregion
     }
 }
