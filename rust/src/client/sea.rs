@@ -84,6 +84,7 @@ impl SeaClient {
             next_chunk_internal_link: result.next_chunk_internal_link.clone(),
             external_links,
             has_inline_data: result.data_array.is_some(),
+            data_array: result.data_array.clone(),
         })
     }
 
