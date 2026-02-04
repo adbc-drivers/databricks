@@ -84,15 +84,91 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Gets or creates a feature flag context for the host asynchronously.
-        /// Waits for initial fetch to complete before returning.
+        /// HttpClient is only created on cache miss (lazy creation for performance).
         /// </summary>
         /// <param name="host">The host (Databricks workspace URL) to get or create a context for.</param>
-        /// <param name="httpClient">
-        /// HttpClient from the connection, pre-configured with:
-        /// - Base address (https://{host})
-        /// - Auth headers (Bearer token)
-        /// - Custom User-Agent for connector service
-        /// </param>
+        /// <param name="properties">Connection properties for creating HttpClient on cache miss.</param>
+        /// <param name="driverVersion">The driver version for the API endpoint.</param>
+        /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
+        /// <param name="cacheTtl">Optional cache TTL for sliding expiration. If null, uses DefaultCacheTtl.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The feature flag context for the host.</returns>
+        /// <exception cref="ArgumentException">Thrown when host is null or whitespace.</exception>
+        private async Task<FeatureFlagContext> GetOrCreateContextAsync(
+            string host,
+            IReadOnlyDictionary<string, string> properties,
+            string driverVersion,
+            string? endpointFormat = null,
+            TimeSpan? cacheTtl = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
+            }
+
+            var cacheKey = GetCacheKey(host);
+            var effectiveCacheTtl = cacheTtl ?? DefaultCacheTtl;
+
+            // Try to get existing context (fast path - no HttpClient created)
+            if (_cache.TryGetValue(cacheKey, out FeatureFlagContext? context) && context != null)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.cache_hit",
+                    tags: new ActivityTagsCollection { { "host", host } }));
+
+                return context;
+            }
+
+            // Cache miss - create new context with async lock to prevent duplicate creation
+            await _createLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                // Double-check after acquiring lock
+                if (_cache.TryGetValue(cacheKey, out context) && context != null)
+                {
+                    return context;
+                }
+
+                // Create HttpClient only on cache miss (lazy creation)
+                using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
+
+                // Create context asynchronously - this waits for initial fetch to complete
+                context = await FeatureFlagContext.CreateAsync(
+                    host,
+                    httpClient,
+                    driverVersion,
+                    endpointFormat,
+                    cancellationToken).ConfigureAwait(false);
+
+                // Set cache options with sliding expiration
+                // Using sliding expiration so that reads extend the expiration window
+                var cacheOptions = new MemoryCacheEntryOptions()
+                    .SetSlidingExpiration(effectiveCacheTtl)
+                    .RegisterPostEvictionCallback(OnCacheEntryEvicted);
+
+                _cache.Set(cacheKey, context, cacheOptions);
+
+                Activity.Current?.AddEvent(new ActivityEvent("feature_flags.context_created",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", host },
+                        { "cache_ttl_seconds", effectiveCacheTtl.TotalSeconds }
+                    }));
+
+                return context;
+            }
+            finally
+            {
+                _createLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Gets or creates a feature flag context for the host asynchronously.
+        /// This overload accepts an HttpClient directly for testing purposes.
+        /// </summary>
+        /// <param name="host">The host (Databricks workspace URL) to get or create a context for.</param>
+        /// <param name="httpClient">The HttpClient to use for fetching feature flags.</param>
         /// <param name="driverVersion">The driver version for the API endpoint.</param>
         /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
         /// <param name="cacheTtl">Optional cache TTL for sliding expiration. If null, uses DefaultCacheTtl.</param>
@@ -100,7 +176,7 @@ namespace AdbcDrivers.Databricks
         /// <returns>The feature flag context for the host.</returns>
         /// <exception cref="ArgumentException">Thrown when host is null or whitespace.</exception>
         /// <exception cref="ArgumentNullException">Thrown when httpClient is null.</exception>
-        public async Task<FeatureFlagContext> GetOrCreateContextAsync(
+        internal async Task<FeatureFlagContext> GetOrCreateContextAsync(
             string host,
             HttpClient httpClient,
             string driverVersion,
@@ -149,7 +225,6 @@ namespace AdbcDrivers.Databricks
                     cancellationToken).ConfigureAwait(false);
 
                 // Set cache options with sliding expiration
-                // Using sliding expiration so that reads extend the expiration window
                 var cacheOptions = new MemoryCacheEntryOptions()
                     .SetSlidingExpiration(effectiveCacheTtl)
                     .RegisterPostEvictionCallback(OnCacheEntryEvicted);
@@ -172,10 +247,16 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Synchronous wrapper for GetOrCreateContextAsync.
-        /// Used for backward compatibility with synchronous callers.
+        /// Gets or creates a feature flag context for the host synchronously.
+        /// This is a convenience wrapper for testing purposes.
         /// </summary>
-        public FeatureFlagContext GetOrCreateContext(
+        /// <param name="host">The host (Databricks workspace URL) to get or create a context for.</param>
+        /// <param name="httpClient">The HttpClient to use for fetching feature flags.</param>
+        /// <param name="driverVersion">The driver version for the API endpoint.</param>
+        /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
+        /// <param name="cacheTtl">Optional cache TTL for sliding expiration. If null, uses DefaultCacheTtl.</param>
+        /// <returns>The feature flag context for the host.</returns>
+        internal FeatureFlagContext GetOrCreateContext(
             string host,
             HttpClient httpClient,
             string driverVersion,
@@ -327,6 +408,16 @@ namespace AdbcDrivers.Databricks
 
             try
             {
+                // Check if feature flag cache is enabled (default: true)
+                if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) &&
+                    bool.TryParse(enabledStr, out bool enabled) &&
+                    !enabled)
+                {
+                    activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
+                        tags: new ActivityTagsCollection { { "reason", "disabled_by_config" } }));
+                    return localProperties;
+                }
+
                 // Extract host from local properties
                 var host = TryGetHost(localProperties);
                 if (string.IsNullOrEmpty(host))
@@ -338,16 +429,6 @@ namespace AdbcDrivers.Databricks
 
                 activity?.SetTag("feature_flags.host", host);
 
-                // Create HttpClient for feature flag API
-                using var httpClient = CreateFeatureFlagHttpClient(host, assemblyVersion, localProperties);
-
-                if (httpClient == null)
-                {
-                    activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
-                        tags: new ActivityTagsCollection { { "reason", "no_auth_credentials" } }));
-                    return localProperties;
-                }
-
                 // Extract cache TTL from properties (if configured)
                 TimeSpan? cacheTtl = null;
                 if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheTtlSeconds, out string? cacheTtlSecondsStr) &&
@@ -357,8 +438,14 @@ namespace AdbcDrivers.Databricks
                     cacheTtl = TimeSpan.FromSeconds(cacheTtlSeconds);
                 }
 
-                // Get or create feature flag context asynchronously (waits for initial fetch)
-                var context = await GetOrCreateContextAsync(host, httpClient, assemblyVersion, cacheTtl: cacheTtl, cancellationToken: cancellationToken).ConfigureAwait(false);
+                // Get or create feature flag context asynchronously
+                // HttpClient is only created on cache miss (lazy creation for performance)
+                var context = await GetOrCreateContextAsync(
+                    host,
+                    localProperties,
+                    assemblyVersion,
+                    cacheTtl: cacheTtl,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 // Get all flags from cache (remote properties)
                 var remoteProperties = context.GetAllFlags();
@@ -456,29 +543,6 @@ namespace AdbcDrivers.Databricks
             }
 
             return host;
-        }
-
-        /// <summary>
-        /// Creates an HttpClient configured for the feature flag API.
-        /// Supports all authentication methods including:
-        /// - PAT (Personal Access Token)
-        /// - OAuth M2M (client_credentials)
-        /// - OAuth U2M (access_token)
-        /// - Workload Identity Federation (via MandatoryTokenExchangeDelegatingHandler)
-        /// Respects proxy settings and TLS options from connection properties.
-        /// </summary>
-        /// <param name="host">The Databricks host (without protocol).</param>
-        /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
-        /// <param name="properties">Connection properties for proxy, TLS, and auth configuration.</param>
-        /// <returns>Configured HttpClient, or null if no valid authentication is available.</returns>
-        private static HttpClient? CreateFeatureFlagHttpClient(
-            string host,
-            string assemblyVersion,
-            IReadOnlyDictionary<string, string> properties)
-        {
-            // Use centralized factory to create HttpClient with full auth handler chain
-            // This properly supports Workload Identity Federation via MandatoryTokenExchangeDelegatingHandler
-            return Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, assemblyVersion);
         }
 
         /// <summary>

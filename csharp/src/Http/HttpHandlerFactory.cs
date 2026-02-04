@@ -175,30 +175,28 @@ namespace AdbcDrivers.Databricks.Http
 
         /// <summary>
         /// Adds authentication handlers to the handler chain.
-        /// Returns the new handler chain with auth handlers added, or null if auth is required but not available.
+        /// Always returns a handler. Throws exceptions on configuration errors.
+        /// If no auth is configured, returns the handler unchanged.
         /// </summary>
         /// <param name="handler">The current handler chain.</param>
         /// <param name="properties">Connection properties.</param>
         /// <param name="host">The Databricks host.</param>
         /// <param name="authHttpClient">HTTP client for auth operations (required for OAuth).</param>
         /// <param name="identityFederationClientId">Identity federation client ID (optional).</param>
-        /// <param name="authHttpClientOut">Output: the auth HTTP client (pass-through from input, used by CreateHandlers to return in HandlerResult).</param>
-        /// <returns>Handler with auth handlers added, or null if required auth is not available.</returns>
-        private static HttpMessageHandler? AddAuthHandlers(
+        /// <returns>Handler with auth handlers added, or the original handler if no auth is configured.</returns>
+        /// <exception cref="ArgumentException">Thrown when OAuth is configured but required credentials are missing.</exception>
+        private static HttpMessageHandler AddAuthHandlers(
             HttpMessageHandler handler,
             IReadOnlyDictionary<string, string> properties,
             string host,
             HttpClient? authHttpClient,
-            string? identityFederationClientId,
-            out HttpClient? authHttpClientOut)
+            string? identityFederationClientId)
         {
-            authHttpClientOut = authHttpClient;
-
             if (IsOAuthEnabled(properties))
             {
                 if (authHttpClient == null)
                 {
-                    return null; // OAuth requires auth HTTP client
+                    throw new ArgumentException("OAuth authentication requires an auth HTTP client.");
                 }
 
                 ITokenExchangeClient tokenExchangeClient = new TokenExchangeClient(authHttpClient, host);
@@ -217,16 +215,18 @@ namespace AdbcDrivers.Databricks.Http
                     var tokenProvider = CreateOAuthClientCredentialsProvider(properties, authHttpClient, host);
                     if (tokenProvider == null)
                     {
-                        return null; // Missing client credentials
+                        throw new ArgumentException(
+                            $"OAuth client_credentials grant type requires '{DatabricksParameters.OAuthClientId}' and '{DatabricksParameters.OAuthClientSecret}' parameters.");
                     }
                     handler = new OAuthDelegatingHandler(handler, tokenProvider);
                 }
                 else if (grantType == DatabricksOAuthGrantType.AccessToken)
                 {
-                    string? accessToken = AuthHelper.GetTokenFromProperties(properties);
+                    string? accessToken = GetTokenFromProperties(properties);
                     if (string.IsNullOrEmpty(accessToken))
                     {
-                        return null; // No access token
+                        throw new ArgumentException(
+                            $"OAuth access_token grant type requires '{SparkParameters.AccessToken}' or '{SparkParameters.Token}' parameter.");
                     }
 
                     // Enable token refresh if configured and token is JWT with expiry
@@ -249,24 +249,41 @@ namespace AdbcDrivers.Databricks.Http
                 }
                 else
                 {
-                    return null; // Unknown grant type
+                    throw new ArgumentException(
+                        $"Unknown OAuth grant type. Supported values: '{DatabricksConstants.OAuthGrantTypes.AccessToken}', '{DatabricksConstants.OAuthGrantTypes.ClientCredentials}'.");
                 }
             }
             else
             {
                 // Non-OAuth authentication: use static Bearer token if provided
-                string? accessToken = AuthHelper.GetTokenFromProperties(properties);
+                string? accessToken = GetTokenFromProperties(properties);
                 if (!string.IsNullOrEmpty(accessToken))
                 {
                     handler = new StaticBearerTokenHandler(handler, accessToken);
                 }
-                else
-                {
-                    return null; // No auth available
-                }
+                // If no token, return handler unchanged (no auth)
             }
 
             return handler;
+        }
+
+        /// <summary>
+        /// Gets the access token from connection properties.
+        /// Tries access_token first, then falls back to token.
+        /// </summary>
+        private static string? GetTokenFromProperties(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(SparkParameters.AccessToken, out string? accessToken) && !string.IsNullOrEmpty(accessToken))
+            {
+                return accessToken;
+            }
+
+            if (properties.TryGetValue(SparkParameters.Token, out string? token) && !string.IsNullOrEmpty(token))
+            {
+                return token;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -329,17 +346,16 @@ namespace AdbcDrivers.Databricks.Http
             }
 
             // Add auth handlers
-            var resultHandler = AddAuthHandlers(
+            handler = AddAuthHandlers(
                 handler,
                 config.Properties,
                 config.Host,
                 authHttpClient,
-                config.IdentityFederationClientId,
-                out authHttpClient);
+                config.IdentityFederationClientId);
 
             return new HandlerResult
             {
-                Handler = resultHandler ?? handler, // Fall back to handler without auth if auth not configured
+                Handler = handler,
                 AuthHttpClient = authHttpClient
             };
         }
@@ -363,8 +379,8 @@ namespace AdbcDrivers.Databricks.Http
         /// <param name="properties">Connection properties containing configuration.</param>
         /// <param name="host">The Databricks host (without protocol).</param>
         /// <param name="timeoutSeconds">HTTP client timeout in seconds.</param>
-        /// <returns>Configured HttpMessageHandler, or null if no valid authentication is available.</returns>
-        public static HttpMessageHandler? CreateFeatureFlagHandler(
+        /// <returns>Configured HttpMessageHandler.</returns>
+        public static HttpMessageHandler CreateFeatureFlagHandler(
             IReadOnlyDictionary<string, string> properties,
             string host,
             int timeoutSeconds)
@@ -391,8 +407,7 @@ namespace AdbcDrivers.Databricks.Http
                 properties,
                 host,
                 authHttpClient,
-                identityFederationClientId,
-                out _);
+                identityFederationClientId);
         }
     }
 }
