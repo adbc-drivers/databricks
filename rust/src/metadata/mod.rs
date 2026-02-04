@@ -21,10 +21,11 @@
 //! ## Module Structure
 //!
 //! - `types`: Data structures for metadata query results
+//! - `sql`: SQL command builder for metadata queries
 
+pub mod sql;
 pub mod types;
 
 // Re-export commonly used types
-pub use types::{
-    CatalogInfo, ColumnInfo, ForeignKeyInfo, PrimaryKeyInfo, SchemaInfo, TableInfo,
-};
+pub use sql::SqlCommandBuilder;
+pub use types::{CatalogInfo, ColumnInfo, ForeignKeyInfo, PrimaryKeyInfo, SchemaInfo, TableInfo};
