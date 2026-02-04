@@ -81,6 +81,7 @@ pub mod connection;
 pub mod database;
 pub mod driver;
 pub mod error;
+pub mod metadata;
 pub mod reader;
 pub mod result;
 pub mod statement;
