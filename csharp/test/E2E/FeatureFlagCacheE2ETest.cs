@@ -208,7 +208,9 @@ namespace AdbcDrivers.Databricks.Tests
         /// </summary>
         private string? GetNormalizedHostName()
         {
-            var hostName = TestConfiguration.HostName ?? TestConfiguration.Uri;
+            var hostName = !string.IsNullOrEmpty(TestConfiguration.HostName)
+                ? TestConfiguration.HostName
+                : TestConfiguration.Uri;
             if (string.IsNullOrEmpty(hostName))
             {
                 return null;
