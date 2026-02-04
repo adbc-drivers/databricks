@@ -316,8 +316,10 @@ version = "0.1.0"
 dependencies = [
  "adbc_core",
  "arrow-array",
+ "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
+ "arrow-select",
  "async-trait",
  "chrono",
  "dashmap",

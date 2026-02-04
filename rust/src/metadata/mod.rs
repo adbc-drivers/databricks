@@ -24,13 +24,22 @@
 //! - `sql`: SQL command builder for metadata queries
 //! - `type_mapping`: Type conversion functions for Databricks to Arrow/XDBC
 //! - `service`: MetadataService for executing metadata queries
+//! - `schemas`: Arrow schema definitions for ADBC get_objects() result
+//! - `builder`: GetObjectsBuilder for constructing nested Arrow structures
 
+pub mod builder;
+pub mod schemas;
 pub mod service;
 pub mod sql;
 pub mod type_mapping;
 pub mod types;
 
 // Re-export commonly used types
+pub use builder::GetObjectsBuilder;
+pub use schemas::{
+    column_schema, constraint_schema, db_schema_schema, get_objects_schema, table_schema,
+    usage_schema,
+};
 pub use service::MetadataService;
 pub use sql::SqlCommandBuilder;
 pub use type_mapping::{databricks_type_to_arrow, databricks_type_to_xdbc, parse_decimal_params};

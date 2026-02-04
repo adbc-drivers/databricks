@@ -184,10 +184,9 @@ impl ResultReaderFactory {
             "STRING" => DataType::Utf8,
             "BINARY" => DataType::Binary,
             "DATE" => DataType::Date32,
-            "TIMESTAMP" | "TIMESTAMP_NTZ" => DataType::Timestamp(
-                arrow_schema::TimeUnit::Microsecond,
-                None,
-            ),
+            "TIMESTAMP" | "TIMESTAMP_NTZ" => {
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+            }
             // For complex types and unknown types, fall back to string
             // The actual Arrow IPC data will have the correct type
             _ => {

@@ -96,9 +96,7 @@ impl MetadataService {
             // SHOW CATALOGS returns a single column "catalog" with catalog names
             let catalog_names = self.extract_string_column(&batch, 0)?;
             for name in catalog_names {
-                catalogs.push(CatalogInfo {
-                    catalog_name: name,
-                });
+                catalogs.push(CatalogInfo { catalog_name: name });
             }
         }
 
@@ -140,9 +138,7 @@ impl MetadataService {
         for batch in batches {
             // SHOW SCHEMAS IN ALL CATALOGS returns: catalog, databaseName
             // SHOW SCHEMAS IN `catalog` returns: databaseName (single column)
-            let is_all_catalogs = catalog.is_none()
-                || catalog == Some("")
-                || catalog == Some("%");
+            let is_all_catalogs = catalog.is_none() || catalog == Some("") || catalog == Some("%");
 
             if is_all_catalogs && batch.num_columns() >= 2 {
                 // All catalogs: first column is catalog, second is schema
@@ -246,9 +242,7 @@ impl MetadataService {
                             );
                         }
                         StatementState::Closed => {
-                            return Err(
-                                DatabricksErrorHelper::io().message("Statement was closed")
-                            );
+                            return Err(DatabricksErrorHelper::io().message("Statement was closed"));
                         }
                     }
                 }
@@ -272,14 +266,14 @@ impl MetadataService {
     /// This method handles extracting the inline data and converting it to Arrow RecordBatches.
     fn extract_result_batches(&self, statement_id: &str) -> Result<Vec<RecordBatch>> {
         // Get the final response with results
-        let response = self.runtime.block_on(async {
-            self.client.get_statement_status(statement_id).await
-        })?;
+        let response = self
+            .runtime
+            .block_on(async { self.client.get_statement_status(statement_id).await })?;
 
         // Check if we have a manifest with schema information
-        let manifest = response.manifest.ok_or_else(|| {
-            DatabricksErrorHelper::io().message("No result manifest available")
-        })?;
+        let manifest = response
+            .manifest
+            .ok_or_else(|| DatabricksErrorHelper::io().message("No result manifest available"))?;
 
         // For metadata queries, we expect inline data or very small results
         // If external links are present, we need to fetch them
@@ -402,7 +396,11 @@ impl MetadataService {
     }
 
     /// Extract string values from a column in a RecordBatch.
-    fn extract_string_column(&self, batch: &RecordBatch, column_index: usize) -> Result<Vec<String>> {
+    fn extract_string_column(
+        &self,
+        batch: &RecordBatch,
+        column_index: usize,
+    ) -> Result<Vec<String>> {
         if column_index >= batch.num_columns() {
             return Err(DatabricksErrorHelper::invalid_argument()
                 .message(format!("Column index {} out of bounds", column_index)));
@@ -456,10 +454,8 @@ mod tests {
         }
 
         fn with_catalogs(catalogs: Vec<&str>) -> Self {
-            let data_array: Vec<Vec<String>> = catalogs
-                .iter()
-                .map(|c| vec![c.to_string()])
-                .collect();
+            let data_array: Vec<Vec<String>> =
+                catalogs.iter().map(|c| vec![c.to_string()]).collect();
 
             let response = ExecuteResponse {
                 statement_id: "stmt-1".to_string(),
@@ -708,7 +704,8 @@ mod tests {
     fn test_metadata_service_new() {
         let runtime = create_test_runtime();
         let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
-        let service = MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
         assert_eq!(service.session_id, "session-1");
     }
@@ -717,7 +714,8 @@ mod tests {
     fn test_extract_string_column() {
         let runtime = create_test_runtime();
         let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
-        let service = MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
         // Create a simple RecordBatch with string data
         let array = StringArray::from(vec!["main", "catalog1", "catalog2"]);
@@ -736,7 +734,8 @@ mod tests {
     fn test_extract_string_column_with_nulls() {
         let runtime = create_test_runtime();
         let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
-        let service = MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
         // Create a RecordBatch with null values
         let array = StringArray::from(vec![Some("main"), None, Some("catalog2")]);
@@ -755,7 +754,8 @@ mod tests {
     fn test_extract_string_column_out_of_bounds() {
         let runtime = create_test_runtime();
         let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
-        let service = MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
         let array = StringArray::from(vec!["main"]);
         let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
@@ -773,7 +773,8 @@ mod tests {
     fn test_convert_data_array_to_batches() {
         let runtime = create_test_runtime();
         let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
-        let service = MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
         let data_array = vec![
             vec!["main".to_string()],
@@ -822,7 +823,8 @@ mod tests {
     fn test_convert_data_array_empty() {
         let runtime = create_test_runtime();
         let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
-        let service = MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
         let data_array: Vec<Vec<String>> = vec![];
 
@@ -862,7 +864,8 @@ mod tests {
     fn test_map_databricks_type() {
         let runtime = create_test_runtime();
         let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
-        let service = MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
         assert_eq!(
             service.map_databricks_type("BOOLEAN"),
@@ -891,7 +894,8 @@ mod tests {
     fn test_build_schema_from_manifest() {
         let runtime = create_test_runtime();
         let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
-        let service = MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
         let manifest = ResultManifest {
             format: "JSON_ARRAY".to_string(),
@@ -931,8 +935,11 @@ mod tests {
     #[test]
     fn test_list_catalogs_with_mock() {
         let runtime = create_test_runtime();
-        let client: Arc<dyn DatabricksClient> =
-            Arc::new(MockClient::with_catalogs(vec!["main", "hive_metastore", "system"]));
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_catalogs(vec![
+            "main",
+            "hive_metastore",
+            "system",
+        ]));
         let service =
             MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
 
