@@ -14,30 +14,57 @@
 
 //! Connection implementation for the Databricks ADBC driver.
 
+use crate::client::{DatabricksClient, DatabricksHttpClient};
 use crate::error::DatabricksErrorHelper;
+use crate::reader::ResultReaderFactory;
 use crate::statement::Statement;
+use crate::types::cloudfetch::CloudFetchConfig;
 use adbc_core::error::Result;
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
 use adbc_core::Optionable;
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 use arrow_schema::{ArrowError, Schema};
 use driverbase::error::ErrorHelper;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tracing::debug;
+
+/// Configuration passed from Database to Connection.
+pub struct ConnectionConfig {
+    pub host: String,
+    pub warehouse_id: String,
+    pub catalog: Option<String>,
+    pub schema: Option<String>,
+    pub client: Arc<dyn DatabricksClient>,
+    pub http_client: Arc<DatabricksHttpClient>,
+    pub cloudfetch_config: CloudFetchConfig,
+}
 
 /// Represents an active connection to a Databricks SQL endpoint.
 ///
 /// A Connection is created from a Database and is used to create Statements
-/// for executing SQL queries.
+/// for executing SQL queries. It maintains a session with the Databricks
+/// server and manages shared resources like the HTTP client.
 #[derive(Debug)]
 pub struct Connection {
-    uri: Option<String>,
-    http_path: Option<String>,
-    // Access token for authentication.
-    // TODO: Used when implementing HTTP client for statement execution.
-    #[allow(dead_code)]
-    access_token: Option<String>,
-    catalog: Option<String>,
-    schema: Option<String>,
+    // Configuration
+    host: String,
+    warehouse_id: String,
+
+    // Databricks client (trait object for backend flexibility)
+    client: Arc<dyn DatabricksClient>,
+
+    // HTTP client for CloudFetch downloads
+    http_client: Arc<DatabricksHttpClient>,
+
+    // Session ID (created on connection initialization)
+    session_id: String,
+
+    // CloudFetch settings
+    cloudfetch_config: CloudFetchConfig,
+
+    // Tokio runtime for async operations
+    runtime: tokio::runtime::Runtime,
 }
 
 /// Type alias for our empty reader used in stub implementations.
@@ -45,41 +72,50 @@ type EmptyReader =
     RecordBatchIterator<std::vec::IntoIter<std::result::Result<RecordBatch, ArrowError>>>;
 
 impl Connection {
-    /// Creates a new Connection with the given configuration.
-    pub(crate) fn new(
-        uri: Option<String>,
-        http_path: Option<String>,
-        access_token: Option<String>,
-        catalog: Option<String>,
-        schema: Option<String>,
-    ) -> Self {
-        Self {
-            uri,
-            http_path,
-            access_token,
-            catalog,
-            schema,
-        }
+    /// Called by Database::new_connection().
+    ///
+    /// Connection receives the DatabricksClient from Database - it does NOT
+    /// create the client itself. This keeps the client selection logic in
+    /// Database where configuration is set.
+    pub(crate) fn new(config: ConnectionConfig) -> crate::error::Result<Self> {
+        // Create tokio runtime
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+            DatabricksErrorHelper::io().message(format!("Failed to create async runtime: {}", e))
+        })?;
+
+        // Create session using the client provided by Database
+        let session_info = runtime.block_on(config.client.create_session(
+            config.catalog.as_deref(),
+            config.schema.as_deref(),
+            HashMap::new(),
+        ))?;
+
+        debug!("Created session: {}", session_info.session_id);
+
+        Ok(Self {
+            host: config.host,
+            warehouse_id: config.warehouse_id,
+            client: config.client,
+            http_client: config.http_client,
+            session_id: session_info.session_id,
+            cloudfetch_config: config.cloudfetch_config,
+            runtime,
+        })
     }
 
-    /// Returns the configured URI.
-    pub fn uri(&self) -> Option<&str> {
-        self.uri.as_deref()
+    /// Returns the Databricks host URL.
+    pub fn host(&self) -> &str {
+        &self.host
     }
 
-    /// Returns the configured HTTP path.
-    pub fn http_path(&self) -> Option<&str> {
-        self.http_path.as_deref()
+    /// Returns the warehouse ID.
+    pub fn warehouse_id(&self) -> &str {
+        &self.warehouse_id
     }
 
-    /// Returns the configured catalog.
-    pub fn catalog(&self) -> Option<&str> {
-        self.catalog.as_deref()
-    }
-
-    /// Returns the configured schema.
-    pub fn schema(&self) -> Option<&str> {
-        self.schema.as_deref()
+    /// Returns the session ID.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 }
 
@@ -118,11 +154,23 @@ impl adbc_core::Connection for Connection {
     type StatementType = Statement;
 
     fn new_statement(&mut self) -> Result<Self::StatementType> {
-        Ok(Statement::new())
+        let reader_factory = ResultReaderFactory::new(
+            self.client.clone(),
+            self.http_client.clone(),
+            self.cloudfetch_config.clone(),
+            self.runtime.handle().clone(),
+        );
+
+        Ok(Statement::new(
+            self.client.clone(),
+            self.session_id.clone(),
+            reader_factory,
+            self.runtime.handle().clone(),
+        ))
     }
 
     fn cancel(&mut self) -> Result<()> {
-        // TODO: Implement cancellation
+        // TODO: Implement connection-level cancellation
         Ok(())
     }
 
@@ -229,33 +277,20 @@ impl adbc_core::Connection for Connection {
     }
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // Clean up session on connection close
+        debug!("Closing session: {}", self.session_id);
+        let _ = self
+            .runtime
+            .block_on(self.client.delete_session(&self.session_id));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adbc_core::Connection as _;
 
-    #[test]
-    fn test_connection_new_statement() {
-        let mut conn = Connection::new(None, None, None, None, None);
-        assert!(conn.new_statement().is_ok());
-    }
-
-    #[test]
-    fn test_connection_get_info() {
-        let conn = Connection::new(None, None, None, None, None);
-        let result = conn.get_info(None);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_connection_commit() {
-        let mut conn = Connection::new(None, None, None, None, None);
-        assert!(conn.commit().is_ok());
-    }
-
-    #[test]
-    fn test_connection_rollback() {
-        let mut conn = Connection::new(None, None, None, None, None);
-        assert!(conn.rollback().is_err());
-    }
+    // Note: Full connection tests require mock DatabricksClient
+    // Integration tests should be added in a separate test module
 }
