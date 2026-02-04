@@ -57,6 +57,9 @@ pub struct ExecuteResultData {
     pub next_chunk_internal_link: Option<String>,
     pub external_links: Option<Vec<CloudFetchLink>>,
     pub has_inline_data: bool,
+    /// Inline data for small results (e.g., metadata queries).
+    /// Each inner Vec represents a row, with string values for each column.
+    pub data_array: Option<Vec<Vec<String>>>,
 }
 
 /// Result of fetching chunk links.

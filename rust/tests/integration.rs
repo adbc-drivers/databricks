@@ -13,6 +13,14 @@
 // limitations under the License.
 
 //! Integration tests for the Databricks ADBC driver.
+//!
+//! This module contains:
+//! - Basic driver/database/connection tests (run without Databricks connection)
+//! - End-to-end tests requiring real Databricks connection (marked #[ignore])
+//! - Metadata tests in the `integration/metadata_tests` submodule
+
+// Include the metadata tests submodule
+mod metadata;
 
 use adbc_core::options::{OptionDatabase, OptionValue};
 use adbc_core::Database as _;
