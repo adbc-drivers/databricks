@@ -85,8 +85,8 @@ namespace AdbcDrivers.Databricks.Http
         /// <param name="properties">Connection properties.</param>
         /// <param name="host">The Databricks host (without protocol).</param>
         /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
-        /// <returns>Configured HttpClient for feature flags, or null if no valid authentication is available.</returns>
-        public static HttpClient? CreateFeatureFlagHttpClient(
+        /// <returns>Configured HttpClient for feature flags.</returns>
+        public static HttpClient CreateFeatureFlagHttpClient(
             IReadOnlyDictionary<string, string> properties,
             string host,
             string assemblyVersion)
@@ -100,10 +100,6 @@ namespace AdbcDrivers.Databricks.Http
 
             // Create handler with full auth chain (including WIF support)
             var handler = HttpHandlerFactory.CreateFeatureFlagHandler(properties, host, timeoutSeconds);
-            if (handler == null)
-            {
-                return null;
-            }
 
             var httpClient = new HttpClient(handler)
             {
