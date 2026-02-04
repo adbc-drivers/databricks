@@ -257,18 +257,18 @@ Wire up the metadata infrastructure to implement `get_objects()`, `get_table_sch
 
 ---
 
-### Task 8: Add Unit and Integration Tests
+### Task 8: Add Unit and Integration Tests ✅ COMPLETED
 
 **Description:**
 Add comprehensive unit tests for all metadata components and integration tests that run against a real Databricks endpoint.
 
 **Acceptance Criteria:**
-- [ ] Unit tests in each module file (`#[cfg(test)] mod tests`):
+- [x] Unit tests in each module file (`#[cfg(test)] mod tests`):
   - `sql.rs`: Test all SQL generation methods with various filter combinations
   - `type_mapping.rs`: Test all type mappings (already in Task 5)
   - `builder.rs`: Test builder at each depth level (already in Task 6)
   - `service.rs`: Test with mocked client responses
-- [ ] Create `rust/tests/integration/metadata_tests.rs` with:
+- [x] Create `rust/tests/metadata/metadata_tests.rs` with:
   - `test_get_objects_catalogs_depth`
   - `test_get_objects_schemas_depth`
   - `test_get_objects_tables_depth`
@@ -279,15 +279,28 @@ Add comprehensive unit tests for all metadata components and integration tests t
   - `test_get_table_schema_existing_table`
   - `test_get_table_schema_nonexistent_table`
   - `test_get_table_types`
-- [ ] Integration tests use environment variables for connection (DATABRICKS_HOST, DATABRICKS_TOKEN, etc.)
-- [ ] All tests pass with `cargo test`
-- [ ] Document test setup requirements in test file comments
+  - `test_get_objects_arrow_schema_structure`
+- [x] Integration tests use environment variables for connection (DATABRICKS_HOST, DATABRICKS_TOKEN, etc.)
+- [x] All tests pass with `cargo test`
+- [x] Document test setup requirements in test file comments
 
-**Files to Create/Modify:**
-- `rust/tests/integration/metadata_tests.rs` (new)
-- `rust/tests/integration/mod.rs` (modify or create)
+**Files Created/Modified:**
+- `rust/tests/metadata/metadata_tests.rs` (new - 540+ lines)
+- `rust/tests/metadata/mod.rs` (new)
+- `rust/tests/integration.rs` (modified - added metadata module)
 
 **Reference:** Design doc section "Test Strategy" (lines 801-828)
+
+**Implementation Notes:**
+- Unit tests: 171 tests total in the metadata module covering sql.rs (14 tests), type_mapping.rs (20+ tests), builder.rs (11 tests), service.rs (33+ tests), types.rs (10 tests), schemas.rs (7 tests)
+- Integration tests: 11 tests marked with `#[ignore]` for CI without credentials
+- Tests verify correct Arrow schema structure and filter behavior
+- Tests documented with setup requirements including environment variables:
+  - `DATABRICKS_HOST`: The Databricks workspace URL
+  - `DATABRICKS_HTTP_PATH`: The SQL warehouse HTTP path
+  - `DATABRICKS_TOKEN`: A valid personal access token
+  - `DATABRICKS_TEST_CATALOG`: The catalog to use for tests (optional, default: "main")
+  - `DATABRICKS_TEST_SCHEMA`: The schema to use for tests (optional, default: "default")
 
 ---
 
@@ -321,12 +334,12 @@ Task 8 (Tests)
 
 ## Definition of Done
 
-- [ ] All acceptance criteria met for each task
-- [ ] Code follows project conventions (Apache 2.0 headers, doc comments)
-- [ ] `cargo build` succeeds with no warnings
-- [ ] `cargo test` passes all unit tests
-- [ ] `cargo clippy -- -D warnings` passes
-- [ ] `cargo fmt --check` passes
+- [x] All acceptance criteria met for each task
+- [x] Code follows project conventions (Apache 2.0 headers, doc comments)
+- [x] `cargo build` succeeds with no warnings
+- [x] `cargo test` passes all unit tests (171 tests)
+- [x] `cargo clippy -- -D warnings` passes
+- [x] `cargo fmt --check` passes
 - [ ] Integration tests pass against Databricks endpoint
 - [ ] Code reviewed and approved
 

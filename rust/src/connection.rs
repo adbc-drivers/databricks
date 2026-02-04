@@ -131,9 +131,8 @@ impl Connection {
 
         // Convert SQL LIKE pattern to regex-like matching
         let mut regex_pattern = String::new();
-        let mut chars = pattern.chars().peekable();
 
-        while let Some(c) = chars.next() {
+        for c in pattern.chars() {
             match c {
                 '%' => regex_pattern.push_str(".*"),
                 '_' => regex_pattern.push('.'),
@@ -254,16 +253,16 @@ impl adbc_core::Connection for Connection {
         );
 
         // Step 1: Get catalogs (filtered by pattern if provided)
-        let catalogs = metadata_service
-            .list_catalogs()
-            .map_err(|e| e.to_adbc())?;
+        let catalogs = metadata_service.list_catalogs().map_err(|e| e.to_adbc())?;
 
         // Filter catalogs by pattern if provided
         let catalogs: Vec<_> = catalogs
             .into_iter()
             .filter(|c| match catalog {
                 None => true,
-                Some(pattern) => pattern.is_empty() || Self::matches_pattern(&c.catalog_name, pattern),
+                Some(pattern) => {
+                    pattern.is_empty() || Self::matches_pattern(&c.catalog_name, pattern)
+                }
             })
             .collect();
 
@@ -291,7 +290,9 @@ impl adbc_core::Connection for Connection {
                 }
 
                 // Step 3: Get tables for this schema
-                let table_type_slice: Option<Vec<&str>> = table_type.as_ref().map(|v| v.iter().map(|s| s.as_ref()).collect());
+                let table_type_slice: Option<Vec<&str>> = table_type
+                    .as_ref()
+                    .map(|v| v.iter().map(|s| s.as_ref()).collect());
                 let tables = metadata_service
                     .list_tables(
                         Some(&cat.catalog_name),
@@ -330,11 +331,19 @@ impl adbc_core::Connection for Connection {
 
                     // Step 5: Get constraints (primary keys, foreign keys)
                     let pks = metadata_service
-                        .list_primary_keys(&cat.catalog_name, &schema.schema_name, &table.table_name)
+                        .list_primary_keys(
+                            &cat.catalog_name,
+                            &schema.schema_name,
+                            &table.table_name,
+                        )
                         .unwrap_or_default();
 
                     let fks = metadata_service
-                        .list_foreign_keys(&cat.catalog_name, &schema.schema_name, &table.table_name)
+                        .list_foreign_keys(
+                            &cat.catalog_name,
+                            &schema.schema_name,
+                            &table.table_name,
+                        )
                         .unwrap_or_default();
 
                     builder.add_constraints(
