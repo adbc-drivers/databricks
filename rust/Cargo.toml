@@ -61,6 +61,9 @@ async-trait = "0.1"
 # Error handling
 thiserror = "2"
 
+# Pattern matching for metadata filtering
+regex = "1"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"

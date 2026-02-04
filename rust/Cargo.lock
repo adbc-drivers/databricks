@@ -326,6 +326,7 @@ dependencies = [
  "driverbase",
  "futures",
  "lz4_flex",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
