@@ -122,33 +122,41 @@ Implement the `MetadataService` struct that executes metadata SQL queries via th
 
 ---
 
-### Task 4: Implement MetadataService Table and Column Methods
+### Task 4: Implement MetadataService Table and Column Methods ✅ COMPLETED
 
 **Description:**
 Extend `MetadataService` with methods for listing tables, columns, primary keys, and foreign keys. These are needed for the full `get_objects()` implementation.
 
 **Acceptance Criteria:**
-- [ ] Implement `list_tables(catalog, schema_pattern, table_pattern, table_types) -> Result<Vec<TableInfo>>`:
+- [x] Implement `list_tables(catalog, schema_pattern, table_pattern, table_types) -> Result<Vec<TableInfo>>`:
   - Build SQL with all filters using `SqlCommandBuilder`
   - Filter by table_types if provided
   - Parse Arrow result into `TableInfo` structs
-- [ ] Implement `list_columns(catalog, schema_pattern, table_pattern, column_pattern) -> Result<Vec<ColumnInfo>>`:
+- [x] Implement `list_columns(catalog, schema_pattern, table_pattern, column_pattern) -> Result<Vec<ColumnInfo>>`:
   - Build SQL using `SqlCommandBuilder`
   - Parse Arrow result with all column metadata fields
-- [ ] Implement `list_table_types() -> Vec<String>`:
+- [x] Implement `list_table_types() -> Vec<String>`:
   - Return static list: `["SYSTEM TABLE", "TABLE", "VIEW", "METRIC_VIEW"]`
-- [ ] Implement `list_primary_keys(catalog, schema, table) -> Result<Vec<PrimaryKeyInfo>>`:
+- [x] Implement `list_primary_keys(catalog, schema, table) -> Result<Vec<PrimaryKeyInfo>>`:
   - Execute `SHOW KEYS` query
   - Parse result into `PrimaryKeyInfo` structs
-- [ ] Implement `list_foreign_keys(catalog, schema, table) -> Result<Vec<ForeignKeyInfo>>`:
+- [x] Implement `list_foreign_keys(catalog, schema, table) -> Result<Vec<ForeignKeyInfo>>`:
   - Execute `SHOW FOREIGN KEYS` query
   - Parse result into `ForeignKeyInfo` structs
-- [ ] Add unit tests for each method
+- [x] Add unit tests for each method
 
-**Files to Create/Modify:**
-- `rust/src/metadata/service.rs` (modify)
+**Files Modified:**
+- `rust/src/metadata/service.rs` (modified - added 5 new methods with 33+ unit tests)
 
 **Reference:** Design doc sections "MetadataService Interface" (lines 109-165) and "SQL Commands for Metadata" (lines 80-94)
+
+**Implementation Notes:**
+- `list_tables()` uses `SqlCommandBuilder` to generate SHOW TABLES query with catalog/schema/table filters
+- Table type normalization maps Databricks-specific types (MANAGED, EXTERNAL) to standard ADBC types (TABLE)
+- `list_columns()` parses type info to extract column_size, decimal_digits, and num_prec_radix from type strings
+- Ordinal positions are recomputed per table to ensure correct 1-based ordering
+- `list_primary_keys()` and `list_foreign_keys()` use static SQL builders for fully qualified queries
+- All methods handle empty results gracefully and return empty vectors
 
 ---
 

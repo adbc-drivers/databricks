@@ -31,12 +31,18 @@
 use crate::client::DatabricksClient;
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::metadata::sql::SqlCommandBuilder;
-use crate::metadata::types::{CatalogInfo, SchemaInfo};
+use crate::metadata::types::{
+    CatalogInfo, ColumnInfo, ForeignKeyInfo, PrimaryKeyInfo, SchemaInfo, TableInfo,
+};
 use crate::types::sea::{ExecuteParams, StatementState};
 use arrow_array::{Array, RecordBatch, StringArray};
 use driverbase::error::ErrorHelper;
 use std::sync::Arc;
 use tracing::debug;
+
+/// Supported table types in Databricks.
+/// From databricks-jdbc MetadataResultConstants.java
+const TABLE_TYPES: &[&str] = &["SYSTEM TABLE", "TABLE", "VIEW", "METRIC_VIEW"];
 
 /// Service for executing metadata queries via SEA.
 ///
@@ -167,6 +173,432 @@ impl MetadataService {
 
         debug!("Found {} schemas", schemas.len());
         Ok(schemas)
+    }
+
+    /// List tables, optionally filtered by catalog, schema, table pattern, and table types.
+    ///
+    /// Executes `SHOW TABLES IN CATALOG {catalog}` or `SHOW TABLES IN ALL CATALOGS`
+    /// and returns the list of tables.
+    ///
+    /// # Arguments
+    ///
+    /// * `catalog` - Optional catalog to filter by. If None or "%", queries all catalogs.
+    /// * `schema_pattern` - Optional LIKE pattern for schema names.
+    /// * `table_pattern` - Optional LIKE pattern for table names.
+    /// * `table_types` - Optional list of table types to filter by (e.g., ["TABLE", "VIEW"]).
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`TableInfo`] containing table metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query execution fails.
+    pub fn list_tables(
+        &self,
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+        table_pattern: Option<&str>,
+        table_types: Option<&[&str]>,
+    ) -> Result<Vec<TableInfo>> {
+        let sql = SqlCommandBuilder::new()
+            .with_catalog(catalog)
+            .with_schema_pattern(schema_pattern)
+            .with_table_pattern(table_pattern)
+            .build_show_tables();
+        debug!("Executing metadata query: {}", sql);
+
+        let batches = self.execute_metadata_query(&sql)?;
+
+        let mut tables = Vec::new();
+        for batch in batches {
+            // SHOW TABLES returns columns: catalog, database/schema, tableName, tableType, isTemporary
+            // Column indices may vary based on query type, but we need at least 4 columns
+            if batch.num_columns() < 4 {
+                continue;
+            }
+
+            let catalog_names = self.extract_string_column(&batch, 0)?;
+            let schema_names = self.extract_string_column(&batch, 1)?;
+            let table_names = self.extract_string_column(&batch, 2)?;
+            let table_type_values = self.extract_string_column(&batch, 3)?;
+
+            for i in 0..catalog_names.len() {
+                let table_type = self.normalize_table_type(&table_type_values[i]);
+
+                // Filter by table_types if provided
+                if let Some(types) = table_types {
+                    if !types.is_empty()
+                        && !types.iter().any(|t| t.eq_ignore_ascii_case(&table_type))
+                    {
+                        continue;
+                    }
+                }
+
+                tables.push(TableInfo {
+                    catalog_name: catalog_names[i].clone(),
+                    schema_name: schema_names[i].clone(),
+                    table_name: table_names[i].clone(),
+                    table_type,
+                    remarks: None, // SHOW TABLES doesn't return remarks
+                });
+            }
+        }
+
+        debug!("Found {} tables", tables.len());
+        Ok(tables)
+    }
+
+    /// Normalizes table type strings to standard ADBC values.
+    ///
+    /// Databricks may return various forms like "MANAGED", "EXTERNAL", "VIEW", etc.
+    /// This method normalizes them to standard ADBC table types.
+    fn normalize_table_type(&self, table_type: &str) -> String {
+        let upper = table_type.to_uppercase();
+        match upper.as_str() {
+            "MANAGED" | "EXTERNAL" | "TABLE" => "TABLE".to_string(),
+            "VIEW" | "MATERIALIZED_VIEW" => "VIEW".to_string(),
+            "SYSTEM TABLE" => "SYSTEM TABLE".to_string(),
+            "METRIC_VIEW" => "METRIC_VIEW".to_string(),
+            _ => upper, // Return as-is for unknown types
+        }
+    }
+
+    /// List columns, optionally filtered by catalog, schema, table, and column patterns.
+    ///
+    /// Executes `SHOW COLUMNS IN CATALOG {catalog}` and returns detailed column metadata
+    /// including all XDBC fields.
+    ///
+    /// # Arguments
+    ///
+    /// * `catalog` - Required catalog to query (SHOW COLUMNS requires a catalog).
+    /// * `schema_pattern` - Optional LIKE pattern for schema names.
+    /// * `table_pattern` - Optional LIKE pattern for table names.
+    /// * `column_pattern` - Optional LIKE pattern for column names.
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`ColumnInfo`] containing detailed column metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query execution fails or if catalog is not provided.
+    pub fn list_columns(
+        &self,
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+        table_pattern: Option<&str>,
+        column_pattern: Option<&str>,
+    ) -> Result<Vec<ColumnInfo>> {
+        let sql = SqlCommandBuilder::new()
+            .with_catalog(catalog)
+            .with_schema_pattern(schema_pattern)
+            .with_table_pattern(table_pattern)
+            .with_column_pattern(column_pattern)
+            .build_show_columns()?;
+        debug!("Executing metadata query: {}", sql);
+
+        let batches = self.execute_metadata_query(&sql)?;
+
+        let mut columns = Vec::new();
+        for batch in batches {
+            // SHOW COLUMNS returns: catalog, database/schema, tableName, columnName, dataType,
+            // description, partition, comment, ... (varies by version)
+            // We need at least 5 columns for basic info
+            if batch.num_columns() < 5 {
+                continue;
+            }
+
+            let catalog_names = self.extract_string_column(&batch, 0)?;
+            let schema_names = self.extract_string_column(&batch, 1)?;
+            let table_names = self.extract_string_column(&batch, 2)?;
+            let column_names = self.extract_string_column(&batch, 3)?;
+            let data_types = self.extract_string_column(&batch, 4)?;
+
+            // Optional columns - try to extract if available
+            let comments = if batch.num_columns() > 5 {
+                self.extract_string_column(&batch, 5).ok()
+            } else {
+                None
+            };
+
+            for i in 0..catalog_names.len() {
+                let type_name = data_types[i].clone();
+                let (column_size, decimal_digits, num_prec_radix) =
+                    self.parse_column_type_info(&type_name);
+
+                // For SHOW COLUMNS, we assume columns are nullable by default
+                // since the query doesn't return nullability info
+                let nullable: i16 = 1; // Assume nullable
+                let is_nullable = "YES".to_string();
+
+                let remarks = comments.as_ref().and_then(|c| {
+                    let comment = &c[i];
+                    if comment.is_empty() {
+                        None
+                    } else {
+                        Some(comment.clone())
+                    }
+                });
+
+                columns.push(ColumnInfo {
+                    catalog_name: catalog_names[i].clone(),
+                    schema_name: schema_names[i].clone(),
+                    table_name: table_names[i].clone(),
+                    column_name: column_names[i].clone(),
+                    ordinal_position: (i + 1) as i32, // 1-based position within this result
+                    data_type: type_name.clone(),
+                    type_name: type_name.clone(),
+                    column_size,
+                    decimal_digits,
+                    num_prec_radix,
+                    nullable,
+                    remarks,
+                    column_def: None, // Not provided by SHOW COLUMNS
+                    is_nullable,
+                    is_autoincrement: None,   // Not provided by SHOW COLUMNS
+                    is_generatedcolumn: None, // Not provided by SHOW COLUMNS
+                });
+            }
+        }
+
+        // Recompute ordinal positions per table
+        self.recompute_ordinal_positions(&mut columns);
+
+        debug!("Found {} columns", columns.len());
+        Ok(columns)
+    }
+
+    /// Recomputes ordinal positions to be correct per table.
+    ///
+    /// SHOW COLUMNS returns columns in order, but the ordinal position needs
+    /// to be relative to each table, starting from 1.
+    fn recompute_ordinal_positions(&self, columns: &mut [ColumnInfo]) {
+        use std::collections::HashMap;
+
+        // Group columns by (catalog, schema, table) and assign positions
+        let mut position_counters: HashMap<(String, String, String), i32> = HashMap::new();
+
+        for col in columns.iter_mut() {
+            let key = (
+                col.catalog_name.clone(),
+                col.schema_name.clone(),
+                col.table_name.clone(),
+            );
+            let counter = position_counters.entry(key).or_insert(0);
+            *counter += 1;
+            col.ordinal_position = *counter;
+        }
+    }
+
+    /// Parse column type information to extract size, precision, and radix.
+    ///
+    /// For numeric types, extracts precision and scale from type names like "DECIMAL(10,2)".
+    /// For string types, estimates maximum length.
+    fn parse_column_type_info(&self, type_name: &str) -> (Option<i32>, Option<i16>, Option<i16>) {
+        let type_upper = type_name.to_uppercase();
+        let base_type = type_upper
+            .split(['(', '<'])
+            .next()
+            .unwrap_or(&type_upper)
+            .trim();
+
+        match base_type {
+            // Integer types - return bit width as column size
+            "TINYINT" | "BYTE" => (Some(3), Some(0), Some(10)), // 8-bit, 3 digits
+            "SMALLINT" | "SHORT" => (Some(5), Some(0), Some(10)), // 16-bit, 5 digits
+            "INT" | "INTEGER" => (Some(10), Some(0), Some(10)), // 32-bit, 10 digits
+            "BIGINT" | "LONG" => (Some(19), Some(0), Some(10)), // 64-bit, 19 digits
+
+            // Floating point - IEEE 754 precision
+            "FLOAT" | "REAL" => (Some(7), None, Some(2)), // ~7 significant digits
+            "DOUBLE" => (Some(15), None, Some(2)),        // ~15 significant digits
+
+            // Decimal - parse precision and scale
+            "DECIMAL" | "DEC" | "NUMERIC" => {
+                let (precision, scale) =
+                    crate::metadata::type_mapping::parse_decimal_params(type_name);
+                (Some(precision as i32), Some(scale as i16), Some(10))
+            }
+
+            // String types
+            "STRING" | "TEXT" => (Some(i32::MAX), None, None),
+            "VARCHAR" | "CHAR" => {
+                // Try to parse length from VARCHAR(n)
+                let size = self.parse_type_length(type_name).unwrap_or(i32::MAX);
+                (Some(size), None, None)
+            }
+
+            // Binary
+            "BINARY" | "VARBINARY" => (Some(i32::MAX), None, None),
+
+            // Boolean
+            "BOOLEAN" | "BOOL" => (Some(1), None, None),
+
+            // Date/Time
+            "DATE" => (Some(10), None, None), // YYYY-MM-DD
+            "TIMESTAMP" | "TIMESTAMP_NTZ" | "TIMESTAMP_LTZ" => (Some(29), None, None), // Full timestamp
+
+            // Complex types
+            "ARRAY" | "MAP" | "STRUCT" => (None, None, None),
+
+            // Unknown
+            _ => (None, None, None),
+        }
+    }
+
+    /// Parse type length from parameterized type strings like VARCHAR(255).
+    fn parse_type_length(&self, type_name: &str) -> Option<i32> {
+        let start = type_name.find('(')?;
+        let end = type_name.rfind(')')?;
+        if start >= end {
+            return None;
+        }
+        let params = &type_name[start + 1..end];
+        params.trim().parse::<i32>().ok()
+    }
+
+    /// List supported table types.
+    ///
+    /// Returns a static list of table types supported by Databricks:
+    /// - `SYSTEM TABLE`
+    /// - `TABLE`
+    /// - `VIEW`
+    /// - `METRIC_VIEW`
+    ///
+    /// # Returns
+    ///
+    /// A vector of table type strings.
+    pub fn list_table_types(&self) -> Vec<String> {
+        TABLE_TYPES.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// List primary keys for a specific table.
+    ///
+    /// Executes `SHOW KEYS IN CATALOG {catalog} IN SCHEMA {schema} IN TABLE {table}`
+    /// and returns the primary key information.
+    ///
+    /// # Arguments
+    ///
+    /// * `catalog` - The catalog containing the table.
+    /// * `schema` - The schema containing the table.
+    /// * `table` - The table name.
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`PrimaryKeyInfo`] containing primary key columns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query execution fails.
+    pub fn list_primary_keys(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<PrimaryKeyInfo>> {
+        let sql = SqlCommandBuilder::build_show_primary_keys(catalog, schema, table);
+        debug!("Executing metadata query: {}", sql);
+
+        let batches = self.execute_metadata_query(&sql)?;
+
+        let mut keys = Vec::new();
+        for batch in batches {
+            // SHOW KEYS returns: database, tableName, primaryKey
+            // or potentially more columns depending on version
+            // The primaryKey column contains the key column name
+            if batch.num_columns() < 3 {
+                continue;
+            }
+
+            // Try to parse based on expected column structure
+            // Some versions may return: pk_name, column_name, key_sequence
+            // Others may return: database, tableName, primaryKey
+            let column_names = self.extract_string_column(&batch, 2)?;
+
+            for (i, col_name) in column_names.iter().enumerate() {
+                if col_name.is_empty() {
+                    continue;
+                }
+                keys.push(PrimaryKeyInfo {
+                    catalog_name: catalog.to_string(),
+                    schema_name: schema.to_string(),
+                    table_name: table.to_string(),
+                    column_name: col_name.clone(),
+                    key_seq: (i + 1) as i16, // 1-based sequence
+                    pk_name: None,           // Not typically provided
+                });
+            }
+        }
+
+        debug!("Found {} primary key columns", keys.len());
+        Ok(keys)
+    }
+
+    /// List foreign keys for a specific table.
+    ///
+    /// Executes `SHOW FOREIGN KEYS IN CATALOG {catalog} IN SCHEMA {schema} IN TABLE {table}`
+    /// and returns the foreign key information.
+    ///
+    /// # Arguments
+    ///
+    /// * `catalog` - The catalog containing the table.
+    /// * `schema` - The schema containing the table.
+    /// * `table` - The table name.
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`ForeignKeyInfo`] containing foreign key relationships.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query execution fails.
+    pub fn list_foreign_keys(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>> {
+        let sql = SqlCommandBuilder::build_show_foreign_keys(catalog, schema, table);
+        debug!("Executing metadata query: {}", sql);
+
+        let batches = self.execute_metadata_query(&sql)?;
+
+        let mut keys = Vec::new();
+        for batch in batches {
+            // SHOW FOREIGN KEYS returns relationship information
+            // Expected columns vary by version, but typically include:
+            // fk_database, fk_table, fk_column, pk_database, pk_table, pk_column
+            if batch.num_columns() < 6 {
+                continue;
+            }
+
+            let fk_schemas = self.extract_string_column(&batch, 0)?;
+            let fk_tables = self.extract_string_column(&batch, 1)?;
+            let fk_columns = self.extract_string_column(&batch, 2)?;
+            let pk_schemas = self.extract_string_column(&batch, 3)?;
+            let pk_tables = self.extract_string_column(&batch, 4)?;
+            let pk_columns = self.extract_string_column(&batch, 5)?;
+
+            for i in 0..fk_schemas.len() {
+                keys.push(ForeignKeyInfo {
+                    pk_catalog: catalog.to_string(), // Assume same catalog
+                    pk_schema: pk_schemas[i].clone(),
+                    pk_table: pk_tables[i].clone(),
+                    pk_column: pk_columns[i].clone(),
+                    fk_catalog: catalog.to_string(),
+                    fk_schema: fk_schemas[i].clone(),
+                    fk_table: fk_tables[i].clone(),
+                    fk_column: fk_columns[i].clone(),
+                    key_seq: (i + 1) as i16, // 1-based sequence
+                    fk_name: None,           // Not typically provided
+                    pk_name: None,           // Not typically provided
+                });
+            }
+        }
+
+        debug!("Found {} foreign key relationships", keys.len());
+        Ok(keys)
     }
 
     /// Execute a metadata SQL query and return the result batches.
@@ -633,6 +1065,580 @@ mod tests {
 
             Self::new(vec![response, status_response])
         }
+
+        fn with_tables(tables: Vec<(&str, &str, &str, &str)>) -> Self {
+            // tables: (catalog, schema, table_name, table_type)
+            let data_array: Vec<Vec<String>> = tables
+                .iter()
+                .map(|(cat, schema, table, table_type)| {
+                    vec![
+                        cat.to_string(),
+                        schema.to_string(),
+                        table.to_string(),
+                        table_type.to_string(),
+                        "false".to_string(), // isTemporary
+                    ]
+                })
+                .collect();
+
+            let response = ExecuteResponse {
+                statement_id: "stmt-1".to_string(),
+                status: StatementStatus {
+                    state: StatementState::Succeeded,
+                    error: None,
+                },
+                manifest: Some(ResultManifest {
+                    format: "JSON_ARRAY".to_string(),
+                    schema: ResultSchema {
+                        column_count: 5,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "catalog".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 0,
+                            },
+                            ColumnInfo {
+                                name: "database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "tableName".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 2,
+                            },
+                            ColumnInfo {
+                                name: "tableType".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 3,
+                            },
+                            ColumnInfo {
+                                name: "isTemporary".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 4,
+                            },
+                        ],
+                    },
+                    total_chunk_count: Some(1),
+                    total_row_count: Some(tables.len() as i64),
+                    total_byte_count: None,
+                    truncated: false,
+                    chunks: None,
+                    result_compression: None,
+                }),
+                result: Some(ExecuteResultData {
+                    chunk_index: Some(0),
+                    row_offset: Some(0),
+                    row_count: Some(tables.len() as i64),
+                    byte_count: None,
+                    next_chunk_index: None,
+                    next_chunk_internal_link: None,
+                    external_links: None,
+                    has_inline_data: true,
+                    data_array: Some(data_array.clone()),
+                }),
+            };
+
+            let status_response = ExecuteResponse {
+                statement_id: "stmt-1".to_string(),
+                status: StatementStatus {
+                    state: StatementState::Succeeded,
+                    error: None,
+                },
+                manifest: Some(ResultManifest {
+                    format: "JSON_ARRAY".to_string(),
+                    schema: ResultSchema {
+                        column_count: 5,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "catalog".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 0,
+                            },
+                            ColumnInfo {
+                                name: "database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "tableName".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 2,
+                            },
+                            ColumnInfo {
+                                name: "tableType".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 3,
+                            },
+                            ColumnInfo {
+                                name: "isTemporary".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 4,
+                            },
+                        ],
+                    },
+                    total_chunk_count: Some(1),
+                    total_row_count: Some(tables.len() as i64),
+                    total_byte_count: None,
+                    truncated: false,
+                    chunks: None,
+                    result_compression: None,
+                }),
+                result: Some(ExecuteResultData {
+                    chunk_index: Some(0),
+                    row_offset: Some(0),
+                    row_count: Some(tables.len() as i64),
+                    byte_count: None,
+                    next_chunk_index: None,
+                    next_chunk_internal_link: None,
+                    external_links: None,
+                    has_inline_data: true,
+                    data_array: Some(data_array),
+                }),
+            };
+
+            Self::new(vec![response, status_response])
+        }
+
+        fn with_columns(columns: Vec<(&str, &str, &str, &str, &str)>) -> Self {
+            // columns: (catalog, schema, table, column_name, data_type)
+            let data_array: Vec<Vec<String>> = columns
+                .iter()
+                .map(|(cat, schema, table, col, dtype)| {
+                    vec![
+                        cat.to_string(),
+                        schema.to_string(),
+                        table.to_string(),
+                        col.to_string(),
+                        dtype.to_string(),
+                        "".to_string(), // comment
+                    ]
+                })
+                .collect();
+
+            let response = ExecuteResponse {
+                statement_id: "stmt-1".to_string(),
+                status: StatementStatus {
+                    state: StatementState::Succeeded,
+                    error: None,
+                },
+                manifest: Some(ResultManifest {
+                    format: "JSON_ARRAY".to_string(),
+                    schema: ResultSchema {
+                        column_count: 6,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "catalog".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 0,
+                            },
+                            ColumnInfo {
+                                name: "database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "tableName".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 2,
+                            },
+                            ColumnInfo {
+                                name: "columnName".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 3,
+                            },
+                            ColumnInfo {
+                                name: "dataType".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 4,
+                            },
+                            ColumnInfo {
+                                name: "comment".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 5,
+                            },
+                        ],
+                    },
+                    total_chunk_count: Some(1),
+                    total_row_count: Some(columns.len() as i64),
+                    total_byte_count: None,
+                    truncated: false,
+                    chunks: None,
+                    result_compression: None,
+                }),
+                result: Some(ExecuteResultData {
+                    chunk_index: Some(0),
+                    row_offset: Some(0),
+                    row_count: Some(columns.len() as i64),
+                    byte_count: None,
+                    next_chunk_index: None,
+                    next_chunk_internal_link: None,
+                    external_links: None,
+                    has_inline_data: true,
+                    data_array: Some(data_array.clone()),
+                }),
+            };
+
+            let status_response = ExecuteResponse {
+                statement_id: "stmt-1".to_string(),
+                status: StatementStatus {
+                    state: StatementState::Succeeded,
+                    error: None,
+                },
+                manifest: Some(ResultManifest {
+                    format: "JSON_ARRAY".to_string(),
+                    schema: ResultSchema {
+                        column_count: 6,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "catalog".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 0,
+                            },
+                            ColumnInfo {
+                                name: "database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "tableName".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 2,
+                            },
+                            ColumnInfo {
+                                name: "columnName".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 3,
+                            },
+                            ColumnInfo {
+                                name: "dataType".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 4,
+                            },
+                            ColumnInfo {
+                                name: "comment".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 5,
+                            },
+                        ],
+                    },
+                    total_chunk_count: Some(1),
+                    total_row_count: Some(columns.len() as i64),
+                    total_byte_count: None,
+                    truncated: false,
+                    chunks: None,
+                    result_compression: None,
+                }),
+                result: Some(ExecuteResultData {
+                    chunk_index: Some(0),
+                    row_offset: Some(0),
+                    row_count: Some(columns.len() as i64),
+                    byte_count: None,
+                    next_chunk_index: None,
+                    next_chunk_internal_link: None,
+                    external_links: None,
+                    has_inline_data: true,
+                    data_array: Some(data_array),
+                }),
+            };
+
+            Self::new(vec![response, status_response])
+        }
+
+        fn with_primary_keys(keys: Vec<(&str, &str, &str)>) -> Self {
+            // keys: (database, tableName, primaryKey column)
+            let data_array: Vec<Vec<String>> = keys
+                .iter()
+                .map(|(db, table, pk_col)| {
+                    vec![db.to_string(), table.to_string(), pk_col.to_string()]
+                })
+                .collect();
+
+            let response = ExecuteResponse {
+                statement_id: "stmt-1".to_string(),
+                status: StatementStatus {
+                    state: StatementState::Succeeded,
+                    error: None,
+                },
+                manifest: Some(ResultManifest {
+                    format: "JSON_ARRAY".to_string(),
+                    schema: ResultSchema {
+                        column_count: 3,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 0,
+                            },
+                            ColumnInfo {
+                                name: "tableName".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "primaryKey".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 2,
+                            },
+                        ],
+                    },
+                    total_chunk_count: Some(1),
+                    total_row_count: Some(keys.len() as i64),
+                    total_byte_count: None,
+                    truncated: false,
+                    chunks: None,
+                    result_compression: None,
+                }),
+                result: Some(ExecuteResultData {
+                    chunk_index: Some(0),
+                    row_offset: Some(0),
+                    row_count: Some(keys.len() as i64),
+                    byte_count: None,
+                    next_chunk_index: None,
+                    next_chunk_internal_link: None,
+                    external_links: None,
+                    has_inline_data: true,
+                    data_array: Some(data_array.clone()),
+                }),
+            };
+
+            let status_response = ExecuteResponse {
+                statement_id: "stmt-1".to_string(),
+                status: StatementStatus {
+                    state: StatementState::Succeeded,
+                    error: None,
+                },
+                manifest: Some(ResultManifest {
+                    format: "JSON_ARRAY".to_string(),
+                    schema: ResultSchema {
+                        column_count: 3,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 0,
+                            },
+                            ColumnInfo {
+                                name: "tableName".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "primaryKey".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 2,
+                            },
+                        ],
+                    },
+                    total_chunk_count: Some(1),
+                    total_row_count: Some(keys.len() as i64),
+                    total_byte_count: None,
+                    truncated: false,
+                    chunks: None,
+                    result_compression: None,
+                }),
+                result: Some(ExecuteResultData {
+                    chunk_index: Some(0),
+                    row_offset: Some(0),
+                    row_count: Some(keys.len() as i64),
+                    byte_count: None,
+                    next_chunk_index: None,
+                    next_chunk_internal_link: None,
+                    external_links: None,
+                    has_inline_data: true,
+                    data_array: Some(data_array),
+                }),
+            };
+
+            Self::new(vec![response, status_response])
+        }
+
+        fn with_foreign_keys(keys: Vec<(&str, &str, &str, &str, &str, &str)>) -> Self {
+            // keys: (fk_schema, fk_table, fk_column, pk_schema, pk_table, pk_column)
+            let data_array: Vec<Vec<String>> = keys
+                .iter()
+                .map(
+                    |(fk_schema, fk_table, fk_col, pk_schema, pk_table, pk_col)| {
+                        vec![
+                            fk_schema.to_string(),
+                            fk_table.to_string(),
+                            fk_col.to_string(),
+                            pk_schema.to_string(),
+                            pk_table.to_string(),
+                            pk_col.to_string(),
+                        ]
+                    },
+                )
+                .collect();
+
+            let response = ExecuteResponse {
+                statement_id: "stmt-1".to_string(),
+                status: StatementStatus {
+                    state: StatementState::Succeeded,
+                    error: None,
+                },
+                manifest: Some(ResultManifest {
+                    format: "JSON_ARRAY".to_string(),
+                    schema: ResultSchema {
+                        column_count: 6,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "fk_database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 0,
+                            },
+                            ColumnInfo {
+                                name: "fk_table".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "fk_column".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 2,
+                            },
+                            ColumnInfo {
+                                name: "pk_database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 3,
+                            },
+                            ColumnInfo {
+                                name: "pk_table".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 4,
+                            },
+                            ColumnInfo {
+                                name: "pk_column".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 5,
+                            },
+                        ],
+                    },
+                    total_chunk_count: Some(1),
+                    total_row_count: Some(keys.len() as i64),
+                    total_byte_count: None,
+                    truncated: false,
+                    chunks: None,
+                    result_compression: None,
+                }),
+                result: Some(ExecuteResultData {
+                    chunk_index: Some(0),
+                    row_offset: Some(0),
+                    row_count: Some(keys.len() as i64),
+                    byte_count: None,
+                    next_chunk_index: None,
+                    next_chunk_internal_link: None,
+                    external_links: None,
+                    has_inline_data: true,
+                    data_array: Some(data_array.clone()),
+                }),
+            };
+
+            let status_response = ExecuteResponse {
+                statement_id: "stmt-1".to_string(),
+                status: StatementStatus {
+                    state: StatementState::Succeeded,
+                    error: None,
+                },
+                manifest: Some(ResultManifest {
+                    format: "JSON_ARRAY".to_string(),
+                    schema: ResultSchema {
+                        column_count: 6,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "fk_database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 0,
+                            },
+                            ColumnInfo {
+                                name: "fk_table".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "fk_column".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 2,
+                            },
+                            ColumnInfo {
+                                name: "pk_database".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 3,
+                            },
+                            ColumnInfo {
+                                name: "pk_table".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 4,
+                            },
+                            ColumnInfo {
+                                name: "pk_column".to_string(),
+                                type_name: "STRING".to_string(),
+                                type_text: "STRING".to_string(),
+                                position: 5,
+                            },
+                        ],
+                    },
+                    total_chunk_count: Some(1),
+                    total_row_count: Some(keys.len() as i64),
+                    total_byte_count: None,
+                    truncated: false,
+                    chunks: None,
+                    result_compression: None,
+                }),
+                result: Some(ExecuteResultData {
+                    chunk_index: Some(0),
+                    row_offset: Some(0),
+                    row_count: Some(keys.len() as i64),
+                    byte_count: None,
+                    next_chunk_index: None,
+                    next_chunk_internal_link: None,
+                    external_links: None,
+                    has_inline_data: true,
+                    data_array: Some(data_array),
+                }),
+            };
+
+            Self::new(vec![response, status_response])
+        }
     }
 
     #[async_trait]
@@ -991,5 +1997,427 @@ mod tests {
 
         let schemas = service.list_schemas(None, None).unwrap();
         assert!(schemas.is_empty());
+    }
+
+    // =========================================================================
+    // Tests for list_tables
+    // =========================================================================
+
+    #[test]
+    fn test_list_tables_with_mock() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_tables(vec![
+            ("main", "default", "users", "MANAGED"),
+            ("main", "default", "orders", "MANAGED"),
+            ("main", "analytics", "events_view", "VIEW"),
+        ]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let tables = service.list_tables(None, None, None, None).unwrap();
+        assert_eq!(tables.len(), 3);
+        assert_eq!(tables[0].catalog_name, "main");
+        assert_eq!(tables[0].schema_name, "default");
+        assert_eq!(tables[0].table_name, "users");
+        assert_eq!(tables[0].table_type, "TABLE"); // MANAGED normalized to TABLE
+        assert_eq!(tables[2].table_type, "VIEW");
+    }
+
+    #[test]
+    fn test_list_tables_with_table_type_filter() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_tables(vec![
+            ("main", "default", "users", "MANAGED"),
+            ("main", "default", "orders", "MANAGED"),
+            ("main", "analytics", "events_view", "VIEW"),
+        ]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        // Filter for only TABLEs (MANAGED maps to TABLE)
+        let tables = service
+            .list_tables(None, None, None, Some(&["TABLE"]))
+            .unwrap();
+        assert_eq!(tables.len(), 2);
+        assert!(tables.iter().all(|t| t.table_type == "TABLE"));
+    }
+
+    #[test]
+    fn test_list_tables_with_multiple_table_types() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_tables(vec![
+            ("main", "default", "users", "MANAGED"),
+            ("main", "default", "orders", "VIEW"),
+            ("main", "analytics", "system_info", "SYSTEM TABLE"),
+        ]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        // Filter for TABLEs and VIEWs
+        let tables = service
+            .list_tables(None, None, None, Some(&["TABLE", "VIEW"]))
+            .unwrap();
+        assert_eq!(tables.len(), 2);
+    }
+
+    #[test]
+    fn test_list_tables_empty() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_tables(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let tables = service.list_tables(None, None, None, None).unwrap();
+        assert!(tables.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_table_type() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        assert_eq!(service.normalize_table_type("MANAGED"), "TABLE");
+        assert_eq!(service.normalize_table_type("EXTERNAL"), "TABLE");
+        assert_eq!(service.normalize_table_type("TABLE"), "TABLE");
+        assert_eq!(service.normalize_table_type("VIEW"), "VIEW");
+        assert_eq!(service.normalize_table_type("MATERIALIZED_VIEW"), "VIEW");
+        assert_eq!(service.normalize_table_type("SYSTEM TABLE"), "SYSTEM TABLE");
+        assert_eq!(service.normalize_table_type("METRIC_VIEW"), "METRIC_VIEW");
+        assert_eq!(service.normalize_table_type("unknown"), "UNKNOWN");
+    }
+
+    // =========================================================================
+    // Tests for list_columns
+    // =========================================================================
+
+    #[test]
+    fn test_list_columns_with_mock() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_columns(vec![
+            ("main", "default", "users", "id", "BIGINT"),
+            ("main", "default", "users", "name", "STRING"),
+            ("main", "default", "users", "email", "STRING"),
+        ]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let columns = service
+            .list_columns(Some("main"), None, None, None)
+            .unwrap();
+        assert_eq!(columns.len(), 3);
+        assert_eq!(columns[0].catalog_name, "main");
+        assert_eq!(columns[0].schema_name, "default");
+        assert_eq!(columns[0].table_name, "users");
+        assert_eq!(columns[0].column_name, "id");
+        assert_eq!(columns[0].data_type, "BIGINT");
+        assert_eq!(columns[0].ordinal_position, 1);
+        assert_eq!(columns[1].ordinal_position, 2);
+        assert_eq!(columns[2].ordinal_position, 3);
+    }
+
+    #[test]
+    fn test_list_columns_with_multiple_tables() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_columns(vec![
+            ("main", "default", "users", "id", "BIGINT"),
+            ("main", "default", "users", "name", "STRING"),
+            ("main", "default", "orders", "id", "BIGINT"),
+            ("main", "default", "orders", "user_id", "BIGINT"),
+        ]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let columns = service
+            .list_columns(Some("main"), None, None, None)
+            .unwrap();
+        assert_eq!(columns.len(), 4);
+
+        // Check that ordinal positions are per-table
+        assert_eq!(columns[0].table_name, "users");
+        assert_eq!(columns[0].ordinal_position, 1);
+        assert_eq!(columns[1].table_name, "users");
+        assert_eq!(columns[1].ordinal_position, 2);
+        assert_eq!(columns[2].table_name, "orders");
+        assert_eq!(columns[2].ordinal_position, 1);
+        assert_eq!(columns[3].table_name, "orders");
+        assert_eq!(columns[3].ordinal_position, 2);
+    }
+
+    #[test]
+    fn test_list_columns_type_parsing() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_columns(vec![
+            ("main", "default", "test", "int_col", "INT"),
+            ("main", "default", "test", "decimal_col", "DECIMAL(10,2)"),
+            ("main", "default", "test", "varchar_col", "VARCHAR(255)"),
+        ]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let columns = service
+            .list_columns(Some("main"), None, None, None)
+            .unwrap();
+        assert_eq!(columns.len(), 3);
+
+        // INT type
+        assert_eq!(columns[0].column_size, Some(10));
+        assert_eq!(columns[0].decimal_digits, Some(0));
+        assert_eq!(columns[0].num_prec_radix, Some(10));
+
+        // DECIMAL(10,2) type
+        assert_eq!(columns[1].column_size, Some(10));
+        assert_eq!(columns[1].decimal_digits, Some(2));
+        assert_eq!(columns[1].num_prec_radix, Some(10));
+
+        // VARCHAR(255) type
+        assert_eq!(columns[2].column_size, Some(255));
+        assert!(columns[2].decimal_digits.is_none());
+    }
+
+    #[test]
+    fn test_list_columns_empty() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_columns(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let columns = service
+            .list_columns(Some("main"), None, None, None)
+            .unwrap();
+        assert!(columns.is_empty());
+    }
+
+    #[test]
+    fn test_list_columns_requires_catalog() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_columns(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        // Calling without catalog should fail
+        let result = service.list_columns(None, None, None, None);
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Tests for list_table_types
+    // =========================================================================
+
+    #[test]
+    fn test_list_table_types() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let types = service.list_table_types();
+        assert_eq!(types.len(), 4);
+        assert!(types.contains(&"SYSTEM TABLE".to_string()));
+        assert!(types.contains(&"TABLE".to_string()));
+        assert!(types.contains(&"VIEW".to_string()));
+        assert!(types.contains(&"METRIC_VIEW".to_string()));
+    }
+
+    // =========================================================================
+    // Tests for list_primary_keys
+    // =========================================================================
+
+    #[test]
+    fn test_list_primary_keys_with_mock() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_primary_keys(vec![(
+            "default", "users", "id",
+        )]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let keys = service
+            .list_primary_keys("main", "default", "users")
+            .unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].catalog_name, "main");
+        assert_eq!(keys[0].schema_name, "default");
+        assert_eq!(keys[0].table_name, "users");
+        assert_eq!(keys[0].column_name, "id");
+        assert_eq!(keys[0].key_seq, 1);
+    }
+
+    #[test]
+    fn test_list_primary_keys_composite() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_primary_keys(vec![
+            ("default", "order_items", "order_id"),
+            ("default", "order_items", "item_id"),
+        ]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let keys = service
+            .list_primary_keys("main", "default", "order_items")
+            .unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].column_name, "order_id");
+        assert_eq!(keys[0].key_seq, 1);
+        assert_eq!(keys[1].column_name, "item_id");
+        assert_eq!(keys[1].key_seq, 2);
+    }
+
+    #[test]
+    fn test_list_primary_keys_empty() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_primary_keys(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let keys = service
+            .list_primary_keys("main", "default", "no_pk_table")
+            .unwrap();
+        assert!(keys.is_empty());
+    }
+
+    // =========================================================================
+    // Tests for list_foreign_keys
+    // =========================================================================
+
+    #[test]
+    fn test_list_foreign_keys_with_mock() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_foreign_keys(vec![(
+            "default", "orders", "user_id", "default", "users", "id",
+        )]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let keys = service
+            .list_foreign_keys("main", "default", "orders")
+            .unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].fk_catalog, "main");
+        assert_eq!(keys[0].fk_schema, "default");
+        assert_eq!(keys[0].fk_table, "orders");
+        assert_eq!(keys[0].fk_column, "user_id");
+        assert_eq!(keys[0].pk_schema, "default");
+        assert_eq!(keys[0].pk_table, "users");
+        assert_eq!(keys[0].pk_column, "id");
+        assert_eq!(keys[0].key_seq, 1);
+    }
+
+    #[test]
+    fn test_list_foreign_keys_multiple() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_foreign_keys(vec![
+            ("default", "orders", "user_id", "default", "users", "id"),
+            (
+                "default",
+                "orders",
+                "product_id",
+                "default",
+                "products",
+                "id",
+            ),
+        ]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let keys = service
+            .list_foreign_keys("main", "default", "orders")
+            .unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].fk_column, "user_id");
+        assert_eq!(keys[0].pk_table, "users");
+        assert_eq!(keys[1].fk_column, "product_id");
+        assert_eq!(keys[1].pk_table, "products");
+    }
+
+    #[test]
+    fn test_list_foreign_keys_empty() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::with_foreign_keys(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let keys = service
+            .list_foreign_keys("main", "default", "users")
+            .unwrap();
+        assert!(keys.is_empty());
+    }
+
+    // =========================================================================
+    // Tests for parse_column_type_info
+    // =========================================================================
+
+    #[test]
+    fn test_parse_column_type_info_integers() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let (size, digits, radix) = service.parse_column_type_info("TINYINT");
+        assert_eq!(size, Some(3));
+        assert_eq!(digits, Some(0));
+        assert_eq!(radix, Some(10));
+
+        let (size, digits, radix) = service.parse_column_type_info("INT");
+        assert_eq!(size, Some(10));
+        assert_eq!(digits, Some(0));
+        assert_eq!(radix, Some(10));
+
+        let (size, digits, radix) = service.parse_column_type_info("BIGINT");
+        assert_eq!(size, Some(19));
+        assert_eq!(digits, Some(0));
+        assert_eq!(radix, Some(10));
+    }
+
+    #[test]
+    fn test_parse_column_type_info_decimal() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let (size, digits, radix) = service.parse_column_type_info("DECIMAL(10,2)");
+        assert_eq!(size, Some(10));
+        assert_eq!(digits, Some(2));
+        assert_eq!(radix, Some(10));
+
+        let (size, digits, radix) = service.parse_column_type_info("DECIMAL(38,18)");
+        assert_eq!(size, Some(38));
+        assert_eq!(digits, Some(18));
+        assert_eq!(radix, Some(10));
+    }
+
+    #[test]
+    fn test_parse_column_type_info_string() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        let (size, digits, radix) = service.parse_column_type_info("STRING");
+        assert_eq!(size, Some(i32::MAX));
+        assert!(digits.is_none());
+        assert!(radix.is_none());
+
+        let (size, digits, radix) = service.parse_column_type_info("VARCHAR(255)");
+        assert_eq!(size, Some(255));
+        assert!(digits.is_none());
+        assert!(radix.is_none());
+    }
+
+    #[test]
+    fn test_parse_type_length() {
+        let runtime = create_test_runtime();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient::new(vec![]));
+        let service =
+            MetadataService::new(client, "session-1".to_string(), runtime.handle().clone());
+
+        assert_eq!(service.parse_type_length("VARCHAR(255)"), Some(255));
+        assert_eq!(service.parse_type_length("CHAR(10)"), Some(10));
+        assert_eq!(service.parse_type_length("STRING"), None);
+        assert_eq!(service.parse_type_length("VARCHAR"), None);
+        assert_eq!(service.parse_type_length("VARCHAR()"), None);
     }
 }
