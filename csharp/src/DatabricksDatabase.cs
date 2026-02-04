@@ -27,6 +27,7 @@ using System.Linq;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache;
+using Apache.Arrow.Adbc.Drivers.Apache.Spark;
 
 namespace AdbcDrivers.Databricks
 {
@@ -35,6 +36,13 @@ namespace AdbcDrivers.Databricks
     /// </summary>
     public class DatabricksDatabase : AdbcDatabase
     {
+        /// <summary>
+        /// The environment variable name that contains the path to the default Databricks configuration file.
+        /// </summary>
+        public const string DefaultConfigEnvironmentVariable = "DATABRICKS_CONFIG_FILE";
+
+        internal static readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(DatabricksDatabase));
+
         readonly IReadOnlyDictionary<string, string> properties;
 
         /// <summary>
@@ -67,6 +75,9 @@ namespace AdbcDrivers.Databricks
                     : options
                         .Concat(properties.Where(x => !options.Keys.Contains(x.Key, StringComparer.OrdinalIgnoreCase)))
                         .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+                // Merge with environment config (DATABRICKS_CONFIG_FILE) and feature flags from server
+                mergedProperties = MergeWithEnvironmentConfigAndFeatureFlags(mergedProperties);
 
                 // Check protocol selection
                 string protocol = "thrift"; // default
@@ -126,6 +137,74 @@ namespace AdbcDrivers.Databricks
 
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Merges properties with environment config and feature flags from server.
+        /// This is the single place where all property merging happens for both Thrift and REST connections.
+        /// </summary>
+        /// <param name="properties">Properties to merge.</param>
+        /// <returns>Merged properties dictionary.</returns>
+        private static IReadOnlyDictionary<string, string> MergeWithEnvironmentConfigAndFeatureFlags(IReadOnlyDictionary<string, string> properties)
+        {
+            // First, merge with environment config
+            var mergedWithEnvConfig = MergeWithDefaultEnvironmentConfig(properties);
+
+            // Then, merge with feature flags from server (cached per host)
+            return FeatureFlagCache.GetInstance()
+                .MergePropertiesWithFeatureFlags(mergedWithEnvConfig, s_assemblyVersion);
+        }
+
+        /// <summary>
+        /// Automatically merges properties from the default DATABRICKS_CONFIG_FILE environment variable with passed-in properties.
+        /// Environment config (driver config) always takes precedence over passed-in properties.
+        /// If DATABRICKS_CONFIG_FILE is not set or invalid, only passed-in properties are used.
+        /// </summary>
+        /// <param name="properties">Properties passed to constructor.</param>
+        /// <returns>Merged properties dictionary.</returns>
+        private static IReadOnlyDictionary<string, string> MergeWithDefaultEnvironmentConfig(IReadOnlyDictionary<string, string> properties)
+        {
+            // Try to load configuration from the default environment variable
+            var environmentConfig = DatabricksConfiguration.TryFromEnvironmentVariable(DefaultConfigEnvironmentVariable);
+
+            if (environmentConfig != null)
+            {
+                // Environment config (driver config) always takes precedence
+                return MergeProperties(properties, environmentConfig.Properties);
+            }
+
+            // No environment config available, use only passed-in properties
+            return properties;
+        }
+
+        /// <summary>
+        /// Merges two property dictionaries, with additional properties taking precedence.
+        /// </summary>
+        /// <param name="baseProperties">Base properties dictionary.</param>
+        /// <param name="additionalProperties">Additional properties to merge. These take precedence over base properties.</param>
+        /// <returns>Merged properties dictionary.</returns>
+        private static IReadOnlyDictionary<string, string> MergeProperties(IReadOnlyDictionary<string, string> baseProperties, IReadOnlyDictionary<string, string>? additionalProperties)
+        {
+            if (additionalProperties == null || additionalProperties.Count == 0)
+            {
+                return baseProperties;
+            }
+
+            var merged = new Dictionary<string, string>();
+
+            // Add base properties first
+            foreach (var kvp in baseProperties)
+            {
+                merged[kvp.Key] = kvp.Value;
+            }
+
+            // Additional properties override base properties
+            foreach (var kvp in additionalProperties)
+            {
+                merged[kvp.Key] = kvp.Value;
+            }
+
+            return merged;
         }
     }
 }

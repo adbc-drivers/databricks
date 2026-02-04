@@ -256,16 +256,6 @@ namespace AdbcDrivers.Databricks
         public const string IdentityFederationClientId = "adbc.databricks.identity_federation_client_id";
 
         /// <summary>
-        /// Controls whether driver configuration takes precedence over passed-in properties during configuration merging.
-        /// When "true": Environment/driver config properties override passed-in constructor properties.
-        /// When "false" (default): Passed-in constructor properties override environment/driver config properties.
-        /// This property can be set either in the environment configuration file or in passed-in properties.
-        /// When set in both places, the value in passed-in properties takes precedence.
-        /// Default value is false if not specified.
-        /// </summary>
-        public const string DriverConfigTakePrecedence = "adbc.databricks.driver_config_take_precedence";
-
-        /// <summary>
         /// The interval in seconds for heartbeat polling during long-running operations.
         /// This prevents queries from timing out by periodically checking operation status.
         /// Default value is 60 seconds if not specified.
