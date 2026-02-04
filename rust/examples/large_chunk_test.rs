@@ -31,12 +31,12 @@ fn main() {
         .init();
 
     // Connection parameters from environment variables
-    let host = std::env::var("DATABRICKS_HOST")
-        .expect("DATABRICKS_HOST environment variable required");
+    let host =
+        std::env::var("DATABRICKS_HOST").expect("DATABRICKS_HOST environment variable required");
     let http_path = std::env::var("DATABRICKS_HTTP_PATH")
         .expect("DATABRICKS_HTTP_PATH environment variable required");
-    let token = std::env::var("DATABRICKS_TOKEN")
-        .expect("DATABRICKS_TOKEN environment variable required");
+    let token =
+        std::env::var("DATABRICKS_TOKEN").expect("DATABRICKS_TOKEN environment variable required");
 
     println!("=== Large Chunk CloudFetch Test (>10 chunks) ===\n");
     println!("Host: {}", &host);

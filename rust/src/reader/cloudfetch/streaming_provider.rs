@@ -566,10 +566,12 @@ impl StreamingCloudFetchProvider {
             }
 
             // Wait for any chunk state change with timeout
-            let timeout = self
-                .config
-                .chunk_ready_timeout
-                .unwrap_or(std::time::Duration::from_secs(DEFAULT_CHUNK_READY_TIMEOUT_SECS));
+            let timeout =
+                self.config
+                    .chunk_ready_timeout
+                    .unwrap_or(std::time::Duration::from_secs(
+                        DEFAULT_CHUNK_READY_TIMEOUT_SECS,
+                    ));
 
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
