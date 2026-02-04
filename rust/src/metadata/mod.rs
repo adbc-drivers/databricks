@@ -23,12 +23,15 @@
 //! - `types`: Data structures for metadata query results
 //! - `sql`: SQL command builder for metadata queries
 //! - `type_mapping`: Type conversion functions for Databricks to Arrow/XDBC
+//! - `service`: MetadataService for executing metadata queries
 
+pub mod service;
 pub mod sql;
 pub mod type_mapping;
 pub mod types;
 
 // Re-export commonly used types
+pub use service::MetadataService;
 pub use sql::SqlCommandBuilder;
 pub use type_mapping::{databricks_type_to_arrow, databricks_type_to_xdbc, parse_decimal_params};
 pub use types::{CatalogInfo, ColumnInfo, ForeignKeyInfo, PrimaryKeyInfo, SchemaInfo, TableInfo};
