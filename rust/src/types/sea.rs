@@ -17,7 +17,8 @@
 //! These types map directly to the JSON structures used by the Databricks
 //! SQL Statement Execution API. They are primarily used by `SeaClient`.
 
-use serde::{Deserialize, Serialize};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
 /// Response from statement execution or status polling.
@@ -122,9 +123,28 @@ pub struct ResultData {
     pub next_chunk_internal_link: Option<String>,
     #[serde(default)]
     pub external_links: Option<Vec<ExternalLink>>,
-    /// Inline data for small results (not used with CloudFetch)
+    /// Inline data for small results in JSON format (not used with Arrow)
     #[serde(default)]
     pub data_array: Option<Vec<Vec<String>>>,
+    /// Inline Arrow IPC data (base64-encoded in JSON, decoded by serde).
+    /// Present when server returns inline results instead of CloudFetch.
+    #[serde(default, deserialize_with = "deserialize_base64_attachment")]
+    pub attachment: Option<Vec<u8>>,
+}
+
+/// Deserialize base64-encoded attachment field from JSON.
+fn deserialize_base64_attachment<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        Some(s) if !s.is_empty() => STANDARD
+            .decode(&s)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+        _ => Ok(None),
+    }
 }
 
 /// External link for CloudFetch download.
@@ -327,5 +347,53 @@ mod tests {
             link.http_headers.unwrap().get("x-custom"),
             Some(&"value".to_string())
         );
+    }
+
+    #[test]
+    fn test_result_data_with_base64_attachment() {
+        // "Hello, World!" in base64
+        let json = r#"{
+            "chunk_index": 0,
+            "row_count": 10,
+            "attachment": "SGVsbG8sIFdvcmxkIQ=="
+        }"#;
+
+        let result: ResultData = serde_json::from_str(json).unwrap();
+        assert_eq!(result.chunk_index, Some(0));
+        assert!(result.attachment.is_some());
+        assert_eq!(result.attachment.unwrap(), b"Hello, World!");
+    }
+
+    #[test]
+    fn test_result_data_without_attachment() {
+        let json = r#"{
+            "chunk_index": 0,
+            "row_count": 10
+        }"#;
+
+        let result: ResultData = serde_json::from_str(json).unwrap();
+        assert!(result.attachment.is_none());
+    }
+
+    #[test]
+    fn test_result_data_with_empty_attachment() {
+        let json = r#"{
+            "chunk_index": 0,
+            "attachment": ""
+        }"#;
+
+        let result: ResultData = serde_json::from_str(json).unwrap();
+        assert!(result.attachment.is_none());
+    }
+
+    #[test]
+    fn test_result_data_with_null_attachment() {
+        let json = r#"{
+            "chunk_index": 0,
+            "attachment": null
+        }"#;
+
+        let result: ResultData = serde_json::from_str(json).unwrap();
+        assert!(result.attachment.is_none());
     }
 }

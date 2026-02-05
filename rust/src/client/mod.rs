@@ -56,7 +56,9 @@ pub struct ExecuteResultData {
     pub next_chunk_index: Option<i64>,
     pub next_chunk_internal_link: Option<String>,
     pub external_links: Option<Vec<CloudFetchLink>>,
-    pub has_inline_data: bool,
+    /// Inline Arrow IPC data (decoded from base64).
+    /// Present when server returns inline results instead of CloudFetch.
+    pub inline_arrow_data: Option<Vec<u8>>,
 }
 
 /// Result of fetching chunk links.

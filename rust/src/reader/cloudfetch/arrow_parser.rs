@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Arrow IPC parsing utilities for CloudFetch responses.
+//! Arrow IPC parsing utilities for result data.
 //!
-//! CloudFetch downloads return Arrow IPC Streaming format bytes from cloud storage.
-//! This module handles parsing these bytes, including optional LZ4 decompression.
+//! This module handles parsing Arrow IPC Streaming format bytes from various sources:
+//! - CloudFetch downloads from cloud storage
+//! - Inline Arrow data embedded in API responses
+//!
+//! Supports optional LZ4 decompression based on the result manifest.
 
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::types::sea::CompressionCodec;
@@ -25,15 +28,18 @@ use driverbase::error::ErrorHelper;
 use lz4_flex::frame::FrameDecoder;
 use std::io::{Cursor, Read};
 
-/// Parse CloudFetch response into RecordBatches.
+/// Parse Arrow IPC data into RecordBatches.
 ///
-/// The response is Arrow IPC streaming format, optionally LZ4 compressed.
-/// The compression codec is specified in the ResultManifest from the initial
-/// statement execution response (manifest.result_compression field).
+/// Handles Arrow IPC streaming format bytes from either:
+/// - CloudFetch downloads from cloud storage
+/// - Inline Arrow data embedded in API responses (base64-decoded attachment field)
+///
+/// The data may be optionally LZ4 compressed, as indicated by the compression codec
+/// from the ResultManifest (manifest.result_compression field).
 /// A single chunk may contain multiple RecordBatches.
 ///
 /// # Arguments
-/// * `data` - Raw bytes from the CloudFetch download
+/// * `data` - Raw Arrow IPC bytes (from CloudFetch download or inline attachment)
 /// * `compression` - Compression codec used (from manifest.result_compression)
 ///
 /// # Returns
@@ -42,10 +48,7 @@ use std::io::{Cursor, Read};
 /// # Errors
 /// - If LZ4 decompression fails
 /// - If Arrow IPC parsing fails
-pub fn parse_cloudfetch_response(
-    data: &[u8],
-    compression: CompressionCodec,
-) -> Result<Vec<RecordBatch>> {
+pub fn parse_arrow_ipc(data: &[u8], compression: CompressionCodec) -> Result<Vec<RecordBatch>> {
     // 1. Decompress if needed
     let decompressed: Vec<u8>;
     let bytes: &[u8] = match compression {
@@ -127,7 +130,7 @@ mod tests {
         let batch = create_test_batch(100);
         let ipc_data = create_test_arrow_ipc(&[batch.clone()]);
 
-        let result = parse_cloudfetch_response(&ipc_data, CompressionCodec::None).unwrap();
+        let result = parse_arrow_ipc(&ipc_data, CompressionCodec::None).unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].num_rows(), 100);
@@ -140,7 +143,7 @@ mod tests {
         let batch2 = create_test_batch(30);
         let ipc_data = create_test_arrow_ipc(&[batch1, batch2]);
 
-        let result = parse_cloudfetch_response(&ipc_data, CompressionCodec::None).unwrap();
+        let result = parse_arrow_ipc(&ipc_data, CompressionCodec::None).unwrap();
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].num_rows(), 50);
@@ -163,7 +166,7 @@ mod tests {
             encoder.finish().unwrap();
         }
 
-        let result = parse_cloudfetch_response(&compressed, CompressionCodec::Lz4Frame).unwrap();
+        let result = parse_arrow_ipc(&compressed, CompressionCodec::Lz4Frame).unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].num_rows(), 100);
@@ -173,7 +176,7 @@ mod tests {
     fn test_parse_invalid_data() {
         let invalid_data = b"this is not valid arrow ipc data";
 
-        let result = parse_cloudfetch_response(invalid_data, CompressionCodec::None);
+        let result = parse_arrow_ipc(invalid_data, CompressionCodec::None);
         assert!(result.is_err());
     }
 
@@ -181,7 +184,7 @@ mod tests {
     fn test_parse_invalid_compressed_data() {
         let invalid_data = b"this is not valid lz4 compressed data";
 
-        let result = parse_cloudfetch_response(invalid_data, CompressionCodec::Lz4Frame);
+        let result = parse_arrow_ipc(invalid_data, CompressionCodec::Lz4Frame);
         assert!(result.is_err());
     }
 
@@ -196,7 +199,7 @@ mod tests {
             writer.finish().unwrap();
         }
 
-        let result = parse_cloudfetch_response(&buffer, CompressionCodec::None).unwrap();
+        let result = parse_arrow_ipc(&buffer, CompressionCodec::None).unwrap();
         assert!(result.is_empty());
     }
 }

@@ -83,7 +83,7 @@ impl SeaClient {
             next_chunk_index: result.next_chunk_index,
             next_chunk_internal_link: result.next_chunk_internal_link.clone(),
             external_links,
-            has_inline_data: result.data_array.is_some(),
+            inline_arrow_data: result.attachment.clone(),
         })
     }
 
@@ -428,17 +428,19 @@ mod tests {
             next_chunk_internal_link: None,
             external_links: None,
             data_array: None,
+            attachment: None,
         };
 
         let converted = SeaClient::convert_result_data(&result).unwrap();
         assert_eq!(converted.chunk_index, Some(0));
         assert_eq!(converted.row_count, Some(100));
         assert!(converted.external_links.is_none());
-        assert!(!converted.has_inline_data);
+        assert!(converted.inline_arrow_data.is_none());
     }
 
     #[test]
-    fn test_convert_result_data_with_inline_data() {
+    fn test_convert_result_data_with_inline_arrow_data() {
+        let test_data = vec![1u8, 2, 3, 4, 5];
         let result = crate::types::sea::ResultData {
             chunk_index: Some(0),
             row_offset: Some(0),
@@ -447,10 +449,12 @@ mod tests {
             next_chunk_index: None,
             next_chunk_internal_link: None,
             external_links: None,
-            data_array: Some(vec![vec!["value1".to_string()]]),
+            data_array: None,
+            attachment: Some(test_data.clone()),
         };
 
         let converted = SeaClient::convert_result_data(&result).unwrap();
-        assert!(converted.has_inline_data);
+        assert!(converted.inline_arrow_data.is_some());
+        assert_eq!(converted.inline_arrow_data.unwrap(), test_data);
     }
 }
