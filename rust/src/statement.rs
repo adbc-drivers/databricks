@@ -104,6 +104,13 @@ impl Statement {
                     );
                 }
                 StatementState::Closed => {
+                    // Closed with result data is valid for inline results - the server
+                    // delivers the data and immediately closes the statement since no
+                    // further fetching is needed.
+                    if current_response.result.is_some() {
+                        debug!("Statement closed with inline result data - treating as success");
+                        return Ok(current_response);
+                    }
                     return Err(
                         DatabricksErrorHelper::invalid_state().message("Statement was closed")
                     );

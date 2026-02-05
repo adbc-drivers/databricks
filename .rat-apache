@@ -103,6 +103,7 @@ go/integration_e2e_test.go
 go/ipc_reader_adapter.go
 go/ipc_reader_test.go
 go/statement.go
+go/pkg/adbc.h
 go/pkg/driver.go
 go/pkg/utils.c
 go/pkg/utils.h

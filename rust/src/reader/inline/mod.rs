@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//         http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,8 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-module github.com/apache/arrow-adbc/databricks/test-infrastructure/proxy-server
+//! Inline Arrow results support.
+//!
+//! This module handles inline Arrow results that are embedded directly in the
+//! API response (via the `attachment` field) rather than being downloaded from
+//! cloud storage via CloudFetch.
+//!
+//! Inline results are used for small result sets where the overhead of CloudFetch
+//! (presigned URL generation, separate HTTP download) would be inefficient.
 
-go 1.21
+mod provider;
 
-require gopkg.in/yaml.v3 v3.0.1
+pub use provider::InlineArrowProvider;
