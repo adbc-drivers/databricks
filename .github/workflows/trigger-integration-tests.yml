@@ -14,7 +14,7 @@
 name: Trigger Integration Tests
 on:
   pull_request:
-    types: [labeled, synchronize]  # Trigger on label add or new commits
+    types: [opened, synchronize, labeled]  # Trigger on PR open, new commits, or label add
   merge_group:  # Trigger when added to merge queue
 jobs:
   # =============================================================================
@@ -140,13 +140,14 @@ jobs:
               body: '🚀 Integration tests triggered! [View workflow run](https://github.com/databricks/databricks-driver-test/actions)'
             });
   # =============================================================================
-  # For Merge Queue: Check if relevant files changed
+  # Check if relevant files changed (for both PR and Merge Queue)
   # =============================================================================
-  check-merge-queue-paths:
-    if: github.event_name == 'merge_group'
+  check-paths:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: [self-hosted, Linux, X64, peco-driver]
     outputs:
       should-test: ${{ steps.check-paths.outputs.should_test }}
+      head-sha: ${{ steps.check-paths.outputs.head_sha }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -155,17 +156,28 @@ jobs:
       - name: Check if relevant files changed
         id: check-paths
         run: |
-          # Get the base and head commits for the merge queue
-          BASE_SHA="${{ github.event.merge_group.base_sha }}"
-          HEAD_SHA="${{ github.event.merge_group.head_sha }}"
+          # Get the base and head commits based on event type
+          if [ "${{ github.event_name }}" = "merge_group" ]; then
+            BASE_SHA="${{ github.event.merge_group.base_sha }}"
+            HEAD_SHA="${{ github.event.merge_group.head_sha }}"
+            echo "Event: merge_group"
+          else
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            echo "Event: pull_request"
+          fi
+
           echo "Checking files changed between $BASE_SHA and $HEAD_SHA"
-          # Define paths to check
+          echo "head_sha=$HEAD_SHA" >> $GITHUB_OUTPUT
+
+          # Define paths to check - only driver code paths
           PATHS=(
             ".github/workflows/trigger-integration-tests.yml"
             "ci/scripts/"
             "csharp/src/"
             "csharp/test/"
           )
+
           # Check if any relevant files changed
           CHANGED=false
           for path in "${PATHS[@]}"; do
@@ -175,19 +187,20 @@ jobs:
               break
             fi
           done
+
           if [ "$CHANGED" = true ]; then
             echo "should_test=true" >> $GITHUB_OUTPUT
-            echo "✅ Relevant files changed - will run tests"
+            echo "✅ Relevant driver files changed - will run tests"
           else
             echo "should_test=false" >> $GITHUB_OUTPUT
-            echo "⏭️ No relevant files changed - skipping tests"
+            echo "⏭️ No driver files changed - skipping tests"
           fi
   # =============================================================================
   # For Merge Queue: Check if tests already passed on PR
   # =============================================================================
   check-previous-run:
-    needs: check-merge-queue-paths
-    if: github.event_name == 'merge_group' && needs.check-merge-queue-paths.outputs.should-test == 'true'
+    needs: check-paths
+    if: github.event_name == 'merge_group' && needs.check-paths.outputs.should-test == 'true'
     runs-on: [self-hosted, Linux, X64, peco-driver]
     outputs:
       already-passed: ${{ steps.check-pr.outputs.passed }}
@@ -289,8 +302,10 @@ jobs:
               "pr_author": "merge-queue"
             }
   auto-approve-no-relevant-changes:
-    needs: check-merge-queue-paths
-    if: github.event_name == 'merge_group' && needs.check-merge-queue-paths.outputs.should-test == 'false'
+    needs: check-paths
+    if: |
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+      needs.check-paths.outputs.should-test == 'false'
     runs-on: [self-hosted, Linux, X64, peco-driver]
     steps:
       - name: Generate GitHub App Token
@@ -306,19 +321,35 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const eventType = '${{ github.event_name }}';
+            const isPR = eventType === 'pull_request';
+
             await github.rest.checks.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               name: 'Integration Tests',
-              head_sha: '${{ github.event.merge_group.head_sha }}',
+              head_sha: '${{ needs.check-paths.outputs.head-sha }}',
               status: 'completed',
               conclusion: 'success',
               completed_at: new Date().toISOString(),
               output: {
-                title: 'Auto-approved - no relevant changes',
-                summary: '✅ No integration test files changed. Skipping tests.'
+                title: 'Auto-approved - no driver code changes',
+                summary: `✅ No driver code changed. Skipping integration tests.\n\n` +
+                         `**Changed files**: Infrastructure/documentation only\n` +
+                         `**Event**: ${isPR ? 'Pull Request' : 'Merge Queue'}`
               }
             });
+
+            // Add a comment on PR for visibility
+            if (isPR) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: '✅ **Integration tests auto-approved**\n\n' +
+                      'No driver code changes detected. Your changes only affect infrastructure/documentation, so tests are skipped.'
+              });
+            }
   auto-approve-already-passed:
     needs: check-previous-run
     if: needs.check-previous-run.outputs.already-passed == 'true'
