@@ -15,7 +15,11 @@
 */
 
 using System.Collections.Generic;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
 using AdbcDrivers.Databricks;
 using Xunit;
 
@@ -162,6 +166,55 @@ namespace AdbcDrivers.Databricks.Tests
             // Current regex pattern ^[a-zA-Z0-9_.]+$ allows starting with numbers
             // This test documents the current behavior
             Assert.True(result, $"Property name '{propertyName}' is currently accepted by the regex");
+        }
+
+        /// <summary>
+        /// Tests that GetInfo returns correct driver information for DriverName and DriverArrowVersion.
+        /// Note: VendorName and VendorVersion require a server connection and should be tested in E2E tests.
+        /// </summary>
+        [Fact]
+        public async System.Threading.Tasks.Task GetInfo_DriverInformation_ReturnsCorrectValues()
+        {
+            // Arrange
+            using var connection = CreateMinimalConnection();
+            var infoCodes = new List<AdbcInfoCode>
+            {
+                AdbcInfoCode.DriverName,
+                AdbcInfoCode.DriverArrowVersion
+            };
+
+            // Act
+            using IArrowArrayStream stream = connection.GetInfo(infoCodes);
+            using RecordBatch recordBatch = await stream.ReadNextRecordBatchAsync();
+
+            // Assert
+            Assert.NotNull(recordBatch);
+            Assert.Equal(2, recordBatch.Length);
+
+            // Get the columns
+            UInt32Array infoNameArray = (UInt32Array)recordBatch.Column("info_name");
+            DenseUnionArray valueArray = (DenseUnionArray)recordBatch.Column("info_value");
+            StringArray stringArray = (StringArray)valueArray.Fields[0];
+
+            // Verify each info code
+            for (int i = 0; i < infoNameArray.Length; i++)
+            {
+                AdbcInfoCode infoCode = (AdbcInfoCode)infoNameArray.GetValue(i)!.Value;
+                string value = stringArray.GetString(i);
+
+                switch (infoCode)
+                {
+                    case AdbcInfoCode.DriverName:
+                        Assert.Equal("ADBC Databricks Driver", value);
+                        break;
+                    case AdbcInfoCode.DriverArrowVersion:
+                        Assert.Equal("1.0.0", value);
+                        break;
+                    default:
+                        Assert.Fail($"Unexpected info code: {infoCode}");
+                        break;
+                }
+            }
         }
     }
 }
