@@ -281,8 +281,6 @@ impl Drop for Statement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: Full statement tests require mock DatabricksClient
     // Integration tests should be added in a separate test module
 }
