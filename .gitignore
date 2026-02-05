@@ -285,3 +285,6 @@ BenchmarkDotNet.Artifacts/
 cloudfetch_benchmark_metrics.json
 .claude/settings.local.json
 databricks-test-config.json
+
+# Rust local cargo config (may contain credentials)
+rust/.cargo/

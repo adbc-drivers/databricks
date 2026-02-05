@@ -319,6 +319,7 @@ dependencies = [
  "arrow-ipc",
  "arrow-schema",
  "async-trait",
+ "base64",
  "chrono",
  "dashmap",
  "driverbase",
