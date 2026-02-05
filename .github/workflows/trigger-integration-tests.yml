@@ -176,9 +176,6 @@ jobs:
             "ci/scripts/"
             "csharp/src/"
             "csharp/test/"
-            "go/"
-            "rust/src/"
-            "rust/examples/"
           )
 
           # Check if any relevant files changed
@@ -350,15 +347,7 @@ jobs:
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
                 body: '✅ **Integration tests auto-approved**\n\n' +
-                      'No driver code changes detected. The following paths trigger integration tests:\n' +
-                      '- `.github/workflows/trigger-integration-tests.yml`\n' +
-                      '- `ci/scripts/`\n' +
-                      '- `csharp/src/`\n' +
-                      '- `csharp/test/`\n' +
-                      '- `go/`\n' +
-                      '- `rust/src/`\n' +
-                      '- `rust/examples/`\n\n' +
-                      'Your changes only affect infrastructure/documentation, so tests are skipped.'
+                      'No driver code changes detected. Your changes only affect infrastructure/documentation, so tests are skipped.'
               });
             }
   auto-approve-already-passed:
