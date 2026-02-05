@@ -510,6 +510,8 @@ namespace AdbcDrivers.Databricks
 
         protected override bool GetObjectsPatternsRequireLowerCase => true;
 
+        protected override string DriverName => "ADBC Databricks Driver";
+
         internal override IArrowArrayStream NewReader<T>(T statement, Schema schema, IResponse response, TGetResultSetMetadataResp? metadataResp = null)
         {
             bool isLz4Compressed = false;
@@ -527,6 +529,9 @@ namespace AdbcDrivers.Databricks
             }
 
             HttpClient httpClient = new HttpClient(HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator));
+            // Set user-agent for reader HTTP client (used for CloudFetch and result fetching)
+            string userAgent = $"{DriverName.Replace(" ", "")}/{ProductVersionDefault}";
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
             return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
         }
 
