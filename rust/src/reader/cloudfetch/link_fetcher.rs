@@ -465,6 +465,17 @@ impl ChunkLinkFetcher for SeaChunkLinkFetcherHandle {
         }
 
         // Fetch from server (synchronous fallback if prefetch hasn't caught up)
+        //
+        // TODO: This can cause duplicate API calls. There are two independent prefetch
+        // loops that race: (1) `SeaChunkLinkFetcher::run_prefetch_loop` triggered by
+        // `SeaChunkLinkFetcherHandle::new()`, and (2) `StreamingCloudFetchProvider::
+        // run_link_prefetch_loop` which also calls `fetch_links(32, ...)` because its
+        // `next_link_fetch_index` (set from initial cached links) is less than its
+        // prefetch window. Both end up calling `get_result_chunks(32)` simultaneously.
+        // Consider consolidating link prefetch into a single layer — either let the
+        // link fetcher handle all prefetching (and have the provider just request links
+        // on demand), or remove the fetcher's async prefetch and let the provider drive
+        // all fetching.
         debug!(
             "SeaChunkLinkFetcher: cache miss for chunk {}, fetching synchronously",
             start_chunk_index
@@ -543,9 +554,12 @@ impl ChunkLinkFetcher for SeaChunkLinkFetcherHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{ExecuteResponse, SessionInfo};
-    use crate::types::sea::{ExecuteParams, ResultManifest, StatementState, StatementStatus};
+    use crate::client::{ExecuteResult, SessionInfo};
+    use crate::reader::EmptyReader;
+    use crate::types::sea::ExecuteParams;
+    use arrow_schema::Schema;
     use std::collections::HashMap;
+    use std::sync::Arc as StdArc;
 
     /// Mock DatabricksClient for testing
     #[derive(Debug)]
@@ -581,33 +595,11 @@ mod tests {
             _session_id: &str,
             _sql: &str,
             _params: &ExecuteParams,
-        ) -> Result<ExecuteResponse> {
-            Ok(ExecuteResponse {
+        ) -> Result<ExecuteResult> {
+            Ok(ExecuteResult {
                 statement_id: "mock-statement".to_string(),
-                status: StatementStatus {
-                    state: StatementState::Succeeded,
-                    error: None,
-                },
-                manifest: Some(ResultManifest {
-                    format: "ARROW_STREAM".to_string(),
-                    schema: crate::types::sea::ResultSchema {
-                        column_count: 1,
-                        columns: vec![],
-                    },
-                    total_chunk_count: Some(self.chunks.len() as i64),
-                    total_row_count: None,
-                    total_byte_count: None,
-                    truncated: false,
-                    chunks: None,
-                    result_compression: None,
-                }),
-                result: None,
+                reader: Box::new(EmptyReader::new(StdArc::new(Schema::empty()))),
             })
-        }
-
-        async fn get_statement_status(&self, _statement_id: &str) -> Result<ExecuteResponse> {
-            self.execute_statement("", "", &ExecuteParams::default())
-                .await
         }
 
         async fn get_result_chunks(

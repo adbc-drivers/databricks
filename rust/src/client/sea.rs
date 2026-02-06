@@ -18,44 +18,94 @@
 //! SQL Statement Execution API (REST-based).
 
 use crate::client::{
-    ChunkLinkFetchResult, DatabricksClient, DatabricksHttpClient, ExecuteResponse,
-    ExecuteResultData, SessionInfo,
+    ChunkLinkFetchResult, DatabricksClient, DatabricksClientConfig, DatabricksHttpClient,
+    ExecuteResponse, ExecuteResult, ExecuteResultData, SessionInfo,
 };
 use crate::error::{DatabricksErrorHelper, Result};
+use crate::reader::ResultReaderFactory;
 use crate::types::cloudfetch::CloudFetchLink;
 use crate::types::sea::{
     CreateSessionRequest, CreateSessionResponse, ExecuteParams, ExecuteStatementRequest,
-    GetChunksResponse, StatementExecutionResponse,
+    GetChunksResponse, StatementExecutionResponse, StatementState,
 };
 use async_trait::async_trait;
 use driverbase::error::ErrorHelper;
 use reqwest::Method;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use tokio::runtime::Handle as RuntimeHandle;
 use tracing::debug;
 
 /// SEA client for the Databricks SQL Statement Execution API.
 ///
 /// This client implements the `DatabricksClient` trait using REST endpoints.
-#[derive(Debug)]
+/// The `reader_factory` is set after construction via `set_reader_factory()` because
+/// `ResultReaderFactory` needs `Arc<dyn DatabricksClient>` which requires wrapping
+/// `SeaClient` in `Arc` first.
 pub struct SeaClient {
     http_client: Arc<DatabricksHttpClient>,
     host: String,
     warehouse_id: String,
+    config: DatabricksClientConfig,
+    reader_factory: OnceLock<ResultReaderFactory>,
+    runtime_handle: OnceLock<RuntimeHandle>,
+}
+
+impl std::fmt::Debug for SeaClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SeaClient")
+            .field("host", &self.host)
+            .field("warehouse_id", &self.warehouse_id)
+            .field("config", &self.config)
+            .field(
+                "reader_factory",
+                &if self.reader_factory.get().is_some() {
+                    "<set>"
+                } else {
+                    "<not set>"
+                },
+            )
+            .finish()
+    }
 }
 
 impl SeaClient {
     /// Create a new SEA client.
+    ///
+    /// After construction, call `set_reader_factory()` to enable result reader creation.
+    /// This two-step initialization is required because `ResultReaderFactory` needs
+    /// `Arc<dyn DatabricksClient>`, which is only available after wrapping in `Arc`.
     pub fn new(
         http_client: Arc<DatabricksHttpClient>,
         host: impl Into<String>,
         warehouse_id: impl Into<String>,
+        config: DatabricksClientConfig,
     ) -> Self {
         Self {
             http_client,
             host: host.into(),
             warehouse_id: warehouse_id.into(),
+            config,
+            reader_factory: OnceLock::new(),
+            runtime_handle: OnceLock::new(),
         }
+    }
+
+    /// Set the reader factory and runtime handle. Must be called once after wrapping in `Arc`.
+    pub fn set_reader_factory(
+        &self,
+        reader_factory: ResultReaderFactory,
+        runtime_handle: RuntimeHandle,
+    ) {
+        let _ = self.reader_factory.set(reader_factory);
+        let _ = self.runtime_handle.set(runtime_handle);
+    }
+
+    fn reader_factory(&self) -> Result<&ResultReaderFactory> {
+        self.reader_factory.get().ok_or_else(|| {
+            DatabricksErrorHelper::invalid_state()
+                .message("SeaClient reader_factory not initialized")
+        })
     }
 
     /// Build the base URL for API requests.
@@ -76,15 +126,160 @@ impl SeaClient {
         };
 
         Ok(ExecuteResultData {
-            chunk_index: result.chunk_index,
-            row_offset: result.row_offset,
-            row_count: result.row_count,
-            byte_count: result.byte_count,
-            next_chunk_index: result.next_chunk_index,
             next_chunk_internal_link: result.next_chunk_internal_link.clone(),
             external_links,
             inline_arrow_data: result.attachment.clone(),
         })
+    }
+
+    /// Poll for statement status (private — used by wait_for_completion).
+    async fn get_statement_status(&self, statement_id: &str) -> Result<ExecuteResponse> {
+        let url = format!("{}/statements/{}", self.base_url(), statement_id);
+
+        debug!("Getting statement status at {}", url);
+
+        let request = self
+            .http_client
+            .inner()
+            .request(Method::GET, &url)
+            .build()
+            .map_err(|e| {
+                DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
+            })?;
+
+        let response = self.http_client.execute(request).await?;
+        let body = response.text().await.map_err(|e| {
+            DatabricksErrorHelper::io().message(format!("Failed to read response: {}", e))
+        })?;
+
+        let sea_response: StatementExecutionResponse =
+            serde_json::from_str(&body).map_err(|e| {
+                DatabricksErrorHelper::io().message(format!(
+                    "Failed to parse status response: {} - body: {}",
+                    e, body
+                ))
+            })?;
+
+        debug!(
+            "Status response: statement_id={}, status={:?}",
+            sea_response.statement_id, sea_response.status.state
+        );
+
+        Self::convert_response(sea_response)
+    }
+
+    /// Wait for statement to complete, polling status.
+    async fn wait_for_completion(&self, response: ExecuteResponse) -> Result<ExecuteResponse> {
+        let start = std::time::Instant::now();
+        let mut current_response = response;
+
+        loop {
+            match current_response.status.state {
+                StatementState::Succeeded => return Ok(current_response),
+                StatementState::Failed => {
+                    let error_msg = current_response
+                        .status
+                        .error
+                        .as_ref()
+                        .and_then(|e| e.message.clone())
+                        .unwrap_or_else(|| "Unknown error".to_string());
+                    return Err(DatabricksErrorHelper::io().message(error_msg));
+                }
+                StatementState::Canceled => {
+                    return Err(
+                        DatabricksErrorHelper::invalid_state().message("Statement was canceled")
+                    );
+                }
+                StatementState::Closed => {
+                    // Closed with result data is valid for inline results — the server
+                    // delivers the data and immediately closes the statement since no
+                    // further fetching is needed.
+                    if current_response.result.is_some() {
+                        debug!("Statement closed with inline result data - treating as success");
+                        return Ok(current_response);
+                    }
+                    return Err(
+                        DatabricksErrorHelper::invalid_state().message("Statement was closed")
+                    );
+                }
+                StatementState::Pending | StatementState::Running => {
+                    if start.elapsed() > self.config.poll_timeout {
+                        return Err(
+                            DatabricksErrorHelper::io().message("Statement execution timed out")
+                        );
+                    }
+
+                    tokio::time::sleep(self.config.poll_interval).await;
+
+                    debug!(
+                        "Polling statement status: {}",
+                        current_response.statement_id
+                    );
+                    current_response = self
+                        .get_statement_status(&current_response.statement_id)
+                        .await?;
+                }
+            }
+        }
+    }
+
+    /// Call the execute statement API endpoint (without polling or reader creation).
+    async fn call_execute_api(
+        &self,
+        session_id: &str,
+        sql: &str,
+        params: &ExecuteParams,
+    ) -> Result<ExecuteResponse> {
+        let url = format!("{}/statements", self.base_url());
+
+        let request_body = ExecuteStatementRequest {
+            warehouse_id: self.warehouse_id.clone(),
+            statement: sql.to_string(),
+            session_id: Some(session_id.to_string()),
+            catalog: params.catalog.clone(),
+            schema: params.schema.clone(),
+            // TODO: INLINE_OR_EXTERNAL_LINKS is not a public API disposition but enables
+            // returning all chunk links in a single response (requires JDBC user agent).
+            // Once EXTERNAL_LINKS supports multi-link responses, switch back to it.
+            disposition: "INLINE_OR_EXTERNAL_LINKS".to_string(),
+            format: "ARROW_STREAM".to_string(),
+            wait_timeout: params.wait_timeout.clone(),
+            on_wait_timeout: params.on_wait_timeout.clone(),
+            row_limit: params.row_limit,
+        };
+
+        debug!("Executing statement at {}: {}", url, sql);
+
+        let request = self
+            .http_client
+            .inner()
+            .request(Method::POST, &url)
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .build()
+            .map_err(|e| {
+                DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
+            })?;
+
+        let response = self.http_client.execute(request).await?;
+        let body = response.text().await.map_err(|e| {
+            DatabricksErrorHelper::io().message(format!("Failed to read response: {}", e))
+        })?;
+
+        let sea_response: StatementExecutionResponse =
+            serde_json::from_str(&body).map_err(|e| {
+                DatabricksErrorHelper::io().message(format!(
+                    "Failed to parse execute response: {} - body: {}",
+                    e, body
+                ))
+            })?;
+
+        debug!(
+            "Execute response: statement_id={}, status={:?}",
+            sea_response.statement_id, sea_response.status.state
+        );
+
+        Self::convert_response(sea_response)
     }
 
     /// Convert SEA response to internal ExecuteResponse.
@@ -180,92 +375,21 @@ impl DatabricksClient for SeaClient {
         session_id: &str,
         sql: &str,
         params: &ExecuteParams,
-    ) -> Result<ExecuteResponse> {
-        let url = format!("{}/statements", self.base_url());
+    ) -> Result<ExecuteResult> {
+        // 1. Call SEA API
+        let response = self.call_execute_api(session_id, sql, params).await?;
 
-        let request_body = ExecuteStatementRequest {
-            warehouse_id: self.warehouse_id.clone(),
-            statement: sql.to_string(),
-            session_id: Some(session_id.to_string()),
-            catalog: params.catalog.clone(),
-            schema: params.schema.clone(),
-            // TODO: INLINE_OR_EXTERNAL_LINKS is not a public API disposition but enables
-            // returning all chunk links in a single response (requires JDBC user agent).
-            // Once EXTERNAL_LINKS supports multi-link responses, switch back to it.
-            disposition: "INLINE_OR_EXTERNAL_LINKS".to_string(),
-            format: "ARROW_STREAM".to_string(),
-            wait_timeout: params.wait_timeout.clone(),
-            on_wait_timeout: params.on_wait_timeout.clone(),
-            row_limit: params.row_limit,
-        };
+        // 2. Poll until completion
+        let response = self.wait_for_completion(response).await?;
 
-        debug!("Executing statement at {}: {}", url, sql);
+        // 3. Create appropriate reader
+        let reader_factory = self.reader_factory()?;
+        let reader = reader_factory.create_reader(&response.statement_id, &response)?;
 
-        let request = self
-            .http_client
-            .inner()
-            .request(Method::POST, &url)
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .build()
-            .map_err(|e| {
-                DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
-            })?;
-
-        let response = self.http_client.execute(request).await?;
-        let body = response.text().await.map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to read response: {}", e))
-        })?;
-
-        let sea_response: StatementExecutionResponse =
-            serde_json::from_str(&body).map_err(|e| {
-                DatabricksErrorHelper::io().message(format!(
-                    "Failed to parse execute response: {} - body: {}",
-                    e, body
-                ))
-            })?;
-
-        debug!(
-            "Execute response: statement_id={}, status={:?}",
-            sea_response.statement_id, sea_response.status.state
-        );
-
-        Self::convert_response(sea_response)
-    }
-
-    async fn get_statement_status(&self, statement_id: &str) -> Result<ExecuteResponse> {
-        let url = format!("{}/statements/{}", self.base_url(), statement_id);
-
-        debug!("Getting statement status at {}", url);
-
-        let request = self
-            .http_client
-            .inner()
-            .request(Method::GET, &url)
-            .build()
-            .map_err(|e| {
-                DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
-            })?;
-
-        let response = self.http_client.execute(request).await?;
-        let body = response.text().await.map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to read response: {}", e))
-        })?;
-
-        let sea_response: StatementExecutionResponse =
-            serde_json::from_str(&body).map_err(|e| {
-                DatabricksErrorHelper::io().message(format!(
-                    "Failed to parse status response: {} - body: {}",
-                    e, body
-                ))
-            })?;
-
-        debug!(
-            "Status response: statement_id={}, status={:?}",
-            sea_response.statement_id, sea_response.status.state
-        );
-
-        Self::convert_response(sea_response)
+        Ok(ExecuteResult {
+            statement_id: response.statement_id,
+            reader,
+        })
     }
 
     async fn get_result_chunks(
@@ -399,7 +523,12 @@ mod tests {
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
         let http_client =
             Arc::new(DatabricksHttpClient::new(HttpClientConfig::default(), auth).unwrap());
-        SeaClient::new(http_client, "https://test.databricks.com", "warehouse-123")
+        SeaClient::new(
+            http_client,
+            "https://test.databricks.com",
+            "warehouse-123",
+            DatabricksClientConfig::default(),
+        )
     }
 
     #[test]
@@ -413,7 +542,12 @@ mod tests {
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
         let http_client =
             Arc::new(DatabricksHttpClient::new(HttpClientConfig::default(), auth).unwrap());
-        let client = SeaClient::new(http_client, "https://test.databricks.com/", "warehouse-123");
+        let client = SeaClient::new(
+            http_client,
+            "https://test.databricks.com/",
+            "warehouse-123",
+            DatabricksClientConfig::default(),
+        );
         assert_eq!(client.base_url(), "https://test.databricks.com/api/2.0/sql");
     }
 
@@ -432,8 +566,6 @@ mod tests {
         };
 
         let converted = SeaClient::convert_result_data(&result).unwrap();
-        assert_eq!(converted.chunk_index, Some(0));
-        assert_eq!(converted.row_count, Some(100));
         assert!(converted.external_links.is_none());
         assert!(converted.inline_arrow_data.is_none());
     }

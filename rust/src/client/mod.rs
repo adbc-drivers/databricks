@@ -23,13 +23,38 @@ pub mod http;
 pub mod sea;
 
 use crate::error::Result;
-use crate::types::cloudfetch::CloudFetchLink;
+use crate::reader::ResultReader;
+use crate::types::cloudfetch::{CloudFetchConfig, CloudFetchLink};
 use crate::types::sea::{ExecuteParams, ResultManifest, StatementStatus};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::time::Duration;
 
 pub use http::{DatabricksHttpClient, HttpClientConfig};
 pub use sea::SeaClient;
+
+/// Backend-agnostic configuration for DatabricksClient implementations.
+///
+/// Contains polling and CloudFetch settings shared across SEA and Thrift backends.
+#[derive(Debug, Clone)]
+pub struct DatabricksClientConfig {
+    /// Maximum time to wait for statement completion (default: 600s).
+    pub poll_timeout: Duration,
+    /// Interval between status polls (default: 500ms).
+    pub poll_interval: Duration,
+    /// CloudFetch configuration.
+    pub cloudfetch_config: CloudFetchConfig,
+}
+
+impl Default for DatabricksClientConfig {
+    fn default() -> Self {
+        Self {
+            poll_timeout: Duration::from_secs(600),
+            poll_interval: Duration::from_millis(500),
+            cloudfetch_config: CloudFetchConfig::default(),
+        }
+    }
+}
 
 /// Session information returned from create_session.
 #[derive(Debug, Clone)]
@@ -37,28 +62,39 @@ pub struct SessionInfo {
     pub session_id: String,
 }
 
-/// Unified response from statement execution.
-#[derive(Debug, Clone)]
-pub struct ExecuteResponse {
+/// Result from `execute_statement`. Contains the statement ID (for cancellation/cleanup)
+/// and a reader over the result data.
+pub struct ExecuteResult {
     pub statement_id: String,
-    pub status: StatementStatus,
-    pub manifest: Option<ResultManifest>,
-    pub result: Option<ExecuteResultData>,
+    pub reader: Box<dyn ResultReader + Send>,
 }
 
-/// Result data from execution (simplified view for consumers).
+impl std::fmt::Debug for ExecuteResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecuteResult")
+            .field("statement_id", &self.statement_id)
+            .field("reader", &"<dyn ResultReader>")
+            .finish()
+    }
+}
+
+/// Unified response from statement execution (internal to client implementations).
 #[derive(Debug, Clone)]
-pub struct ExecuteResultData {
-    pub chunk_index: Option<i64>,
-    pub row_offset: Option<i64>,
-    pub row_count: Option<i64>,
-    pub byte_count: Option<i64>,
-    pub next_chunk_index: Option<i64>,
-    pub next_chunk_internal_link: Option<String>,
-    pub external_links: Option<Vec<CloudFetchLink>>,
+pub(crate) struct ExecuteResponse {
+    pub(crate) statement_id: String,
+    pub(crate) status: StatementStatus,
+    pub(crate) manifest: Option<ResultManifest>,
+    pub(crate) result: Option<ExecuteResultData>,
+}
+
+/// Result data from execution (internal to client implementations).
+#[derive(Debug, Clone)]
+pub(crate) struct ExecuteResultData {
+    pub(crate) next_chunk_internal_link: Option<String>,
+    pub(crate) external_links: Option<Vec<CloudFetchLink>>,
     /// Inline Arrow IPC data (decoded from base64).
     /// Present when server returns inline results instead of CloudFetch.
-    pub inline_arrow_data: Option<Vec<u8>>,
+    pub(crate) inline_arrow_data: Option<Vec<u8>>,
 }
 
 /// Result of fetching chunk links.
@@ -107,15 +143,15 @@ pub trait DatabricksClient: Send + Sync + std::fmt::Debug {
     // --- Statement Execution ---
 
     /// Execute a SQL statement within a session.
+    ///
+    /// Handles polling, result format detection, and reader creation internally.
+    /// Always returns a ready-to-read `ExecuteResult`.
     async fn execute_statement(
         &self,
         session_id: &str,
         sql: &str,
         params: &ExecuteParams,
-    ) -> Result<ExecuteResponse>;
-
-    /// Poll statement status (for async execution).
-    async fn get_statement_status(&self, statement_id: &str) -> Result<ExecuteResponse>;
+    ) -> Result<ExecuteResult>;
 
     // --- Result Fetching (CloudFetch) ---
 
