@@ -221,11 +221,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Create a separate HTTP client for CloudFetch downloads (without auth headers)
             // This is needed because CloudFetch uses pre-signed URLs from cloud storage (S3, Azure Blob, etc.)
             // and those services reject requests with multiple authentication methods
-            int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
-            _cloudFetchHttpClient = new HttpClient()
-            {
-                Timeout = TimeSpan.FromMinutes(timeoutMinutes)
-            };
+            // Note: We still need proxy and TLS configuration for corporate network access
+            _cloudFetchHttpClient = HttpClientFactory.CreateCloudFetchHttpClient(properties);
 
             // Create REST API client
             _client = new StatementExecutionClient(_httpClient, baseUrl);
@@ -251,8 +248,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             var config = new HttpHandlerFactory.HandlerConfig
             {
-                BaseHandler = new HttpClientHandler(),
-                BaseAuthHandler = new HttpClientHandler(),
+                BaseHandler = HttpClientFactory.CreateHandler(properties),
+                BaseAuthHandler = HttpClientFactory.CreateHandler(properties),
                 Properties = properties,
                 Host = GetHost(properties),
                 ActivityTracer = this,

@@ -436,6 +436,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-5.3: MetricsAggregator
 **Description**: Aggregates Activity data by statement_id, handles exception buffering.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/MetricsAggregator.cs`
 
 **Input**:
@@ -443,7 +445,7 @@ Implement the core telemetry infrastructure including feature flag management, p
 - ITelemetryExporter for flushing
 
 **Output**:
-- Aggregated TelemetryMetric per statement
+- Aggregated TelemetryEvent per statement
 - Batched flush on threshold or interval
 
 **Test Expectations**:
@@ -452,13 +454,35 @@ Implement the core telemetry infrastructure including feature flag management, p
 |-----------|-----------|-------|-----------------|
 | Unit | `MetricsAggregator_ProcessActivity_ConnectionOpen_EmitsImmediately` | Connection.Open activity | Metric queued for export |
 | Unit | `MetricsAggregator_ProcessActivity_Statement_AggregatesByStatementId` | Multiple activities with same statement_id | Single aggregated metric |
-| Unit | `MetricsAggregator_CompleteStatement_EmitsAggregatedMetric` | Call CompleteStatement() | Queues aggregated metric |
-| Unit | `MetricsAggregator_FlushAsync_BatchSizeReached_ExportsMetrics` | 100 metrics (batch size) | Calls exporter |
-| Unit | `MetricsAggregator_FlushAsync_TimeInterval_ExportsMetrics` | Wait 5 seconds | Calls exporter |
+| Unit | `MetricsAggregator_CompleteStatement_EmitsAggregatedEvent` | Call CompleteStatement() | Queues aggregated metric |
+| Unit | `MetricsAggregator_FlushAsync_BatchSizeReached_ExportsEvents` | Batch size reached | Calls exporter |
+| Unit | `MetricsAggregator_FlushAsync_TimeInterval_ExportsEvents` | Wait for interval | Calls exporter |
 | Unit | `MetricsAggregator_RecordException_Terminal_FlushesImmediately` | Terminal exception | Immediately exports error metric |
 | Unit | `MetricsAggregator_RecordException_Retryable_BuffersUntilComplete` | Retryable exception | Buffers, exports on CompleteStatement |
 | Unit | `MetricsAggregator_ProcessActivity_ExceptionSwallowed_NoThrow` | Activity processing throws | No exception propagated |
 | Unit | `MetricsAggregator_ProcessActivity_FiltersTags_UsingRegistry` | Activity with sensitive tags | Only safe tags in metric |
+| Unit | `MetricsAggregator_WrapInFrontendLog_CreatesValidStructure` | TelemetryEvent | Valid TelemetryFrontendLog structure |
+
+**Implementation Notes**:
+- Uses `ConcurrentDictionary<string, StatementTelemetryContext>` for thread-safe aggregation by statement_id
+- Connection events emit immediately without aggregation
+- Statement events are aggregated until `CompleteStatement()` is called
+- Terminal exceptions (via `ExceptionClassifier`) are queued immediately
+- Retryable exceptions are buffered and only emitted when `CompleteStatement(failed: true)` is called
+- Uses `TelemetryTagRegistry.ShouldExportToDatabricks()` for tag filtering
+- Creates `TelemetryFrontendLog` wrapper with workspace_id, client context, and timestamp
+- All exceptions swallowed and logged at TRACE level using `Debug.WriteLine()`
+- Timer-based periodic flush using `System.Threading.Timer`
+- Comprehensive test coverage with 29 unit tests in `MetricsAggregatorTests.cs`
+- Test file location: `csharp/test/Unit/Telemetry/MetricsAggregatorTests.cs`
+
+**Key Design Decisions**:
+1. **ConcurrentDictionary for aggregation**: Thread-safe statement aggregation without explicit locking
+2. **Nested StatementTelemetryContext**: Holds aggregated metrics and buffered exceptions per statement
+3. **Immediate connection events**: Connection open events don't require aggregation and are emitted immediately
+4. **Exception buffering**: Retryable exceptions are buffered per statement and only emitted on failed completion
+5. **Timer-based flush**: Uses `System.Threading.Timer` for periodic flush based on `FlushIntervalMs`
+6. **Graceful disposal**: `Dispose()` stops timer and performs final flush
 
 ---
 
@@ -492,6 +516,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-5.5: TelemetryClient
 **Description**: Main telemetry client that coordinates listener, aggregator, and exporter.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/TelemetryClient.cs`
 
 **Input**:
@@ -510,6 +536,23 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `TelemetryClient_ExportAsync_DelegatesToExporter` | Metrics list | CircuitBreakerTelemetryExporter.ExportAsync called |
 | Unit | `TelemetryClient_CloseAsync_FlushesAndCancels` | N/A | Pending metrics flushed, background task cancelled |
 | Unit | `TelemetryClient_CloseAsync_ExceptionSwallowed` | Flush throws | No exception propagated |
+
+**Implementation Notes**:
+- Implements `ITelemetryClient` interface with `Host`, `ExportAsync`, and `CloseAsync` members
+- Constructor creates the full telemetry pipeline: DatabricksTelemetryExporter → CircuitBreakerTelemetryExporter → MetricsAggregator → DatabricksActivityListener
+- Starts a background flush task that periodically flushes metrics based on `FlushIntervalMs` configuration
+- `CloseAsync` implements graceful shutdown: cancels background task, stops listener (which flushes pending metrics), waits for background task with 5s timeout, disposes resources
+- All operations in `CloseAsync` wrapped in try-catch to swallow exceptions per telemetry requirement
+- Updated `TelemetryClientManager.CreateClient()` to use `TelemetryClient` instead of `TelemetryClientAdapter`
+- Comprehensive test coverage with 21 unit tests covering constructor, export, close, background flush, and thread safety
+- Test file location: `csharp/test/Unit/Telemetry/TelemetryClientTests.cs`
+
+**Key Design Decisions**:
+1. **Background flush task**: Uses `Task.Run` with internal loop and `Task.Delay` for periodic flushing
+2. **Graceful shutdown**: CloseAsync uses 5-second timeout waiting for background task to prevent hanging
+3. **Cross-framework compatibility**: Uses conditional compilation (`#if NET6_0_OR_GREATER`) for `Task.WaitAsync` vs `Task.WhenAny` fallback
+4. **Exception swallowing**: Every operation in CloseAsync wrapped in try-catch per design requirement
+5. **Idempotent close**: Uses lock and boolean flag to ensure CloseAsync can be called multiple times safely
 
 ---
 
