@@ -101,8 +101,6 @@ namespace AdbcDrivers.Databricks
         // Default namespace
         private TNamespace? _defaultNamespace;
 
-        private HttpClient? _authHttpClient;
-
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
         /// If provided by Database, this is shared across all connections for optimal pooling.
@@ -405,14 +403,7 @@ namespace AdbcDrivers.Databricks
             };
 
             var result = HttpHandlerFactory.CreateHandlers(config);
-
-            if (result.AuthHttpClient != null)
-            {
-                Debug.Assert(_authHttpClient == null, "Auth HttpClient should not be initialized yet.");
-                _authHttpClient = result.AuthHttpClient;
-            }
-
-            return result.Handler;
+            return result;
         }
 
         protected override bool GetObjectsPatternsRequireLowerCase => true;
@@ -875,10 +866,6 @@ namespace AdbcDrivers.Databricks
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
-            {
-                _authHttpClient?.Dispose();
-            }
             base.Dispose(disposing);
         }
     }
