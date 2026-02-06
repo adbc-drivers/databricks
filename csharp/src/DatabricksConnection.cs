@@ -126,12 +126,13 @@ namespace AdbcDrivers.Databricks
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager? memoryStreamManager,
             System.Buffers.ArrayPool<byte>? lz4BufferPool)
-            : base(MergeWithDefaultEnvironmentConfig(properties))
+            : base(FeatureFlagCache.GetInstance().MergePropertiesWithFeatureFlags(MergeWithDefaultEnvironmentConfig(properties), s_assemblyVersion))
         {
             // Use provided manager (from Database) or create new instance (for direct construction)
             RecyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             // Use provided pool (from Database) or create new instance (for direct construction)
             Lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
+
             ValidateProperties();
         }
 
@@ -526,7 +527,7 @@ namespace AdbcDrivers.Databricks
                 isLz4Compressed = metadataResp.Lz4Compressed;
             }
 
-            HttpClient httpClient = new HttpClient(HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator));
+            HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
             return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
         }
 
