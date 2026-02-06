@@ -60,3 +60,12 @@ repos:
   rev: 4e9fb185c5a600c0c1de0df011ce16ffbafb709e
   hooks:
   - id: rat
+
+- repo: local
+  hooks:
+  - id: cargo fmt
+    name: cargo fmt
+    language: system
+    types: [rust]
+    entry: bash -c 'cd rust && cargo +stable fmt --all'
+    pass_filenames: false

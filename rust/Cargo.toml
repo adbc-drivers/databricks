@@ -67,4 +67,4 @@ tracing-subscriber = "0.3"
 
 [lib]
 name = "databricks_adbc"
-path = "src/lib.rs"
+crate-type = ["lib", "cdylib"]

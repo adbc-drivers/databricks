@@ -289,8 +289,6 @@ impl Drop for Connection {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: Full connection tests require mock DatabricksClient
     // Integration tests should be added in a separate test module
 }

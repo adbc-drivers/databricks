@@ -632,6 +632,7 @@ mod tests {
     use std::collections::HashMap;
 
     /// Mock ChunkLinkFetcher for testing
+    #[allow(dead_code)]
     #[derive(Debug)]
     struct MockLinkFetcher {
         links_by_index: HashMap<i64, CloudFetchLink>,
@@ -639,6 +640,7 @@ mod tests {
     }
 
     impl MockLinkFetcher {
+        #[allow(dead_code)]
         fn new(total_chunks: i64) -> Self {
             let mut links_by_index = HashMap::new();
             for i in 0..total_chunks {
