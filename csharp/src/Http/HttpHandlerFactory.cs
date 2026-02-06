@@ -111,22 +111,6 @@ namespace AdbcDrivers.Databricks.Http
         }
 
         /// <summary>
-        /// Result of creating HTTP handlers.
-        /// </summary>
-        internal class HandlerResult
-        {
-            /// <summary>
-            /// HTTP handler chain for API requests.
-            /// </summary>
-            public HttpMessageHandler Handler { get; set; } = null!;
-
-            /// <summary>
-            /// HTTP client for OAuth token operations (may be null if OAuth not configured).
-            /// </summary>
-            public HttpClient? AuthHttpClient { get; set; }
-        }
-
-        /// <summary>
         /// Checks if OAuth authentication is configured in properties.
         /// </summary>
         private static bool IsOAuthEnabled(IReadOnlyDictionary<string, string> properties)
@@ -189,9 +173,11 @@ namespace AdbcDrivers.Databricks.Http
             HttpMessageHandler handler,
             IReadOnlyDictionary<string, string> properties,
             string host,
-            HttpClient? authHttpClient,
-            string? identityFederationClientId)
+            HttpClient? authHttpClient)
         {
+            // Get identity federation client ID
+            properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId);
+
             if (IsOAuthEnabled(properties))
             {
                 if (authHttpClient == null)
@@ -297,7 +283,7 @@ namespace AdbcDrivers.Databricks.Http
         /// 5. TracingDelegatingHandler - propagates W3C trace context (closest to network)
         /// 6. Base HTTP handler - actual network communication
         /// </summary>
-        public static HandlerResult CreateHandlers(HandlerConfig config)
+        public static HttpMessageHandler CreateHandlers(HandlerConfig config)
         {
             HttpMessageHandler handler = config.BaseHandler;
             HttpMessageHandler authHandler = config.BaseAuthHandler;
@@ -350,14 +336,9 @@ namespace AdbcDrivers.Databricks.Http
                 handler,
                 config.Properties,
                 config.Host,
-                authHttpClient,
-                config.IdentityFederationClientId);
+                authHttpClient);
 
-            return new HandlerResult
-            {
-                Handler = handler,
-                AuthHttpClient = authHttpClient
-            };
+            return handler;
         }
 
         /// <summary>
@@ -398,16 +379,12 @@ namespace AdbcDrivers.Databricks.Http
                 };
             }
 
-            // Get identity federation client ID
-            properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId);
-
             // Add auth handlers
             return AddAuthHandlers(
                 baseHandler,
                 properties,
                 host,
-                authHttpClient,
-                identityFederationClientId);
+                authHttpClient);
         }
     }
 }

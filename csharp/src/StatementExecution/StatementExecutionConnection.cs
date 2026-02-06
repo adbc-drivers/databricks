@@ -65,7 +65,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly bool _traceStateEnabled;
 
         // Authentication support
-        private HttpClient? _authHttpClient;
         private readonly string? _identityFederationClientId;
 
         /// <summary>
@@ -267,12 +266,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             var result = HttpHandlerFactory.CreateHandlers(config);
 
-            if (result.AuthHttpClient != null)
-            {
-                _authHttpClient = result.AuthHttpClient;
-            }
-
-            var httpClient = new HttpClient(result.Handler)
+            var httpClient = new HttpClient(result)
             {
                 Timeout = TimeSpan.FromMinutes(timeoutMinutes)
             };
@@ -450,9 +444,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 // Dispose the CloudFetch HTTP client (we always own it)
                 _cloudFetchHttpClient.Dispose();
-
-                // Dispose the auth HTTP client if it was created
-                _authHttpClient?.Dispose();
 
                 _sessionLock.Dispose();
             });
