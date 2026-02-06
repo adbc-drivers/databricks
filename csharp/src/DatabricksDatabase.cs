@@ -157,7 +157,7 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Automatically merges properties from the default DATABRICKS_CONFIG_FILE environment variable with passed-in properties.
-        /// Environment config (driver config) always takes precedence over passed-in properties.
+        /// The merge priority is controlled by the "adbc.databricks.driver_config_take_precedence" property.
         /// If DATABRICKS_CONFIG_FILE is not set or invalid, only passed-in properties are used.
         /// </summary>
         /// <param name="properties">Properties passed to constructor.</param>
@@ -169,12 +169,54 @@ namespace AdbcDrivers.Databricks
 
             if (environmentConfig != null)
             {
-                // Environment config (driver config) always takes precedence
-                return MergeProperties(properties, environmentConfig.Properties);
+                // Determine precedence setting - check passed-in properties first, then environment config
+                bool driverConfigTakesPrecedence = DetermineDriverConfigPrecedence(properties, environmentConfig.Properties);
+
+                if (driverConfigTakesPrecedence)
+                {
+                    // Environment config properties override passed-in properties
+                    return MergeProperties(properties, environmentConfig.Properties);
+                }
+                else
+                {
+                    // Passed-in properties override environment config properties (default behavior)
+                    return MergeProperties(environmentConfig.Properties, properties);
+                }
             }
 
             // No environment config available, use only passed-in properties
             return properties;
+        }
+
+        /// <summary>
+        /// Determines whether driver configuration should take precedence based on the precedence property.
+        /// Checks passed-in properties first, then environment properties, defaulting to false.
+        /// </summary>
+        /// <param name="passedInProperties">Properties passed to constructor.</param>
+        /// <param name="environmentProperties">Properties loaded from environment configuration.</param>
+        /// <returns>True if driver config should take precedence, false otherwise.</returns>
+        private static bool DetermineDriverConfigPrecedence(IReadOnlyDictionary<string, string> passedInProperties, IReadOnlyDictionary<string, string> environmentProperties)
+        {
+            // Priority 1: Check passed-in properties for precedence setting
+            if (passedInProperties.TryGetValue(DatabricksParameters.DriverConfigTakePrecedence, out string? passedInValue))
+            {
+                if (bool.TryParse(passedInValue, out bool passedInPrecedence))
+                {
+                    return passedInPrecedence;
+                }
+            }
+
+            // Priority 2: Check environment config for precedence setting
+            if (environmentProperties.TryGetValue(DatabricksParameters.DriverConfigTakePrecedence, out string? environmentValue))
+            {
+                if (bool.TryParse(environmentValue, out bool environmentPrecedence))
+                {
+                    return environmentPrecedence;
+                }
+            }
+
+            // Default: Passed-in properties override environment config (current behavior)
+            return false;
         }
 
         /// <summary>
