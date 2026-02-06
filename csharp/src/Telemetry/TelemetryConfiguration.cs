@@ -85,6 +85,13 @@ namespace AdbcDrivers.Databricks.Telemetry
         public const string FeatureFlagName = "databricks.partnerplatform.clientConfigsFeatureFlags.enableTelemetryForAdbc";
 
         /// <summary>
+        /// Feature flag endpoint format (relative to host).
+        /// {0} = driver version without OSS suffix.
+        /// NOTE: Using OSS_JDBC endpoint until OSS_ADBC is configured server-side.
+        /// </summary>
+        public const string FeatureFlagEndpointFormat = "/api/2.0/connector-service/feature-flags/OSS_JDBC/{0}";
+
+        /// <summary>
         /// Gets or sets whether telemetry is enabled.
         /// Default is true.
         /// </summary>
