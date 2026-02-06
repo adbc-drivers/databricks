@@ -159,9 +159,8 @@ jobs:
           BASE_SHA="${{ github.event.merge_group.base_sha }}"
           HEAD_SHA="${{ github.event.merge_group.head_sha }}"
           echo "Checking files changed between $BASE_SHA and $HEAD_SHA"
-          # Define paths to check
+          # Define paths to check (only actual code, not workflow orchestration)
           PATHS=(
-            ".github/workflows/trigger-integration-tests.yml"
             "ci/scripts/"
             "csharp/src/"
             "csharp/test/"
@@ -190,7 +189,7 @@ jobs:
     if: github.event_name == 'merge_group' && needs.check-merge-queue-paths.outputs.should-test == 'true'
     runs-on: [self-hosted, Linux, X64, peco-driver]
     outputs:
-      already-passed: ${{ steps.check-pr.outputs.passed }}
+      already-passed: ${{ steps.check-pr.outputs.result }}
       pr-number: ${{ steps.extract-pr.outputs.pr_number }}
     steps:
       - name: Extract PR number from merge queue ref
