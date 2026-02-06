@@ -91,9 +91,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             if (config == null) throw new ArgumentNullException(nameof(config));
 
-            // Apply CloudFetch timeout configuration to HttpClient
-            _httpClient.Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes);
-
             _maxParallelDownloads = config.ParallelDownloads;
             _isLz4Compressed = config.IsLz4Compressed;
             _maxRetries = config.MaxRetries;
