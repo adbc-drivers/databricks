@@ -65,7 +65,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly bool _traceStateEnabled;
 
         // Authentication support
-        private HttpClient? _authHttpClient;
         private readonly string? _identityFederationClientId;
 
         /// <summary>
@@ -221,11 +220,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Create a separate HTTP client for CloudFetch downloads (without auth headers)
             // This is needed because CloudFetch uses pre-signed URLs from cloud storage (S3, Azure Blob, etc.)
             // and those services reject requests with multiple authentication methods
-            int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
-            _cloudFetchHttpClient = new HttpClient()
-            {
-                Timeout = TimeSpan.FromMinutes(timeoutMinutes)
-            };
+            // Note: We still need proxy and TLS configuration for corporate network access
+            _cloudFetchHttpClient = HttpClientFactory.CreateCloudFetchHttpClient(properties);
 
             // Create REST API client
             _client = new StatementExecutionClient(_httpClient, baseUrl);
@@ -251,8 +247,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             var config = new HttpHandlerFactory.HandlerConfig
             {
-                BaseHandler = new HttpClientHandler(),
-                BaseAuthHandler = new HttpClientHandler(),
+                BaseHandler = HttpClientFactory.CreateHandler(properties),
+                BaseAuthHandler = HttpClientFactory.CreateHandler(properties),
                 Properties = properties,
                 Host = GetHost(properties),
                 ActivityTracer = this,
@@ -270,12 +266,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             var result = HttpHandlerFactory.CreateHandlers(config);
 
-            if (result.AuthHttpClient != null)
-            {
-                _authHttpClient = result.AuthHttpClient;
-            }
-
-            var httpClient = new HttpClient(result.Handler)
+            var httpClient = new HttpClient(result)
             {
                 Timeout = TimeSpan.FromMinutes(timeoutMinutes)
             };
@@ -453,9 +444,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 // Dispose the CloudFetch HTTP client (we always own it)
                 _cloudFetchHttpClient.Dispose();
-
-                // Dispose the auth HTTP client if it was created
-                _authHttpClient?.Dispose();
 
                 _sessionLock.Dispose();
             });

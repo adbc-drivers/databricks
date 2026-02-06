@@ -176,69 +176,419 @@ sequenceDiagram
 
 ### 3.1 FeatureFlagCache (Per-Host)
 
-**Purpose**: Cache feature flag values at the host level to avoid repeated API calls and rate limiting.
+**Purpose**: Cache **all** feature flag values at the host level to avoid repeated API calls and rate limiting. This is a generic cache that can be used for any driver configuration controlled by server-side feature flags, not just telemetry.
 
-**Location**: `Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.FeatureFlagCache`
+**Location**: `AdbcDrivers.Databricks.FeatureFlagCache` (note: not in Telemetry namespace - this is a general-purpose component)
 
 #### Rationale
+- **Generic feature flag support**: Cache returns all flags, allowing any driver feature to be controlled server-side
 - **Per-host caching**: Feature flags cached by host (not per connection) to prevent rate limiting
 - **Reference counting**: Tracks number of connections per host for proper cleanup
-- **Automatic expiration**: Refreshes cached flags after TTL expires (15 minutes)
+- **Server-controlled TTL**: Refresh interval controlled by server-provided `ttl_seconds` (default: 15 minutes)
+- **Background refresh**: Scheduled refresh at server-specified intervals
 - **Thread-safe**: Uses ConcurrentDictionary for concurrent access from multiple connections
+
+#### Configuration Priority Order
+
+Feature flags are integrated directly into the existing ADBC driver property parsing logic as an **extra layer** in the property value resolution. The priority order is:
+
+```
+1. User-specified properties (highest priority)
+2. Feature flags from server
+3. Driver default values (lowest priority)
+```
+
+**Integration Approach**: Feature flags are merged into the `Properties` dictionary at connection initialization time. This means:
+- The existing `Properties.TryGetValue()` pattern continues to work unchanged
+- Feature flags are transparently available as properties
+- No changes needed to existing property parsing code
+
+```mermaid
+flowchart LR
+    A[User Properties] --> D[Merged Properties]
+    B[Feature Flags] --> D
+    C[Driver Defaults] --> D
+    D --> E[Properties.TryGetValue]
+    E --> F[Existing Parsing Logic]
+```
+
+**Merge Logic** (in `DatabricksConnection` initialization):
+```csharp
+// Current flow:
+// 1. User properties from connection string/config
+// 2. Environment properties from DATABRICKS_CONFIG_FILE
+
+// New flow with feature flags:
+// 1. User properties from connection string/config (highest priority)
+// 2. Feature flags from server (middle priority)
+// 3. Environment properties / driver defaults (lowest priority)
+
+private Dictionary<string, string> MergePropertiesWithFeatureFlags(
+    Dictionary<string, string> userProperties,
+    IReadOnlyDictionary<string, string> featureFlags)
+{
+    var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    // Start with feature flags as base (lower priority)
+    foreach (var flag in featureFlags)
+    {
+        // Map feature flag names to property names if needed
+        string propertyName = MapFeatureFlagToPropertyName(flag.Key);
+        if (propertyName != null)
+        {
+            merged[propertyName] = flag.Value;
+        }
+    }
+
+    // Override with user properties (higher priority)
+    foreach (var prop in userProperties)
+    {
+        merged[prop.Key] = prop.Value;
+    }
+
+    return merged;
+}
+```
+
+**Feature Flag to Property Name Mapping**:
+```csharp
+// Feature flags have long names, map to driver property names
+private static readonly Dictionary<string, string> FeatureFlagToPropertyMap = new()
+{
+    ["databricks.partnerplatform.clientConfigsFeatureFlags.enableTelemetryForAdbc"] = "telemetry.enabled",
+    ["databricks.partnerplatform.clientConfigsFeatureFlags.enableCloudFetch"] = "cloudfetch.enabled",
+    // ... more mappings
+};
+```
+
+This approach:
+- **Preserves existing code**: All `Properties.TryGetValue()` calls work unchanged
+- **Transparent integration**: Feature flags appear as regular properties after merge
+- **Clear priority**: User settings always win over server flags
+- **Single merge point**: Feature flag integration happens once at connection initialization
+- **Fresh values per connection**: Each new connection uses the latest cached feature flag values
+
+#### Per-Connection Property Resolution
+
+Each new connection applies property merging with the **latest** cached feature flag values:
+
+```mermaid
+sequenceDiagram
+    participant C1 as Connection 1
+    participant C2 as Connection 2
+    participant FFC as FeatureFlagCache
+    participant BG as Background Refresh
+
+    Note over FFC: Cache has flags v1
+
+    C1->>FFC: GetOrCreateContext(host)
+    FFC-->>C1: context (refCount=1)
+    C1->>C1: Merge properties with flags v1
+    Note over C1: Properties frozen with v1
+
+    BG->>FFC: Refresh flags
+    Note over FFC: Cache updated to flags v2
+
+    C2->>FFC: GetOrCreateContext(host)
+    FFC-->>C2: context (refCount=2)
+    C2->>C2: Merge properties with flags v2
+    Note over C2: Properties frozen with v2
+
+    Note over C1,C2: C1 uses v1, C2 uses v2
+```
+
+**Key Points**:
+- **Shared cache, per-connection merge**: The `FeatureFlagCache` is shared (per-host), but property merging happens at each connection initialization
+- **Latest values for new connections**: When a new connection is created, it reads the current cached values (which may have been updated by background refresh)
+- **Stable within connection**: Once merged, a connection's `Properties` are stable for its lifetime (no mid-connection changes)
+- **Background refresh benefits new connections**: The scheduled refresh ensures new connections get up-to-date flag values without waiting for a fetch
+
+#### Feature Flag API
+
+**Endpoint**: `GET /api/2.0/connector-service/feature-flags/OSS_JDBC/{driver_version}`
+
+> **Note**: Currently using the JDBC endpoint (`OSS_JDBC`) until the ADBC endpoint (`OSS_ADBC`) is configured server-side. The feature flag name will still use `enableTelemetryForAdbc` to distinguish ADBC telemetry from JDBC telemetry.
+
+Where `{driver_version}` is the driver version (e.g., `1.0.0`).
+
+**Request Headers**:
+- `Authorization`: Bearer token (same as connection auth)
+- `User-Agent`: Custom user agent for connector service
+
+**Response Format** (JSON):
+```json
+{
+  "flags": [
+    {
+      "name": "databricks.partnerplatform.clientConfigsFeatureFlags.enableTelemetryForAdbc",
+      "value": "true"
+    },
+    {
+      "name": "databricks.partnerplatform.clientConfigsFeatureFlags.enableCloudFetch",
+      "value": "true"
+    },
+    {
+      "name": "databricks.partnerplatform.clientConfigsFeatureFlags.maxDownloadThreads",
+      "value": "10"
+    }
+  ],
+  "ttl_seconds": 900
+}
+```
+
+**Response Fields**:
+- `flags`: Array of feature flag entries with `name` and `value` (string). Names can be mapped to driver property names.
+- `ttl_seconds`: Server-controlled refresh interval in seconds (default: 900 = 15 minutes)
+
+**JDBC Reference**: See `DatabricksDriverFeatureFlagsContext.java:30-33` for endpoint format.
+
+#### Refresh Strategy
+
+The feature flag cache follows the JDBC driver pattern:
+
+1. **Initial Blocking Fetch**: On connection open, make a blocking HTTP call to fetch all feature flags
+2. **Cache All Flags**: Store all returned flags in a local cache (Guava Cache in JDBC, ConcurrentDictionary in C#)
+3. **Scheduled Background Refresh**: Start a daemon thread that refreshes flags at intervals based on `ttl_seconds`
+4. **Dynamic TTL**: If server returns a different `ttl_seconds`, reschedule the refresh interval
+
+```mermaid
+sequenceDiagram
+    participant Conn as Connection.Open
+    participant FFC as FeatureFlagContext
+    participant Server as Databricks Server
+
+    Conn->>FFC: GetOrCreateContext(host)
+    FFC->>Server: GET /api/2.0/connector-service/feature-flags/OSS_JDBC/{version}
+    Note over FFC,Server: Blocking initial fetch
+    Server-->>FFC: {flags: [...], ttl_seconds: 900}
+    FFC->>FFC: Cache all flags
+    FFC->>FFC: Schedule refresh at ttl_seconds interval
+
+    loop Every ttl_seconds
+        FFC->>Server: GET /api/2.0/connector-service/feature-flags/OSS_JDBC/{version}
+        Server-->>FFC: {flags: [...], ttl_seconds: N}
+        FFC->>FFC: Update cache, reschedule if TTL changed
+    end
+```
+
+**JDBC Reference**: See `DatabricksDriverFeatureFlagsContext.java:48-58` for initial fetch and scheduling.
+
+#### HTTP Client Pattern
+
+The feature flag cache does **not** use a separate dedicated HTTP client. Instead, it reuses the connection's existing HTTP client infrastructure:
+
+```mermaid
+graph LR
+    A[DatabricksConnection] -->|provides| B[HttpClient]
+    A -->|provides| C[Auth Headers]
+    B --> D[FeatureFlagContext]
+    C --> D
+    D -->|HTTP GET| E[Feature Flag Endpoint]
+```
+
+**Key Points**:
+1. **Reuse connection's HttpClient**: The `FeatureFlagContext` receives the connection's `HttpClient` (already configured with base address, timeouts, etc.)
+2. **Reuse connection's authentication**: Auth headers (Bearer token) come from the connection's authentication mechanism
+3. **Custom User-Agent**: Set a connector-service-specific User-Agent header for the feature flag requests
+
+**JDBC Implementation** (`DatabricksDriverFeatureFlagsContext.java:89-105`):
+```java
+// Get shared HTTP client from connection
+IDatabricksHttpClient httpClient =
+    DatabricksHttpClientFactory.getInstance().getClient(connectionContext);
+
+// Create request
+HttpGet request = new HttpGet(featureFlagEndpoint);
+
+// Set custom User-Agent for connector service
+request.setHeader("User-Agent",
+    UserAgentManager.buildUserAgentForConnectorService(connectionContext));
+
+// Add auth headers from connection's auth config
+DatabricksClientConfiguratorManager.getInstance()
+    .getConfigurator(connectionContext)
+    .getDatabricksConfig()
+    .authenticate()
+    .forEach(request::addHeader);
+```
+
+**C# Equivalent Pattern**:
+```csharp
+// In DatabricksConnection - create HttpClient for feature flags
+private HttpClient CreateFeatureFlagHttpClient()
+{
+    var handler = HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator);
+    var httpClient = new HttpClient(handler);
+
+    // Set base address
+    httpClient.BaseAddress = new Uri($"https://{_host}");
+
+    // Set auth header (reuse connection's token)
+    if (Properties.TryGetValue(SparkParameters.Token, out string? token))
+    {
+        httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+    }
+
+    // Set custom User-Agent for connector service
+    httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+        BuildConnectorServiceUserAgent());
+
+    return httpClient;
+}
+
+// Pass to FeatureFlagContext
+var context = featureFlagCache.GetOrCreateContext(_host, CreateFeatureFlagHttpClient());
+```
+
+This approach:
+- Avoids duplicating HTTP client configuration
+- Ensures consistent authentication across all API calls
+- Allows proper resource cleanup when connection closes
 
 #### Interface
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
+namespace AdbcDrivers.Databricks
 {
     /// <summary>
     /// Singleton that manages feature flag cache per host.
     /// Prevents rate limiting by caching feature flag responses.
+    /// This is a generic cache for all feature flags, not just telemetry.
     /// </summary>
     internal sealed class FeatureFlagCache
     {
-        private static readonly FeatureFlagCache Instance = new();
-        public static FeatureFlagCache GetInstance() => Instance;
+        private static readonly FeatureFlagCache s_instance = new FeatureFlagCache();
+        public static FeatureFlagCache GetInstance() => s_instance;
 
         /// <summary>
         /// Gets or creates a feature flag context for the host.
         /// Increments reference count.
+        /// Makes initial blocking fetch if context is new.
         /// </summary>
-        public FeatureFlagContext GetOrCreateContext(string host);
+        public FeatureFlagContext GetOrCreateContext(string host, HttpClient httpClient, string driverVersion);
 
         /// <summary>
         /// Decrements reference count for the host.
-        /// Removes context when ref count reaches zero.
+        /// Removes context and stops refresh scheduler when ref count reaches zero.
         /// </summary>
         public void ReleaseContext(string host);
-
-        /// <summary>
-        /// Checks if telemetry is enabled for the host.
-        /// Uses cached value if available and not expired.
-        /// </summary>
-        public Task<bool> IsTelemetryEnabledAsync(
-            string host,
-            HttpClient httpClient,
-            CancellationToken ct = default);
     }
 
     /// <summary>
     /// Holds feature flag state and reference count for a host.
+    /// Manages background refresh scheduling.
+    /// Uses the HttpClient provided by the connection for API calls.
     /// </summary>
-    internal sealed class FeatureFlagContext
+    internal sealed class FeatureFlagContext : IDisposable
     {
-        public bool? TelemetryEnabled { get; set; }
-        public DateTime? LastFetched { get; set; }
-        public int RefCount { get; set; }
-        public TimeSpan CacheDuration { get; } = TimeSpan.FromMinutes(15);
+        /// <summary>
+        /// Creates a new context with the given HTTP client.
+        /// Makes initial blocking fetch to populate cache.
+        /// Starts background refresh scheduler.
+        /// </summary>
+        /// <param name="host">The Databricks host.</param>
+        /// <param name="httpClient">
+        /// HttpClient from the connection, pre-configured with:
+        /// - Base address (https://{host})
+        /// - Auth headers (Bearer token)
+        /// - Custom User-Agent for connector service
+        /// </param>
+        public FeatureFlagContext(string host, HttpClient httpClient);
 
-        public bool IsExpired => LastFetched == null ||
-            DateTime.UtcNow - LastFetched.Value > CacheDuration;
+        public int RefCount { get; }
+        public TimeSpan RefreshInterval { get; }  // From server ttl_seconds
+
+        /// <summary>
+        /// Gets a feature flag value by name.
+        /// Returns null if the flag is not found.
+        /// </summary>
+        public string? GetFlagValue(string flagName);
+
+        /// <summary>
+        /// Checks if a feature flag is enabled (value is "true").
+        /// Returns false if flag is not found or value is not "true".
+        /// </summary>
+        public bool IsFeatureEnabled(string flagName);
+
+        /// <summary>
+        /// Gets all cached feature flags as a dictionary.
+        /// Can be used to merge with user properties.
+        /// </summary>
+        public IReadOnlyDictionary<string, string> GetAllFlags();
+
+        /// <summary>
+        /// Stops the background refresh scheduler.
+        /// </summary>
+        public void Shutdown();
+
+        public void Dispose();
+    }
+
+    /// <summary>
+    /// Response model for feature flags API.
+    /// </summary>
+    internal sealed class FeatureFlagsResponse
+    {
+        public List<FeatureFlagEntry>? Flags { get; set; }
+        public int? TtlSeconds { get; set; }
+    }
+
+    internal sealed class FeatureFlagEntry
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
     }
 }
 ```
 
-**JDBC Reference**: `DatabricksDriverFeatureFlagsContextFactory.java:27` maintains per-compute (host) feature flag contexts with reference counting.
+#### Usage Example
+
+```csharp
+// In DatabricksConnection constructor/initialization
+// This runs for EACH new connection, using LATEST cached feature flags
+
+// Step 1: Get or create feature flag context
+// - If context exists: returns existing context with latest cached flags
+// - If new: creates context, does initial blocking fetch, starts background refresh
+var featureFlagCache = FeatureFlagCache.GetInstance();
+var featureFlagContext = featureFlagCache.GetOrCreateContext(_host, CreateFeatureFlagHttpClient());
+
+// Step 2: Merge feature flags into properties using LATEST cached values
+// Each new connection gets a fresh merge with current flag values
+Properties = MergePropertiesWithFeatureFlags(
+    userProperties,
+    featureFlagContext.GetAllFlags());  // Returns current cached flags
+
+// Step 3: Existing property parsing works unchanged!
+// Feature flags are now transparently available as properties
+bool IsTelemetryEnabled()
+{
+    // This works whether the value came from:
+    // - User property (highest priority)
+    // - Feature flag (merged in)
+    // - Or falls back to driver default
+    if (Properties.TryGetValue("telemetry.enabled", out var value))
+    {
+        return bool.TryParse(value, out var result) && result;
+    }
+    return true; // Driver default
+}
+
+// Same pattern for all other properties - no changes needed!
+if (Properties.TryGetValue(DatabricksParameters.CloudFetchEnabled, out var cfValue))
+{
+    // Value could be from user OR from feature flag - transparent!
+}
+```
+
+**Key Benefits**:
+- Existing code like `Properties.TryGetValue()` continues to work unchanged
+- Each new connection uses the **latest** cached feature flag values
+- Feature flag integration is a one-time merge at connection initialization
+- Properties are stable for the lifetime of the connection (no mid-connection changes)
+
+**JDBC Reference**: `DatabricksDriverFeatureFlagsContextFactory.java:27` maintains per-compute (host) feature flag contexts with reference counting. `DatabricksDriverFeatureFlagsContext.java` implements the caching, refresh scheduling, and API calls.
 
 ---
 
@@ -257,7 +607,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
 #### Interface
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
+namespace AdbcDrivers.Databricks.Telemetry
 {
     /// <summary>
     /// Singleton factory that manages one telemetry client per host.
@@ -319,7 +669,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
 #### Interface
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
+namespace AdbcDrivers.Databricks.Telemetry
 {
     /// <summary>
     /// Wraps telemetry exporter with circuit breaker pattern.
@@ -372,7 +722,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
 #### Interface
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
+namespace AdbcDrivers.Databricks.Telemetry
 {
     /// <summary>
     /// Custom ActivityListener that aggregates metrics from Activity events
@@ -460,7 +810,7 @@ private ActivityListener CreateListener()
 #### Interface
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
+namespace AdbcDrivers.Databricks.Telemetry
 {
     /// <summary>
     /// Aggregates metrics from activities by statement_id and includes session_id.
@@ -554,7 +904,7 @@ flowchart TD
 #### Interface
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry
+namespace AdbcDrivers.Databricks.Telemetry
 {
     public interface ITelemetryExporter
     {
@@ -609,7 +959,7 @@ Telemetry/
 **File**: `TagDefinitions/TelemetryTag.cs`
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.TagDefinitions
+namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
 {
     /// <summary>
     /// Defines export scope for telemetry tags.
@@ -648,7 +998,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.TagDefinitions
 **File**: `TagDefinitions/ConnectionOpenEvent.cs`
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.TagDefinitions
+namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
 {
     /// <summary>
     /// Tag definitions for Connection.Open events.
@@ -726,7 +1076,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.TagDefinitions
 **File**: `TagDefinitions/StatementExecutionEvent.cs`
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.TagDefinitions
+namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
 {
     /// <summary>
     /// Tag definitions for Statement execution events.
@@ -812,7 +1162,7 @@ namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.TagDefinitions
 **File**: `TagDefinitions/TelemetryTagRegistry.cs`
 
 ```csharp
-namespace Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.TagDefinitions
+namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
 {
     /// <summary>
     /// Central registry for all telemetry tags and events.
@@ -1069,9 +1419,15 @@ public sealed class TelemetryConfiguration
     public int CircuitBreakerThreshold { get; set; } = 5;
     public TimeSpan CircuitBreakerTimeout { get; set; } = TimeSpan.FromMinutes(1);
 
-    // Feature flag
+    // Feature flag name to check in the cached flags
     public const string FeatureFlagName =
         "databricks.partnerplatform.clientConfigsFeatureFlags.enableTelemetryForAdbc";
+
+    // Feature flag endpoint (relative to host)
+    // {0} = driver version without OSS suffix
+    // NOTE: Using OSS_JDBC endpoint until OSS_ADBC is configured server-side
+    public const string FeatureFlagEndpointFormat =
+        "/api/2.0/connector-service/feature-flags/OSS_JDBC/{0}";
 }
 ```
 
@@ -1801,13 +2157,25 @@ The Activity-based design was selected because it:
 ## 12. Implementation Checklist
 
 ### Phase 1: Feature Flag Cache & Per-Host Management
-- [ ] Create `FeatureFlagCache` singleton with per-host contexts
+- [ ] Create `FeatureFlagCache` singleton with per-host contexts (in `Apache.Arrow.Adbc.Drivers.Databricks` namespace, not Telemetry)
+- [ ] Make cache generic - return all flags, not just telemetry-specific ones
 - [ ] Implement `FeatureFlagContext` with reference counting
-- [ ] Add cache expiration logic (15 minute TTL)
-- [ ] Implement `FetchFeatureFlagAsync` to call feature endpoint
+- [ ] Implement `GetFlagValue(string)` and `GetAllFlags()` methods for generic flag access
+- [ ] Implement API call to `/api/2.0/connector-service/feature-flags/OSS_JDBC/{version}` (use JDBC endpoint initially)
+- [ ] Parse `FeatureFlagsResponse` with `flags` array and `ttl_seconds`
+- [ ] Implement initial blocking fetch on context creation
+- [ ] Implement background refresh scheduler using server-provided `ttl_seconds`
+- [ ] Add `Shutdown()` method to stop scheduler and cleanup
+- [ ] Implement configuration priority: user properties > feature flags > driver defaults
 - [ ] Create `TelemetryClientManager` singleton
 - [ ] Implement `TelemetryClientHolder` with reference counting
 - [ ] Add unit tests for cache behavior and reference counting
+- [ ] Add unit tests for background refresh scheduling
+- [ ] Add unit tests for configuration priority order
+
+**Code Guidelines**:
+- Avoid `#if` preprocessor directives - write code compatible with all target .NET versions (netstandard2.0, net472, net8.0)
+- Use polyfills or runtime checks instead of compile-time conditionals where needed
 
 ### Phase 2: Circuit Breaker
 - [ ] Create `CircuitBreaker` class with state machine
@@ -1896,6 +2264,19 @@ This ensures compatibility with OTEL ecosystem.
 - Listener is optional (only activated when telemetry enabled)
 - Activity overhead already exists
 
+### 13.4 Feature Flag Endpoint Migration
+
+**Question**: When should we migrate from `OSS_JDBC` to `OSS_ADBC` endpoint?
+
+**Current State**: The ADBC driver currently uses the JDBC feature flag endpoint (`/api/2.0/connector-service/feature-flags/OSS_JDBC/{version}`) because the ADBC endpoint is not yet configured on the server side.
+
+**Migration Plan**:
+1. Server team configures the `OSS_ADBC` endpoint with appropriate feature flags
+2. Update `TelemetryConfiguration.FeatureFlagEndpointFormat` to use `OSS_ADBC`
+3. Coordinate with server team on feature flag name (`enableTelemetryForAdbc`)
+
+**Tracking**: Create a follow-up ticket to track this migration once server-side support is ready.
+
 ---
 
 ## 14. References
@@ -1920,8 +2301,12 @@ This ensures compatibility with OTEL ecosystem.
 - `CircuitBreakerTelemetryPushClient.java:15`: Circuit breaker wrapper
 - `CircuitBreakerManager.java:25`: Per-host circuit breaker management
 - `TelemetryPushClient.java:86-94`: Exception re-throwing for circuit breaker
-- `TelemetryHelper.java:60-71`: Feature flag checking
-- `DatabricksDriverFeatureFlagsContextFactory.java:27`: Per-host feature flag cache
+- `TelemetryHelper.java:45-46,77`: Feature flag name and checking
+- `DatabricksDriverFeatureFlagsContextFactory.java`: Per-host feature flag cache with reference counting
+- `DatabricksDriverFeatureFlagsContext.java:30-33`: Feature flag API endpoint format
+- `DatabricksDriverFeatureFlagsContext.java:48-58`: Initial fetch and background refresh scheduling
+- `DatabricksDriverFeatureFlagsContext.java:89-140`: HTTP call and response parsing
+- `FeatureFlagsResponse.java`: Response model with `flags` array and `ttl_seconds`
 
 ---
 
