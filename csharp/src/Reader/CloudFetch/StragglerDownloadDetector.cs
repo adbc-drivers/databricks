@@ -30,20 +30,17 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
     /// </summary>
     internal class StragglerDownloadDetector : IDisposable
     {
-        // Timing constants for monitoring and cleanup
+        // Timing constants for monitoring
         private static readonly TimeSpan StragglerMonitoringInterval = TimeSpan.FromSeconds(2);
-        private static readonly TimeSpan MetricsCleanupDelay = TimeSpan.FromSeconds(5);  // Must be > monitoring interval
-        private static readonly TimeSpan CtsDisposalDelay = TimeSpan.FromSeconds(6);  // Must be > metrics cleanup delay
 
         private readonly CloudFetchStragglerMitigationConfig _config;
         private readonly IActivityTracer _activityTracer;
         private long _totalStragglersDetectedInQuery;
 
         private readonly ConcurrentDictionary<long, FileDownloadMetrics> _activeDownloadMetrics;
+        private readonly ConcurrentDictionary<long, FileDownloadMetrics> _completedDownloadMetrics;
         private readonly ConcurrentDictionary<long, CancellationTokenSource> _perFileDownloadCancellationTokens;
         private readonly ConcurrentDictionary<long, bool> _alreadyCountedStragglers;
-        private readonly ConcurrentDictionary<long, Task> _metricCleanupTasks;
-        private readonly ConcurrentDictionary<long, Task> _ctsDisposalTasks;
         private readonly SemaphoreSlim _sequentialSemaphore;
 
         private Task? _monitoringTask;
@@ -102,10 +99,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             // Initialize tracking dictionaries
             _activeDownloadMetrics = new ConcurrentDictionary<long, FileDownloadMetrics>();
+            _completedDownloadMetrics = new ConcurrentDictionary<long, FileDownloadMetrics>();
             _perFileDownloadCancellationTokens = new ConcurrentDictionary<long, CancellationTokenSource>();
             _alreadyCountedStragglers = new ConcurrentDictionary<long, bool>();
-            _metricCleanupTasks = new ConcurrentDictionary<long, Task>();
-            _ctsDisposalTasks = new ConcurrentDictionary<long, Task>();
             _sequentialSemaphore = new SemaphoreSlim(1, 1);
             _totalStragglersDetectedInQuery = 0;
             _hasTriggeredSequentialDownloadFallback = false;
@@ -181,40 +177,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 _monitoringTask = null;
             }
 
-            // Await all metric cleanup tasks before disposing resources
-            if (_metricCleanupTasks.Count > 0)
-            {
-                try
-                {
-                    await Task.WhenAll(_metricCleanupTasks.Values).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Ignore cleanup task exceptions during shutdown
-                }
-                _metricCleanupTasks.Clear();
-            }
-
-            // Await all CTS disposal tasks to prevent memory leaks
-            if (_ctsDisposalTasks.Count > 0)
-            {
-                try
-                {
-                    await Task.WhenAll(_ctsDisposalTasks.Values).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Ignore disposal task exceptions during shutdown
-                }
-                _ctsDisposalTasks.Clear();
-            }
-
-            // Cleanup per-file cancellation tokens
+            // Cleanup remaining per-file cancellation tokens
             foreach (var cts in _perFileDownloadCancellationTokens.Values)
             {
                 cts?.Dispose();
             }
             _perFileDownloadCancellationTokens.Clear();
+
+            // Clear completed download metrics history
+            _completedDownloadMetrics.Clear();
 
             stopwatch.Stop();
 
@@ -236,16 +207,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <returns>Cancellation token for this specific download.</returns>
         public CancellationToken RegisterDownload(long fileOffset, long fileSizeBytes, CancellationToken globalCancellationToken, Activity? activity = null)
         {
-            // Check if this is a retry and preserve the cancelled flag
-            bool wasPreviouslyCancelled = false;
-            if (_activeDownloadMetrics.TryGetValue(fileOffset, out var oldMetrics))
-            {
-                wasPreviouslyCancelled = oldMetrics.WasCancelledAsStragler;
-            }
+            // Check if this download was previously identified as a straggler
+            // If so, preserve the flag to prevent re-detection on retry
+            bool wasPreviouslyCancelled = _alreadyCountedStragglers.ContainsKey(fileOffset);
 
             var metrics = new FileDownloadMetrics(fileOffset, fileSizeBytes);
 
-            // Preserve the cancelled flag for retries
+            // Preserve the cancelled flag for retries (used for tracing/debugging)
             if (wasPreviouslyCancelled)
             {
                 metrics.MarkCancelledAsStragler();
@@ -361,9 +329,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 return Enumerable.Empty<long>();
             }
 
-            // Separate completed and active downloads
-            var completedDownloads = allDownloadMetrics.Where(m => m.IsDownloadCompleted).ToList();
-            var activeDownloads = allDownloadMetrics.Where(m => !m.IsDownloadCompleted && !m.WasCancelledAsStragler).ToList();
+            // Determine which dictionary to use for tracking already-detected stragglers
+            var countingDict = alreadyCounted ?? _alreadyCountedStragglers;
+
+            // Get completed downloads from both active metrics (just completed) and historical completed metrics
+            var completedFromActive = allDownloadMetrics.Where(m => m.IsDownloadCompleted).ToList();
+            var completedFromHistory = _completedDownloadMetrics.Values.ToList();
+            var completedDownloads = completedFromActive.Concat(completedFromHistory).ToList();
+
+            // Filter out downloads that were already detected as stragglers (prevents re-detection on retry)
+            var activeDownloads = allDownloadMetrics.Where(m => !m.IsDownloadCompleted && !countingDict.ContainsKey(m.FileOffset)).ToList();
 
             if (activeDownloads.Count == 0)
             {
@@ -371,7 +346,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
 
             // Check if we have enough completed downloads to calculate median
-            int totalDownloads = allDownloadMetrics.Count;
+            int totalDownloads = allDownloadMetrics.Count + _completedDownloadMetrics.Count;
             int requiredCompletions = (int)Math.Ceiling(totalDownloads * _config.Quantile);
 
             if (completedDownloads.Count < requiredCompletions)
@@ -389,7 +364,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             // Identify stragglers
             var stragglers = new List<long>();
-            var countingDict = alreadyCounted ?? _alreadyCountedStragglers;
 
             foreach (var download in activeDownloads)
             {
@@ -424,53 +398,45 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 return Enumerable.Empty<long>();
             }
 
-            // Pre-calculate metrics for tracing before delegation
-            var completedDownloads = allDownloadMetrics.Where(m => m.IsDownloadCompleted).ToList();
-            var activeDownloads = allDownloadMetrics.Where(m => !m.IsDownloadCompleted && !m.WasCancelledAsStragler).ToList();
-
-            int totalDownloads = allDownloadMetrics.Count;
-            int requiredCompletions = (int)Math.Ceiling(totalDownloads * _config.Quantile);
-
-            // Add detection check tracing before delegation
-            if (completedDownloads.Count >= requiredCompletions && activeDownloads.Count > 0)
-            {
-                double medianThroughput = CalculateMedianThroughput(completedDownloads);
-
-                if (medianThroughput > 0)
-                {
-                    activity?.AddEvent("cloudfetch.straggler_detection_check", [
-                        new("completed_downloads", completedDownloads.Count),
-                        new("active_downloads", activeDownloads.Count),
-                        new("median_throughput_mbps", medianThroughput / (1024.0 * 1024.0)),
-                        new("required_completions", requiredCompletions)
-                    ]);
-                }
-            }
-
-            // Delegate to internal method (used by tests) - this avoids code duplication
+            // Delegate to internal method - it handles all the detection logic
             var stragglers = IdentifyStragglerDownloads(allDownloadMetrics, currentTime, _alreadyCountedStragglers).ToList();
 
-            // Add per-straggler identification tracing
-            if (stragglers.Count > 0 && activity != null)
+            // Add tracing only if activity is provided
+            if (activity != null)
             {
-                double medianThroughput = CalculateMedianThroughput(completedDownloads);
+                // Calculate metrics for tracing only when needed
+                var completedDownloads = allDownloadMetrics.Where(m => m.IsDownloadCompleted).ToList();
+                var activeDownloads = allDownloadMetrics.Where(m => !m.IsDownloadCompleted && !m.WasCancelledAsStragler).ToList();
+                int requiredCompletions = (int)Math.Ceiling(allDownloadMetrics.Count * _config.Quantile);
 
-                foreach (var offset in stragglers)
+                if (completedDownloads.Count >= requiredCompletions && activeDownloads.Count > 0)
                 {
-                    var download = allDownloadMetrics.FirstOrDefault(m => m.FileOffset == offset);
-                    if (download != null)
-                    {
-                        TimeSpan elapsed = currentTime - download.DownloadStartTime;
-                        double elapsedSeconds = elapsed.TotalSeconds;
-                        double expectedSeconds = (_config.Multiplier * download.FileSizeBytes / medianThroughput) + _config.Padding.TotalSeconds;
+                    double medianThroughput = CalculateMedianThroughput(completedDownloads);
 
-                        activity.AddEvent("cloudfetch.straggler_identified", [
-                            new("offset", download.FileOffset),
-                            new("elapsed_seconds", elapsedSeconds),
-                            new("expected_seconds", expectedSeconds),
-                            new("file_size_mb", download.FileSizeBytes / (1024.0 / 1024.0)),
-                            new("slowdown_ratio", elapsedSeconds / expectedSeconds)
+                    if (medianThroughput > 0)
+                    {
+                        activity.AddEvent("cloudfetch.straggler_detection_check", [
+                            new("completed_downloads", completedDownloads.Count),
+                            new("active_downloads", activeDownloads.Count),
+                            new("median_throughput_mbps", medianThroughput / (1024.0 * 1024.0))
                         ]);
+
+                        // Add per-straggler identification tracing
+                        foreach (var offset in stragglers)
+                        {
+                            var download = allDownloadMetrics.FirstOrDefault(m => m.FileOffset == offset);
+                            if (download != null)
+                            {
+                                TimeSpan elapsed = currentTime - download.DownloadStartTime;
+                                double elapsedSeconds = elapsed.TotalSeconds;
+
+                                activity.AddEvent("cloudfetch.straggler_identified", [
+                                    new("offset", download.FileOffset),
+                                    new("elapsed_seconds", elapsedSeconds),
+                                    new("file_size_mb", download.FileSizeBytes / (1024.0 / 1024.0))
+                                ]);
+                            }
+                        }
                     }
                 }
             }
@@ -603,100 +569,29 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         }
 
         /// <summary>
-        /// Schedules cleanup of metrics and cancellation tokens after a delay.
+        /// Performs immediate cleanup when download completes.
+        /// Moves metrics from active to completed for median throughput calculation.
+        /// Note: _alreadyCountedStragglers is NOT cleaned up here - it persists for the entire query
+        /// to prevent re-detection of stragglers on retry.
         /// </summary>
         private void ScheduleCleanup(long fileOffset)
         {
-            // Capture the current metrics instance that we're scheduling cleanup for
-            // This prevents race condition where retry creates new metrics before old cleanup runs
-            if (!_activeDownloadMetrics.TryGetValue(fileOffset, out var metricsToCleanup))
+            // Move completed metrics to completed dictionary for median calculation
+            if (_activeDownloadMetrics.TryRemove(fileOffset, out var metrics))
             {
-                return; // No metrics to cleanup
-            }
-
-            // Cancel and await any existing cleanup tasks for this offset before scheduling new ones
-            if (_metricCleanupTasks.TryRemove(fileOffset, out var oldMetricCleanupTask))
-            {
-                // Best effort cancellation - task may already be completing
-                _ = Task.Run(async () =>
+                // Only store if actually completed (not just cancelled without completion)
+                if (metrics.IsDownloadCompleted)
                 {
-                    try
-                    {
-                        await oldMetricCleanupTask.ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        // Ignore exceptions from cancelled/completed tasks
-                    }
-                });
+                    _completedDownloadMetrics[fileOffset] = metrics;
+                }
             }
 
-            if (_ctsDisposalTasks.TryRemove(fileOffset, out var oldCtsDisposalTask))
-            {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await oldCtsDisposalTask.ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        // Ignore exceptions from cancelled/completed tasks
-                    }
-                });
-            }
-
-            // Delay CTS disposal to avoid race with monitoring thread
+            // Immediately remove and dispose CTS
+            // Race condition with monitoring thread is handled by try-catch in MonitoringLoopAsync
             if (_perFileDownloadCancellationTokens.TryRemove(fileOffset, out var cts))
             {
-                var disposalTask = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await Task.Delay(CtsDisposalDelay);
-                        cts?.Dispose();
-                    }
-                    catch
-                    {
-                        // Ignore exceptions during disposal
-                    }
-                    finally
-                    {
-                        _ctsDisposalTasks?.TryRemove(fileOffset, out _);
-                    }
-                });
-                _ctsDisposalTasks[fileOffset] = disposalTask;
+                cts?.Dispose();
             }
-
-            // Track cleanup task to ensure proper shutdown
-            var cleanupTask = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(MetricsCleanupDelay);
-
-                    // RACE CONDITION FIX: Only remove if the metrics instance is STILL the same one we captured
-                    // If a retry happened, a new FileDownloadMetrics instance would be in the dictionary
-                    if (_activeDownloadMetrics.TryGetValue(fileOffset, out var currentMetrics))
-                    {
-                        // Reference equality: only remove if it's the exact same object
-                        if (ReferenceEquals(currentMetrics, metricsToCleanup))
-                        {
-                            _activeDownloadMetrics.TryRemove(fileOffset, out _);
-                        }
-                        // else: Different instance = retry happened, don't remove new metrics
-                    }
-                }
-                catch
-                {
-                    // Ignore exceptions in cleanup task
-                }
-                finally
-                {
-                    _metricCleanupTasks?.TryRemove(fileOffset, out _);
-                }
-            });
-            _metricCleanupTasks[fileOffset] = cleanupTask;
         }
 
         public void Dispose()
