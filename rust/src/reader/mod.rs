@@ -69,7 +69,7 @@ impl ResultReaderFactory {
     /// Create a reader from a statement execution response.
     ///
     /// Automatically selects CloudFetch, inline, or other reader based on response.
-    pub fn create_reader(
+    pub(crate) fn create_reader(
         &self,
         statement_id: &str,
         response: &ExecuteResponse,
@@ -354,7 +354,7 @@ impl ResultReader for InlineArrowReader {
 ///
 /// Used for valid queries that return zero rows (e.g., `SELECT * WHERE 1=0`).
 /// The schema is preserved from the query's manifest.
-struct EmptyReader {
+pub struct EmptyReader {
     schema: SchemaRef,
 }
 

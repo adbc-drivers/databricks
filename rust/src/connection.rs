@@ -14,11 +14,9 @@
 
 //! Connection implementation for the Databricks ADBC driver.
 
-use crate::client::{DatabricksClient, DatabricksHttpClient};
+use crate::client::DatabricksClient;
 use crate::error::DatabricksErrorHelper;
-use crate::reader::ResultReaderFactory;
 use crate::statement::Statement;
-use crate::types::cloudfetch::CloudFetchConfig;
 use adbc_core::error::Result;
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
 use adbc_core::Optionable;
@@ -36,8 +34,6 @@ pub struct ConnectionConfig {
     pub catalog: Option<String>,
     pub schema: Option<String>,
     pub client: Arc<dyn DatabricksClient>,
-    pub http_client: Arc<DatabricksHttpClient>,
-    pub cloudfetch_config: CloudFetchConfig,
 }
 
 /// Represents an active connection to a Databricks SQL endpoint.
@@ -54,14 +50,8 @@ pub struct Connection {
     // Databricks client (trait object for backend flexibility)
     client: Arc<dyn DatabricksClient>,
 
-    // HTTP client for CloudFetch downloads
-    http_client: Arc<DatabricksHttpClient>,
-
     // Session ID (created on connection initialization)
     session_id: String,
-
-    // CloudFetch settings
-    cloudfetch_config: CloudFetchConfig,
 
     // Tokio runtime for async operations
     runtime: tokio::runtime::Runtime,
@@ -74,15 +64,13 @@ type EmptyReader =
 impl Connection {
     /// Called by Database::new_connection().
     ///
-    /// Connection receives the DatabricksClient from Database - it does NOT
-    /// create the client itself. This keeps the client selection logic in
-    /// Database where configuration is set.
-    pub(crate) fn new(config: ConnectionConfig) -> crate::error::Result<Self> {
-        // Create tokio runtime
-        let runtime = tokio::runtime::Runtime::new().map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to create async runtime: {}", e))
-        })?;
-
+    /// Connection receives the DatabricksClient and runtime from Database.
+    /// The runtime is created by Database so it can share the handle with
+    /// SeaClient and ResultReaderFactory before Connection is created.
+    pub(crate) fn new_with_runtime(
+        config: ConnectionConfig,
+        runtime: tokio::runtime::Runtime,
+    ) -> crate::error::Result<Self> {
         // Create session using the client provided by Database
         let session_info = runtime.block_on(config.client.create_session(
             config.catalog.as_deref(),
@@ -96,9 +84,7 @@ impl Connection {
             host: config.host,
             warehouse_id: config.warehouse_id,
             client: config.client,
-            http_client: config.http_client,
             session_id: session_info.session_id,
-            cloudfetch_config: config.cloudfetch_config,
             runtime,
         })
     }
@@ -154,17 +140,9 @@ impl adbc_core::Connection for Connection {
     type StatementType = Statement;
 
     fn new_statement(&mut self) -> Result<Self::StatementType> {
-        let reader_factory = ResultReaderFactory::new(
-            self.client.clone(),
-            self.http_client.clone(),
-            self.cloudfetch_config.clone(),
-            self.runtime.handle().clone(),
-        );
-
         Ok(Statement::new(
             self.client.clone(),
             self.session_id.clone(),
-            reader_factory,
             self.runtime.handle().clone(),
         ))
     }
