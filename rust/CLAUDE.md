@@ -39,8 +39,12 @@ cargo clippy -- -D warnings  # Lint with warnings as errors
 
 ## Pull Requests
 
-When creating PRs, always target the upstream repository `adbc-drivers/databricks`, not the personal fork. Use:
+When creating PRs, always target the upstream repository `adbc-drivers/databricks`, not the personal fork.
+The EMU (Enterprise Managed User) account cannot create PRs. Check available accounts with `gh auth status`
+and switch to the personal account before creating PRs:
 ```bash
+gh auth status              # check which accounts are available
+gh auth switch --user <personal-account>
 gh pr create --repo adbc-drivers/databricks
 ```
 
