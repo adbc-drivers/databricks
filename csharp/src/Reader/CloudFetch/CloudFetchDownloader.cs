@@ -541,6 +541,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                             }
                         }
+
                         // Download the file directly
                         using HttpResponseMessage response = await _httpClient.SendAsync(
                             request,
