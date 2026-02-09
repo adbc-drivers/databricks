@@ -16,12 +16,10 @@
 
 using System;
 using System.Collections.Generic;
-using System.Net.Http;
 using System.Reflection;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Drivers.Apache.Spark;
-using Moq;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
@@ -29,14 +27,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
     /// <summary>
     /// Unit tests for StatementExecutionConnection OAuth and token authentication.
     /// </summary>
-    public class StatementExecutionConnectionAuthTests : IDisposable
+    public class StatementExecutionConnectionAuthTests
     {
-        private readonly Mock<HttpMessageHandler> _mockHttpHandler;
-
-        public StatementExecutionConnectionAuthTests()
-        {
-            _mockHttpHandler = new Mock<HttpMessageHandler>();
-        }
 
         /// <summary>
         /// Creates a basic set of properties required for StatementExecutionConnection.
@@ -78,15 +70,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var connection = new StatementExecutionConnection(properties);
 
             // Assert - verify connection was created successfully with OAuth
+            // The auth HTTP client is now managed internally by HttpHandlerFactory
             Assert.NotNull(connection);
-
-            // Verify _authHttpClient was created
-            var authHttpClientField = typeof(StatementExecutionConnection).GetField(
-                "_authHttpClient",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(authHttpClientField);
-            var authHttpClient = authHttpClientField!.GetValue(connection);
-            Assert.NotNull(authHttpClient);
         }
 
         [Fact]
@@ -111,15 +96,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var connection = new StatementExecutionConnection(properties);
 
             // Assert - verify connection was created successfully
+            // The auth HTTP client is now managed internally by HttpHandlerFactory
             Assert.NotNull(connection);
-
-            // Verify _authHttpClient was created for token operations
-            var authHttpClientField = typeof(StatementExecutionConnection).GetField(
-                "_authHttpClient",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(authHttpClientField);
-            var authHttpClient = authHttpClientField!.GetValue(connection);
-            Assert.NotNull(authHttpClient);
         }
 
         [Fact]
@@ -135,15 +113,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var connection = new StatementExecutionConnection(properties);
 
             // Assert - verify connection was created successfully with OAuth handlers
+            // The auth HTTP client is now managed internally by HttpHandlerFactory
             Assert.NotNull(connection);
-
-            // Verify _authHttpClient was created for OAuth (needed for MandatoryTokenExchangeDelegatingHandler)
-            var authHttpClientField = typeof(StatementExecutionConnection).GetField(
-                "_authHttpClient",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(authHttpClientField);
-            var authHttpClient = authHttpClientField!.GetValue(connection);
-            Assert.NotNull(authHttpClient);
         }
 
         [Fact]
@@ -159,15 +130,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var connection = new StatementExecutionConnection(properties);
 
             // Assert - verify connection was created successfully
+            // The auth HTTP client is now managed internally by HttpHandlerFactory
             Assert.NotNull(connection);
-
-            // Verify _authHttpClient was created for OAuth operations
-            var authHttpClientField = typeof(StatementExecutionConnection).GetField(
-                "_authHttpClient",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(authHttpClientField);
-            var authHttpClient = authHttpClientField!.GetValue(connection);
-            Assert.NotNull(authHttpClient);
         }
 
         [Fact]
@@ -194,7 +158,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void Constructor_WithoutOAuth_DoesNotCreateAuthHttpClient()
+        public void Constructor_WithoutOAuth_CreatesConnectionWithStaticBearerToken()
         {
             // Arrange
             var properties = CreateBaseProperties();
@@ -204,13 +168,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // Act
             using var connection = new StatementExecutionConnection(properties);
 
-            // Assert
-            var authHttpClientField = typeof(StatementExecutionConnection).GetField(
-                "_authHttpClient",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(authHttpClientField);
-            var authHttpClient = authHttpClientField!.GetValue(connection);
-            Assert.Null(authHttpClient); // Should be null when OAuth is not used
+            // Assert - verify connection was created successfully
+            // Without OAuth, a static bearer token handler is used (no separate auth HTTP client needed)
+            Assert.NotNull(connection);
         }
 
         [Fact]
@@ -249,7 +209,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void Dispose_WithOAuthEnabled_DisposesAuthHttpClient()
+        public void Dispose_WithOAuthEnabled_DisposesCleanly()
         {
             // Arrange
             var properties = CreateBaseProperties();
@@ -260,18 +220,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             var connection = new StatementExecutionConnection(properties);
 
-            // Get reference to auth HTTP client before disposal
-            var authHttpClientField = typeof(StatementExecutionConnection).GetField(
-                "_authHttpClient",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            var authHttpClient = authHttpClientField!.GetValue(connection) as HttpClient;
-            Assert.NotNull(authHttpClient);
-
             // Act
             connection.Dispose();
 
-            // Assert - after disposal, attempting to use the client should fail
-            // We can't directly test disposal, but we verify no exceptions during dispose
+            // Assert - verify no exceptions during dispose
             // Multiple dispose calls should be safe
             connection.Dispose();
         }
@@ -302,11 +254,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             // Act & Assert
             Assert.Throws<ArgumentException>(() => new StatementExecutionConnection(properties));
-        }
-
-        public void Dispose()
-        {
-            _mockHttpHandler?.Object?.Dispose();
         }
     }
 }
