@@ -31,7 +31,9 @@ tracing = "0.1"
 # Use arrow versions that match driverbase (which uses v57)
 # The adbc_core crate accepts >=53.1.0, <58
 arrow-array = "57"
+arrow-buffer = "57"
 arrow-schema = "57"
+arrow-select = "57"
 arrow-ipc = "57"
 
 # HTTP client and async runtime

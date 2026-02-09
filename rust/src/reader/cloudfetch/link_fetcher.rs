@@ -636,6 +636,49 @@ mod tests {
         async fn close_statement(&self, _statement_id: &str) -> Result<()> {
             Ok(())
         }
+
+        async fn list_catalogs(&self, _session_id: &str) -> Result<ExecuteResult> {
+            self.execute_statement("", "", &ExecuteParams::default())
+                .await
+        }
+
+        async fn list_schemas(
+            &self,
+            _session_id: &str,
+            _catalog: Option<&str>,
+            _schema_pattern: Option<&str>,
+        ) -> Result<ExecuteResult> {
+            self.execute_statement("", "", &ExecuteParams::default())
+                .await
+        }
+
+        async fn list_tables(
+            &self,
+            _session_id: &str,
+            _catalog: Option<&str>,
+            _schema_pattern: Option<&str>,
+            _table_pattern: Option<&str>,
+            _table_types: Option<&[&str]>,
+        ) -> Result<ExecuteResult> {
+            self.execute_statement("", "", &ExecuteParams::default())
+                .await
+        }
+
+        async fn list_columns(
+            &self,
+            _session_id: &str,
+            _catalog: &str,
+            _schema_pattern: Option<&str>,
+            _table_pattern: Option<&str>,
+            _column_pattern: Option<&str>,
+        ) -> Result<ExecuteResult> {
+            self.execute_statement("", "", &ExecuteParams::default())
+                .await
+        }
+
+        fn list_table_types(&self) -> Vec<String> {
+            vec!["TABLE".to_string()]
+        }
     }
 
     fn create_test_link(chunk_index: i64) -> CloudFetchLink {

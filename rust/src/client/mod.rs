@@ -176,4 +176,43 @@ pub trait DatabricksClient: Send + Sync + std::fmt::Debug {
 
     /// Close/cleanup a statement (release server resources).
     async fn close_statement(&self, statement_id: &str) -> Result<()>;
+
+    // --- Metadata ---
+
+    /// List all catalogs.
+    async fn list_catalogs(&self, session_id: &str) -> Result<ExecuteResult>;
+
+    /// List schemas, optionally filtered by catalog and pattern.
+    /// When catalog is None or wildcard, uses "SHOW SCHEMAS IN ALL CATALOGS".
+    async fn list_schemas(
+        &self,
+        session_id: &str,
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+    ) -> Result<ExecuteResult>;
+
+    /// List tables, optionally filtered.
+    /// When catalog is None or wildcard, uses "SHOW TABLES IN ALL CATALOGS".
+    async fn list_tables(
+        &self,
+        session_id: &str,
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+        table_pattern: Option<&str>,
+        table_types: Option<&[&str]>,
+    ) -> Result<ExecuteResult>;
+
+    /// List columns for a specific catalog, optionally filtered by patterns.
+    /// Catalog is required — `SHOW COLUMNS IN ALL CATALOGS` is not yet available server-side.
+    async fn list_columns(
+        &self,
+        session_id: &str,
+        catalog: &str,
+        schema_pattern: Option<&str>,
+        table_pattern: Option<&str>,
+        column_pattern: Option<&str>,
+    ) -> Result<ExecuteResult>;
+
+    /// List supported table types (static, no SQL executed).
+    fn list_table_types(&self) -> Vec<String>;
 }
