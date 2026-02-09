@@ -192,6 +192,10 @@ impl adbc_core::Connection for Connection {
         table_type: Option<Vec<&str>>,
         column_name: Option<&str>,
     ) -> Result<impl RecordBatchReader + Send> {
+        debug!(
+            "get_objects: depth={:?}, catalog={:?}, db_schema={:?}, table_name={:?}, table_type={:?}, column_name={:?}",
+            depth, catalog, db_schema, table_name, table_type, column_name
+        );
         match depth {
             ObjectDepth::Catalogs => {
                 let result = self
@@ -202,6 +206,7 @@ impl adbc_core::Connection for Connection {
 
                 // Client-side catalog pattern filtering (SHOW CATALOGS has no LIKE clause)
                 let catalogs = filter_by_pattern(catalogs, catalog, |c| &c.catalog_name);
+                debug!("get_objects(Catalogs): found {} catalogs", catalogs.len());
 
                 let reader = build_get_objects_catalogs(catalogs).map_err(|e| e.to_adbc())?;
                 collect_reader(reader).map_err(|e| e.to_adbc())
@@ -216,6 +221,7 @@ impl adbc_core::Connection for Connection {
                     )
                     .map_err(|e| e.to_adbc())?;
                 let schemas = parse_schemas(result).map_err(|e| e.to_adbc())?;
+                debug!("get_objects(Schemas): found {} schemas", schemas.len());
 
                 let grouped = group_schemas_by_catalog(schemas);
                 let reader = build_get_objects_schemas(grouped).map_err(|e| e.to_adbc())?;
@@ -239,6 +245,10 @@ impl adbc_core::Connection for Connection {
                 if let Some(ref types) = table_type {
                     tables.retain(|t| types.iter().any(|tt| t.table_type.eq_ignore_ascii_case(tt)));
                 }
+                debug!(
+                    "get_objects(Tables): found {} tables after filtering",
+                    tables.len()
+                );
 
                 let grouped = group_tables_by_catalog_schema(tables);
                 let reader = build_get_objects_tables(grouped).map_err(|e| e.to_adbc())?;
@@ -263,6 +273,10 @@ impl adbc_core::Connection for Connection {
                 if let Some(ref types) = table_type {
                     tables.retain(|t| types.iter().any(|tt| t.table_type.eq_ignore_ascii_case(tt)));
                 }
+                debug!(
+                    "get_objects(All): found {} tables after filtering",
+                    tables.len()
+                );
 
                 // Step 2: Get distinct catalogs from tables result
                 let distinct_catalogs: Vec<String> = {
@@ -277,6 +291,11 @@ impl adbc_core::Connection for Connection {
                 };
 
                 // Step 3: Fetch columns per catalog (parallel)
+                debug!(
+                    "get_objects(All): fetching columns for {} distinct catalogs: {:?}",
+                    distinct_catalogs.len(),
+                    distinct_catalogs
+                );
                 let all_columns = self
                     .runtime
                     .block_on(async {
@@ -316,6 +335,10 @@ impl adbc_core::Connection for Connection {
                     .map_err(|e| e.to_adbc())?;
 
                 // Step 4: Group and build
+                debug!(
+                    "get_objects(All): fetched {} total columns",
+                    all_columns.len()
+                );
                 let grouped = group_tables_and_columns(tables, all_columns);
                 let reader = build_get_objects_all(grouped).map_err(|e| e.to_adbc())?;
                 collect_reader(reader).map_err(|e| e.to_adbc())
@@ -329,6 +352,10 @@ impl adbc_core::Connection for Connection {
         db_schema: Option<&str>,
         table_name: &str,
     ) -> Result<Schema> {
+        debug!(
+            "get_table_schema: catalog={:?}, db_schema={:?}, table_name={:?}",
+            catalog, db_schema, table_name
+        );
         // SHOW COLUMNS IN CATALOG `{cat}` requires a catalog.
         // If catalog is not provided, discover it via list_tables.
         let resolved_catalog = match catalog {
@@ -356,6 +383,8 @@ impl adbc_core::Connection for Connection {
             }
         };
 
+        debug!("get_table_schema: resolved catalog={:?}", resolved_catalog);
+
         let result = self
             .runtime
             .block_on(self.client.list_columns(
@@ -374,6 +403,12 @@ impl adbc_core::Connection for Connection {
                 .to_adbc());
         }
 
+        debug!(
+            "get_table_schema: found {} fields for {}.{}",
+            fields.len(),
+            resolved_catalog,
+            table_name
+        );
         Ok(Schema::new(fields))
     }
 

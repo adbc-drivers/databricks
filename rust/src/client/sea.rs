@@ -517,6 +517,7 @@ impl DatabricksClient for SeaClient {
 
     async fn list_catalogs(&self, session_id: &str) -> Result<ExecuteResult> {
         let sql = SqlCommandBuilder::new().build_show_catalogs();
+        debug!("list_catalogs: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await
     }
@@ -531,6 +532,7 @@ impl DatabricksClient for SeaClient {
             .with_catalog(catalog)
             .with_schema_pattern(schema_pattern)
             .build_show_schemas();
+        debug!("list_schemas: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await
     }
@@ -549,6 +551,7 @@ impl DatabricksClient for SeaClient {
             .with_schema_pattern(schema_pattern)
             .with_table_pattern(table_pattern)
             .build_show_tables();
+        debug!("list_tables: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await
     }
@@ -567,6 +570,7 @@ impl DatabricksClient for SeaClient {
             .with_table_pattern(table_pattern)
             .with_column_pattern(column_pattern)
             .build_show_columns()?;
+        debug!("list_columns: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await
     }
