@@ -171,13 +171,16 @@ impl adbc_core::Connection for Connection {
         let codes = codes.unwrap_or_default();
 
         if return_all || codes.contains(&InfoCode::DriverName) {
-            builder.add_string(InfoCode::DriverName as u32, "Databricks ADBC Driver");
+            builder.add_string(u32::from(&InfoCode::DriverName), "Databricks ADBC Driver");
         }
         if return_all || codes.contains(&InfoCode::DriverVersion) {
-            builder.add_string(InfoCode::DriverVersion as u32, env!("CARGO_PKG_VERSION"));
+            builder.add_string(
+                u32::from(&InfoCode::DriverVersion),
+                env!("CARGO_PKG_VERSION"),
+            );
         }
         if return_all || codes.contains(&InfoCode::VendorName) {
-            builder.add_string(InfoCode::VendorName as u32, "Databricks");
+            builder.add_string(u32::from(&InfoCode::VendorName), "Databricks");
         }
 
         Ok(builder.build())
@@ -220,7 +223,7 @@ impl adbc_core::Connection for Connection {
                             .list_schemas(&self.session_id, catalog, db_schema),
                     )
                     .map_err(|e| e.to_adbc())?;
-                let schemas = parse_schemas(result).map_err(|e| e.to_adbc())?;
+                let schemas = parse_schemas(result, catalog).map_err(|e| e.to_adbc())?;
                 debug!("get_objects(Schemas): found {} schemas", schemas.len());
 
                 let grouped = group_schemas_by_catalog(schemas);

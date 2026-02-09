@@ -150,17 +150,31 @@ pub fn parse_catalogs(result: ExecuteResult) -> Result<Vec<CatalogInfo>> {
 }
 
 /// Parse schemas from SHOW SCHEMAS result.
-/// Result columns: `databaseName: Utf8`, `catalog: Utf8`
-pub fn parse_schemas(result: ExecuteResult) -> Result<Vec<SchemaInfo>> {
+///
+/// Handles two server response formats:
+/// - `SHOW SCHEMAS IN ALL CATALOGS` returns columns: `databaseName`, `catalog`
+/// - `SHOW SCHEMAS IN \`catalog\`` returns only: `databaseName` (no `catalog` column)
+///
+/// When the `catalog` column is missing, `fallback_catalog` is used instead.
+/// This matches the JDBC driver behavior (MetadataResultSetBuilder.getRowsForSchemas).
+pub fn parse_schemas(
+    result: ExecuteResult,
+    fallback_catalog: Option<&str>,
+) -> Result<Vec<SchemaInfo>> {
     let mut schemas = Vec::new();
     let mut reader = result.reader;
 
     while let Some(batch) = reader.next_batch()? {
-        let cat_idx = column_index(&batch, "catalog")?;
+        let cat_idx = batch.schema().index_of("catalog").ok();
         let db_idx = column_index(&batch, "databaseName")?;
         for row in 0..batch.num_rows() {
+            let catalog_name = if let Some(idx) = cat_idx {
+                get_string_value(&batch, idx, row)?
+            } else {
+                fallback_catalog.unwrap_or_default().to_string()
+            };
             schemas.push(SchemaInfo {
-                catalog_name: get_string_value(&batch, cat_idx, row)?,
+                catalog_name,
                 schema_name: get_string_value(&batch, db_idx, row)?,
             });
         }
@@ -381,11 +395,38 @@ mod tests {
         .unwrap();
 
         let result = make_execute_result(vec![batch]);
-        let schemas = parse_schemas(result).unwrap();
+        let schemas = parse_schemas(result, None).unwrap();
 
         assert_eq!(schemas.len(), 2);
         assert_eq!(schemas[0].catalog_name, "main");
         assert_eq!(schemas[0].schema_name, "default");
+        assert_eq!(schemas[1].schema_name, "information_schema");
+    }
+
+    #[test]
+    fn test_parse_schemas_fallback_catalog() {
+        // SHOW SCHEMAS IN `main` returns only databaseName (no catalog column)
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "databaseName",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                "default",
+                "information_schema",
+            ]))],
+        )
+        .unwrap();
+
+        let result = make_execute_result(vec![batch]);
+        let schemas = parse_schemas(result, Some("main")).unwrap();
+
+        assert_eq!(schemas.len(), 2);
+        assert_eq!(schemas[0].catalog_name, "main");
+        assert_eq!(schemas[0].schema_name, "default");
+        assert_eq!(schemas[1].catalog_name, "main");
         assert_eq!(schemas[1].schema_name, "information_schema");
     }
 

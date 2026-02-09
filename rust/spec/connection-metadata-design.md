@@ -190,10 +190,12 @@ Based on the `databricks-jdbc` implementation (`CommandConstants.java`) and veri
 |-------|---------------|
 | `SHOW CATALOGS` | `catalog: Utf8` |
 | `SHOW SCHEMAS IN ALL CATALOGS` | `databaseName: Utf8`, `catalog: Utf8` |
+| `SHOW SCHEMAS IN \`catalog\`` | `databaseName: Utf8` (**no `catalog` column** — see note below) |
 | `SHOW TABLES IN ALL CATALOGS` | `namespace: Utf8`, `tableName: Utf8`, `isTemporary: Boolean`, `information: Utf8?`, `catalogName: Utf8`, `tableType: Utf8`, `remarks: Utf8?` |
 | `SHOW COLUMNS IN CATALOG <cat>` | `col_name: Utf8`, `catalogName: Utf8?`, `namespace: Utf8`, `tableName: Utf8`, `columnType: Utf8`, `columnSize: Int32?`, `decimalDigits: Int32?`, `radix: Int32?`, `isNullable: Utf8?`, `remarks: Utf8?`, `ordinalPosition: Int32?`, `isAutoIncrement: Utf8?`, `isGenerated: Utf8?` |
 
 **Notes:**
+- **`SHOW SCHEMAS` schema varies by syntax:** `SHOW SCHEMAS IN ALL CATALOGS` returns both `databaseName` and `catalog` columns, but `SHOW SCHEMAS IN \`catalog\`` returns **only** `databaseName` (no `catalog` column). The parser handles this by accepting a fallback catalog parameter — when the `catalog` column is absent, it uses the catalog that was passed to `list_schemas`. This matches the JDBC driver behavior (`MetadataResultSetBuilder.getRowsForSchemas`, lines 1148-1156). `SHOW TABLES` and `SHOW COLUMNS` do not have this issue — the `IN CATALOG` syntax always returns the full column set.
 - `SHOW COLUMNS IN ALL CATALOGS` is **not yet available** server-side (syntax error). For now, we fan out `SHOW COLUMNS IN CATALOG <cat>` per catalog in parallel. When the command is added, we can switch to a single call.
 - `SHOW TABLE TYPES` does **not exist**. Table types are hardcoded based on what Databricks supports.
 - `SHOW TABLES` returns `tableType` which is empty string (`""`) for `hive_metastore` tables (typed as `"UNKNOWN"` in remarks). For Unity Catalog tables it returns `"TABLE"`, `"VIEW"`, etc.
@@ -434,9 +436,10 @@ pub fn parse_catalogs(result: ExecuteResult) -> Result<Vec<CatalogInfo>> {
 }
 
 /// Parse schemas from SHOW SCHEMAS result.
-/// Works for both "SHOW SCHEMAS IN ALL CATALOGS" and "SHOW SCHEMAS IN `catalog`".
-pub fn parse_schemas(result: ExecuteResult) -> Result<Vec<SchemaInfo>> {
-    // Reads "catalog" and "databaseName" columns
+/// Works for both "SHOW SCHEMAS IN ALL CATALOGS" (has `catalog` column) and
+/// "SHOW SCHEMAS IN `catalog`" (missing `catalog` column — uses fallback).
+pub fn parse_schemas(result: ExecuteResult, fallback_catalog: Option<&str>) -> Result<Vec<SchemaInfo>> {
+    // Reads "databaseName" column; reads "catalog" column if present, else uses fallback_catalog
 }
 
 /// Parse tables from SHOW TABLES result.
