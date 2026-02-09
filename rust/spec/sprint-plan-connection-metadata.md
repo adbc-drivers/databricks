@@ -118,14 +118,43 @@ The implementation follows a single-query-per-depth strategy for `get_objects` (
 
 ---
 
+### Task 4: Integration tests for metadata methods ✅
+
+**Scope:** Add end-to-end integration tests in `rust/tests/integration.rs` for all three metadata methods (`get_objects`, `get_table_schema`, `get_table_types`) against a live Databricks endpoint.
+
+**Files modified:**
+- `rust/tests/integration.rs` — Added 11 integration tests + `create_live_connection()` helper
+
+**Integration tests added (all `#[ignore]`, require env vars):**
+- `test_get_objects_catalogs_depth` — Verifies schema matches `GET_OBJECTS_SCHEMA`, finds "main" catalog, `catalog_db_schemas` null
+- `test_get_objects_schemas_depth` — Verifies schemas are populated, finds "default" schema, `db_schema_tables` null
+- `test_get_objects_tables_depth` — Verifies tables in main.default, `table_columns`/`table_constraints` null
+- `test_get_objects_columns_depth` — Verifies columns in main.information_schema.tables, constraints empty list (not null)
+- `test_get_objects_with_catalog_filter` — Verifies catalog pattern "main" returns only "main"
+- `test_get_objects_with_schema_pattern` — Verifies schema pattern "default" filters correctly
+- `test_get_objects_with_table_type_filter` — Verifies table_type filter "VIEW" in main.information_schema
+- `test_get_table_schema_existing_table` — Verifies main.information_schema.tables returns known columns
+- `test_get_table_schema_nonexistent_table` — Verifies NOT_FOUND error for nonexistent table
+- `test_get_table_schema_without_catalog` — Verifies catalog discovery via list_tables when catalog is None
+- `test_get_table_types` — Verifies schema matches `GET_TABLE_TYPES_SCHEMA`, contains TABLE and VIEW
+
+**Implementation decisions:**
+- Extracted `create_live_connection()` helper to avoid code duplication across tests
+- Tests use `main.information_schema.tables` as a well-known table that exists in every Unity Catalog workspace
+- Tests validate schema conformance, depth-appropriate null/non-null fields, and data presence
+- Nonexistent table test uses a unique name (`nonexistent_table_xyz_12345`) to avoid false positives
+
+---
+
 ## Dependencies
 
 ```
-Task 1 ──► Task 2 ──► Task 3
+Task 1 ──► Task 2 ──► Task 3 ──► Task 4
 ```
 
 - Task 2 depends on Task 1 (needs trait methods, SQL builder, type mapping)
 - Task 3 depends on Task 2 (needs parsing, builder, and the simpler Connection methods)
+- Task 4 depends on Task 3 (needs all Connection metadata methods implemented)
 
 ## Risk / Notes
 
