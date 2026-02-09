@@ -636,6 +636,65 @@ mod tests {
         async fn close_statement(&self, _statement_id: &str) -> Result<()> {
             Ok(())
         }
+
+        async fn list_catalogs(&self, _session_id: &str) -> Result<ExecuteResult> {
+            unimplemented!("not needed for link_fetcher tests")
+        }
+
+        async fn list_schemas(
+            &self,
+            _session_id: &str,
+            _catalog: Option<&str>,
+            _schema_pattern: Option<&str>,
+        ) -> Result<ExecuteResult> {
+            unimplemented!("not needed for link_fetcher tests")
+        }
+
+        async fn list_tables(
+            &self,
+            _session_id: &str,
+            _catalog: Option<&str>,
+            _schema_pattern: Option<&str>,
+            _table_pattern: Option<&str>,
+            _table_types: Option<&[&str]>,
+        ) -> Result<ExecuteResult> {
+            unimplemented!("not needed for link_fetcher tests")
+        }
+
+        async fn list_columns(
+            &self,
+            _session_id: &str,
+            _catalog: &str,
+            _schema_pattern: Option<&str>,
+            _table_pattern: Option<&str>,
+            _column_pattern: Option<&str>,
+        ) -> Result<ExecuteResult> {
+            unimplemented!("not needed for link_fetcher tests")
+        }
+
+        async fn list_primary_keys(
+            &self,
+            _session_id: &str,
+            _catalog: &str,
+            _schema: &str,
+            _table: &str,
+        ) -> Result<ExecuteResult> {
+            unimplemented!("not needed for link_fetcher tests")
+        }
+
+        async fn list_foreign_keys(
+            &self,
+            _session_id: &str,
+            _catalog: &str,
+            _schema: &str,
+            _table: &str,
+        ) -> Result<ExecuteResult> {
+            unimplemented!("not needed for link_fetcher tests")
+        }
+
+        fn list_table_types(&self) -> Vec<String> {
+            unimplemented!("not needed for link_fetcher tests")
+        }
     }
 
     fn create_test_link(chunk_index: i64) -> CloudFetchLink {
