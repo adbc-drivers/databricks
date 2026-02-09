@@ -20,7 +20,8 @@ use crate::statement::Statement;
 use adbc_core::error::Result;
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
 use adbc_core::Optionable;
-use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+use adbc_core::schemas::GET_TABLE_TYPES_SCHEMA;
+use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray};
 use arrow_schema::{ArrowError, Schema};
 use driverbase::error::ErrorHelper;
 use std::collections::{HashMap, HashSet};
@@ -202,11 +203,19 @@ impl adbc_core::Connection for Connection {
     }
 
     fn get_table_types(&self) -> Result<impl RecordBatchReader + Send> {
-        Err::<EmptyReader, _>(
-            DatabricksErrorHelper::not_implemented()
-                .message("get_table_types")
-                .to_adbc(),
-        )
+        let table_types = self.client.list_table_types();
+        let array = StringArray::from(table_types);
+        let batch = RecordBatch::try_new(GET_TABLE_TYPES_SCHEMA.clone(), vec![Arc::new(array)])
+            .map_err(|e| {
+                DatabricksErrorHelper::io()
+                    .message(format!("Failed to build get_table_types result: {}", e))
+                    .to_adbc()
+            })?;
+
+        Ok(RecordBatchIterator::new(
+            vec![Ok(batch)],
+            GET_TABLE_TYPES_SCHEMA.clone(),
+        ))
     }
 
     fn read_partition(
@@ -267,6 +276,168 @@ impl Drop for Connection {
 
 #[cfg(test)]
 mod tests {
-    // Note: Full connection tests require mock DatabricksClient
-    // Integration tests should be added in a separate test module
+    use super::*;
+    use crate::client::{
+        ChunkLinkFetchResult, DatabricksClient, ExecuteResult, SessionInfo,
+    };
+    use crate::types::sea::ExecuteParams;
+    use arrow_array::cast::AsArray;
+    use arrow_array::Array;
+    use async_trait::async_trait;
+
+    /// Minimal mock client for connection tests.
+    #[derive(Debug)]
+    struct MockClient;
+
+    #[async_trait]
+    impl DatabricksClient for MockClient {
+        async fn create_session(
+            &self,
+            _catalog: Option<&str>,
+            _schema: Option<&str>,
+            _session_config: HashMap<String, String>,
+        ) -> crate::error::Result<SessionInfo> {
+            Ok(SessionInfo {
+                session_id: "mock-session".to_string(),
+            })
+        }
+
+        async fn delete_session(&self, _session_id: &str) -> crate::error::Result<()> {
+            Ok(())
+        }
+
+        async fn execute_statement(
+            &self,
+            _session_id: &str,
+            _sql: &str,
+            _params: &ExecuteParams,
+        ) -> crate::error::Result<ExecuteResult> {
+            unimplemented!("not needed for get_table_types test")
+        }
+
+        async fn get_result_chunks(
+            &self,
+            _statement_id: &str,
+            _chunk_index: i64,
+            _row_offset: i64,
+        ) -> crate::error::Result<ChunkLinkFetchResult> {
+            unimplemented!("not needed for get_table_types test")
+        }
+
+        async fn cancel_statement(&self, _statement_id: &str) -> crate::error::Result<()> {
+            Ok(())
+        }
+
+        async fn close_statement(&self, _statement_id: &str) -> crate::error::Result<()> {
+            Ok(())
+        }
+
+        async fn list_catalogs(
+            &self,
+            _session_id: &str,
+        ) -> crate::error::Result<ExecuteResult> {
+            unimplemented!("not needed for get_table_types test")
+        }
+
+        async fn list_schemas(
+            &self,
+            _session_id: &str,
+            _catalog: Option<&str>,
+            _schema_pattern: Option<&str>,
+        ) -> crate::error::Result<ExecuteResult> {
+            unimplemented!("not needed for get_table_types test")
+        }
+
+        async fn list_tables(
+            &self,
+            _session_id: &str,
+            _catalog: Option<&str>,
+            _schema_pattern: Option<&str>,
+            _table_pattern: Option<&str>,
+            _table_types: Option<&[&str]>,
+        ) -> crate::error::Result<ExecuteResult> {
+            unimplemented!("not needed for get_table_types test")
+        }
+
+        async fn list_columns(
+            &self,
+            _session_id: &str,
+            _catalog: &str,
+            _schema_pattern: Option<&str>,
+            _table_pattern: Option<&str>,
+            _column_pattern: Option<&str>,
+        ) -> crate::error::Result<ExecuteResult> {
+            unimplemented!("not needed for get_table_types test")
+        }
+
+        async fn list_primary_keys(
+            &self,
+            _session_id: &str,
+            _catalog: &str,
+            _schema: &str,
+            _table: &str,
+        ) -> crate::error::Result<ExecuteResult> {
+            unimplemented!("not needed for get_table_types test")
+        }
+
+        async fn list_foreign_keys(
+            &self,
+            _session_id: &str,
+            _catalog: &str,
+            _schema: &str,
+            _table: &str,
+        ) -> crate::error::Result<ExecuteResult> {
+            unimplemented!("not needed for get_table_types test")
+        }
+
+        fn list_table_types(&self) -> Vec<String> {
+            vec![
+                "SYSTEM TABLE".to_string(),
+                "TABLE".to_string(),
+                "VIEW".to_string(),
+                "METRIC_VIEW".to_string(),
+            ]
+        }
+    }
+
+    /// Helper to create a Connection with the mock client (bypasses session creation).
+    fn create_test_connection() -> Connection {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let client: Arc<dyn DatabricksClient> = Arc::new(MockClient);
+        Connection {
+            host: "https://test.databricks.com".to_string(),
+            warehouse_id: "test-warehouse".to_string(),
+            client,
+            session_id: "mock-session".to_string(),
+            runtime,
+        }
+    }
+
+    #[test]
+    fn test_get_table_types_returns_correct_types() {
+        use adbc_core::Connection as _;
+
+        let conn = create_test_connection();
+        let mut reader = conn.get_table_types().unwrap();
+
+        // Verify schema matches GET_TABLE_TYPES_SCHEMA
+        let schema = reader.schema();
+        assert_eq!(schema.fields().len(), 1);
+        assert_eq!(schema.field(0).name(), "table_type");
+
+        // Read batches and collect all values
+        let batch = reader.next().unwrap().unwrap();
+        let table_type_col = batch.column(0).as_string::<i32>();
+        let values: Vec<&str> = (0..table_type_col.len())
+            .map(|i| table_type_col.value(i))
+            .collect();
+
+        assert_eq!(
+            values,
+            vec!["SYSTEM TABLE", "TABLE", "VIEW", "METRIC_VIEW"]
+        );
+
+        // No more batches
+        assert!(reader.next().is_none());
+    }
 }
