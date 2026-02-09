@@ -25,5 +25,9 @@ pub mod parse;
 pub mod sql;
 pub mod type_mapping;
 
+pub use parse::{
+    parse_catalogs, parse_columns, parse_columns_as_fields, parse_schemas, parse_tables,
+    CatalogInfo, ColumnInfo, SchemaInfo, TableInfo,
+};
 pub use sql::SqlCommandBuilder;
 pub use type_mapping::{databricks_type_to_arrow, databricks_type_to_xdbc, parse_decimal_params};
