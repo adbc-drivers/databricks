@@ -26,3 +26,4 @@ pub mod sql;
 pub mod type_mapping;
 
 pub use sql::SqlCommandBuilder;
+pub use type_mapping::{databricks_type_to_arrow, databricks_type_to_xdbc, parse_decimal_params};
