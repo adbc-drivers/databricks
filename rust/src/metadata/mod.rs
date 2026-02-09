@@ -29,5 +29,10 @@ pub use parse::{
     parse_catalogs, parse_columns, parse_columns_as_fields, parse_schemas, parse_tables,
     CatalogInfo, ColumnInfo, SchemaInfo, TableInfo,
 };
+pub use builder::{
+    build_get_objects_all, build_get_objects_catalogs, build_get_objects_schemas,
+    build_get_objects_tables, group_schemas_by_catalog, group_tables_and_columns,
+    group_tables_by_catalog_schema, CatalogNode, SchemaNode, TableNode,
+};
 pub use sql::SqlCommandBuilder;
 pub use type_mapping::{databricks_type_to_arrow, databricks_type_to_xdbc, parse_decimal_params};
