@@ -465,17 +465,6 @@ impl ChunkLinkFetcher for SeaChunkLinkFetcherHandle {
         }
 
         // Fetch from server (synchronous fallback if prefetch hasn't caught up)
-        //
-        // TODO: This can cause duplicate API calls. There are two independent prefetch
-        // loops that race: (1) `SeaChunkLinkFetcher::run_prefetch_loop` triggered by
-        // `SeaChunkLinkFetcherHandle::new()`, and (2) `StreamingCloudFetchProvider::
-        // run_link_prefetch_loop` which also calls `fetch_links(32, ...)` because its
-        // `next_link_fetch_index` (set from initial cached links) is less than its
-        // prefetch window. Both end up calling `get_result_chunks(32)` simultaneously.
-        // Consider consolidating link prefetch into a single layer — either let the
-        // link fetcher handle all prefetching (and have the provider just request links
-        // on demand), or remove the fetcher's async prefetch and let the provider drive
-        // all fetching.
         debug!(
             "SeaChunkLinkFetcher: cache miss for chunk {}, fetching synchronously",
             start_chunk_index

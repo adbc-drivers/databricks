@@ -15,7 +15,7 @@
 //! StreamingCloudFetchProvider for orchestrating CloudFetch downloads.
 //!
 //! This is the main component that coordinates:
-//! - Link prefetching from the backend
+//! - On-demand link fetching from the link fetcher (which handles prefetching)
 //! - Parallel chunk downloads from cloud storage
 //! - Memory management via chunk limits
 //! - Consumer API via RecordBatchReader trait
@@ -59,7 +59,6 @@ pub struct StreamingCloudFetchProvider {
 
     // Download scheduling state
     next_download_index: AtomicI64,
-    next_link_fetch_index: AtomicI64,
     end_of_stream: AtomicBool,
 
     // Storage - unified chunks map with state and data
@@ -71,11 +70,7 @@ pub struct StreamingCloudFetchProvider {
     max_chunks_in_memory: usize,
 
     // Coordination signals
-    consumer_advanced: Arc<Notify>,
     chunk_state_changed: Arc<Notify>,
-
-    // Error propagation from background tasks
-    prefetch_error: Arc<Mutex<Option<crate::error::Error>>>,
 
     // Cancellation
     cancel_token: CancellationToken,
@@ -118,14 +113,11 @@ impl StreamingCloudFetchProvider {
             current_chunk_index: AtomicI64::new(0),
             current_batch_buffer: Mutex::new(VecDeque::new()),
             next_download_index: AtomicI64::new(0),
-            next_link_fetch_index: AtomicI64::new(0),
             end_of_stream: AtomicBool::new(false),
             chunks: Arc::new(DashMap::new()),
             chunks_in_memory: AtomicUsize::new(0),
             max_chunks_in_memory: config.max_chunks_in_memory,
-            consumer_advanced: Arc::new(Notify::new()),
             chunk_state_changed: Arc::new(Notify::new()),
-            prefetch_error: Arc::new(Mutex::new(None)),
             cancel_token: CancellationToken::new(),
             runtime_handle,
         });
@@ -145,54 +137,38 @@ impl StreamingCloudFetchProvider {
     /// 1. Fetch initial links from the link fetcher (which has them cached)
     /// 2. Populate the chunks map
     /// 3. Schedule downloads to start immediately
-    /// 4. Start the ongoing link prefetch loop
     async fn initialize(self: &Arc<Self>) {
         // Fetch initial batch of links (should be instant if cached by link fetcher)
         debug!("Initializing provider: fetching initial links");
 
         match self.link_fetcher.fetch_links(0, 0).await {
             Ok(result) => {
-                // Store fetched links and track the highest chunk index
-                let mut max_chunk_index: i64 = -1;
+                // Store fetched links
                 for link in result.links {
                     let chunk_index = link.chunk_index;
-                    if chunk_index > max_chunk_index {
-                        max_chunk_index = chunk_index;
-                    }
                     self.chunks
                         .entry(chunk_index)
                         .or_insert_with(|| ChunkEntry::with_link(link));
                 }
-
-                // Update next fetch index
-                let next_fetch_index = max_chunk_index + 1;
-                self.next_link_fetch_index
-                    .store(next_fetch_index, Ordering::Release);
 
                 if !result.has_more {
                     self.end_of_stream.store(true, Ordering::Release);
                 }
 
                 debug!(
-                    "Provider initialized: {} links cached, next_link_fetch_index={}, end_of_stream={}",
+                    "Provider initialized: {} links cached, end_of_stream={}",
                     self.chunks.len(),
-                    next_fetch_index,
                     !result.has_more
                 );
 
                 // Now schedule downloads - chunks map has links ready
-                self.schedule_downloads();
+                self.schedule_downloads().await;
             }
             Err(e) => {
                 error!("Failed to fetch initial links: {}", e);
-                *self.prefetch_error.lock().unwrap() = Some(e);
                 self.chunk_state_changed.notify_one();
-                return;
             }
         }
-
-        // Continue with ongoing link prefetch loop
-        self.run_link_prefetch_loop().await;
     }
 
     /// Get next record batch. Main consumer interface.
@@ -200,11 +176,6 @@ impl StreamingCloudFetchProvider {
     /// Blocks until the next batch is available or end of stream.
     /// First drains current_batch_buffer, then fetches next chunk.
     pub async fn next_batch(&self) -> Result<Option<RecordBatch>> {
-        // Check for errors from background tasks
-        if let Some(err) = self.prefetch_error.lock().unwrap().take() {
-            return Err(err);
-        }
-
         // Check for cancellation
         if self.cancel_token.is_cancelled() {
             return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
@@ -249,11 +220,8 @@ impl StreamingCloudFetchProvider {
                 chunk_index, new_count, self.max_chunks_in_memory, next_chunk
             );
 
-            // Signal that consumer advanced (for link prefetch)
-            self.consumer_advanced.notify_one();
-
             // Schedule more downloads
-            self.schedule_downloads();
+            self.schedule_downloads().await;
 
             // Return first batch from buffer
             if let Some(batch) = self.current_batch_buffer.lock().unwrap().pop_front() {
@@ -280,92 +248,35 @@ impl StreamingCloudFetchProvider {
 
     // --- Internal methods ---
 
-    /// Background task: fetch links ahead of consumer position.
-    async fn run_link_prefetch_loop(&self) {
-        let mut next_row_offset: i64 = 0;
+    /// Fetch links from the link fetcher and store them in the chunks map.
+    ///
+    /// Returns whether the requested `start_index` is now available in the map.
+    async fn fetch_and_store_links(&self, start_index: i64) -> bool {
+        match self.link_fetcher.fetch_links(start_index, 0).await {
+            Ok(result) => {
+                for link in result.links {
+                    let chunk_index = link.chunk_index;
+                    self.chunks
+                        .entry(chunk_index)
+                        .or_insert_with(|| ChunkEntry::with_link(link));
+                }
 
-        loop {
-            // Check cancellation
-            if self.cancel_token.is_cancelled() {
-                debug!("Link prefetch loop cancelled");
-                break;
+                if !result.has_more {
+                    self.end_of_stream.store(true, Ordering::Release);
+                }
+
+                self.chunks.contains_key(&start_index)
             }
-
-            // Check if we need to fetch more links
-            let current = self.current_chunk_index.load(Ordering::Acquire);
-            let prefetched = self.next_link_fetch_index.load(Ordering::Acquire);
-            let window = self.config.link_prefetch_window as i64;
-
-            let need_more_links =
-                prefetched - current < window && !self.end_of_stream.load(Ordering::Acquire);
-
-            if need_more_links {
-                debug!(
-                    "Fetching more links: current={}, prefetched={}, window={}",
-                    current, prefetched, window
-                );
-
-                match self
-                    .link_fetcher
-                    .fetch_links(prefetched, next_row_offset)
-                    .await
-                {
-                    Ok(result) => {
-                        // Store fetched links and track the highest chunk index
-                        let mut max_chunk_index = prefetched - 1;
-                        for link in result.links {
-                            let chunk_index = link.chunk_index;
-                            if chunk_index > max_chunk_index {
-                                max_chunk_index = chunk_index;
-                            }
-                            self.chunks
-                                .entry(chunk_index)
-                                .or_insert_with(|| ChunkEntry::with_link(link));
-                        }
-
-                        // Update next fetch index based on actual links received
-                        let next_fetch_index = max_chunk_index + 1;
-                        self.next_link_fetch_index
-                            .store(next_fetch_index, Ordering::Release);
-
-                        // The CachingLinkFetcher handles end-of-stream detection based on
-                        // total_chunk_count. We just use the has_more from the result.
-                        if !result.has_more {
-                            debug!("End of links: has_more=false");
-                            self.end_of_stream.store(true, Ordering::Release);
-                        }
-
-                        if let Some(offset) = result.next_row_offset {
-                            next_row_offset = offset;
-                        }
-
-                        // Trigger downloads for newly fetched links
-                        self.schedule_downloads();
-                    }
-                    Err(e) => {
-                        error!("Failed to fetch links: {}", e);
-                        *self.prefetch_error.lock().unwrap() = Some(e);
-                        self.chunk_state_changed.notify_one();
-                        break;
-                    }
-                }
-            }
-
-            // Wait for consumer to advance or cancellation
-            tokio::select! {
-                _ = self.cancel_token.cancelled() => {
-                    debug!("Link prefetch loop cancelled during wait");
-                    break;
-                }
-                _ = self.consumer_advanced.notified() => {
-                    // Consumer moved forward, check if we need more links
-                }
+            Err(e) => {
+                error!("Failed to fetch links for chunk {}: {}", start_index, e);
+                self.chunk_state_changed.notify_one();
+                false
             }
         }
     }
 
     /// Spawn download tasks for available links up to concurrency limit.
-    fn schedule_downloads(&self) {
+    async fn schedule_downloads(&self) {
         loop {
             // Check if we have room for more downloads
             let current_in_memory = self.chunks_in_memory.load(Ordering::Acquire);
@@ -390,8 +301,21 @@ impl StreamingCloudFetchProvider {
             };
 
             if !should_download {
-                // No link available yet, or already downloading/downloaded
-                break;
+                // Link not in map yet — try to pull from the fetcher (cache or server)
+                if self.end_of_stream.load(Ordering::Acquire) {
+                    break;
+                }
+                if !self.fetch_and_store_links(next_index).await {
+                    break;
+                }
+                // Re-check after fetching
+                let ready = self
+                    .chunks
+                    .get(&next_index)
+                    .is_some_and(|e| matches!(e.state, ChunkState::UrlFetched));
+                if !ready {
+                    break;
+                }
             }
 
             // Try to claim this chunk for download
@@ -537,11 +461,6 @@ impl StreamingCloudFetchProvider {
                 return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
             }
 
-            // Check for prefetch errors
-            if let Some(err) = self.prefetch_error.lock().unwrap().take() {
-                return Err(err);
-            }
-
             // Check if chunk is ready
             if let Some(entry) = self.chunks.get(&chunk_index) {
                 match &entry.state {
@@ -598,7 +517,7 @@ impl StreamingCloudFetchProvider {
         let chunk_index = 0i64;
 
         // Ensure chunk 0 is being downloaded
-        self.schedule_downloads();
+        self.schedule_downloads().await;
 
         // Wait for chunk 0
         self.wait_for_chunk(chunk_index).await?;
