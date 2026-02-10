@@ -126,8 +126,8 @@ jobs:
               "commit_sha": "${{ github.event.pull_request.head.sha }}",
               "pr_repo": "${{ github.repository }}",
               "pr_url": "${{ github.event.pull_request.html_url }}",
-              "pr_title": ${{ toJSON(github.event.pull_request.title) }},
-              "pr_author": ${{ toJSON(github.event.pull_request.user.login) }}
+              "pr_title": "${{ github.event.pull_request.title }}",
+              "pr_author": "${{ github.event.pull_request.user.login }}"
             }
       - name: Comment on PR
         uses: actions/github-script@v7
