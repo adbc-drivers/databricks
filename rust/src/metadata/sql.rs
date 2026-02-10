@@ -42,25 +42,57 @@ impl SqlCommandBuilder {
     }
 
     pub fn with_schema_pattern(mut self, pattern: Option<&str>) -> Self {
-        self.schema_pattern = pattern.map(Self::escape_like_pattern);
+        self.schema_pattern = pattern.map(Self::jdbc_pattern_to_hive);
         self
     }
 
     pub fn with_table_pattern(mut self, pattern: Option<&str>) -> Self {
-        self.table_pattern = pattern.map(Self::escape_like_pattern);
+        self.table_pattern = pattern.map(Self::jdbc_pattern_to_hive);
         self
     }
 
     pub fn with_column_pattern(mut self, pattern: Option<&str>) -> Self {
-        self.column_pattern = pattern.map(Self::escape_like_pattern);
+        self.column_pattern = pattern.map(Self::jdbc_pattern_to_hive);
         self
     }
 
-    /// Escape pattern for use in LIKE clause.
-    /// ADBC/JDBC uses % for multi-char wildcard and _ for single char,
-    /// which match SQL LIKE syntax. We only need to escape single quotes.
-    fn escape_like_pattern(pattern: &str) -> String {
-        pattern.replace('\'', "''")
+    /// Convert JDBC/ADBC-style pattern to Hive-style pattern for SHOW commands.
+    ///
+    /// Databricks SHOW commands use Hive-style wildcards, not SQL LIKE wildcards:
+    /// - `%` → `*` (multi-char wildcard)
+    /// - `_` → `.` (single-char wildcard)
+    /// - `\%` → `%` (escaped literal percent)
+    /// - `\_` → `_` (escaped literal underscore)
+    /// - `\\` → `\\` (escaped backslash)
+    ///
+    /// Also escapes single quotes for safe SQL embedding.
+    /// Matches JDBC driver's `WildcardUtil.jdbcPatternToHive`.
+    fn jdbc_pattern_to_hive(pattern: &str) -> String {
+        let mut result = String::with_capacity(pattern.len());
+        let mut escape_next = false;
+        for ch in pattern.chars() {
+            if ch == '\\' && !escape_next {
+                escape_next = true;
+                continue;
+            }
+            if escape_next {
+                // Escaped character: emit literally
+                if ch == '\\' {
+                    result.push_str("\\\\");
+                } else {
+                    result.push(ch);
+                }
+                escape_next = false;
+            } else {
+                match ch {
+                    '%' => result.push('*'),
+                    '_' => result.push('.'),
+                    '\'' => result.push_str("''"),
+                    _ => result.push(ch),
+                }
+            }
+        }
+        result
     }
 
     /// Escape identifier for use in SQL (backtick-quote).
@@ -194,7 +226,7 @@ mod tests {
         let sql = SqlCommandBuilder::new()
             .with_schema_pattern(Some("default%"))
             .build_show_schemas();
-        assert_eq!(sql, "SHOW SCHEMAS IN ALL CATALOGS LIKE 'default%'");
+        assert_eq!(sql, "SHOW SCHEMAS IN ALL CATALOGS LIKE 'default*'");
     }
 
     #[test]
@@ -244,7 +276,7 @@ mod tests {
             .build_show_tables();
         assert_eq!(
             sql,
-            "SHOW TABLES IN CATALOG `main` SCHEMA LIKE 'default' LIKE 'my_table%'"
+            "SHOW TABLES IN CATALOG `main` SCHEMA LIKE 'default' LIKE 'my.table*'"
         );
     }
 
@@ -274,7 +306,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             sql,
-            "SHOW COLUMNS IN CATALOG `main` SCHEMA LIKE 'default' TABLE LIKE 'my_table' LIKE 'id%'"
+            "SHOW COLUMNS IN CATALOG `main` SCHEMA LIKE 'default' TABLE LIKE 'my.table' LIKE 'id*'"
         );
     }
 
@@ -310,5 +342,45 @@ mod tests {
             sql,
             "SHOW FOREIGN KEYS IN CATALOG `main` IN SCHEMA `default` IN TABLE `my_table`"
         );
+    }
+
+    // --- jdbc_pattern_to_hive tests (matches JDBC WildcardUtil) ---
+
+    #[test]
+    fn test_pattern_percent_to_star() {
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive("abc%"), "abc*");
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive("%abc"), "*abc");
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive("%abc%"), "*abc*");
+    }
+
+    #[test]
+    fn test_pattern_underscore_to_dot() {
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive("abc_"), "abc.");
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive("_abc"), ".abc");
+    }
+
+    #[test]
+    fn test_pattern_escaped_percent_literal() {
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive(r"abc\%"), "abc%");
+    }
+
+    #[test]
+    fn test_pattern_escaped_underscore_literal() {
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive(r"abc\_"), "abc_");
+    }
+
+    #[test]
+    fn test_pattern_escaped_backslash() {
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive(r"abc\\"), r"abc\\");
+    }
+
+    #[test]
+    fn test_pattern_no_wildcards() {
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive("exact"), "exact");
+    }
+
+    #[test]
+    fn test_pattern_single_quote_escaped() {
+        assert_eq!(SqlCommandBuilder::jdbc_pattern_to_hive("it's"), "it''s");
     }
 }

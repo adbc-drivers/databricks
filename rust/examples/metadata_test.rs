@@ -121,6 +121,15 @@ fn main() {
     println!("\n--- Test 8: get_table_schema (auto catalog) - tpch.lineitem ---");
     test_get_table_schema_auto_catalog(&conn);
 
+    println!("\n--- Test 9: get_objects(Schemas) with pattern - catalog='samples', schema='tpc%' ---");
+    test_get_objects_schemas_pattern(&conn);
+
+    println!("\n--- Test 10: get_objects(Tables) with pattern - samples.tpch, table='line%' ---");
+    test_get_objects_tables_pattern(&conn);
+
+    println!("\n--- Test 11: get_objects(Catalogs) with pattern - catalog='sam%' ---");
+    test_get_objects_catalogs_pattern(&conn);
+
     println!("\n=== All Metadata Tests Complete ===");
 }
 
@@ -575,6 +584,178 @@ fn test_get_table_schema_auto_catalog(conn: &impl ConnectionTrait) {
     println!(
         "  Total: {} fields [PASS] ({:.3}s)",
         field_names.len(),
+        start.elapsed().as_secs_f64()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: get_objects(Schemas) with pattern — schema LIKE 'tpc%'
+// ---------------------------------------------------------------------------
+
+fn test_get_objects_schemas_pattern(conn: &impl ConnectionTrait) {
+    let start = Instant::now();
+    let mut reader = conn
+        .get_objects(
+            ObjectDepth::Schemas,
+            Some("samples"),
+            Some("tpc%"),
+            None,
+            None,
+            None,
+        )
+        .expect("get_objects(Schemas) with pattern failed");
+
+    let mut schema_names = Vec::new();
+    for batch_result in reader.by_ref() {
+        let batch = batch_result.expect("Error reading Schemas batch");
+        let schemas_list = batch.column(1).as_list::<i32>();
+
+        for i in 0..batch.num_rows() {
+            if schemas_list.is_null(i) {
+                continue;
+            }
+            let schemas_arr = schemas_list.value(i);
+            let schemas_struct = as_struct(schemas_arr.as_ref());
+            let names = schemas_struct.column(0).as_string::<i32>();
+            for j in 0..schemas_struct.len() {
+                let name = names.value(j);
+                println!("  {}", name);
+                schema_names.push(name.to_string());
+            }
+        }
+    }
+
+    // 'tpc%' should match tpch, tpcds_sf1, tpcds_sf1000
+    assert!(
+        schema_names.len() >= 3,
+        "Pattern 'tpc%' should match at least 3 schemas, got {}",
+        schema_names.len()
+    );
+    assert!(
+        schema_names.iter().any(|s| s == "tpch"),
+        "Must include 'tpch'"
+    );
+    for name in &schema_names {
+        assert!(
+            name.starts_with("tpc"),
+            "All matched schemas must start with 'tpc', got '{}'",
+            name
+        );
+    }
+
+    println!(
+        "  Total: {} schemas [PASS] ({:.3}s)",
+        schema_names.len(),
+        start.elapsed().as_secs_f64()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: get_objects(Tables) with pattern — table LIKE 'line%'
+// ---------------------------------------------------------------------------
+
+fn test_get_objects_tables_pattern(conn: &impl ConnectionTrait) {
+    let start = Instant::now();
+    let mut reader = conn
+        .get_objects(
+            ObjectDepth::Tables,
+            Some("samples"),
+            Some("tpch"),
+            Some("line%"),
+            None,
+            None,
+        )
+        .expect("get_objects(Tables) with table pattern failed");
+
+    let mut table_names = Vec::new();
+    for batch_result in reader.by_ref() {
+        let batch = batch_result.expect("Error reading Tables batch");
+        let schemas_list = batch.column(1).as_list::<i32>();
+
+        for i in 0..batch.num_rows() {
+            if schemas_list.is_null(i) {
+                continue;
+            }
+            let schemas_arr = schemas_list.value(i);
+            let schemas_struct = as_struct(schemas_arr.as_ref());
+            let tables_lists = schemas_struct.column(1).as_list::<i32>();
+
+            for j in 0..schemas_struct.len() {
+                if tables_lists.is_null(j) {
+                    continue;
+                }
+                let tables_arr = tables_lists.value(j);
+                let tables_struct = as_struct(tables_arr.as_ref());
+                let tbl_names = tables_struct.column(0).as_string::<i32>();
+                for k in 0..tables_struct.len() {
+                    let name = tbl_names.value(k);
+                    println!("  {}", name);
+                    table_names.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    // 'line%' in samples.tpch should match 'lineitem'
+    assert_eq!(
+        table_names.len(),
+        1,
+        "Pattern 'line%' should match exactly 1 table, got {}",
+        table_names.len()
+    );
+    assert_eq!(table_names[0], "lineitem");
+
+    println!(
+        "  Total: {} tables [PASS] ({:.3}s)",
+        table_names.len(),
+        start.elapsed().as_secs_f64()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: get_objects(Catalogs) with pattern — catalog LIKE 'sam%'
+// ---------------------------------------------------------------------------
+
+fn test_get_objects_catalogs_pattern(conn: &impl ConnectionTrait) {
+    let start = Instant::now();
+    let mut reader = conn
+        .get_objects(
+            ObjectDepth::Catalogs,
+            Some("sam%"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("get_objects(Catalogs) with pattern failed");
+
+    let mut catalog_names = Vec::new();
+    for batch_result in reader.by_ref() {
+        let batch = batch_result.expect("Error reading Catalogs batch");
+        let catalog_col = batch.column(0).as_string::<i32>();
+        for i in 0..batch.num_rows() {
+            let name = catalog_col.value(i);
+            println!("  {}", name);
+            catalog_names.push(name.to_string());
+        }
+    }
+
+    // 'sam%' should match 'samples' (client-side filtered)
+    assert!(
+        catalog_names.iter().any(|c| c == "samples"),
+        "Must include 'samples'"
+    );
+    for name in &catalog_names {
+        assert!(
+            name.starts_with("sam"),
+            "All matched catalogs must start with 'sam', got '{}'",
+            name
+        );
+    }
+
+    println!(
+        "  Total: {} catalogs [PASS] ({:.3}s)",
+        catalog_names.len(),
         start.elapsed().as_secs_f64()
     );
 }

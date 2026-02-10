@@ -661,4 +661,14 @@ mod tests {
         assert!(converted.inline_arrow_data.is_some());
         assert_eq!(converted.inline_arrow_data.unwrap(), test_data);
     }
+
+    #[test]
+    fn test_list_table_types() {
+        let client = create_test_client();
+        let types = client.list_table_types();
+        assert_eq!(
+            types,
+            vec!["SYSTEM TABLE", "TABLE", "VIEW", "METRIC_VIEW"]
+        );
+    }
 }
