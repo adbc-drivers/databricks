@@ -469,10 +469,10 @@ jobs:
             --lcov --output-path lcov.info
 
       - name: Coverage report
-        uses: getsentry/codecov-action@v1
+        uses: getsentry/codecov-action@bee8d919178e87c35ada22280d7da8b77dda2cbb  # main (2025-02-10)
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          directory: rust
+          files: rust/lcov.info
           coverage-format: lcov
           post-pr-comment: true
           target-project: auto
