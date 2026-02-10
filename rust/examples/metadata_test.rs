@@ -121,7 +121,9 @@ fn main() {
     println!("\n--- Test 8: get_table_schema (auto catalog) - tpch.lineitem ---");
     test_get_table_schema_auto_catalog(&conn);
 
-    println!("\n--- Test 9: get_objects(Schemas) with pattern - catalog='samples', schema='tpc%' ---");
+    println!(
+        "\n--- Test 9: get_objects(Schemas) with pattern - catalog='samples', schema='tpc%' ---"
+    );
     test_get_objects_schemas_pattern(&conn);
 
     println!("\n--- Test 10: get_objects(Tables) with pattern - samples.tpch, table='line%' ---");
@@ -719,14 +721,7 @@ fn test_get_objects_tables_pattern(conn: &impl ConnectionTrait) {
 fn test_get_objects_catalogs_pattern(conn: &impl ConnectionTrait) {
     let start = Instant::now();
     let mut reader = conn
-        .get_objects(
-            ObjectDepth::Catalogs,
-            Some("sam%"),
-            None,
-            None,
-            None,
-            None,
-        )
+        .get_objects(ObjectDepth::Catalogs, Some("sam%"), None, None, None, None)
         .expect("get_objects(Catalogs) with pattern failed");
 
     let mut catalog_names = Vec::new();
