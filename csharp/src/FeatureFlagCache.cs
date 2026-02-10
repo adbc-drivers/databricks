@@ -38,6 +38,11 @@ namespace AdbcDrivers.Databricks
     /// - Background refresh task runs based on TTL within each FeatureFlagContext
     /// - Automatic cleanup via IMemoryCache eviction
     /// - Thread-safe using IMemoryCache and SemaphoreSlim for async locking
+    /// - The first call to get feature flags is blocking (waits for initial fetch to complete)
+    /// </para>
+    /// <para>
+    /// Note: This singleton is designed to live for the lifetime of the application.
+    /// Individual FeatureFlagContext instances are disposed when evicted from the cache.
     /// </para>
     /// <para>
     /// JDBC Reference: DatabricksDriverFeatureFlagsContextFactory.java

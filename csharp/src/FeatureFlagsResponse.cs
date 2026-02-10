@@ -29,7 +29,7 @@ namespace AdbcDrivers.Databricks
         /// Array of feature flag entries with name and value.
         /// </summary>
         [JsonPropertyName("flags")]
-        public List<FeatureFlagEntry>? Flags { get; set; }
+        public IReadOnlyList<FeatureFlagEntry>? Flags { get; set; }
 
         /// <summary>
         /// Server-controlled refresh interval in seconds.

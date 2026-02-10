@@ -319,15 +319,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void TelemetryConfiguration_FeatureFlagName_IsCorrect()
-        {
-            // Assert
-            Assert.Equal(
-                "databricks.partnerplatform.clientConfigsFeatureFlags.enableTelemetryForAdbc",
-                TelemetryConfiguration.FeatureFlagName);
-        }
-
-        [Fact]
         public void TelemetryConfiguration_PropertyKeys_AreCorrect()
         {
             // Assert

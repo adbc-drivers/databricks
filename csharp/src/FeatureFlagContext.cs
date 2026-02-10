@@ -61,9 +61,8 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Default feature flag endpoint format. {0} = driver version.
-        /// NOTE: Using OSS_JDBC endpoint until OSS_ADBC is configured server-side.
         /// </summary>
-        internal const string DefaultFeatureFlagEndpointFormat = "/api/2.0/connector-service/feature-flags/OSS_JDBC/{0}";
+        internal const string DefaultFeatureFlagEndpointFormat = "/api/2.0/connector-service/feature-flags/ADBC/{0}";
 
         private readonly string _host;
         private readonly string _driverVersion;
@@ -220,10 +219,16 @@ namespace AdbcDrivers.Databricks
                     catch (Exception ex)
                     {
                         // Log error but continue the refresh loop
-                        Activity.Current?.AddEvent("feature_flags.background_refresh.error", [
-                            new("error.message", ex.Message),
-                            new("error.type", ex.GetType().Name)
-                        ]);
+                        // Use StartActivity since Activity.Current is null in background tasks
+                        using var activity = s_activitySource.StartActivity("BackgroundRefresh.Error");
+                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        activity?.AddEvent(new ActivityEvent("feature_flags.background_refresh.error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.message", ex.Message },
+                                { "error.type", ex.GetType().Name },
+                                { "host", _host }
+                            }));
                     }
                 }
             }, _refreshCts.Token);
