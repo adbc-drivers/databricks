@@ -23,6 +23,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.Models;
+using Polly;
+using Polly.Retry;
 
 namespace AdbcDrivers.Databricks.Telemetry
 {
@@ -60,6 +62,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly string _host;
         private readonly bool _isAuthenticated;
         private readonly TelemetryConfiguration _config;
+        private readonly ResiliencePipeline _retryPipeline;
 
         private static readonly JsonSerializerOptions s_jsonOptions = new JsonSerializerOptions
         {
@@ -101,6 +104,46 @@ namespace AdbcDrivers.Databricks.Telemetry
             _host = host;
             _isAuthenticated = isAuthenticated;
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            _retryPipeline = CreateRetryPipeline(config);
+        }
+
+        /// <summary>
+        /// Creates the Polly retry pipeline with configured retry settings.
+        /// </summary>
+        private static ResiliencePipeline CreateRetryPipeline(TelemetryConfiguration config)
+        {
+            // If no retries configured, return an empty pipeline (no-op)
+            if (config.MaxRetries <= 0)
+            {
+                return ResiliencePipeline.Empty;
+            }
+
+            var retryOptions = new RetryStrategyOptions
+            {
+                MaxRetryAttempts = config.MaxRetries,
+                Delay = TimeSpan.FromMilliseconds(config.RetryDelayMs),
+                BackoffType = DelayBackoffType.Constant,
+                ShouldHandle = new PredicateBuilder()
+                    .Handle<Exception>(ex =>
+                        ex is not OperationCanceledException &&
+                        !ExceptionClassifier.IsTerminalException(ex)),
+                OnRetry = args =>
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.retry",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "attempt", args.AttemptNumber + 1 },
+                            { "max_attempts", config.MaxRetries + 1 },
+                            { "error.message", args.Outcome.Exception?.Message ?? "Unknown" },
+                            { "error.type", args.Outcome.Exception?.GetType().Name ?? "Unknown" }
+                        }));
+                    return default;
+                }
+            };
+
+            return new ResiliencePipelineBuilder()
+                .AddRetry(retryOptions)
+                .Build();
         }
 
         /// <summary>
@@ -187,88 +230,56 @@ namespace AdbcDrivers.Databricks.Telemetry
         }
 
         /// <summary>
-        /// Sends the telemetry request with retry logic.
+        /// Sends the telemetry request with retry logic using Polly.
         /// </summary>
         /// <returns>True if the request succeeded, false otherwise.</returns>
         private async Task<bool> SendWithRetryAsync(string json, CancellationToken ct)
         {
             var endpointUrl = GetEndpointUrl();
-            Exception? lastException = null;
 
-            for (int attempt = 0; attempt <= _config.MaxRetries; attempt++)
+            try
             {
-                try
+                await _retryPipeline.ExecuteAsync(async token =>
                 {
-                    if (attempt > 0 && _config.RetryDelayMs > 0)
+                    await SendRequestAsync(endpointUrl, json, token).ConfigureAwait(false);
+                }, ct).ConfigureAwait(false);
+
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.success",
+                    tags: new ActivityTagsCollection
                     {
-                        await Task.Delay(_config.RetryDelayMs, ct).ConfigureAwait(false);
-                    }
-
-                    await SendRequestAsync(endpointUrl, json, ct).ConfigureAwait(false);
-
-                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.success",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "endpoint", endpointUrl },
-                            { "attempt", attempt + 1 }
-                        }));
-                    return true;
-                }
-                catch (OperationCanceledException)
-                {
-                    // Don't retry on cancellation
-                    throw;
-                }
-                catch (HttpRequestException ex)
-                {
-                    lastException = ex;
-
-                    // Check if this is a terminal error that shouldn't be retried
-                    if (ExceptionClassifier.IsTerminalException(ex))
-                    {
-                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.terminal_error",
-                            tags: new ActivityTagsCollection
-                            {
-                                { "error.message", ex.Message },
-                                { "error.type", ex.GetType().Name }
-                            }));
-                        return false;
-                    }
-
-                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.retry",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "attempt", attempt + 1 },
-                            { "max_attempts", _config.MaxRetries + 1 },
-                            { "error.message", ex.Message }
-                        }));
-                }
-                catch (Exception ex)
-                {
-                    lastException = ex;
-                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.retry",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "attempt", attempt + 1 },
-                            { "max_attempts", _config.MaxRetries + 1 },
-                            { "error.message", ex.Message },
-                            { "error.type", ex.GetType().Name }
-                        }));
-                }
+                        { "endpoint", endpointUrl }
+                    }));
+                return true;
             }
-
-            if (lastException != null)
+            catch (OperationCanceledException)
             {
+                // Don't swallow cancellation
+                throw;
+            }
+            catch (HttpRequestException ex) when (ExceptionClassifier.IsTerminalException(ex))
+            {
+                // Terminal error - don't retry (this shouldn't be reached since ShouldHandle excludes it,
+                // but kept as a safety net)
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.terminal_error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.message", ex.Message },
+                        { "error.type", ex.GetType().Name }
+                    }));
+                return false;
+            }
+            catch (Exception ex)
+            {
+                // All retries exhausted
                 Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.exhausted",
                     tags: new ActivityTagsCollection
                     {
                         { "total_attempts", _config.MaxRetries + 1 },
-                        { "error.message", lastException.Message },
-                        { "error.type", lastException.GetType().Name }
+                        { "error.message", ex.Message },
+                        { "error.type", ex.GetType().Name }
                     }));
+                return false;
             }
-
-            return false;
         }
 
         /// <summary>
