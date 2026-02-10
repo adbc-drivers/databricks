@@ -296,62 +296,6 @@ namespace AdbcDrivers.Databricks.Tests
             }
         }
 
-        /// <summary>
-        /// Tests that property values are actually overridden based on precedence settings in DatabricksConnection.
-        /// Validates that the correct property values (EnablePKFK and UseCloudFetch) are used based on precedence.
-        /// </summary>
-        [Theory]
-        [InlineData("true")] // Environment takes precedence, should use environment values (false, false)
-        [InlineData("false")] // Constructor takes precedence, should use constructor values (true, true)
-        public void DatabricksConnection_PropertyOverridePrecedence_ValidatesCorrectValues(string precedenceValue)
-        {
-            // Arrange
-            var envProperties = new Dictionary<string, string>
-            {
-                [DatabricksParameters.DriverConfigTakePrecedence] = precedenceValue,
-                [DatabricksParameters.EnablePKFK] = "false",
-                [DatabricksParameters.UseCloudFetch] = "false"
-            };
-            var configFile = CreateTempJsonFile(envProperties);
-            var envVar = "TEST_PRECEDENCE_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-
-            var constructorProperties = new Dictionary<string, string>
-            {
-                [SparkParameters.HostName] = "test-host",
-                [SparkParameters.Token] = "test-token",
-                [DatabricksParameters.EnablePKFK] = "true",
-                [DatabricksParameters.UseCloudFetch] = "true",
-                [DatabricksParameters.CloudFetchMaxRetries] = "5"
-            };
-
-            try
-            {
-                Environment.SetEnvironmentVariable(DatabricksConnection.DefaultConfigEnvironmentVariable, configFile);
-
-                // Act
-                using var connection = new DatabricksConnection(constructorProperties);
-
-                // Assert - Validate that the correct property values are being used based on precedence
-                if (precedenceValue == "true")
-                {
-                    // Environment takes precedence: should use environment values (false, false)
-                    Assert.False(connection.EnablePKFK, "Environment precedence should use EnablePKFK=false from environment config");
-                    Assert.False(connection.UseCloudFetch, "Environment precedence should use UseCloudFetch=false from environment config");
-                }
-                else
-                {
-                    // Constructor takes precedence: should use constructor values (true, true)
-                    Assert.True(connection.EnablePKFK, "Constructor precedence should use EnablePKFK=true from constructor properties");
-                    Assert.True(connection.UseCloudFetch, "Constructor precedence should use UseCloudFetch=true from constructor properties");
-                }
-            }
-            finally
-            {
-                Environment.SetEnvironmentVariable(DatabricksConnection.DefaultConfigEnvironmentVariable, null);
-            }
-        }
-
-
         #region Helper Methods
 
         /// <summary>

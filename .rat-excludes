@@ -35,3 +35,5 @@ go/validation/queries/*/*.sql
 go/pkg/adbc.h
 test-infrastructure/proxy-server/generated/**
 rust/Cargo.lock
+rust/license.tpl
+rust/pixi.lock

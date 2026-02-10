@@ -15,9 +15,12 @@
 //! Database implementation for the Databricks ADBC driver.
 
 use crate::auth::PersonalAccessToken;
-use crate::client::{DatabricksClient, DatabricksHttpClient, HttpClientConfig, SeaClient};
+use crate::client::{
+    DatabricksClient, DatabricksClientConfig, DatabricksHttpClient, HttpClientConfig, SeaClient,
+};
 use crate::connection::{Connection, ConnectionConfig};
 use crate::error::DatabricksErrorHelper;
+use crate::reader::ResultReaderFactory;
 use crate::types::cloudfetch::CloudFetchConfig;
 use adbc_core::error::Result;
 use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
@@ -363,20 +366,51 @@ impl adbc_core::Database for Database {
                 .map_err(|e| e.to_adbc())?,
         );
 
-        // Create DatabricksClient (currently always SEA)
-        let client: Arc<dyn DatabricksClient> =
-            Arc::new(SeaClient::new(http_client.clone(), host, warehouse_id));
+        // Create tokio runtime for async operations
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+            DatabricksErrorHelper::io()
+                .message(format!("Failed to create async runtime: {}", e))
+                .to_adbc()
+        })?;
 
-        // Create connection
-        Connection::new(ConnectionConfig {
-            host: host.clone(),
-            warehouse_id: warehouse_id.clone(),
-            catalog: self.catalog.clone(),
-            schema: self.schema.clone(),
-            client,
-            http_client,
+        // Two-step initialization required because ResultReaderFactory needs
+        // Arc<dyn DatabricksClient>, which requires wrapping SeaClient in Arc first.
+        //
+        // 1. Create SeaClient (without reader_factory — uses OnceLock)
+        // 2. Wrap in Arc<SeaClient>, coerce to Arc<dyn DatabricksClient>
+        // 3. Create ResultReaderFactory with that Arc
+        // 4. Set the factory on SeaClient via OnceLock::set()
+        let client_config = DatabricksClientConfig {
             cloudfetch_config: self.cloudfetch_config.clone(),
-        })
+            ..Default::default()
+        };
+        let sea_client = Arc::new(SeaClient::new(
+            http_client.clone(),
+            host,
+            warehouse_id,
+            client_config,
+        ));
+        let client: Arc<dyn DatabricksClient> = sea_client.clone();
+
+        let reader_factory = ResultReaderFactory::new(
+            client.clone(),
+            http_client,
+            self.cloudfetch_config.clone(),
+            runtime.handle().clone(),
+        );
+        sea_client.set_reader_factory(reader_factory, runtime.handle().clone());
+
+        // Create connection (passes runtime ownership to Connection)
+        Connection::new_with_runtime(
+            ConnectionConfig {
+                host: host.clone(),
+                warehouse_id: warehouse_id.clone(),
+                catalog: self.catalog.clone(),
+                schema: self.schema.clone(),
+                client,
+            },
+            runtime,
+        )
         .map_err(|e| e.to_adbc())
     }
 

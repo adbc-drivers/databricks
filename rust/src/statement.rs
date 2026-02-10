@@ -16,8 +16,8 @@
 
 use crate::client::DatabricksClient;
 use crate::error::DatabricksErrorHelper;
-use crate::reader::{ResultReaderAdapter, ResultReaderFactory};
-use crate::types::sea::{ExecuteParams, StatementState};
+use crate::reader::ResultReaderAdapter;
+use crate::types::sea::ExecuteParams;
 use adbc_core::error::Result;
 use adbc_core::options::{OptionStatement, OptionValue};
 use adbc_core::Optionable;
@@ -25,7 +25,6 @@ use arrow_array::RecordBatchReader;
 use arrow_schema::Schema;
 use driverbase::error::ErrorHelper;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::runtime::Handle as RuntimeHandle;
 use tracing::debug;
 
@@ -41,16 +40,10 @@ pub struct Statement {
     client: Arc<dyn DatabricksClient>,
     /// Session ID for this statement's connection.
     session_id: String,
-    /// Factory for creating result readers.
-    reader_factory: ResultReaderFactory,
     /// Tokio runtime handle for async operations.
     runtime_handle: RuntimeHandle,
     /// Current statement ID (set after execution).
     current_statement_id: Option<String>,
-    /// Maximum time to wait for statement completion.
-    poll_timeout: Duration,
-    /// Interval between status polls.
-    poll_interval: Duration,
 }
 
 impl Statement {
@@ -58,85 +51,20 @@ impl Statement {
     pub(crate) fn new(
         client: Arc<dyn DatabricksClient>,
         session_id: String,
-        reader_factory: ResultReaderFactory,
         runtime_handle: RuntimeHandle,
     ) -> Self {
         Self {
             query: None,
             client,
             session_id,
-            reader_factory,
             runtime_handle,
             current_statement_id: None,
-            poll_timeout: Duration::from_secs(600), // 10 minutes default
-            poll_interval: Duration::from_millis(500),
         }
     }
 
     /// Returns the current SQL query.
     pub fn sql_query(&self) -> Option<&str> {
         self.query.as_deref()
-    }
-
-    /// Wait for statement to complete, polling status.
-    fn wait_for_completion(
-        &self,
-        response: crate::client::ExecuteResponse,
-    ) -> crate::error::Result<crate::client::ExecuteResponse> {
-        let start = std::time::Instant::now();
-        let mut current_response = response;
-
-        loop {
-            match current_response.status.state {
-                StatementState::Succeeded => return Ok(current_response),
-                StatementState::Failed => {
-                    let error_msg = current_response
-                        .status
-                        .error
-                        .as_ref()
-                        .and_then(|e| e.message.clone())
-                        .unwrap_or_else(|| "Unknown error".to_string());
-                    return Err(DatabricksErrorHelper::io().message(error_msg));
-                }
-                StatementState::Canceled => {
-                    return Err(
-                        DatabricksErrorHelper::invalid_state().message("Statement was canceled")
-                    );
-                }
-                StatementState::Closed => {
-                    // Closed with result data is valid for inline results - the server
-                    // delivers the data and immediately closes the statement since no
-                    // further fetching is needed.
-                    if current_response.result.is_some() {
-                        debug!("Statement closed with inline result data - treating as success");
-                        return Ok(current_response);
-                    }
-                    return Err(
-                        DatabricksErrorHelper::invalid_state().message("Statement was closed")
-                    );
-                }
-                StatementState::Pending | StatementState::Running => {
-                    // Check timeout
-                    if start.elapsed() > self.poll_timeout {
-                        return Err(
-                            DatabricksErrorHelper::io().message("Statement execution timed out")
-                        );
-                    }
-
-                    // Wait and poll again
-                    std::thread::sleep(self.poll_interval);
-
-                    debug!(
-                        "Polling statement status: {}",
-                        current_response.statement_id
-                    );
-                    current_response = self.runtime_handle.block_on(
-                        self.client
-                            .get_statement_status(&current_response.statement_id),
-                    )?;
-                }
-            }
-        }
     }
 }
 
@@ -209,8 +137,8 @@ impl adbc_core::Statement for Statement {
 
         debug!("Executing query: {}", query);
 
-        // Execute statement via DatabricksClient
-        let response = self
+        // Execute statement via DatabricksClient (handles polling and reader creation)
+        let result = self
             .runtime_handle
             .block_on(self.client.execute_statement(
                 &self.session_id,
@@ -219,22 +147,11 @@ impl adbc_core::Statement for Statement {
             ))
             .map_err(|e| e.to_adbc())?;
 
-        // Store statement ID for potential cancellation
-        self.current_statement_id = Some(response.statement_id.clone());
-
-        // Wait for completion if pending/running
-        let response = self
-            .wait_for_completion(response)
-            .map_err(|e| e.to_adbc())?;
-
-        // Create reader via factory
-        let reader = self
-            .reader_factory
-            .create_reader(&response.statement_id, &response)
-            .map_err(|e| e.to_adbc())?;
+        // Store statement ID for cancellation/cleanup
+        self.current_statement_id = Some(result.statement_id);
 
         // Wrap in adapter for RecordBatchReader trait
-        ResultReaderAdapter::new(reader).map_err(|e| e.to_adbc())
+        ResultReaderAdapter::new(result.reader).map_err(|e| e.to_adbc())
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {
@@ -288,8 +205,6 @@ impl Drop for Statement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: Full statement tests require mock DatabricksClient
     // Integration tests should be added in a separate test module
 }

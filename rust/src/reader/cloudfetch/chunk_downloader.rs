@@ -137,6 +137,7 @@ mod tests {
     use crate::client::HttpClientConfig;
     use std::collections::HashMap;
 
+    #[allow(dead_code)]
     fn create_test_link() -> CloudFetchLink {
         CloudFetchLink {
             url: "https://storage.example.com/chunk0".to_string(),

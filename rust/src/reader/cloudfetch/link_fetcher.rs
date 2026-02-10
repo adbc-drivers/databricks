@@ -543,9 +543,12 @@ impl ChunkLinkFetcher for SeaChunkLinkFetcherHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{ExecuteResponse, SessionInfo};
-    use crate::types::sea::{ExecuteParams, ResultManifest, StatementState, StatementStatus};
+    use crate::client::{ExecuteResult, SessionInfo};
+    use crate::reader::EmptyReader;
+    use crate::types::sea::ExecuteParams;
+    use arrow_schema::Schema;
     use std::collections::HashMap;
+    use std::sync::Arc as StdArc;
 
     /// Mock DatabricksClient for testing
     #[derive(Debug)]
@@ -581,33 +584,11 @@ mod tests {
             _session_id: &str,
             _sql: &str,
             _params: &ExecuteParams,
-        ) -> Result<ExecuteResponse> {
-            Ok(ExecuteResponse {
+        ) -> Result<ExecuteResult> {
+            Ok(ExecuteResult {
                 statement_id: "mock-statement".to_string(),
-                status: StatementStatus {
-                    state: StatementState::Succeeded,
-                    error: None,
-                },
-                manifest: Some(ResultManifest {
-                    format: "ARROW_STREAM".to_string(),
-                    schema: crate::types::sea::ResultSchema {
-                        column_count: 1,
-                        columns: vec![],
-                    },
-                    total_chunk_count: Some(self.chunks.len() as i64),
-                    total_row_count: None,
-                    total_byte_count: None,
-                    truncated: false,
-                    chunks: None,
-                    result_compression: None,
-                }),
-                result: None,
+                reader: Box::new(EmptyReader::new(StdArc::new(Schema::empty()))),
             })
-        }
-
-        async fn get_statement_status(&self, _statement_id: &str) -> Result<ExecuteResponse> {
-            self.execute_statement("", "", &ExecuteParams::default())
-                .await
         }
 
         async fn get_result_chunks(
