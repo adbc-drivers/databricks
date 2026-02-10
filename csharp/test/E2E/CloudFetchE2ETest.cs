@@ -96,14 +96,17 @@ namespace AdbcDrivers.Databricks.Tests
             ActivitySource.AddActivityListener(_activityListener);
         }
 
-        public new void Dispose()
+        protected override void Dispose(bool disposing)
         {
             if (!_disposed)
             {
-                _activityListener?.Dispose();
+                if (disposing)
+                {
+                    _activityListener?.Dispose();
+                }
                 _disposed = true;
             }
-            base.Dispose();
+            base.Dispose(disposing);
         }
 
         /// <summary>
