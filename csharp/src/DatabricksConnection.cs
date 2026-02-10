@@ -529,9 +529,6 @@ namespace AdbcDrivers.Databricks
             }
 
             HttpClient httpClient = new HttpClient(HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator));
-            // Set user-agent for reader HTTP client (used for CloudFetch and result fetching)
-            string userAgent = $"{DriverName.Replace(" ", "")}/{ProductVersionDefault}";
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
             return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
         }
 
