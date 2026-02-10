@@ -899,7 +899,9 @@ flowchart TD
 
 **Purpose**: Export aggregated metrics to Databricks telemetry service.
 
-**Location**: `Apache.Arrow.Adbc.Drivers.Databricks.Telemetry.DatabricksTelemetryExporter`
+**Location**: `AdbcDrivers.Databricks.Telemetry.DatabricksTelemetryExporter`
+
+**Status**: Implemented (WI-3.4)
 
 #### Interface
 
@@ -909,28 +911,46 @@ namespace AdbcDrivers.Databricks.Telemetry
     public interface ITelemetryExporter
     {
         /// <summary>
-        /// Export metrics to Databricks service. Never throws.
+        /// Export telemetry frontend logs to the backend service.
+        /// Never throws exceptions (all swallowed and logged at TRACE level).
         /// </summary>
         Task ExportAsync(
-            IReadOnlyList<TelemetryMetric> metrics,
+            IReadOnlyList<TelemetryFrontendLog> logs,
             CancellationToken ct = default);
     }
 
     internal sealed class DatabricksTelemetryExporter : ITelemetryExporter
     {
+        // Authenticated telemetry endpoint
+        internal const string AuthenticatedEndpoint = "/telemetry-ext";
+
+        // Unauthenticated telemetry endpoint
+        internal const string UnauthenticatedEndpoint = "/telemetry-unauth";
+
         public DatabricksTelemetryExporter(
             HttpClient httpClient,
-            DatabricksConnection connection,
+            string host,
+            bool isAuthenticated,
             TelemetryConfiguration config);
 
         public Task ExportAsync(
-            IReadOnlyList<TelemetryMetric> metrics,
+            IReadOnlyList<TelemetryFrontendLog> logs,
             CancellationToken ct = default);
+
+        // Creates TelemetryRequest wrapper with uploadTime and protoLogs
+        internal TelemetryRequest CreateTelemetryRequest(IReadOnlyList<TelemetryFrontendLog> logs);
     }
 }
 ```
 
-**Same implementation as original design**: Circuit breaker, retry logic, endpoints.
+**Implementation Details**:
+- Creates `TelemetryRequest` with `uploadTime` (Unix ms) and `protoLogs` (JSON-serialized `TelemetryFrontendLog` array)
+- Uses `/telemetry-ext` for authenticated requests
+- Uses `/telemetry-unauth` for unauthenticated requests
+- Implements retry logic for transient failures (configurable via `MaxRetries` and `RetryDelayMs`)
+- Uses `ExceptionClassifier` to identify terminal vs retryable errors
+- Never throws exceptions (all caught and logged at TRACE level)
+- Cancellation is propagated (not swallowed)
 
 ---
 
@@ -2205,7 +2225,7 @@ The Activity-based design was selected because it:
 ### Phase 5: Core Implementation
 - [ ] Create `DatabricksActivityListener` class
 - [ ] Create `MetricsAggregator` class (with exception buffering)
-- [ ] Create `DatabricksTelemetryExporter` class
+- [x] Create `DatabricksTelemetryExporter` class (WI-3.4)
 - [ ] Add necessary tags to existing activities (using defined constants)
 - [ ] Update connection to use per-host management
 

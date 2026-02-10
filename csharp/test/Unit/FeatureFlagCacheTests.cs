@@ -16,6 +16,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -410,6 +412,161 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
         #endregion
 
+        #region Background Refresh Error Handling Tests
+
+        [Fact]
+        public async Task FeatureFlagContext_BackgroundRefreshError_SetsActivityStatusToError()
+        {
+            // Arrange
+            var backgroundActivities = new List<(string Name, ActivityStatusCode Status, List<ActivityEvent> Events)>();
+
+            var listener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name == "AdbcDrivers.Databricks.FeatureFlags",
+                Sample = (ref ActivityCreationOptions<ActivityContext> options) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped = activity =>
+                {
+                    if (activity.OperationName.StartsWith("FetchFeatureFlags."))
+                    {
+                        backgroundActivities.Add((
+                            activity.OperationName,
+                            activity.Status,
+                            activity.Events.ToList()));
+                    }
+                }
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            try
+            {
+                var response = new FeatureFlagsResponse
+                {
+                    Flags = new List<FeatureFlagEntry>
+                    {
+                        new FeatureFlagEntry { Name = "flag1", Value = "value1" }
+                    },
+                    TtlSeconds = 1 // 1 second TTL for quick background refresh
+                };
+
+                // Initial call succeeds, subsequent calls fail
+                var httpClient = CreateHttpClientThatFailsAfterFirstCall(response);
+
+                // Act
+                var context = await FeatureFlagContext.CreateAsync(
+                    "test-bg-error.databricks.com",
+                    httpClient,
+                    DriverVersion);
+
+                // Wait for background refresh to trigger and fail (TTL + processing time)
+                await Task.Delay(2000);
+
+                // Assert - Initial fetch should succeed (status OK or Unset)
+                var initialFetch = backgroundActivities.FirstOrDefault(a => a.Name == "FetchFeatureFlags.Initial");
+                Assert.NotEqual(default, initialFetch);
+
+                // Background refresh should have error status due to failed HTTP call
+                var backgroundFetches = backgroundActivities.Where(a => a.Name == "FetchFeatureFlags.Background").ToList();
+                Assert.NotEmpty(backgroundFetches);
+
+                // At least one background fetch should have error status
+                var errorFetch = backgroundFetches.FirstOrDefault(a => a.Status == ActivityStatusCode.Error);
+                Assert.NotEqual(default, errorFetch);
+
+                // Verify error event was added
+                var hasErrorEvent = errorFetch.Events.Any(e => e.Name == "feature_flags.fetch.failed");
+                Assert.True(hasErrorEvent, "Expected 'feature_flags.fetch.failed' event on the error activity");
+
+                // Cleanup
+                context.Dispose();
+            }
+            finally
+            {
+                listener.Dispose();
+            }
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_BackgroundRefreshError_ContinuesRefreshLoop()
+        {
+            // Arrange - Create HTTP client that fails then succeeds
+            var callCount = 0;
+            var mockHandler = new Mock<HttpMessageHandler>();
+            mockHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .Returns((HttpRequestMessage request, CancellationToken token) =>
+                {
+                    callCount++;
+                    if (callCount == 1)
+                    {
+                        // First call (initial fetch) succeeds
+                        var response = new FeatureFlagsResponse
+                        {
+                            Flags = new List<FeatureFlagEntry>
+                            {
+                                new FeatureFlagEntry { Name = "flag1", Value = "initial" }
+                            },
+                            TtlSeconds = 1
+                        };
+                        return Task.FromResult(new HttpResponseMessage
+                        {
+                            StatusCode = HttpStatusCode.OK,
+                            Content = new StringContent(JsonSerializer.Serialize(response))
+                        });
+                    }
+                    else if (callCount == 2)
+                    {
+                        // Second call (first background refresh) fails
+                        throw new HttpRequestException("Simulated network error");
+                    }
+                    else
+                    {
+                        // Third call (second background refresh) succeeds with new value
+                        var response = new FeatureFlagsResponse
+                        {
+                            Flags = new List<FeatureFlagEntry>
+                            {
+                                new FeatureFlagEntry { Name = "flag1", Value = "updated" }
+                            },
+                            TtlSeconds = 1
+                        };
+                        return Task.FromResult(new HttpResponseMessage
+                        {
+                            StatusCode = HttpStatusCode.OK,
+                            Content = new StringContent(JsonSerializer.Serialize(response))
+                        });
+                    }
+                });
+
+            var httpClient = new HttpClient(mockHandler.Object)
+            {
+                BaseAddress = new Uri("https://test.databricks.com")
+            };
+
+            // Act
+            var context = await FeatureFlagContext.CreateAsync(
+                "test-recovery.databricks.com",
+                httpClient,
+                DriverVersion);
+
+            // Initial value should be "initial"
+            Assert.Equal("initial", context.GetFlagValue("flag1"));
+
+            // Wait for background refresh to fail and then recover
+            await Task.Delay(2500);
+
+            // Assert - Value should be updated after recovery
+            Assert.Equal("updated", context.GetFlagValue("flag1"));
+            Assert.True(callCount >= 3, $"Expected at least 3 calls, got {callCount}");
+
+            // Cleanup
+            context.Dispose();
+        }
+
+        #endregion
+
         #region Helper Methods
 
         /// <summary>
@@ -490,6 +647,75 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                         StatusCode = HttpStatusCode.OK,
                         Content = new StringContent(json)
                     };
+                });
+
+            return new HttpClient(mockHandler.Object)
+            {
+                BaseAddress = new Uri("https://test.databricks.com")
+            };
+        }
+
+        private static HttpClient CreateFailingHttpClientAfterFirstCall()
+        {
+            var callCount = 0;
+            var mockHandler = new Mock<HttpMessageHandler>();
+            mockHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .Returns((HttpRequestMessage request, CancellationToken token) =>
+                {
+                    callCount++;
+                    if (callCount == 1)
+                    {
+                        // First call succeeds
+                        var response = new FeatureFlagsResponse
+                        {
+                            Flags = new List<FeatureFlagEntry>
+                            {
+                                new FeatureFlagEntry { Name = "flag1", Value = "value1" }
+                            },
+                            TtlSeconds = 1
+                        };
+                        return Task.FromResult(new HttpResponseMessage
+                        {
+                            StatusCode = HttpStatusCode.OK,
+                            Content = new StringContent(JsonSerializer.Serialize(response))
+                        });
+                    }
+                    // Subsequent calls fail
+                    throw new HttpRequestException("Simulated network error");
+                });
+
+            return new HttpClient(mockHandler.Object)
+            {
+                BaseAddress = new Uri("https://test.databricks.com")
+            };
+        }
+
+        private static HttpClient CreateHttpClientThatFailsAfterFirstCall(FeatureFlagsResponse initialResponse)
+        {
+            var callCount = 0;
+            var json = JsonSerializer.Serialize(initialResponse);
+            var mockHandler = new Mock<HttpMessageHandler>();
+            mockHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .Returns((HttpRequestMessage request, CancellationToken token) =>
+                {
+                    callCount++;
+                    if (callCount == 1)
+                    {
+                        return Task.FromResult(new HttpResponseMessage
+                        {
+                            StatusCode = HttpStatusCode.OK,
+                            Content = new StringContent(json)
+                        });
+                    }
+                    throw new HttpRequestException("Simulated background refresh error");
                 });
 
             return new HttpClient(mockHandler.Object)
