@@ -48,16 +48,16 @@ fn main() {
     let mut db = driver.new_database().expect("Failed to create database");
 
     // Set options using the correct option names
-    db.set_option(OptionDatabase::Uri, OptionValue::String(host.into()))
+    db.set_option(OptionDatabase::Uri, OptionValue::String(host))
         .expect("Failed to set uri");
     db.set_option(
         OptionDatabase::Other("databricks.http_path".into()),
-        OptionValue::String(http_path.into()),
+        OptionValue::String(http_path),
     )
     .expect("Failed to set http_path");
     db.set_option(
         OptionDatabase::Other("databricks.access_token".into()),
-        OptionValue::String(token.into()),
+        OptionValue::String(token),
     )
     .expect("Failed to set access_token");
 
@@ -106,7 +106,7 @@ fn main() {
     let mut batch_sizes: Vec<usize> = Vec::new();
 
     // Stream through all batches
-    while let Some(batch_result) = reader.next() {
+    for batch_result in &mut reader {
         let batch_result: Result<RecordBatch, _> = batch_result;
         match batch_result {
             Ok(batch) => {
@@ -115,7 +115,7 @@ fn main() {
                 total_batches += 1;
                 batch_sizes.push(rows);
 
-                if total_batches <= 10 || total_batches % 100 == 0 {
+                if total_batches <= 10 || total_batches.is_multiple_of(100) {
                     println!(
                         "Batch {}: {} rows (cumulative: {} rows)",
                         total_batches, rows, total_rows

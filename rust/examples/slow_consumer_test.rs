@@ -55,16 +55,16 @@ fn main() {
     let mut db = driver.new_database().expect("Failed to create database");
 
     // Set connection options
-    db.set_option(OptionDatabase::Uri, OptionValue::String(host.into()))
+    db.set_option(OptionDatabase::Uri, OptionValue::String(host))
         .expect("Failed to set uri");
     db.set_option(
         OptionDatabase::Other("databricks.http_path".into()),
-        OptionValue::String(http_path.into()),
+        OptionValue::String(http_path),
     )
     .expect("Failed to set http_path");
     db.set_option(
         OptionDatabase::Other("databricks.access_token".into()),
-        OptionValue::String(token.into()),
+        OptionValue::String(token),
     )
     .expect("Failed to set access_token");
 
@@ -135,7 +135,7 @@ fn main() {
     const ROWS_PER_CHUNK: u64 = 160_000; // approximate
     const SLEEP_BETWEEN_CHUNKS: Duration = Duration::from_secs(3);
 
-    while let Some(batch_result) = reader.next() {
+    for batch_result in &mut reader {
         let batch_result: Result<RecordBatch, _> = batch_result;
         match batch_result {
             Ok(batch) => {
@@ -145,7 +145,7 @@ fn main() {
                 last_chunk_rows += rows as u64;
 
                 // Print every 10th batch
-                if total_batches % 10 == 0 {
+                if total_batches.is_multiple_of(10) {
                     println!(
                         "Batch {}: {} rows (cumulative: {} rows)",
                         total_batches, rows, total_rows

@@ -69,3 +69,9 @@ repos:
     types: [rust]
     entry: bash -c 'cd rust && cargo +stable fmt --all'
     pass_filenames: false
+  - id: cargo clippy
+    name: cargo clippy
+    language: system
+    types: [rust]
+    entry: bash -c 'cd rust && cargo clippy --all-targets -- -D warnings'
+    pass_filenames: false

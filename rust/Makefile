@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: all build test fmt lint clean check
+.PHONY: all build test fmt lint clean check coverage coverage-check
 
 all: build
 
@@ -35,3 +35,9 @@ check: fmt-check lint test
 
 clean:
 	cargo clean
+
+coverage:
+	cargo llvm-cov --all-features --ignore-filename-regex "tests/" --html --open
+
+coverage-check:
+	cargo llvm-cov --all-features --ignore-filename-regex "tests/" --fail-under-lines 80

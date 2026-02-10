@@ -17,7 +17,7 @@
 
 # This is a common workflow for testing a PR when permissions are needed.
 
-name: Go Test PR
+name: Rust Test PR
 
 on:
   workflow_dispatch:
@@ -64,7 +64,7 @@ jobs:
           echo "**Remote:** ${{ steps.get_repo.outputs.repository }}@${{ inputs.ref }}" >> $GITHUB_STEP_SUMMARY
 
   test:
-    uses: adbc-drivers/databricks/.github/workflows/go_test.yaml@main
+    uses: adbc-drivers/databricks/.github/workflows/rust_test.yaml@main
     needs:
       - setup
     with:
