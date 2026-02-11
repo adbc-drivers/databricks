@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn test_parse_uncompressed_arrow_ipc() {
         let batch = create_test_batch(100);
-        let ipc_data = create_test_arrow_ipc(&[batch.clone()]);
+        let ipc_data = create_test_arrow_ipc(std::slice::from_ref(&batch));
 
         let result = parse_arrow_ipc(&ipc_data, CompressionCodec::None).unwrap();
 
@@ -156,7 +156,7 @@ mod tests {
         use std::io::Write;
 
         let batch = create_test_batch(100);
-        let ipc_data = create_test_arrow_ipc(&[batch.clone()]);
+        let ipc_data = create_test_arrow_ipc(std::slice::from_ref(&batch));
 
         // Compress with LZ4 frame format
         let mut compressed = Vec::new();

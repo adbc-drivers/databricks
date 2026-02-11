@@ -30,13 +30,13 @@ on:
       - main
     paths:
       - "rust/**"
-      - .github/workflows/go_test.yaml
+      - .github/workflows/rust_test.yaml
   push:
     branches:
       - main
     paths:
       - "rust/**"
-      - .github/workflows/go_test.yaml
+      - .github/workflows/rust_test.yaml
 
   workflow_call:
     inputs:
@@ -78,7 +78,6 @@ jobs:
           - { platform: linux, arch: amd64, runner: ubuntu-latest }
           - { platform: macos, arch: arm64, runner: macos-latest }
           - { platform: windows, arch: amd64, runner: windows-latest }
-    environment: azure-prod
     permissions:
       contents: read
     steps:
@@ -133,6 +132,10 @@ jobs:
 
           cargo build --locked
 
+      - name: Lint
+        working-directory: rust
+        run: cargo clippy --all-targets --locked -- -D warnings
+
       - name: Start Test Dependencies
         # Can't use Docker on macOS AArch64 runners, and Windows containers
         # work but often the container doesn't support Windows
@@ -149,11 +152,6 @@ jobs:
           fi
 
       - name: Test
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_HTTPPATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
-          DATABRICKS_OAUTH_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
-          DATABRICKS_OAUTH_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
         working-directory: rust
         run: |
           set -a
@@ -173,7 +171,7 @@ jobs:
             ./ci/scripts/pre-test.sh ${{ matrix.platform }} ${{ matrix.arch }}
           fi
 
-          cargo test
+          cargo test --locked
 
           if [[ -f ci/scripts/post-test.sh ]]; then
             ./ci/scripts/post-test.sh
@@ -192,7 +190,6 @@ jobs:
           - { platform: linux, arch: arm64, runner: ubuntu-24.04-arm }
           - { platform: macos, arch: arm64, runner: macos-latest }
           - { platform: windows, arch: amd64, runner: windows-latest }
-    environment: azure-prod
     permissions:
       contents: read
       packages: read
@@ -334,7 +331,6 @@ jobs:
           - { platform: linux, arch: amd64, runner: ubuntu-latest }
           - { platform: macos, arch: arm64, runner: macos-latest }
           - { platform: windows, arch: amd64, runner: windows-latest }
-    environment: azure-prod
     steps:
       # for now, install dbc from main
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
@@ -442,3 +438,43 @@ jobs:
 
           pixi run release --dry-run $(pwd) $tag
           echo gh release upload $tag $(find ~/packages -name '*.tar.gz') $(find ~/packages -name 'manifest.yaml') $(find ~/packages -name '*.md')
+
+  coverage:
+    name: "Coverage"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
+        with:
+          components: "llvm-tools-preview"
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        working-directory: rust
+        run: |
+          cargo llvm-cov --all-features \
+            --ignore-filename-regex "tests/" \
+            --lcov --output-path lcov.info
+
+      - name: Coverage report
+        uses: getsentry/codecov-action@bee8d919178e87c35ada22280d7da8b77dda2cbb  # main (2025-02-10)
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: rust/lcov.info
+          coverage-format: lcov
+          post-pr-comment: true
+          target-project: auto
+          threshold-project: 1
+          target-patch: 80
+          fail-on-error: false

@@ -72,16 +72,16 @@ fn main() {
     let mut db = driver.new_database().expect("Failed to create database");
 
     // Set options
-    db.set_option(OptionDatabase::Uri, OptionValue::String(host.into()))
+    db.set_option(OptionDatabase::Uri, OptionValue::String(host))
         .expect("Failed to set uri");
     db.set_option(
         OptionDatabase::Other("databricks.http_path".into()),
-        OptionValue::String(http_path.into()),
+        OptionValue::String(http_path),
     )
     .expect("Failed to set http_path");
     db.set_option(
         OptionDatabase::Other("databricks.access_token".into()),
-        OptionValue::String(token.into()),
+        OptionValue::String(token),
     )
     .expect("Failed to set access_token");
 
@@ -173,7 +173,7 @@ fn run_query(conn: &mut impl ConnectionTrait, sql: &str, test_name: &str) {
     let mut total_rows = 0u64;
     let mut total_batches = 0u64;
 
-    while let Some(batch_result) = reader.next() {
+    for batch_result in &mut reader {
         let batch_result: Result<RecordBatch, _> = batch_result;
         match batch_result {
             Ok(batch) => {
