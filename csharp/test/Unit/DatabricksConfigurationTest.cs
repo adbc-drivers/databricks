@@ -25,7 +25,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests

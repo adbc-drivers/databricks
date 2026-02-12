@@ -19,7 +19,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution

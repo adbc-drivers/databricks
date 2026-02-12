@@ -17,7 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 using AdbcDrivers.Databricks;
 using Xunit;
 

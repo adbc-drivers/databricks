@@ -29,7 +29,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Drivers.Apache;
+using AdbcDrivers.HiveServer2;
 using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
 using Apache.Arrow.Types;
 using Xunit;
