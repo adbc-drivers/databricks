@@ -31,7 +31,7 @@ using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tests;
 using Apache.Arrow.Adbc.Tests.Drivers.Apache;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
+using AdbcDrivers.Tests.HiveServer2.Common;
 using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Databricks.Tests

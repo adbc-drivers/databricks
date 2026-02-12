@@ -24,7 +24,7 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
+using AdbcDrivers.Tests.HiveServer2.Common;
 using Xunit;
 using Xunit.Abstractions;
 

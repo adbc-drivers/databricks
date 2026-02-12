@@ -26,7 +26,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2.Spark;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
+using AdbcDrivers.Tests.HiveServer2.Common;
 using Xunit;
 using Xunit.Abstractions;
 using Metadata = Apache.Arrow.Adbc.Tests.Metadata;

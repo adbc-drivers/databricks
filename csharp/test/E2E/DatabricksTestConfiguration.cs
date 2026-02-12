@@ -22,7 +22,7 @@
 */
 
 using System.Text.Json.Serialization;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache.Spark;
+using AdbcDrivers.Tests.HiveServer2.Spark;
 
 namespace AdbcDrivers.Databricks.Tests
 {
