@@ -21,7 +21,7 @@
 * limitations under the License.
 */
 
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 
 namespace AdbcDrivers.Databricks
 {

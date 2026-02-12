@@ -19,6 +19,6 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\arrow-adbc\csharp\arrow-adbc\csharp\src\Drivers\Apache\Apache.Arrow.Adbc.Drivers.Apache.csproj" />
+    <ProjectReference Include="..\arrow-adbc\csharp\src\AdbcDrivers.HiveServer2.csproj" />
   </ItemGroup>
 </Project>

@@ -22,7 +22,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 
