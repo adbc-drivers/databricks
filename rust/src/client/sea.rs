@@ -22,6 +22,7 @@ use crate::client::{
     ExecuteResponse, ExecuteResult, ExecuteResultData, SessionInfo,
 };
 use crate::error::{DatabricksErrorHelper, Result};
+use crate::metadata::sql::SqlCommandBuilder;
 use crate::reader::ResultReaderFactory;
 use crate::types::cloudfetch::CloudFetchLink;
 use crate::types::sea::{
@@ -511,6 +512,77 @@ impl DatabricksClient for SeaClient {
 
         Ok(())
     }
+
+    // --- Metadata ---
+
+    async fn list_catalogs(&self, session_id: &str) -> Result<ExecuteResult> {
+        let sql = SqlCommandBuilder::new().build_show_catalogs();
+        debug!("list_catalogs: {}", sql);
+        self.execute_statement(session_id, &sql, &ExecuteParams::default())
+            .await
+    }
+
+    async fn list_schemas(
+        &self,
+        session_id: &str,
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+    ) -> Result<ExecuteResult> {
+        let sql = SqlCommandBuilder::new()
+            .with_catalog(catalog)
+            .with_schema_pattern(schema_pattern)
+            .build_show_schemas();
+        debug!("list_schemas: {}", sql);
+        self.execute_statement(session_id, &sql, &ExecuteParams::default())
+            .await
+    }
+
+    async fn list_tables(
+        &self,
+        session_id: &str,
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+        table_pattern: Option<&str>,
+        _table_types: Option<&[&str]>,
+    ) -> Result<ExecuteResult> {
+        // Note: table_types filtering is done client-side after fetching
+        let sql = SqlCommandBuilder::new()
+            .with_catalog(catalog)
+            .with_schema_pattern(schema_pattern)
+            .with_table_pattern(table_pattern)
+            .build_show_tables();
+        debug!("list_tables: {}", sql);
+        self.execute_statement(session_id, &sql, &ExecuteParams::default())
+            .await
+    }
+
+    async fn list_columns(
+        &self,
+        session_id: &str,
+        catalog: &str,
+        schema_pattern: Option<&str>,
+        table_pattern: Option<&str>,
+        column_pattern: Option<&str>,
+    ) -> Result<ExecuteResult> {
+        let sql = SqlCommandBuilder::new()
+            .with_catalog(Some(catalog))
+            .with_schema_pattern(schema_pattern)
+            .with_table_pattern(table_pattern)
+            .with_column_pattern(column_pattern)
+            .build_show_columns()?;
+        debug!("list_columns: {}", sql);
+        self.execute_statement(session_id, &sql, &ExecuteParams::default())
+            .await
+    }
+
+    fn list_table_types(&self) -> Vec<String> {
+        vec![
+            "SYSTEM TABLE".to_string(),
+            "TABLE".to_string(),
+            "VIEW".to_string(),
+            "METRIC_VIEW".to_string(),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -588,5 +660,12 @@ mod tests {
         let converted = SeaClient::convert_result_data(&result).unwrap();
         assert!(converted.inline_arrow_data.is_some());
         assert_eq!(converted.inline_arrow_data.unwrap(), test_data);
+    }
+
+    #[test]
+    fn test_list_table_types() {
+        let client = create_test_client();
+        let types = client.list_table_types();
+        assert_eq!(types, vec!["SYSTEM TABLE", "TABLE", "VIEW", "METRIC_VIEW"]);
     }
 }

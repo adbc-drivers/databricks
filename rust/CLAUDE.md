@@ -37,6 +37,15 @@ cargo fmt             # Format code
 cargo clippy -- -D warnings  # Lint with warnings as errors
 ```
 
+## Pre-commit Checklist
+
+Before committing or pushing, always run these checks:
+```bash
+cargo fmt             # Format code (CI will reject unformatted code)
+cargo clippy -- -D warnings  # Lint
+cargo test            # Run all tests
+```
+
 ## Pull Requests
 
 When creating PRs, always target the upstream repository `adbc-drivers/databricks`, not the personal fork.

@@ -16,11 +16,20 @@
 
 use crate::client::DatabricksClient;
 use crate::error::DatabricksErrorHelper;
+use crate::metadata::builder::{
+    build_get_objects_all, build_get_objects_catalogs, build_get_objects_schemas,
+    build_get_objects_tables, collect_reader, filter_by_pattern, group_schemas_by_catalog,
+    group_tables_and_columns, group_tables_by_catalog_schema,
+};
+use crate::metadata::parse::{
+    parse_catalogs, parse_columns, parse_columns_as_fields, parse_schemas, parse_tables,
+};
 use crate::statement::Statement;
 use adbc_core::error::Result;
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
+use adbc_core::schemas::GET_TABLE_TYPES_SCHEMA;
 use adbc_core::Optionable;
-use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray};
 use arrow_schema::{ArrowError, Schema};
 use driverbase::error::ErrorHelper;
 use std::collections::{HashMap, HashSet};
@@ -162,13 +171,16 @@ impl adbc_core::Connection for Connection {
         let codes = codes.unwrap_or_default();
 
         if return_all || codes.contains(&InfoCode::DriverName) {
-            builder.add_string(InfoCode::DriverName as u32, "Databricks ADBC Driver");
+            builder.add_string(u32::from(&InfoCode::DriverName), "Databricks ADBC Driver");
         }
         if return_all || codes.contains(&InfoCode::DriverVersion) {
-            builder.add_string(InfoCode::DriverVersion as u32, env!("CARGO_PKG_VERSION"));
+            builder.add_string(
+                u32::from(&InfoCode::DriverVersion),
+                env!("CARGO_PKG_VERSION"),
+            );
         }
         if return_all || codes.contains(&InfoCode::VendorName) {
-            builder.add_string(InfoCode::VendorName as u32, "Databricks");
+            builder.add_string(u32::from(&InfoCode::VendorName), "Databricks");
         }
 
         Ok(builder.build())
@@ -176,37 +188,248 @@ impl adbc_core::Connection for Connection {
 
     fn get_objects(
         &self,
-        _depth: ObjectDepth,
-        _catalog: Option<&str>,
-        _db_schema: Option<&str>,
-        _table_name: Option<&str>,
-        _table_type: Option<Vec<&str>>,
-        _column_name: Option<&str>,
+        depth: ObjectDepth,
+        catalog: Option<&str>,
+        db_schema: Option<&str>,
+        table_name: Option<&str>,
+        table_type: Option<Vec<&str>>,
+        column_name: Option<&str>,
     ) -> Result<impl RecordBatchReader + Send> {
-        Err::<EmptyReader, _>(
-            DatabricksErrorHelper::not_implemented()
-                .message("get_objects")
-                .to_adbc(),
-        )
+        debug!(
+            "get_objects: depth={:?}, catalog={:?}, db_schema={:?}, table_name={:?}, table_type={:?}, column_name={:?}",
+            depth, catalog, db_schema, table_name, table_type, column_name
+        );
+        match depth {
+            ObjectDepth::Catalogs => {
+                let result = self
+                    .runtime
+                    .block_on(self.client.list_catalogs(&self.session_id))
+                    .map_err(|e| e.to_adbc())?;
+                let catalogs = parse_catalogs(result).map_err(|e| e.to_adbc())?;
+
+                // Client-side catalog pattern filtering (SHOW CATALOGS has no LIKE clause)
+                let catalogs = filter_by_pattern(catalogs, catalog, |c| &c.catalog_name);
+                debug!("get_objects(Catalogs): found {} catalogs", catalogs.len());
+
+                let reader = build_get_objects_catalogs(catalogs).map_err(|e| e.to_adbc())?;
+                collect_reader(reader).map_err(|e| e.to_adbc())
+            }
+
+            ObjectDepth::Schemas => {
+                let result = self
+                    .runtime
+                    .block_on(
+                        self.client
+                            .list_schemas(&self.session_id, catalog, db_schema),
+                    )
+                    .map_err(|e| e.to_adbc())?;
+                let schemas = parse_schemas(result, catalog).map_err(|e| e.to_adbc())?;
+                debug!("get_objects(Schemas): found {} schemas", schemas.len());
+
+                let grouped = group_schemas_by_catalog(schemas);
+                let reader = build_get_objects_schemas(grouped).map_err(|e| e.to_adbc())?;
+                collect_reader(reader).map_err(|e| e.to_adbc())
+            }
+
+            ObjectDepth::Tables => {
+                let result = self
+                    .runtime
+                    .block_on(self.client.list_tables(
+                        &self.session_id,
+                        catalog,
+                        db_schema,
+                        table_name,
+                        table_type.as_deref(),
+                    ))
+                    .map_err(|e| e.to_adbc())?;
+                let mut tables = parse_tables(result).map_err(|e| e.to_adbc())?;
+
+                // Client-side table type filtering
+                if let Some(ref types) = table_type {
+                    tables.retain(|t| types.iter().any(|tt| t.table_type.eq_ignore_ascii_case(tt)));
+                }
+                debug!(
+                    "get_objects(Tables): found {} tables after filtering",
+                    tables.len()
+                );
+
+                let grouped = group_tables_by_catalog_schema(tables);
+                let reader = build_get_objects_tables(grouped).map_err(|e| e.to_adbc())?;
+                collect_reader(reader).map_err(|e| e.to_adbc())
+            }
+
+            ObjectDepth::Columns | ObjectDepth::All => {
+                // Step 1: Get tables (for table_type info)
+                let tables_result = self
+                    .runtime
+                    .block_on(self.client.list_tables(
+                        &self.session_id,
+                        catalog,
+                        db_schema,
+                        table_name,
+                        table_type.as_deref(),
+                    ))
+                    .map_err(|e| e.to_adbc())?;
+                let mut tables = parse_tables(tables_result).map_err(|e| e.to_adbc())?;
+
+                // Client-side table type filtering
+                if let Some(ref types) = table_type {
+                    tables.retain(|t| types.iter().any(|tt| t.table_type.eq_ignore_ascii_case(tt)));
+                }
+                debug!(
+                    "get_objects(All): found {} tables after filtering",
+                    tables.len()
+                );
+
+                // Step 2: Get distinct catalogs from tables result
+                let distinct_catalogs: Vec<String> = {
+                    let mut cats: Vec<String> = tables
+                        .iter()
+                        .map(|t| t.catalog_name.clone())
+                        .collect::<HashSet<_>>()
+                        .into_iter()
+                        .collect();
+                    cats.sort();
+                    cats
+                };
+
+                // Step 3: Fetch columns per catalog (parallel)
+                debug!(
+                    "get_objects(All): fetching columns for {} distinct catalogs: {:?}",
+                    distinct_catalogs.len(),
+                    distinct_catalogs
+                );
+                let all_columns = self
+                    .runtime
+                    .block_on(async {
+                        let mut handles = Vec::new();
+                        for cat in &distinct_catalogs {
+                            let client = self.client.clone();
+                            let session_id = self.session_id.clone();
+                            let cat = cat.clone();
+                            let schema_pattern = db_schema.map(|s| s.to_string());
+                            let table_pattern = table_name.map(|s| s.to_string());
+                            let col_pattern = column_name.map(|s| s.to_string());
+
+                            handles.push(tokio::spawn(async move {
+                                client
+                                    .list_columns(
+                                        &session_id,
+                                        &cat,
+                                        schema_pattern.as_deref(),
+                                        table_pattern.as_deref(),
+                                        col_pattern.as_deref(),
+                                    )
+                                    .await
+                            }));
+                        }
+
+                        let mut all_columns = Vec::new();
+                        for handle in handles {
+                            let result = handle.await.map_err(|e| {
+                                crate::error::DatabricksErrorHelper::io()
+                                    .message(format!("Column fetch task failed: {}", e))
+                            })?;
+                            let cols = parse_columns(result?)?;
+                            all_columns.extend(cols);
+                        }
+                        Ok::<_, crate::error::Error>(all_columns)
+                    })
+                    .map_err(|e| e.to_adbc())?;
+
+                // Step 4: Group and build
+                debug!(
+                    "get_objects(All): fetched {} total columns",
+                    all_columns.len()
+                );
+                let grouped = group_tables_and_columns(tables, all_columns);
+                let reader = build_get_objects_all(grouped).map_err(|e| e.to_adbc())?;
+                collect_reader(reader).map_err(|e| e.to_adbc())
+            }
+        }
     }
 
     fn get_table_schema(
         &self,
-        _catalog: Option<&str>,
-        _db_schema: Option<&str>,
-        _table_name: &str,
+        catalog: Option<&str>,
+        db_schema: Option<&str>,
+        table_name: &str,
     ) -> Result<Schema> {
-        Err(DatabricksErrorHelper::not_implemented()
-            .message("get_table_schema")
-            .to_adbc())
+        debug!(
+            "get_table_schema: catalog={:?}, db_schema={:?}, table_name={:?}",
+            catalog, db_schema, table_name
+        );
+        // SHOW COLUMNS IN CATALOG `{cat}` requires a catalog.
+        // If catalog is not provided, discover it via list_tables.
+        let resolved_catalog = match catalog {
+            Some(c) if !c.is_empty() => c.to_string(),
+            _ => {
+                let result = self
+                    .runtime
+                    .block_on(self.client.list_tables(
+                        &self.session_id,
+                        None,
+                        db_schema,
+                        Some(table_name),
+                        None,
+                    ))
+                    .map_err(|e| e.to_adbc())?;
+                let tables = parse_tables(result).map_err(|e| e.to_adbc())?;
+                tables
+                    .first()
+                    .map(|t| t.catalog_name.clone())
+                    .ok_or_else(|| {
+                        DatabricksErrorHelper::not_found()
+                            .message(format!("Table not found: {}", table_name))
+                            .to_adbc()
+                    })?
+            }
+        };
+
+        debug!("get_table_schema: resolved catalog={:?}", resolved_catalog);
+
+        let result = self
+            .runtime
+            .block_on(self.client.list_columns(
+                &self.session_id,
+                &resolved_catalog,
+                db_schema,
+                Some(table_name),
+                None, // all columns
+            ))
+            .map_err(|e| e.to_adbc())?;
+        let fields = parse_columns_as_fields(result).map_err(|e| e.to_adbc())?;
+
+        if fields.is_empty() {
+            return Err(DatabricksErrorHelper::not_found()
+                .message(format!("Table not found: {}", table_name))
+                .to_adbc());
+        }
+
+        debug!(
+            "get_table_schema: found {} fields for {}.{}",
+            fields.len(),
+            resolved_catalog,
+            table_name
+        );
+        Ok(Schema::new(fields))
     }
 
     fn get_table_types(&self) -> Result<impl RecordBatchReader + Send> {
-        Err::<EmptyReader, _>(
-            DatabricksErrorHelper::not_implemented()
-                .message("get_table_types")
-                .to_adbc(),
-        )
+        let table_types = self.client.list_table_types();
+
+        let array = StringArray::from(table_types);
+        let batch = RecordBatch::try_new(GET_TABLE_TYPES_SCHEMA.clone(), vec![Arc::new(array)])
+            .map_err(|e| {
+                DatabricksErrorHelper::io()
+                    .message(format!("Failed to build table types result: {}", e))
+                    .to_adbc()
+            })?;
+
+        Ok(RecordBatchIterator::new(
+            vec![Ok(batch)].into_iter(),
+            GET_TABLE_TYPES_SCHEMA.clone(),
+        ))
     }
 
     fn read_partition(
