@@ -18,7 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using AdbcDrivers.Databricks.Auth;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tracing;
 
 namespace AdbcDrivers.Databricks.Http

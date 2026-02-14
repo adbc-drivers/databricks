@@ -1,3 +1,3 @@
-[submodule "csharp/arrow-adbc"]
-	path = csharp/arrow-adbc
-	url = git@github.com:apache/arrow-adbc.git
+[submodule "csharp/hiveserver2"]
+	path = csharp/hiveserver2
+	url = git@github.com:adbc-drivers/hiveserver2.git

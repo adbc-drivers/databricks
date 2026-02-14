@@ -17,8 +17,8 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using Apache.Arrow.Adbc.Drivers.Apache;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
+using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
 
 namespace AdbcDrivers.Databricks.Http
 {

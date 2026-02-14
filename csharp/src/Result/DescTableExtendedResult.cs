@@ -25,7 +25,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using static Apache.Arrow.Adbc.Drivers.Apache.Hive2.HiveServer2Connection;
+using static AdbcDrivers.HiveServer2.Hive2.HiveServer2Connection;
 
 namespace AdbcDrivers.Databricks.Result
 {

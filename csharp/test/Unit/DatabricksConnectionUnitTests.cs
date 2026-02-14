@@ -17,7 +17,7 @@
 using System.Collections.Generic;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using AdbcDrivers.Databricks;

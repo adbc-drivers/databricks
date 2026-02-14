@@ -26,12 +26,12 @@ using System.Collections.Generic;
 using System.Data.SqlTypes;
 using System.Text;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Drivers.Apache;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tests;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
+using AdbcDrivers.Tests.HiveServer2;
+using AdbcDrivers.Tests.HiveServer2.Common;
 using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Databricks.Tests

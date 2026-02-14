@@ -20,8 +20,8 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Apache;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Spark;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace AdbcDrivers.Databricks

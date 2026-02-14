@@ -22,7 +22,7 @@
 */
 
 using System.Collections.Generic;
-using Apache.Arrow.Adbc.Tests.Drivers.Apache.Common;
+using AdbcDrivers.Tests.HiveServer2.Common;
 using Xunit.Abstractions;
 
 namespace AdbcDrivers.Databricks.Tests

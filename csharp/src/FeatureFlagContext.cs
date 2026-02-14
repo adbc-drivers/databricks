@@ -22,7 +22,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Drivers.Apache;
+using AdbcDrivers.HiveServer2;
 using Apache.Arrow.Adbc.Tracing;
 
 namespace AdbcDrivers.Databricks
