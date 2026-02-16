@@ -19,9 +19,34 @@
 This repository contains [ADBC drivers](https://arrow.apache.org/adbc/) for
 Databricks, implemented in different languages.
 
-## Installation
+## For Power BI
 
-At this time pre-packaged drivers are not yet available. See [Building](#building) for instructions on building from source.
+If you use [Power BI](https://www.microsoft.com/power-platform/products/power-bi),
+follow these instructions to connect to Databricks using the C#-based ADBC driver:
+
+- [Arrow Database Connectivity (ADBC) driver for Power BI](https://docs.databricks.com/partners/bi/power-bi-adbc)
+
+## For Other Applications
+
+Prebuilt versions of the Go-based ADBC driver are available from the
+[Columnar](https://columnar.tech) driver registry. These can be
+installed using [dbc](https://columnar.tech/dbc):
+
+```sh
+dbc install databricks
+```
+
+After installing the Go-based driver using dbc, see examples showing how
+to use it with various languages:
+
+- [C++](https://github.com/columnar-tech/adbc-quickstarts/tree/main/cpp/databricks)
+- [Go](https://github.com/columnar-tech/adbc-quickstarts/tree/main/go/databricks)
+- [Java](https://github.com/columnar-tech/adbc-quickstarts/tree/main/java/databricks)
+- [Python](https://github.com/columnar-tech/adbc-quickstarts/tree/main/python/databricks)
+- [R](https://github.com/columnar-tech/adbc-quickstarts/tree/main/r/databricks)
+- [Rust](https://github.com/columnar-tech/adbc-quickstarts/tree/main/rust/databricks)
+
+See [Building](#building) if you would rather build the drivers yourself.
 
 ## Building
 
