@@ -38,12 +38,17 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// - Terminal exceptions flush immediately, retryable exceptions buffer until complete
     /// - Uses TelemetryTagRegistry to filter tags
     /// - Creates TelemetryFrontendLog wrapper with workspace_id
-    /// - All exceptions swallowed (logged at TRACE level)
+    /// - All exceptions swallowed (traced via ActivitySource for testing)
     ///
     /// JDBC Reference: TelemetryCollector.java
     /// </remarks>
     internal sealed class MetricsAggregator : IDisposable
     {
+        /// <summary>
+        /// Internal ActivitySource for emitting trace events. Tests can subscribe to this.
+        /// </summary>
+        internal static readonly ActivitySource TraceSource = new ActivitySource("AdbcDrivers.Databricks.Telemetry.MetricsAggregator");
+
         private readonly ITelemetryExporter _exporter;
         private readonly TelemetryConfiguration _config;
         private readonly long _workspaceId;
@@ -71,17 +76,17 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <param name="config">The telemetry configuration.</param>
         /// <param name="workspaceId">The Databricks workspace ID for all events.</param>
         /// <param name="userAgent">The user agent string for client context.</param>
-        /// <exception cref="ArgumentNullException">Thrown when exporter or config is null.</exception>
+        /// <exception cref="ArgumentNullException">Thrown when exporter, config, or userAgent is null.</exception>
         public MetricsAggregator(
             ITelemetryExporter exporter,
             TelemetryConfiguration config,
             long workspaceId,
-            string? userAgent = null)
+            string userAgent)
         {
             _exporter = exporter ?? throw new ArgumentNullException(nameof(exporter));
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            _userAgent = userAgent ?? throw new ArgumentNullException(nameof(userAgent));
             _workspaceId = workspaceId;
-            _userAgent = userAgent ?? "AdbcDatabricksDriver";
             _statementContexts = new ConcurrentDictionary<string, StatementTelemetryContext>();
             _pendingEvents = new ConcurrentQueue<TelemetryFrontendLog>();
 
@@ -134,14 +139,19 @@ namespace AdbcDrivers.Databricks.Telemetry
                 // Check if we should flush based on batch size
                 if (_pendingEvents.Count >= _config.BatchSize)
                 {
-                    _ = FlushAsync();
+                    // Fire-and-forget flush - exceptions are handled inside FlushAsync
+                    // Use ContinueWith to ensure the task is observed to avoid unobserved task exceptions
+                    FlushAsync().ContinueWith(
+                        _ => { },
+                        TaskContinuationOptions.ExecuteSynchronously);
                 }
             }
             catch (Exception ex)
             {
                 // Swallow all exceptions per telemetry requirement
-                // Log at TRACE level to avoid customer anxiety
-                Debug.WriteLine($"[TRACE] MetricsAggregator: Error processing activity: {ex.Message}");
+                // Emit trace event for testing/diagnostics
+                Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.ProcessActivity.Error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
             }
         }
 
@@ -192,7 +202,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             catch (Exception ex)
             {
                 // Swallow all exceptions per telemetry requirement
-                Debug.WriteLine($"[TRACE] MetricsAggregator: Error completing statement: {ex.Message}");
+                Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.CompleteStatement.Error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
             }
         }
 
@@ -224,7 +235,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     var errorLog = WrapInFrontendLog(errorEvent);
                     _pendingEvents.Enqueue(errorLog);
 
-                    Debug.WriteLine($"[TRACE] MetricsAggregator: Terminal exception recorded, flushing immediately");
+                    Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.TerminalExceptionRecorded"));
                 }
                 else
                 {
@@ -234,13 +245,15 @@ namespace AdbcDrivers.Databricks.Telemetry
                         _ => new StatementTelemetryContext(statementId, sessionId));
                     context.BufferedExceptions.Add(exception);
 
-                    Debug.WriteLine($"[TRACE] MetricsAggregator: Retryable exception buffered for statement {statementId}");
+                    Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.RetryableExceptionBuffered",
+                        tags: new ActivityTagsCollection { { "statement.id", statementId } }));
                 }
             }
             catch (Exception ex)
             {
                 // Swallow all exceptions per telemetry requirement
-                Debug.WriteLine($"[TRACE] MetricsAggregator: Error recording exception: {ex.Message}");
+                Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.RecordException.Error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
             }
         }
 
@@ -275,7 +288,8 @@ namespace AdbcDrivers.Databricks.Telemetry
 
                 if (eventsToFlush.Count > 0)
                 {
-                    Debug.WriteLine($"[TRACE] MetricsAggregator: Flushing {eventsToFlush.Count} events");
+                    Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.Flushing",
+                        tags: new ActivityTagsCollection { { "event.count", eventsToFlush.Count } }));
                     await _exporter.ExportAsync(eventsToFlush, ct).ConfigureAwait(false);
                 }
             }
@@ -287,7 +301,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             catch (Exception ex)
             {
                 // Swallow all other exceptions per telemetry requirement
-                Debug.WriteLine($"[TRACE] MetricsAggregator: Error flushing events: {ex.Message}");
+                Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.FlushAsync.Error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
             }
         }
 
@@ -307,12 +322,14 @@ namespace AdbcDrivers.Databricks.Telemetry
             {
                 _flushTimer.Dispose();
 
-                // Final flush
-                FlushAsync().GetAwaiter().GetResult();
+                // Final flush - use Task.Run to avoid deadlock in SynchronizationContext-aware environments
+                Task.Run(() => FlushAsync()).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[TRACE] MetricsAggregator: Error during dispose: {ex.Message}");
+                // Swallow exceptions during dispose per telemetry requirement
+                Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.Dispose.Error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
             }
         }
 
@@ -330,11 +347,17 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             try
             {
-                _ = FlushAsync();
+                // Fire-and-forget flush - exceptions are handled inside FlushAsync
+                // Use ContinueWith to ensure the task is observed to avoid unobserved task exceptions
+                FlushAsync().ContinueWith(
+                    _ => { },
+                    TaskContinuationOptions.ExecuteSynchronously);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[TRACE] MetricsAggregator: Error in flush timer: {ex.Message}");
+                // Swallow exceptions in timer per telemetry requirement
+                Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.FlushTimer.Error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
             }
         }
 
@@ -380,7 +403,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             var frontendLog = WrapInFrontendLog(telemetryEvent);
             _pendingEvents.Enqueue(frontendLog);
 
-            Debug.WriteLine($"[TRACE] MetricsAggregator: Connection event emitted immediately");
+            Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.ConnectionEventEmitted"));
         }
 
         /// <summary>
@@ -443,7 +466,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             var frontendLog = WrapInFrontendLog(telemetryEvent);
             _pendingEvents.Enqueue(frontendLog);
 
-            Debug.WriteLine($"[TRACE] MetricsAggregator: Error event emitted immediately");
+            Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.ErrorEventEmitted"));
         }
 
         /// <summary>
@@ -546,14 +569,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             Exception exception)
         {
             var isTerminal = ExceptionClassifier.IsTerminalException(exception);
-            int? httpStatusCode = null;
-
-#if NET5_0_OR_GREATER
-            if (exception is System.Net.Http.HttpRequestException httpEx && httpEx.StatusCode.HasValue)
-            {
-                httpStatusCode = (int)httpEx.StatusCode.Value;
-            }
-#endif
+            int? httpStatusCode = ExtractHttpStatusCode(exception);
 
             return new TelemetryEvent
             {
@@ -567,6 +583,31 @@ namespace AdbcDrivers.Databricks.Telemetry
                     HttpStatusCode = httpStatusCode
                 }
             };
+        }
+
+        /// <summary>
+        /// Extracts HTTP status code from an exception.
+        /// Uses HttpExceptionWithStatusCode which works across all .NET versions.
+        /// </summary>
+        /// <remarks>
+        /// The codebase uses HttpResponseExtensions.EnsureSuccessOrThrow() which throws
+        /// HttpExceptionWithStatusCode for all HTTP errors, ensuring the status code
+        /// is always available regardless of .NET version.
+        /// </remarks>
+        private static int? ExtractHttpStatusCode(Exception exception)
+        {
+            if (exception is HttpExceptionWithStatusCode httpEx)
+            {
+                return (int)httpEx.StatusCode;
+            }
+
+            // Check inner exception for wrapped HTTP exceptions
+            if (exception.InnerException is HttpExceptionWithStatusCode innerHttpEx)
+            {
+                return (int)innerHttpEx.StatusCode;
+            }
+
+            return null;
         }
 
         /// <summary>
