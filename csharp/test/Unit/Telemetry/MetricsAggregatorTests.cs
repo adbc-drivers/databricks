@@ -19,9 +19,11 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using Xunit;
@@ -65,7 +67,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         {
             // Act & Assert
             Assert.Throws<ArgumentNullException>(() =>
-                new MetricsAggregator(null!, _config, TestWorkspaceId));
+                new MetricsAggregator(null!, _config, TestWorkspaceId, TestUserAgent));
         }
 
         [Fact]
@@ -73,7 +75,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         {
             // Act & Assert
             Assert.Throws<ArgumentNullException>(() =>
-                new MetricsAggregator(_mockExporter, null!, TestWorkspaceId));
+                new MetricsAggregator(_mockExporter, null!, TestWorkspaceId, TestUserAgent));
+        }
+
+        [Fact]
+        public void MetricsAggregator_Constructor_NullUserAgent_ThrowsException()
+        {
+            // Act & Assert
+            Assert.Throws<ArgumentNullException>(() =>
+                new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, null!));
         }
 
         [Fact]
@@ -316,8 +326,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 _aggregator.ProcessActivity(activity);
             }
 
-            // Wait for any background flush to complete
-            await Task.Delay(100);
+            // Explicit flush to ensure deterministic behavior (avoids timing-dependent CI flakiness)
+            await _aggregator.FlushAsync();
 
             // Assert - exporter should have been called
             Assert.True(_mockExporter.ExportCallCount > 0);
@@ -343,8 +353,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             activity.Stop();
             _aggregator.ProcessActivity(activity);
 
-            // Act - wait for timer to trigger flush
-            await Task.Delay(250);
+            // Act - wait for timer to trigger flush (3x interval gives margin for CI environments under load)
+            await Task.Delay(300);
 
             // Assert - exporter should have been called by timer
             Assert.True(_mockExporter.ExportCallCount > 0);
@@ -398,6 +408,28 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
         #endregion
 
+        #region Test Helpers
+
+        /// <summary>
+        /// Helper to create HttpExceptionWithStatusCode via production code path.
+        /// Simulates real scenario where HTTP response triggers exception through EnsureSuccessOrThrow().
+        /// </summary>
+        private static HttpExceptionWithStatusCode CreateHttpException(HttpStatusCode statusCode)
+        {
+            using var response = new HttpResponseMessage(statusCode);
+            try
+            {
+                response.EnsureSuccessOrThrow();
+                throw new InvalidOperationException("Expected exception was not thrown");
+            }
+            catch (HttpExceptionWithStatusCode ex)
+            {
+                return ex;
+            }
+        }
+
+        #endregion
+
         #region RecordException Tests
 
         [Fact]
@@ -406,7 +438,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Arrange
             _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
 
-            var terminalException = new HttpRequestException("401 (Unauthorized)");
+            // Use production code path to generate terminal exception (401 Unauthorized)
+            var terminalException = CreateHttpException(HttpStatusCode.Unauthorized);
 
             // Act
             _aggregator.RecordException("stmt-123", "session-456", terminalException);
@@ -497,6 +530,101 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert
             Assert.Equal(0, _aggregator.PendingEventCount);
+        }
+
+        #endregion
+
+        #region HTTP Status Code Extraction Tests
+
+        [Fact]
+        public async Task MetricsAggregator_RecordException_HttpExceptionWithStatusCode_ExtractsStatusCode()
+        {
+            // Arrange
+            _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
+            // 401 is a terminal exception, so it gets queued immediately
+            // Use production code path to generate exception
+            var exception = CreateHttpException(HttpStatusCode.Unauthorized);
+
+            // Act
+            _aggregator.RecordException("stmt-123", "session-456", exception);
+            await _aggregator.FlushAsync();
+
+            // Assert
+            Assert.Equal(1, _mockExporter.ExportCallCount);
+            var exportedLog = _mockExporter.ExportedLogs.First();
+            Assert.NotNull(exportedLog.Entry?.SqlDriverLog?.ErrorInfo);
+            Assert.Equal(401, exportedLog.Entry.SqlDriverLog.ErrorInfo.HttpStatusCode);
+        }
+
+        [Fact]
+        public async Task MetricsAggregator_RecordException_RetryableHttpException_ExtractsStatusCodeOnFailed()
+        {
+            // Arrange
+            _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
+            // 503 is a retryable exception, so it gets buffered until CompleteStatement
+            // Use production code path to generate exception
+            var exception = CreateHttpException(HttpStatusCode.ServiceUnavailable);
+            var statementId = "stmt-503";
+
+            // Act
+            _aggregator.RecordException(statementId, "session-456", exception);
+            _aggregator.CompleteStatement(statementId, failed: true); // Emit buffered exception
+            await _aggregator.FlushAsync();
+
+            // Assert - should have statement event + error event
+            Assert.Equal(1, _mockExporter.ExportCallCount);
+            Assert.Equal(2, _mockExporter.TotalExportedEvents);
+
+            // Find the error event (the one with ErrorInfo)
+            var errorLog = _mockExporter.ExportedLogs.FirstOrDefault(
+                log => log.Entry?.SqlDriverLog?.ErrorInfo != null);
+            Assert.NotNull(errorLog);
+            Assert.Equal(503, errorLog.Entry!.SqlDriverLog!.ErrorInfo!.HttpStatusCode);
+        }
+
+        [Fact]
+        public async Task MetricsAggregator_RecordException_WrappedTerminalHttpException_ExtractsStatusCode()
+        {
+            // Arrange
+            _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
+            // Wrapped terminal exception (403 Forbidden)
+            // Use production code path to generate exception
+            var innerException = CreateHttpException(HttpStatusCode.Forbidden);
+            var wrappedException = new Exception("Wrapped exception", innerException);
+
+            // Act - wrapped terminal exception is recognized as terminal by ExceptionClassifier
+            _aggregator.RecordException("stmt-123", "session-456", wrappedException);
+            await _aggregator.FlushAsync();
+
+            // Assert
+            Assert.Equal(1, _mockExporter.ExportCallCount);
+            var exportedLog = _mockExporter.ExportedLogs.First();
+            Assert.NotNull(exportedLog.Entry?.SqlDriverLog?.ErrorInfo);
+            Assert.Equal(403, exportedLog.Entry.SqlDriverLog.ErrorInfo.HttpStatusCode);
+        }
+
+        [Fact]
+        public async Task MetricsAggregator_RecordException_RegularException_NoStatusCode()
+        {
+            // Arrange
+            _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
+            // Regular exception without HTTP status - will be buffered (retryable)
+            var exception = new InvalidOperationException("Some error");
+            var statementId = "stmt-regular";
+
+            // Act
+            _aggregator.RecordException(statementId, "session-456", exception);
+            _aggregator.CompleteStatement(statementId, failed: true); // Emit buffered exception
+            await _aggregator.FlushAsync();
+
+            // Assert - should have statement event + error event
+            Assert.Equal(1, _mockExporter.ExportCallCount);
+
+            // Find the error event
+            var errorLog = _mockExporter.ExportedLogs.FirstOrDefault(
+                log => log.Entry?.SqlDriverLog?.ErrorInfo != null);
+            Assert.NotNull(errorLog);
+            Assert.Null(errorLog.Entry!.SqlDriverLog!.ErrorInfo!.HttpStatusCode);
         }
 
         #endregion
@@ -782,7 +910,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public int TotalExportedEvents => _totalExportedEvents;
             public IReadOnlyCollection<TelemetryFrontendLog> ExportedLogs => _exportedLogs.ToList();
 
-            public Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 Interlocked.Increment(ref _exportCallCount);
                 Interlocked.Add(ref _totalExportedEvents, logs.Count);
@@ -792,7 +920,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                     _exportedLogs.Add(log);
                 }
 
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             }
         }
 
@@ -801,7 +929,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         /// </summary>
         private class ThrowingTelemetryExporter : ITelemetryExporter
         {
-            public Task ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
+            public Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
             {
                 throw new InvalidOperationException("Test exception from exporter");
             }
