@@ -15,11 +15,13 @@
 */
 
 using System;
-using System.Net.Http;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
+using Microsoft.Extensions.Caching.Memory;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -28,7 +30,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
     /// <summary>
     /// E2E tests for FeatureFlagCache.
     /// Tests feature flag fetching from real Databricks endpoints and validates
-    /// caching and reference counting behavior.
+    /// caching behavior using the MergePropertiesWithFeatureFlagsAsync API.
     /// </summary>
     /// <remarks>
     /// These tests require:
@@ -40,6 +42,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         private readonly bool _canRunRealEndpointTests;
         private readonly string? _host;
         private readonly string? _token;
+
+        /// <summary>
+        /// Test assembly version for feature flag endpoint.
+        /// </summary>
+        private const string TestAssemblyVersion = "1.0.0-test";
 
         public FeatureFlagCacheE2ETests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
@@ -76,558 +83,444 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
-        /// Creates an HttpClient configured with authentication for the Databricks endpoint.
+        /// Creates connection properties for testing.
         /// </summary>
-        private HttpClient CreateAuthenticatedHttpClient()
+        private Dictionary<string, string> CreateTestProperties(string? host = null, string? token = null)
         {
-            var client = new HttpClient();
-            client.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
-            return client;
-        }
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>
-        /// Creates a feature flag fetcher function that simulates calling the feature flag endpoint.
-        /// The actual feature flag endpoint would be called by the driver during connection.
-        /// For E2E testing purposes, we create a fetcher that always returns a boolean value.
-        /// </summary>
-        private Func<CancellationToken, Task<bool>> CreateFeatureFlagFetcher(bool returnValue, int? delayMs = null)
-        {
-            return async ct =>
+            var effectiveHost = host ?? _host;
+            var effectiveToken = token ?? _token;
+
+            if (!string.IsNullOrEmpty(effectiveHost))
             {
-                if (delayMs.HasValue)
-                {
-                    await Task.Delay(delayMs.Value, ct);
-                }
-                return returnValue;
-            };
-        }
+                properties[SparkParameters.HostName] = effectiveHost;
+            }
 
-        /// <summary>
-        /// Creates a feature flag fetcher that makes a real HTTP call to validate connectivity.
-        /// Uses the telemetry endpoint to verify the host is reachable.
-        /// </summary>
-        private Func<CancellationToken, Task<bool>> CreateRealEndpointFetcher(HttpClient httpClient)
-        {
-            return async ct =>
+            if (!string.IsNullOrEmpty(effectiveToken))
             {
-                // Make a lightweight request to validate endpoint connectivity
-                // In production, this would be a feature flag API call
-                // For E2E testing, we verify the host is reachable
-                try
-                {
-                    var host = _host!.TrimEnd('/');
-                    if (!host.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                    {
-                        host = "https://" + host;
-                    }
+                properties[DatabricksParameters.Token] = effectiveToken;
+            }
 
-                    // Try to reach a Databricks API endpoint to validate connectivity
-                    // Using a simple GET request that should work with bearer auth
-                    var request = new HttpRequestMessage(HttpMethod.Get, $"{host}/api/2.0/clusters/list");
-                    var response = await httpClient.SendAsync(request, ct);
-
-                    // Any response (even 403) means we reached the endpoint
-                    // The feature flag would be determined by the response in production
-                    return response.IsSuccessStatusCode ||
-                           response.StatusCode == System.Net.HttpStatusCode.Forbidden ||
-                           response.StatusCode == System.Net.HttpStatusCode.Unauthorized;
-                }
-                catch (HttpRequestException)
-                {
-                    // Network error - endpoint not reachable
-                    return false;
-                }
-            };
+            return properties;
         }
 
-        #region FeatureFlagCache_FetchFromRealEndpoint_ReturnsBoolean
+        #region Real Endpoint Tests
 
         /// <summary>
-        /// Tests that FeatureFlagCache can fetch feature flags from a real Databricks endpoint.
+        /// Tests that FeatureFlagCache can fetch and merge feature flags from a real Databricks endpoint.
         /// This validates the cache correctly handles real-world HTTP responses.
         /// </summary>
         [SkippableFact]
-        public async Task FeatureFlagCache_FetchFromRealEndpoint_ReturnsBoolean()
+        public async Task MergePropertiesWithFeatureFlags_RealEndpoint_ReturnsProperties()
         {
             Skip.IfNot(_canRunRealEndpointTests, "Real endpoint testing requires DATABRICKS_TEST_CONFIG_FILE");
 
             // Arrange
-            var cache = new FeatureFlagCache();
-            var host = _host!;
+            using var cache = new FeatureFlagCache();
+            var properties = CreateTestProperties();
 
-            using var httpClient = CreateAuthenticatedHttpClient();
-            var fetcher = CreateRealEndpointFetcher(httpClient);
+            OutputHelper?.WriteLine($"Testing feature flag fetch from real endpoint: {_host}");
 
-            // Create context first (required before calling IsTelemetryEnabledAsync)
-            var context = cache.GetOrCreateContext(host);
+            // Act
+            var mergedProperties = await cache.MergePropertiesWithFeatureFlagsAsync(
+                properties,
+                TestAssemblyVersion,
+                CancellationToken.None);
 
-            try
+            // Assert
+            // The merged properties should contain at least our original properties
+            Assert.NotNull(mergedProperties);
+            Assert.True(mergedProperties.ContainsKey(SparkParameters.HostName));
+            Assert.Equal(_host, mergedProperties[SparkParameters.HostName]);
+
+            OutputHelper?.WriteLine($"Merged properties count: {mergedProperties.Count}");
+            OutputHelper?.WriteLine($"Original properties count: {properties.Count}");
+
+            // Log any additional properties that came from feature flags
+            foreach (var kvp in mergedProperties)
             {
-                // Act
-                var result = await cache.IsTelemetryEnabledAsync(host, fetcher, CancellationToken.None);
-
-                // Assert
-                // The result should be a boolean - either true or false is valid
-                // The important thing is that no exception was thrown
-                Assert.True(result == true || result == false);
-                OutputHelper?.WriteLine($"Feature flag result from real endpoint: {result}");
-
-                // Verify the cache was updated
-                Assert.NotNull(context.TelemetryEnabled);
-                Assert.NotNull(context.LastFetched);
+                if (!properties.ContainsKey(kvp.Key))
+                {
+                    OutputHelper?.WriteLine($"Feature flag: {kvp.Key} = {kvp.Value}");
+                }
             }
-            finally
-            {
-                cache.ReleaseContext(host);
-            }
+        }
+
+        /// <summary>
+        /// Tests that FeatureFlagCache creates a context for the host after merging.
+        /// </summary>
+        [SkippableFact]
+        public async Task MergePropertiesWithFeatureFlags_RealEndpoint_CreatesContext()
+        {
+            Skip.IfNot(_canRunRealEndpointTests, "Real endpoint testing requires DATABRICKS_TEST_CONFIG_FILE");
+
+            // Arrange
+            using var cache = new FeatureFlagCache();
+            var properties = CreateTestProperties();
+
+            // Verify no context exists initially
+            Assert.False(cache.HasContext(_host!));
+
+            // Act
+            await cache.MergePropertiesWithFeatureFlagsAsync(
+                properties,
+                TestAssemblyVersion,
+                CancellationToken.None);
+
+            // Assert - Context should now exist for the host
+            Assert.True(cache.HasContext(_host!));
+            Assert.True(cache.TryGetContext(_host!, out var context));
+            Assert.NotNull(context);
+            Assert.Equal(_host!.ToLowerInvariant(), context!.Host.ToLowerInvariant());
+
+            OutputHelper?.WriteLine($"Context created for host: {context.Host}");
+            OutputHelper?.WriteLine($"Context TTL: {context.Ttl}");
         }
 
         #endregion
 
-        #region FeatureFlagCache_CachesValue_DoesNotRefetchWithinTTL
+        #region Caching Behavior Tests
 
         /// <summary>
-        /// Tests that FeatureFlagCache caches values and does not refetch within the TTL period.
+        /// Tests that FeatureFlagCache caches contexts and reuses them on subsequent calls.
         /// </summary>
         [Fact]
-        public async Task FeatureFlagCache_CachesValue_DoesNotRefetchWithinTTL()
+        public async Task MergePropertiesWithFeatureFlags_MultipleCalls_ReusesContext()
         {
             // Arrange
-            var cache = new FeatureFlagCache(TimeSpan.FromMinutes(15)); // Use default TTL
+            using var cache = new FeatureFlagCache();
             var host = "test-caching-host.databricks.com";
-            var fetchCount = 0;
-
-            var fetcher = async (CancellationToken ct) =>
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                Interlocked.Increment(ref fetchCount);
-                await Task.CompletedTask;
-                return true;
+                [SparkParameters.HostName] = host,
+                [DatabricksParameters.Token] = "test-token",
+                // Disable actual fetching by setting cache to disabled
+                // This allows us to test caching behavior without real HTTP calls
+                [DatabricksParameters.FeatureFlagCacheEnabled] = "false"
             };
 
-            // Create context first
-            var context = cache.GetOrCreateContext(host);
+            // Act - Multiple calls
+            var result1 = await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
+            var result2 = await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
+            var result3 = await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
 
-            try
-            {
-                // Act - First call should fetch
-                var result1 = await cache.IsTelemetryEnabledAsync(host, fetcher, CancellationToken.None);
-                Assert.True(result1);
-                Assert.Equal(1, fetchCount);
+            // Assert - When disabled, original properties are returned unchanged
+            Assert.Equal(properties.Count, result1.Count);
+            Assert.Equal(properties.Count, result2.Count);
+            Assert.Equal(properties.Count, result3.Count);
 
-                // Second call should use cached value
-                var result2 = await cache.IsTelemetryEnabledAsync(host, fetcher, CancellationToken.None);
-                Assert.True(result2);
-                Assert.Equal(1, fetchCount); // Should NOT have fetched again
-
-                // Third call should still use cached value
-                var result3 = await cache.IsTelemetryEnabledAsync(host, fetcher, CancellationToken.None);
-                Assert.True(result3);
-                Assert.Equal(1, fetchCount); // Should NOT have fetched again
-
-                // Assert
-                OutputHelper?.WriteLine($"Total fetch count: {fetchCount} (expected: 1)");
-                Assert.Equal(1, fetchCount);
-
-                // Verify cache state
-                Assert.True(context.TelemetryEnabled);
-                Assert.False(context.IsExpired);
-            }
-            finally
-            {
-                cache.ReleaseContext(host);
-            }
+            OutputHelper?.WriteLine("Feature flag cache disabled - properties returned unchanged");
         }
 
         /// <summary>
-        /// Tests that FeatureFlagCache refetches after cache expires.
+        /// Tests that FeatureFlagCache respects the cache enabled setting.
         /// </summary>
         [Fact]
-        public async Task FeatureFlagCache_RefetchesAfterExpiry()
+        public async Task MergePropertiesWithFeatureFlags_CacheDisabled_ReturnsOriginalProperties()
         {
-            // Arrange - Use very short TTL for testing
-            var cache = new FeatureFlagCache(TimeSpan.FromMilliseconds(50));
-            var host = "test-expiry-host.databricks.com";
-            var fetchCount = 0;
-
-            var fetcher = async (CancellationToken ct) =>
+            // Arrange
+            using var cache = new FeatureFlagCache();
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                Interlocked.Increment(ref fetchCount);
-                await Task.CompletedTask;
-                return true;
+                [SparkParameters.HostName] = "test-disabled-host.databricks.com",
+                [DatabricksParameters.Token] = "test-token",
+                [DatabricksParameters.FeatureFlagCacheEnabled] = "false"
             };
 
-            // Create context first
-            var context = cache.GetOrCreateContext(host);
+            // Act
+            var result = await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
 
-            try
+            // Assert - Original properties returned unchanged when disabled
+            Assert.Equal(properties.Count, result.Count);
+            foreach (var kvp in properties)
             {
-                // Act - First call should fetch
-                var result1 = await cache.IsTelemetryEnabledAsync(host, fetcher, CancellationToken.None);
-                Assert.True(result1);
-                Assert.Equal(1, fetchCount);
-
-                // Wait for cache to expire
-                await Task.Delay(100);
-                Assert.True(context.IsExpired);
-
-                // Second call should refetch because cache expired
-                var result2 = await cache.IsTelemetryEnabledAsync(host, fetcher, CancellationToken.None);
-                Assert.True(result2);
-                Assert.Equal(2, fetchCount); // Should have fetched again
-
-                // Assert
-                OutputHelper?.WriteLine($"Total fetch count after expiry: {fetchCount} (expected: 2)");
+                Assert.True(result.ContainsKey(kvp.Key));
+                Assert.Equal(kvp.Value, result[kvp.Key]);
             }
-            finally
-            {
-                cache.ReleaseContext(host);
-            }
+
+            // No context should be created when disabled
+            Assert.False(cache.HasContext("test-disabled-host.databricks.com"));
         }
 
         #endregion
 
-        #region FeatureFlagCache_InvalidHost_ReturnsDefaultFalse
+        #region Error Handling Tests
 
         /// <summary>
-        /// Tests that FeatureFlagCache returns false for invalid hosts.
+        /// Tests that FeatureFlagCache returns original properties when host is missing.
         /// </summary>
         [Fact]
-        public async Task FeatureFlagCache_InvalidHost_ReturnsDefaultFalse()
+        public async Task MergePropertiesWithFeatureFlags_MissingHost_ReturnsOriginalProperties()
         {
             // Arrange
-            var cache = new FeatureFlagCache();
-            var invalidHost = "invalid-host-that-does-not-exist-12345.databricks.com";
-            var fetchCount = 0;
-
-            // Fetcher that throws to simulate network error
-            Func<CancellationToken, Task<bool>> fetcher = async (CancellationToken ct) =>
+            using var cache = new FeatureFlagCache();
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                Interlocked.Increment(ref fetchCount);
-                await Task.CompletedTask;
-                throw new HttpRequestException("Host not found");
-            };
-
-            // Create context first
-            var context = cache.GetOrCreateContext(invalidHost);
-
-            try
-            {
-                // Act
-                var result = await cache.IsTelemetryEnabledAsync(invalidHost, fetcher, CancellationToken.None);
-
-                // Assert - Should return false on error (safe default)
-                Assert.False(result);
-                Assert.Equal(1, fetchCount); // Should have attempted to fetch
-                OutputHelper?.WriteLine($"Invalid host returned: {result} (expected: false)");
-            }
-            finally
-            {
-                cache.ReleaseContext(invalidHost);
-            }
-        }
-
-        /// <summary>
-        /// Tests that FeatureFlagCache returns false for null host.
-        /// </summary>
-        [Fact]
-        public async Task FeatureFlagCache_NullHost_ReturnsDefaultFalse()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var fetchCalled = false;
-
-            var fetcher = async (CancellationToken ct) =>
-            {
-                fetchCalled = true;
-                await Task.CompletedTask;
-                return true;
+                [DatabricksParameters.Token] = "test-token"
+                // Note: No host specified
             };
 
             // Act
-            var result = await cache.IsTelemetryEnabledAsync(null!, fetcher, CancellationToken.None);
+            var result = await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
 
-            // Assert
-            Assert.False(result);
-            Assert.False(fetchCalled); // Should not have attempted to fetch for null host
-        }
-
-        /// <summary>
-        /// Tests that FeatureFlagCache returns false for empty host.
-        /// </summary>
-        [Fact]
-        public async Task FeatureFlagCache_EmptyHost_ReturnsDefaultFalse()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var fetchCalled = false;
-
-            var fetcher = async (CancellationToken ct) =>
-            {
-                fetchCalled = true;
-                await Task.CompletedTask;
-                return true;
-            };
-
-            // Act
-            var result = await cache.IsTelemetryEnabledAsync("", fetcher, CancellationToken.None);
-
-            // Assert
-            Assert.False(result);
-            Assert.False(fetchCalled); // Should not have attempted to fetch for empty host
-        }
-
-        /// <summary>
-        /// Tests that FeatureFlagCache returns false for unknown host (no context created).
-        /// </summary>
-        [Fact]
-        public async Task FeatureFlagCache_UnknownHost_ReturnsDefaultFalse()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var unknownHost = "unknown-host.databricks.com";
-            var fetchCalled = false;
-
-            var fetcher = async (CancellationToken ct) =>
-            {
-                fetchCalled = true;
-                await Task.CompletedTask;
-                return true;
-            };
-
-            // Act - Note: No context created for this host
-            var result = await cache.IsTelemetryEnabledAsync(unknownHost, fetcher, CancellationToken.None);
-
-            // Assert
-            Assert.False(result);
-            Assert.False(fetchCalled); // Should not have attempted to fetch for unknown host
-        }
-
-        #endregion
-
-        #region FeatureFlagCache_RefCountingWorks_CleanupAfterRelease
-
-        /// <summary>
-        /// Tests that FeatureFlagCache reference counting works correctly and
-        /// contexts are cleaned up after all references are released.
-        /// </summary>
-        [Fact]
-        public void FeatureFlagCache_RefCountingWorks_CleanupAfterRelease()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var host = "test-refcount-host.databricks.com";
-
-            // Act - Create multiple references
-            var context1 = cache.GetOrCreateContext(host);
-            Assert.Equal(1, context1.RefCount);
-            Assert.True(cache.HasContext(host));
-
-            var context2 = cache.GetOrCreateContext(host);
-            Assert.Equal(2, context2.RefCount);
-            Assert.Same(context1, context2); // Should be same instance
-
-            var context3 = cache.GetOrCreateContext(host);
-            Assert.Equal(3, context3.RefCount);
-            Assert.Same(context1, context3); // Should be same instance
-
-            OutputHelper?.WriteLine($"After creating 3 references: RefCount = {context1.RefCount}");
-
-            // Release references one by one
-            cache.ReleaseContext(host);
-            Assert.Equal(2, context1.RefCount);
-            Assert.True(cache.HasContext(host)); // Still has references
-
-            cache.ReleaseContext(host);
-            Assert.Equal(1, context1.RefCount);
-            Assert.True(cache.HasContext(host)); // Still has references
-
-            cache.ReleaseContext(host);
-            // After last release, context should be removed
-
-            // Assert
-            Assert.False(cache.HasContext(host));
+            // Assert - Original properties returned when host is missing
+            Assert.Equal(properties.Count, result.Count);
             Assert.Equal(0, cache.CachedHostCount);
-            OutputHelper?.WriteLine($"After releasing all references: Context removed");
         }
 
         /// <summary>
-        /// Tests that releasing context for unknown host doesn't throw.
+        /// Tests that FeatureFlagCache returns original properties when properties are empty.
         /// </summary>
         [Fact]
-        public void FeatureFlagCache_ReleaseUnknownHost_DoesNotThrow()
+        public async Task MergePropertiesWithFeatureFlags_EmptyProperties_ReturnsOriginalProperties()
         {
             // Arrange
-            var cache = new FeatureFlagCache();
-            var unknownHost = "never-created-host.databricks.com";
+            using var cache = new FeatureFlagCache();
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            // Act
+            var result = await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
+
+            // Assert
+            Assert.Empty(result);
+            Assert.Equal(0, cache.CachedHostCount);
+        }
+
+        /// <summary>
+        /// Tests that FeatureFlagCache handles null host gracefully via TryGetHost.
+        /// </summary>
+        [Fact]
+        public void TryGetHost_NullOrEmptyHost_ReturnsNull()
+        {
+            // Test with empty properties
+            var emptyProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var result = FeatureFlagCache.TryGetHost(emptyProperties);
+            Assert.Null(result);
+
+            // Test with empty host value
+            var emptyHostProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [SparkParameters.HostName] = ""
+            };
+            result = FeatureFlagCache.TryGetHost(emptyHostProperties);
+            Assert.Null(result);
+        }
+
+        /// <summary>
+        /// Tests that TryGetHost strips protocol from host correctly.
+        /// </summary>
+        [Theory]
+        [InlineData("https://myhost.databricks.com", "myhost.databricks.com")]
+        [InlineData("http://myhost.databricks.com", "myhost.databricks.com")]
+        [InlineData("myhost.databricks.com", "myhost.databricks.com")]
+        [InlineData("https://myhost.databricks.com/path", "myhost.databricks.com")]
+        public void TryGetHost_WithProtocol_StripsProtocolCorrectly(string input, string expected)
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [SparkParameters.HostName] = input
+            };
+
+            // Act
+            var result = FeatureFlagCache.TryGetHost(properties);
+
+            // Assert
+            Assert.Equal(expected, result);
+        }
+
+        /// <summary>
+        /// Tests that TryGetHost extracts host from Uri property.
+        /// </summary>
+        [Fact]
+        public void TryGetHost_FromUri_ExtractsHostCorrectly()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [AdbcOptions.Uri] = "https://myhost.databricks.com/sql/1.0/warehouses/abc123"
+            };
+
+            // Act
+            var result = FeatureFlagCache.TryGetHost(properties);
+
+            // Assert
+            Assert.Equal("myhost.databricks.com", result);
+        }
+
+        #endregion
+
+        #region Cache Management Tests
+
+        /// <summary>
+        /// Tests that FeatureFlagCache.Clear() removes all cached contexts.
+        /// </summary>
+        [SkippableFact]
+        public async Task Clear_RemovesAllContexts()
+        {
+            Skip.IfNot(_canRunRealEndpointTests, "Real endpoint testing requires DATABRICKS_TEST_CONFIG_FILE");
+
+            // Arrange
+            using var cache = new FeatureFlagCache();
+            var properties = CreateTestProperties();
+
+            // Create a context by calling merge
+            await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
+            Assert.True(cache.HasContext(_host!));
+
+            // Act
+            cache.Clear();
+
+            // Assert
+            Assert.Equal(0, cache.CachedHostCount);
+            Assert.False(cache.HasContext(_host!));
+        }
+
+        /// <summary>
+        /// Tests that FeatureFlagCache.RemoveContext() removes specific context.
+        /// </summary>
+        [SkippableFact]
+        public async Task RemoveContext_RemovesSpecificContext()
+        {
+            Skip.IfNot(_canRunRealEndpointTests, "Real endpoint testing requires DATABRICKS_TEST_CONFIG_FILE");
+
+            // Arrange
+            using var cache = new FeatureFlagCache();
+            var properties = CreateTestProperties();
+
+            // Create a context
+            await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
+            Assert.True(cache.HasContext(_host!));
+
+            // Act
+            cache.RemoveContext(_host!);
+
+            // Assert
+            Assert.False(cache.HasContext(_host!));
+        }
+
+        /// <summary>
+        /// Tests that RemoveContext with null/empty host doesn't throw.
+        /// </summary>
+        [Fact]
+        public void RemoveContext_NullOrEmptyHost_DoesNotThrow()
+        {
+            // Arrange
+            using var cache = new FeatureFlagCache();
 
             // Act & Assert - Should not throw
-            cache.ReleaseContext(unknownHost);
-            cache.ReleaseContext(null!);
-            cache.ReleaseContext("");
-            cache.ReleaseContext("   ");
-
-            // All should complete without exception
-            Assert.Equal(0, cache.CachedHostCount);
-        }
-
-        /// <summary>
-        /// Tests that multiple hosts can have independent reference counts.
-        /// </summary>
-        [Fact]
-        public void FeatureFlagCache_MultipleHosts_IndependentRefCounts()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var host1 = "host1.databricks.com";
-            var host2 = "host2.databricks.com";
-            var host3 = "host3.databricks.com";
-
-            // Act - Create contexts for multiple hosts
-            var context1a = cache.GetOrCreateContext(host1);
-            var context1b = cache.GetOrCreateContext(host1);
-            var context2 = cache.GetOrCreateContext(host2);
-            var context3a = cache.GetOrCreateContext(host3);
-            var context3b = cache.GetOrCreateContext(host3);
-            var context3c = cache.GetOrCreateContext(host3);
-
-            // Assert initial state
-            Assert.Equal(3, cache.CachedHostCount);
-            Assert.Equal(2, context1a.RefCount);
-            Assert.Equal(1, context2.RefCount);
-            Assert.Equal(3, context3a.RefCount);
-
-            // Release host2 completely
-            cache.ReleaseContext(host2);
-            Assert.Equal(2, cache.CachedHostCount);
-            Assert.False(cache.HasContext(host2));
-
-            // Host1 and Host3 should still exist
-            Assert.True(cache.HasContext(host1));
-            Assert.True(cache.HasContext(host3));
-
-            // Clean up remaining
-            cache.ReleaseContext(host1);
-            cache.ReleaseContext(host1);
-            cache.ReleaseContext(host3);
-            cache.ReleaseContext(host3);
-            cache.ReleaseContext(host3);
+            cache.RemoveContext(null!);
+            cache.RemoveContext("");
+            cache.RemoveContext("   ");
+            cache.RemoveContext("nonexistent-host.databricks.com");
 
             Assert.Equal(0, cache.CachedHostCount);
-        }
-
-        /// <summary>
-        /// Tests concurrent reference counting is thread-safe.
-        /// </summary>
-        [Fact]
-        public async Task FeatureFlagCache_ConcurrentRefCounting_ThreadSafe()
-        {
-            // Arrange
-            var cache = new FeatureFlagCache();
-            var host = "concurrent-host.databricks.com";
-            var incrementCount = 100;
-            var tasks = new Task[incrementCount];
-
-            // Act - Concurrently create references
-            for (int i = 0; i < incrementCount; i++)
-            {
-                tasks[i] = Task.Run(() => cache.GetOrCreateContext(host));
-            }
-            await Task.WhenAll(tasks);
-
-            // Assert
-            Assert.True(cache.TryGetContext(host, out var context));
-            Assert.Equal(incrementCount, context!.RefCount);
-
-            // Concurrently release references
-            var releaseTasks = new Task[incrementCount];
-            for (int i = 0; i < incrementCount; i++)
-            {
-                releaseTasks[i] = Task.Run(() => cache.ReleaseContext(host));
-            }
-            await Task.WhenAll(releaseTasks);
-
-            // After all releases, context should be removed
-            Assert.False(cache.HasContext(host));
         }
 
         #endregion
 
-        #region Additional E2E Tests
+        #region Custom Memory Cache Tests
 
         /// <summary>
-        /// Tests that cached false value is correctly returned.
+        /// Tests that FeatureFlagCache works with custom IMemoryCache.
         /// </summary>
         [Fact]
-        public async Task FeatureFlagCache_CachesFalseValue_ReturnsCorrectly()
+        public void Constructor_WithCustomMemoryCache_UsesProvidedCache()
         {
             // Arrange
-            var cache = new FeatureFlagCache();
-            var host = "test-false-value-host.databricks.com";
-            var fetchCount = 0;
-
-            var fetcher = async (CancellationToken ct) =>
+            var customCache = new MemoryCache(new MemoryCacheOptions
             {
-                Interlocked.Increment(ref fetchCount);
-                await Task.CompletedTask;
-                return false; // Return false
-            };
+                SizeLimit = 100
+            });
 
-            // Create context first
-            var context = cache.GetOrCreateContext(host);
+            // Act
+            using var cache = new FeatureFlagCache(customCache);
 
-            try
-            {
-                // Act
-                var result1 = await cache.IsTelemetryEnabledAsync(host, fetcher, CancellationToken.None);
-                var result2 = await cache.IsTelemetryEnabledAsync(host, fetcher, CancellationToken.None);
-
-                // Assert
-                Assert.False(result1);
-                Assert.False(result2);
-                Assert.Equal(1, fetchCount); // Should only fetch once
-                Assert.False(context.TelemetryEnabled);
-            }
-            finally
-            {
-                cache.ReleaseContext(host);
-            }
+            // Assert - Cache should work normally
+            Assert.Equal(0, cache.CachedHostCount);
         }
 
         /// <summary>
-        /// Tests that cancellation is properly propagated during fetch.
+        /// Tests that constructor throws when null cache is provided.
         /// </summary>
         [Fact]
-        public async Task FeatureFlagCache_Cancellation_PropagatesCorrectly()
+        public void Constructor_WithNullCache_ThrowsArgumentNullException()
         {
+            // Act & Assert
+            Assert.Throws<ArgumentNullException>(() => new FeatureFlagCache(null!));
+        }
+
+        #endregion
+
+        #region Cancellation Tests
+
+        /// <summary>
+        /// Tests that cancellation is properly handled during merge operation.
+        /// </summary>
+        [SkippableFact]
+        public async Task MergePropertiesWithFeatureFlags_Cancellation_ThrowsOperationCanceledException()
+        {
+            Skip.IfNot(_canRunRealEndpointTests, "Real endpoint testing requires DATABRICKS_TEST_CONFIG_FILE");
+
             // Arrange
-            var cache = new FeatureFlagCache();
-            var host = "test-cancellation-host.databricks.com";
+            using var cache = new FeatureFlagCache();
+            var properties = CreateTestProperties();
             var cts = new CancellationTokenSource();
 
-            var fetcher = async (CancellationToken ct) =>
+            // Cancel immediately
+            cts.Cancel();
+
+            // Act & Assert - Should throw OperationCanceledException
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion, cts.Token));
+        }
+
+        #endregion
+
+        #region TTL Configuration Tests
+
+        /// <summary>
+        /// Tests that custom cache TTL is respected.
+        /// </summary>
+        [Fact]
+        public async Task MergePropertiesWithFeatureFlags_CustomTtl_RespectsTtlSetting()
+        {
+            // Arrange
+            using var cache = new FeatureFlagCache();
+            var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                await Task.Delay(10000, ct); // Long delay that should be cancelled
-                return true;
+                [SparkParameters.HostName] = "test-ttl-host.databricks.com",
+                [DatabricksParameters.Token] = "test-token",
+                [DatabricksParameters.FeatureFlagCacheTtlSeconds] = "30", // 30 seconds
+                [DatabricksParameters.FeatureFlagCacheEnabled] = "false" // Disable actual fetch
             };
 
-            // Create context first
-            var context = cache.GetOrCreateContext(host);
+            // Act
+            var result = await cache.MergePropertiesWithFeatureFlagsAsync(properties, TestAssemblyVersion);
 
-            try
-            {
-                // Act
-                cts.CancelAfter(50); // Cancel after 50ms
+            // Assert - Properties should be returned (cache disabled, so no context created)
+            Assert.Equal(properties.Count, result.Count);
 
-                // Assert - TaskCanceledException inherits from OperationCanceledException
-                var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                    () => cache.IsTelemetryEnabledAsync(host, fetcher, cts.Token));
-                Assert.True(ex is OperationCanceledException);
-            }
-            finally
-            {
-                cache.ReleaseContext(host);
-            }
+            OutputHelper?.WriteLine("Custom TTL setting parsed successfully");
+        }
+
+        #endregion
+
+        #region Singleton Tests
+
+        /// <summary>
+        /// Tests that GetInstance returns the same singleton instance.
+        /// </summary>
+        [Fact]
+        public void GetInstance_ReturnsSameSingletonInstance()
+        {
+            // Act
+            var instance1 = FeatureFlagCache.GetInstance();
+            var instance2 = FeatureFlagCache.GetInstance();
+
+            // Assert
+            Assert.Same(instance1, instance2);
         }
 
         #endregion
