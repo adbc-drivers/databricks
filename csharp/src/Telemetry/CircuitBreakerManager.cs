@@ -33,6 +33,11 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// </remarks>
     internal sealed class CircuitBreakerManager
     {
+        /// <summary>
+        /// Internal ActivitySource for emitting trace events. Tests can subscribe to this.
+        /// </summary>
+        internal static readonly ActivitySource TraceSource = new ActivitySource("AdbcDrivers.Databricks.Telemetry.CircuitBreakerManager");
+
         private static readonly CircuitBreakerManager s_instance = new CircuitBreakerManager();
 
         private readonly ConcurrentDictionary<string, CircuitBreaker> _circuitBreakers;
@@ -81,7 +86,10 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             var circuitBreaker = _circuitBreakers.GetOrAdd(host, _ =>
             {
-                Debug.WriteLine($"[DEBUG] CircuitBreakerManager: Creating circuit breaker for host '{host}'");
+                Activity.Current?.AddEvent(new ActivityEvent("CircuitBreakerCreated", tags: new ActivityTagsCollection
+                {
+                    { "host", host }
+                }));
                 return new CircuitBreaker(_defaultConfig);
             });
 
@@ -115,7 +123,10 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             var circuitBreaker = _circuitBreakers.GetOrAdd(host, _ =>
             {
-                Debug.WriteLine($"[DEBUG] CircuitBreakerManager: Creating circuit breaker for host '{host}' with custom config");
+                Activity.Current?.AddEvent(new ActivityEvent("CircuitBreakerCreatedWithConfig", tags: new ActivityTagsCollection
+                {
+                    { "host", host }
+                }));
                 return new CircuitBreaker(config);
             });
 
@@ -183,7 +194,10 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             if (removed)
             {
-                Debug.WriteLine($"[DEBUG] CircuitBreakerManager: Removed circuit breaker for host '{host}'");
+                Activity.Current?.AddEvent(new ActivityEvent("CircuitBreakerRemoved", tags: new ActivityTagsCollection
+                {
+                    { "host", host }
+                }));
             }
 
             return removed;
@@ -196,7 +210,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         internal void Clear()
         {
             _circuitBreakers.Clear();
-            Debug.WriteLine("[DEBUG] CircuitBreakerManager: Cleared all circuit breakers");
+            Activity.Current?.AddEvent(new ActivityEvent("CircuitBreakersCleared"));
         }
     }
 }
