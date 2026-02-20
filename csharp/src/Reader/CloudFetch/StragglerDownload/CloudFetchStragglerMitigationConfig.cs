@@ -17,7 +17,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace AdbcDrivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
 {
     /// <summary>
     /// Configuration for straggler download mitigation feature.

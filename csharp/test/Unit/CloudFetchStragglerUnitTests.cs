@@ -21,6 +21,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload;
 using Apache.Arrow.Adbc.Tracing;
 using Xunit;
 

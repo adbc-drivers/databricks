@@ -23,7 +23,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Tracing;
 
-namespace AdbcDrivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
 {
     /// <summary>
     /// Detects straggler downloads based on median throughput analysis.

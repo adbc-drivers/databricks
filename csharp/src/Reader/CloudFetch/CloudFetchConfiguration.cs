@@ -17,6 +17,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload;
 using Apache.Arrow;
 using Microsoft.IO;
 

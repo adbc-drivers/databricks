@@ -16,7 +16,7 @@
 
 using System;
 
-namespace AdbcDrivers.Databricks.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
 {
     /// <summary>
     /// Tracks timing and throughput metrics for individual file downloads.

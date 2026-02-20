@@ -31,6 +31,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Microsoft.IO;
@@ -437,13 +438,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             // Add the task to the dictionary
                             downloadTasks[downloadTask] = downloadResult;
                         }
-                        catch
+                        catch (Exception ex)
                         {
                             // If task creation fails, release all acquired resources to prevent leak
                             sequentialPermit?.Dispose();
                             _downloadSemaphore.Release();
                             _memoryManager.ReleaseMemory(size);
-                            throw;
+                            SetError(ex, activity);
+                            break;
                         }
 
                         // Add the result to the result queue add the result here to assure the download sequence.
@@ -597,8 +599,36 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             ]);
                         }
 
-                        // Read the file data
-                        fileData = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                        // When straggler detection is enabled, we need cancellable body reads.
+                        // HttpCompletionOption.ResponseHeadersRead means SendAsync returns after headers only —
+                        // the body (10-100MB+) is downloaded below. Without passing effectiveToken here,
+                        // straggler cancellation via cts.Cancel() has no effect during the body transfer.
+                        //
+                        // This is gated behind straggler detection to avoid changing the existing download
+                        // behavior when the feature is disabled.
+                        if (_stragglerDetector != null)
+                        {
+#if NET5_0_OR_GREATER
+                            fileData = await response.Content.ReadAsByteArrayAsync(effectiveToken).ConfigureAwait(false);
+#else
+                            // net472/netstandard2.0: ReadAsByteArrayAsync(CancellationToken) does not exist.
+                            // CopyToAsync passes the token to the underlying socket ReadAsync on each 81920-byte
+                            // chunk (Stream.DefaultCopyBufferSize), matching ReadAsByteArrayAsync's internal behavior.
+                            using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            {
+                                int capacity = contentLength.HasValue && contentLength.Value > 0
+                                    ? (int)Math.Min(contentLength.Value, int.MaxValue)
+                                    : 0;
+                                var memoryStream = new MemoryStream(capacity);
+                                await contentStream.CopyToAsync(memoryStream, 81920, effectiveToken).ConfigureAwait(false);
+                                fileData = memoryStream.ToArray();
+                            }
+#endif
+                        }
+                        else
+                        {
+                            fileData = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                        }
                         break; // Success, exit retry loop
                     }
                     catch (OperationCanceledException) when (

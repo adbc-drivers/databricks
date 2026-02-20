@@ -28,6 +28,7 @@ using System.Threading.Tasks;
 using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
 using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload;
 using Apache.Hive.Service.Rpc.Thrift;
 using Apache.Arrow.Adbc.Tracing;
 using Moq;
