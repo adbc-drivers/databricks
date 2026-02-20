@@ -15,6 +15,7 @@
 */
 
 using System.Text.Json.Serialization;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 
 namespace AdbcDrivers.Databricks.Telemetry.Models
 {
@@ -25,10 +26,10 @@ namespace AdbcDrivers.Databricks.Telemetry.Models
     public class FrontendLogEntry
     {
         /// <summary>
-        /// The SQL driver telemetry event.
+        /// The SQL driver telemetry event (proto-generated).
         /// </summary>
         [JsonPropertyName("sql_driver_log")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public TelemetryEvent? SqlDriverLog { get; set; }
+        public OssSqlDriverTelemetryLog? SqlDriverLog { get; set; }
     }
 }

@@ -1,0 +1,408 @@
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Standalone version of sql_driver_telemetry.proto for C# testing
+// Source: universe/proto/logs/frontend/oss-sql-driver-telemetry/sql_driver_telemetry.proto
+// This file removes Databricks-internal dependencies while maintaining the schema structure.
+
+syntax = "proto3";
+
+package logging;
+
+option csharp_namespace = "AdbcDrivers.Databricks.Telemetry.Proto";
+
+message OssSqlDriverTelemetryLog {
+  // Session ID
+  string session_id = 1;
+
+  // SQL query ID : this is unique for each execution request
+  string sql_statement_id = 2;
+
+  // Configuration of the system where driver is run
+  DriverSystemConfiguration system_configuration = 3;
+
+  // Connection parameters used for running the driver
+  DriverConnectionParameters driver_connection_params = 4;
+
+  // Denotes the type of authorization in the driver. Example : "custom-oauth-m2m", "oauth-refresh" etc
+  string auth_type = 5;
+
+  // Field is populated if the driver operation is UC Volume based
+  VolumeOperationEvent vol_operation = 6;
+
+  // Field is populated if the driver operation is SQL based (this includes cloud fetch events too)
+  SqlExecutionEvent sql_operation = 7;
+
+  // Driver Error Information: Contains error details including codes and messages if the log is error-related.
+  DriverErrorInfo error_info = 8;
+
+  // The latency of the backend call to the server for the operation.
+  int64 operation_latency_ms = 9;
+}
+
+message DriverSystemConfiguration {
+  // Version of the driver used to connect to the warehouse (e.g: "0.9.7-oss").
+  string driver_version = 1;
+
+  // Name of the runtime (e.g., "OpenJDK 64-Bit Server VM").
+  string runtime_name = 2;
+
+  // Version of the runtime spec (e.g., "1.8" or "11").
+  string runtime_version = 3;
+
+  // Vendor of the runtime (e.g., "Azul Systems, Inc." or "Oracle Corporation").
+  string runtime_vendor = 4;
+
+  // Name of the operating system (e.g., "Mac OS X").
+  string os_name = 5;
+
+  // Version of the operating system (e.g., "14.7").
+  string os_version = 6;
+
+  // Architecture of the operating system (e.g., "x86_64").
+  string os_arch = 7;
+
+  // Name of the driver used to connect to the warehouse (e.g: "oss-jdbc", "jdbc" etc.).
+  string driver_name = 8;
+
+  // This adds the client app name e.g. powerbi, tableau, userAgent etc.
+  string client_app_name = 9;
+
+  // This adds the client locale e.g. en_IN, en_US etc.
+  string locale_name = 10;
+
+  // This adds the default charset encoding. Eg : 'UTF-8'
+  string char_set_encoding = 11;
+
+  // This adds the process name to identify origin of the requests.
+  string process_name = 12;
+}
+
+message DriverConnectionParameters {
+  // HTTP path for API calls
+  string http_path = 1;
+
+  // Mode of operation for the driver (Thrift or SEA)
+  DriverModeType mode = 2;
+
+  // Contains base URL for the host, auth connection type
+  HostDetails host_info = 3;
+
+  // Indicates whether to use a proxy for connections
+  bool use_proxy = 4;
+
+  // Authentication mechanism used (OAuth, Basic Auth, etc.)
+  DriverAuthMechType auth_mech = 5;
+
+  // Authentication flow type, e.g., token exchange
+  DriverAuthFlowType auth_flow = 6;
+
+  // OAuth scope, e.g., "all-apis"
+  string auth_scope = 7;
+
+  // Flag to use system proxy settings
+  bool use_system_proxy = 8;
+
+  // Hosts that do not require proxy usage (comma separated)
+  repeated string non_proxy_hosts = 9;
+
+  // Flag to use cloud fetch proxy settings
+  bool use_cf_proxy = 10;
+
+  // Contains proxy server host, port and proxy auth type
+  HostDetails proxy_host_info = 11;
+
+  // Contains cloud-fetch proxy server host, port and proxy auth type
+  HostDetails cf_proxy_host_info = 12;
+
+  // Determines if discovery mode is enabled for the driver
+  bool discovery_mode_enabled = 13;
+
+  // URL for OAuth discovery
+  string discovery_url = 14;
+
+  // Flag to use empty metadata
+  bool use_empty_metadata = 15;
+
+  // Support for many parameters in API requests
+  bool support_many_parameters = 16;
+
+  // SSL trust store type, e.g., "JKS"
+  string ssl_trust_store_type = 17;
+
+  // Flag to check certificate revocation
+  bool check_certificate_revocation = 18;
+
+  // Flag to accept undetermined certificate revocation statuses
+  bool accept_undetermined_certificate_revocation = 19;
+
+  // Email address of the GCP service account
+  string google_service_account = 20;
+
+  // Local file path where gcp credentials json file is present
+  string google_credential_file_path = 21;
+
+  // The size of the HTTP connection pool
+  int64 http_connection_pool_size = 22;
+
+  // reserved 23
+
+  // Whether or not we should enable hybrid results in SEA
+  bool enable_sea_hybrid_results = 24;
+
+  // Flag to check whether to opt for complex datatype support
+  bool enable_complex_datatype_support = 25;
+
+  // Flag to check whether self signed certificates are allowed
+  bool allow_self_signed_support = 26;
+
+  // Flag to check whether system trust store is being used
+  bool use_system_trust_store = 27;
+
+  // The number of rows fetched in inline mode of thrift
+  int64 rows_fetched_per_block = 28;
+
+  // The azure resource ID of the workspace
+  string azure_workspace_resource_id = 29;
+
+  // The tenant ID of the workspace
+  string azure_tenant_id = 30;
+
+  // The maximum number of characters in a string column value
+  int32 string_column_length = 31;
+
+  // Flag to check if token cache is enabled
+  bool enable_token_cache = 32;
+
+  // URL for OAuth token retrieval
+  string token_endpoint = 33;
+
+  // The authorization endpoint URL
+  string auth_endpoint = 34;
+
+  // Whether or not we should enable arrow
+  bool enable_arrow = 35;
+
+  // Whether or not we should enable direct results
+  bool enable_direct_results = 36;
+
+  // Whether or not we should enable JWT assertion in M2M flow
+  bool enable_jwt_assertion = 37;
+
+  // Local file path where JWT key is present
+  string jwt_key_file = 38;
+
+  // JWT algorithm used in the key file
+  string jwt_algorithm = 39;
+
+  // Socket timeout value (in seconds)
+  int64 socket_timeout = 40;
+
+  // Allowed volume ingestion paths
+  string allowed_volume_ingestion_paths = 41;
+
+  // Result execution status polling interval in milli seconds
+  int64 async_poll_interval_millis = 42;
+
+  // Query tags for tracking and attribution
+  string query_tags = 43;
+
+  // Flag to enable metric view metadata
+  bool enable_metric_view_metadata = 44;
+
+  // Whether auto-commit mode is enabled
+  bool auto_commit = 45;
+
+  // Whether to fetch auto-commit state from server
+  bool fetch_auto_commit_from_server = 46;
+
+  // Flag to enable geospatial support
+  bool enable_geospatial_support = 47;
+}
+
+message DriverErrorInfo {
+  // Internal name of the error. Eg: DatabricksParsingException
+  string error_name = 1;
+
+  // String containing functions and line numbers for code owned by Databricks
+  string stack_trace = 2;
+
+  // Note: error_message (field 3) is pending LPP review in the original proto
+}
+
+message VolumeOperationEvent {
+  // Denotes the kind of UC volume operation
+  VolumeOperationType volume_operation_type = 1;
+
+  // UC Volume path where operations are performed
+  string volume_path = 2;
+
+  // Local file path where operations are performed
+  string local_file = 3;
+}
+
+message SqlExecutionEvent {
+  // denotes the kind of operation performed
+  StatementType statement_type = 1;
+
+  // denotes if the results were compressed
+  bool is_compressed = 2;
+
+  // denotes if results were inline
+  ExecutionResultFormat execution_result = 3;
+
+  // denotes the chunk ID if the event is for a cloud fetch request failure
+  int64 chunk_id = 4;
+
+  // denotes the retry count (if at all the event was retried)
+  int64 retry_count = 5;
+
+  // Chunk download details
+  ChunkDetails chunk_details = 6;
+
+  // Result latency details
+  ResultLatency result_latency = 7;
+
+  // Operation polling details
+  OperationDetail operation_detail = 8;
+
+  // Flag to indicate if OSS Java driver is using patched Arrow (Java-specific)
+  bool java_uses_patched_arrow = 9;
+}
+
+message HostDetails {
+  // Base URL for the host
+  string host_url = 1;
+
+  // Port number
+  int32 port = 2;
+
+  // Proxy auth type in case of proxy hosts
+  DriverProxyAuth proxy_auth_type = 3;
+}
+
+message OperationDetail {
+  // number of getOperationStatus calls made from the driver
+  int32 n_operation_status_calls = 1;
+
+  // summation of latencies of getOperationStatus for the statement
+  int64 operation_status_latency_millis = 2;
+
+  // Type of operation performed in the statement
+  OperationType operation_type = 3;
+
+  // This indicates whether the sql operation is for internal purposes
+  bool is_internal_call = 4;
+}
+
+message ResultLatency {
+  // latency of building of result set (direct) or fetching first chunk (cloud fetch)
+  int64 result_set_ready_latency_millis = 1;
+
+  // Time taken by the end user to consume the result set completely
+  int64 result_set_consumption_latency_millis = 2;
+}
+
+message ChunkDetails {
+  // time taken to download the first chunk
+  int64 initial_chunk_latency_millis = 1;
+
+  // max time taken to download any chunk
+  int64 slowest_chunk_latency_millis = 2;
+
+  // total chunks present in the result
+  int32 total_chunks_present = 3;
+
+  // number of chunks iterated before statement/connection was closed
+  int32 total_chunks_iterated = 4;
+
+  // sum of chunk latency across all chunks iterated
+  int64 sum_chunks_download_time_millis = 5;
+}
+
+// Enums (flattened from nested message enums for proto3 compatibility)
+
+enum DriverModeType {
+  DRIVER_MODE_TYPE_UNSPECIFIED = 0;
+  DRIVER_MODE_THRIFT = 1;
+  DRIVER_MODE_SEA = 2;
+}
+
+enum StatementType {
+  STATEMENT_TYPE_UNSPECIFIED = 0;
+  STATEMENT_QUERY = 1;
+  STATEMENT_SQL = 2;
+  STATEMENT_UPDATE = 3;
+  STATEMENT_METADATA = 4;
+  STATEMENT_VOLUME = 5;
+}
+
+enum OperationType {
+  OPERATION_TYPE_UNSPECIFIED = 0;
+  OPERATION_CREATE_SESSION = 1;
+  OPERATION_DELETE_SESSION = 2;
+  OPERATION_EXECUTE_STATEMENT = 3;
+  OPERATION_EXECUTE_STATEMENT_ASYNC = 4;
+  OPERATION_CLOSE_STATEMENT = 5;
+  OPERATION_CANCEL_STATEMENT = 6;
+  OPERATION_LIST_TYPE_INFO = 7;
+  OPERATION_LIST_CATALOGS = 8;
+  OPERATION_LIST_SCHEMAS = 9;
+  OPERATION_LIST_TABLES = 10;
+  OPERATION_LIST_TABLE_TYPES = 11;
+  OPERATION_LIST_COLUMNS = 12;
+  OPERATION_LIST_FUNCTIONS = 13;
+  OPERATION_LIST_PRIMARY_KEYS = 14;
+  OPERATION_LIST_IMPORTED_KEYS = 15;
+  OPERATION_LIST_EXPORTED_KEYS = 16;
+  OPERATION_LIST_CROSS_REFERENCES = 17;
+}
+
+enum ExecutionResultFormat {
+  EXECUTION_RESULT_FORMAT_UNSPECIFIED = 0;
+  EXECUTION_RESULT_INLINE_ARROW = 1;
+  EXECUTION_RESULT_INLINE_JSON = 2;
+  EXECUTION_RESULT_EXTERNAL_LINKS = 3;
+  EXECUTION_RESULT_COLUMNAR_INLINE = 4;
+}
+
+enum VolumeOperationType {
+  VOLUME_OPERATION_TYPE_UNSPECIFIED = 0;
+  VOLUME_OPERATION_PUT = 1;
+  VOLUME_OPERATION_GET = 2;
+  VOLUME_OPERATION_DELETE = 3;
+  VOLUME_OPERATION_LIST = 4;
+  VOLUME_OPERATION_QUERY = 5;
+}
+
+enum DriverProxyAuth {
+  DRIVER_PROXY_AUTH_UNSPECIFIED = 0;
+  DRIVER_PROXY_AUTH_NONE = 1;
+  DRIVER_PROXY_AUTH_BASIC = 2;
+  DRIVER_PROXY_AUTH_SPNEGO = 3;
+}
+
+enum DriverAuthMechType {
+  DRIVER_AUTH_MECH_TYPE_UNSPECIFIED = 0;
+  DRIVER_AUTH_MECH_OTHER = 1;
+  DRIVER_AUTH_MECH_PAT = 2;
+  DRIVER_AUTH_MECH_OAUTH = 3;
+}
+
+enum DriverAuthFlowType {
+  DRIVER_AUTH_FLOW_TYPE_UNSPECIFIED = 0;
+  DRIVER_AUTH_FLOW_TOKEN_PASSTHROUGH = 1;
+  DRIVER_AUTH_FLOW_CLIENT_CREDENTIALS = 2;
+  DRIVER_AUTH_FLOW_BROWSER_BASED_AUTHENTICATION = 3;
+}
