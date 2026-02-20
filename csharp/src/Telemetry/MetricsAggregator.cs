@@ -42,7 +42,7 @@ namespace AdbcDrivers.Databricks.Telemetry
     ///
     /// JDBC Reference: TelemetryCollector.java
     /// </remarks>
-    internal sealed class MetricsAggregator : IDisposable
+    internal sealed class MetricsAggregator : IDisposable, IAsyncDisposable
     {
         /// <summary>
         /// Internal ActivitySource for emitting trace events. Tests can subscribe to this.
@@ -57,7 +57,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly ConcurrentQueue<TelemetryFrontendLog> _pendingEvents;
         private readonly object _flushLock = new object();
         private readonly Timer _flushTimer;
-        private bool _disposed;
+        private volatile bool _disposed;
 
         /// <summary>
         /// Gets the number of pending events waiting to be flushed.
@@ -333,6 +333,32 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
         }
 
+        /// <summary>
+        /// Asynchronously disposes the MetricsAggregator and flushes any remaining events.
+        /// Preferred over Dispose() to avoid sync-over-async patterns.
+        /// </summary>
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+
+            try
+            {
+                _flushTimer.Dispose();
+                await FlushAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Swallow exceptions during dispose per telemetry requirement
+                Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.DisposeAsync.Error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
+            }
+        }
+
         #region Private Methods
 
         /// <summary>
@@ -492,13 +518,13 @@ namespace AdbcDrivers.Databricks.Telemetry
                     case "result.chunk_count":
                         if (int.TryParse(tag.Value, out int chunkCount))
                         {
-                            context.ChunkCount = (context.ChunkCount ?? 0) + chunkCount;
+                            context.AddChunkCount(chunkCount);
                         }
                         break;
                     case "result.bytes_downloaded":
                         if (long.TryParse(tag.Value, out long bytesDownloaded))
                         {
-                            context.BytesDownloaded = (context.BytesDownloaded ?? 0) + bytesDownloaded;
+                            context.AddBytesDownloaded(bytesDownloaded);
                         }
                         break;
                     case "result.compression_enabled":
@@ -516,13 +542,13 @@ namespace AdbcDrivers.Databricks.Telemetry
                     case "poll.count":
                         if (int.TryParse(tag.Value, out int pollCount))
                         {
-                            context.PollCount = (context.PollCount ?? 0) + pollCount;
+                            context.AddPollCount(pollCount);
                         }
                         break;
                     case "poll.latency_ms":
                         if (long.TryParse(tag.Value, out long pollLatencyMs))
                         {
-                            context.PollLatencyMs = (context.PollLatencyMs ?? 0) + pollLatencyMs;
+                            context.AddPollLatencyMs(pollLatencyMs);
                         }
                         break;
                     case "execution.status":
@@ -578,7 +604,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 ErrorInfo = new DriverErrorInfo
                 {
                     ErrorType = exception.GetType().Name,
-                    ErrorMessage = SanitizeErrorMessage(exception.Message),
+                    ErrorMessage = TruncateErrorMessage(exception.Message),
                     IsTerminal = isTerminal,
                     HttpStatusCode = httpStatusCode
                 }
@@ -611,9 +637,10 @@ namespace AdbcDrivers.Databricks.Telemetry
         }
 
         /// <summary>
-        /// Sanitizes an error message to remove potential PII.
+        /// Truncates an error message to a maximum length.
+        /// Note: This method only truncates; full PII scrubbing is the caller's responsibility.
         /// </summary>
-        private static string SanitizeErrorMessage(string? message)
+        private static string TruncateErrorMessage(string? message)
         {
             if (string.IsNullOrEmpty(message))
             {
@@ -743,20 +770,32 @@ namespace AdbcDrivers.Databricks.Telemetry
         {
             private long _totalLatencyMs;
 
+            // Backing fields for thread-safe accumulating metrics using Interlocked
+            private int _chunkCount;
+            private long _bytesDownloaded;
+            private int _pollCount;
+            private long _pollLatencyMs;
+            private volatile bool _hasChunkCount;
+            private volatile bool _hasBytesDownloaded;
+            private volatile bool _hasPollCount;
+            private volatile bool _hasPollLatencyMs;
+
             public string StatementId { get; }
             public string? SessionId { get; set; }
             public long TotalLatencyMs => Interlocked.Read(ref _totalLatencyMs);
 
-            // Aggregated metrics
+            // Non-accumulating metrics (last value wins)
             public string? ResultFormat { get; set; }
-            public int? ChunkCount { get; set; }
-            public long? BytesDownloaded { get; set; }
             public bool? CompressionEnabled { get; set; }
             public long? RowCount { get; set; }
-            public int? PollCount { get; set; }
-            public long? PollLatencyMs { get; set; }
             public string? ExecutionStatus { get; set; }
             public string? StatementType { get; set; }
+
+            // Thread-safe accumulating metrics using Interlocked
+            public int? ChunkCount => _hasChunkCount ? Interlocked.CompareExchange(ref _chunkCount, 0, 0) : (int?)null;
+            public long? BytesDownloaded => _hasBytesDownloaded ? Interlocked.Read(ref _bytesDownloaded) : (long?)null;
+            public int? PollCount => _hasPollCount ? Interlocked.CompareExchange(ref _pollCount, 0, 0) : (int?)null;
+            public long? PollLatencyMs => _hasPollLatencyMs ? Interlocked.Read(ref _pollLatencyMs) : (long?)null;
 
             // Buffered exceptions for retryable errors
             public ConcurrentBag<Exception> BufferedExceptions { get; } = new ConcurrentBag<Exception>();
@@ -770,6 +809,30 @@ namespace AdbcDrivers.Databricks.Telemetry
             public void AddLatency(long latencyMs)
             {
                 Interlocked.Add(ref _totalLatencyMs, latencyMs);
+            }
+
+            public void AddChunkCount(int count)
+            {
+                Interlocked.Add(ref _chunkCount, count);
+                _hasChunkCount = true;
+            }
+
+            public void AddBytesDownloaded(long bytes)
+            {
+                Interlocked.Add(ref _bytesDownloaded, bytes);
+                _hasBytesDownloaded = true;
+            }
+
+            public void AddPollCount(int count)
+            {
+                Interlocked.Add(ref _pollCount, count);
+                _hasPollCount = true;
+            }
+
+            public void AddPollLatencyMs(long latencyMs)
+            {
+                Interlocked.Add(ref _pollLatencyMs, latencyMs);
+                _hasPollLatencyMs = true;
             }
         }
 

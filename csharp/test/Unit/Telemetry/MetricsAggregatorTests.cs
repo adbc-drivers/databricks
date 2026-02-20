@@ -353,8 +353,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             activity.Stop();
             _aggregator.ProcessActivity(activity);
 
-            // Act - wait for timer to trigger flush (3x interval gives margin for CI environments under load)
-            await Task.Delay(300);
+            // Act - use retry loop for robustness on loaded CI environments
+            var deadline = DateTime.UtcNow.AddSeconds(2);
+            while (_mockExporter.ExportCallCount == 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(10);
+            }
 
             // Assert - exporter should have been called by timer
             Assert.True(_mockExporter.ExportCallCount > 0);
