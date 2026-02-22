@@ -121,12 +121,10 @@ jobs:
             const csharpChanged = names.some(f => f.startsWith('csharp/'));
             const rustChanged = names.some(f => f.startsWith('rust/'));
             const workflowChanged = names.some(f => f.startsWith('.github/workflows/'));
-            const inKnownFolder = csharpChanged || rustChanged || workflowChanged;
-            // Workflow change or unknown folder change triggers all targets
-            const runCsharp = csharpChanged || workflowChanged || !inKnownFolder;
-            const runRust = rustChanged || workflowChanged || !inKnownFolder;
+            // Workflow change triggers all targets; otherwise only changed driver folders
+            const runCsharp = csharpChanged || workflowChanged;
+            const runRust = rustChanged || workflowChanged;
             if (workflowChanged) console.log('✅ Workflow files changed - triggering all targets');
-            else if (!inKnownFolder) console.log('⚠️ Changes outside known folders - defaulting to all targets');
             core.setOutput('csharp', runCsharp.toString());
             core.setOutput('rust', runRust.toString());
 
@@ -223,17 +221,16 @@ jobs:
             RUST_CHANGED=true
           fi
 
-          # If nothing in known folders changed, default to running all tests
-          if [ "$CSHARP_CHANGED" = false ] && [ "$RUST_CHANGED" = false ]; then
-            echo "⚠️ Changes outside known folders - defaulting to all targets"
-            CSHARP_CHANGED=true
-            RUST_CHANGED=true
-          fi
-
           echo "csharp_changed=$CSHARP_CHANGED" >> $GITHUB_OUTPUT
           echo "rust_changed=$RUST_CHANGED" >> $GITHUB_OUTPUT
-          echo "should_test=true" >> $GITHUB_OUTPUT
-          echo "✅ Will run tests"
+
+          if [ "$CSHARP_CHANGED" = true ] || [ "$RUST_CHANGED" = true ]; then
+            echo "should_test=true" >> $GITHUB_OUTPUT
+            echo "✅ Relevant files changed - will run tests"
+          else
+            echo "should_test=false" >> $GITHUB_OUTPUT
+            echo "⏭️ No driver/workflow files changed - will auto-approve"
+          fi
   # =============================================================================
   # For Merge Queue: Check if tests already passed on PR
   # =============================================================================
@@ -357,6 +354,37 @@ jobs:
               "pr_title": "Merge queue validation",
               "pr_author": "merge-queue"
             }
+  auto-approve-no-relevant-changes:
+    needs: check-merge-queue-paths
+    if: github.event_name == 'merge_group' && needs.check-merge-queue-paths.outputs.should-test == 'false'
+    runs-on: [self-hosted, Linux, X64, peco-driver]
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
+          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
+          owner: adbc-drivers
+          repositories: databricks
+      - name: Create passing check (no relevant changes)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Integration Tests',
+              head_sha: '${{ github.event.merge_group.head_sha }}',
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Auto-approved - no relevant changes',
+                summary: '✅ No driver or workflow files changed. Skipping tests.'
+              }
+            });
   auto-approve-already-passed:
     needs: check-previous-run
     if: needs.check-previous-run.outputs.already-passed == 'true'
