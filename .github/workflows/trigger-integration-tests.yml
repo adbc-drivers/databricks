@@ -146,48 +146,6 @@ jobs:
           owner: adbc-drivers
           repositories: databricks
 
-      - name: Create umbrella Integration Tests check
-        id: create-check
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.adbc-token.outputs.token }}
-          result-encoding: string
-          script: |
-            const runCsharp = '${{ steps.changed.outputs.csharp }}' === 'true';
-            const runRust = '${{ steps.changed.outputs.rust }}' === 'true';
-
-            if (!runCsharp && !runRust) {
-              await github.rest.checks.create({
-                owner: 'adbc-drivers',
-                repo: 'databricks',
-                name: 'Integration Tests',
-                head_sha: context.payload.pull_request.head.sha,
-                status: 'completed',
-                conclusion: 'success',
-                completed_at: new Date().toISOString(),
-                output: {
-                  title: 'No relevant changes',
-                  summary: '✅ No driver files changed. Skipping integration tests.'
-                }
-              });
-              return '';
-            }
-
-            const { data: check } = await github.rest.checks.create({
-              owner: 'adbc-drivers',
-              repo: 'databricks',
-              name: 'Integration Tests',
-              head_sha: context.payload.pull_request.head.sha,
-              status: 'in_progress',
-              started_at: new Date().toISOString(),
-              output: {
-                title: 'Integration Tests',
-                summary: '🚀 Running integration tests...'
-              },
-              details_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
-            });
-            return check.id.toString();
-
       - name: Dispatch C# tests to internal repo
         if: steps.changed.outputs.csharp == 'true'
         uses: peter-evans/repository-dispatch@v3
@@ -202,8 +160,7 @@ jobs:
               "pr_repo": "${{ github.repository }}",
               "pr_url": "${{ github.event.pull_request.html_url }}",
               "pr_title": "${{ github.event.pull_request.title }}",
-              "pr_author": "${{ github.event.pull_request.user.login }}",
-              "check_run_id": "${{ steps.create-check.outputs.result }}"
+              "pr_author": "${{ github.event.pull_request.user.login }}"
             }
 
       - name: Dispatch Rust tests to internal repo
@@ -220,9 +177,48 @@ jobs:
               "pr_repo": "${{ github.repository }}",
               "pr_url": "${{ github.event.pull_request.html_url }}",
               "pr_title": "${{ github.event.pull_request.title }}",
-              "pr_author": "${{ github.event.pull_request.user.login }}",
-              "check_run_id": "${{ steps.create-check.outputs.result }}"
+              "pr_author": "${{ github.event.pull_request.user.login }}"
             }
+
+      - name: Pass Integration Tests check (C# not needed)
+        if: steps.changed.outputs.csharp != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers',
+              repo: 'databricks',
+              name: 'Integration Tests',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Skipped - no C# changes',
+                summary: '✅ No C# driver files changed.'
+              }
+            });
+
+      - name: Pass Rust Integration Tests check (Rust not needed)
+        if: steps.changed.outputs.rust != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers',
+              repo: 'databricks',
+              name: 'Rust Integration Tests',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Skipped - no Rust changes',
+                summary: '✅ No Rust driver files changed.'
+              }
+            });
 
       - name: Comment on PR
         uses: actions/github-script@v7
@@ -338,29 +334,26 @@ jobs:
               pull_number: prNumber
             });
             console.log(`PR #${prNumber} head SHA: ${pr.head.sha}`);
-            // Get checks for current PR head SHA
-            const { data: checks } = await github.rest.checks.listForRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: pr.head.sha,
-              check_name: 'Integration Tests'
-            });
-            console.log(`Found ${checks.total_count} check runs for "Integration Tests"`);
-            // Find the most recent passing check
-            const passingChecks = checks.check_runs
-              .filter(run => run.conclusion === 'success')
-              .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
-            if (passingChecks.length === 0) {
-              console.log('❌ No passing checks found');
-              return false;
+            // Check both required checks passed on current PR head SHA
+            const checkNames = ['Integration Tests', 'Rust Integration Tests'];
+            const results = await Promise.all(checkNames.map(name =>
+              github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pr.head.sha,
+                check_name: name
+              })
+            ));
+            for (let i = 0; i < checkNames.length; i++) {
+              const name = checkNames[i];
+              const runs = results[i].data.check_runs;
+              const passing = runs.filter(r => r.conclusion === 'success' && r.head_sha === pr.head.sha);
+              if (passing.length === 0) {
+                console.log(`❌ No passing check found for "${name}"`);
+                return false;
+              }
+              console.log(`✅ "${name}" passed on current head`);
             }
-            const latestPassing = passingChecks[0];
-            // CRITICAL: Check if the passing test ran on the CURRENT head SHA
-            if (latestPassing.head_sha !== pr.head.sha) {
-              console.log(`⚠️ Tests passed on ${latestPassing.head_sha}, but PR head is now ${pr.head.sha}`);
-              return false;
-            }
-            console.log(`✅ Tests passed on current head ${pr.head.sha}`);
             return true;
   trigger-tests-merge:
     needs: [check-merge-queue-paths, check-previous-run]
@@ -420,24 +413,27 @@ jobs:
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
           owner: adbc-drivers
           repositories: databricks
-      - name: Create passing check (no relevant changes)
+      - name: Create passing checks (no relevant changes)
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'Integration Tests',
-              head_sha: '${{ github.event.merge_group.head_sha }}',
-              status: 'completed',
-              conclusion: 'success',
-              completed_at: new Date().toISOString(),
-              output: {
-                title: 'Auto-approved - no relevant changes',
-                summary: '✅ No driver or workflow files changed. Skipping tests.'
-              }
-            });
+            const headSha = '${{ github.event.merge_group.head_sha }}';
+            for (const name of ['Integration Tests', 'Rust Integration Tests']) {
+              await github.rest.checks.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name,
+                head_sha: headSha,
+                status: 'completed',
+                conclusion: 'success',
+                completed_at: new Date().toISOString(),
+                output: {
+                  title: 'Auto-approved - no relevant changes',
+                  summary: '✅ No driver or workflow files changed. Skipping tests.'
+                }
+              });
+            }
   auto-approve-already-passed:
     needs: check-previous-run
     if: needs.check-previous-run.outputs.already-passed == 'true'
@@ -451,21 +447,24 @@ jobs:
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
           owner: adbc-drivers
           repositories: databricks
-      - name: Create passing check (auto-approve)
+      - name: Create passing checks (auto-approve)
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'Integration Tests',
-              head_sha: '${{ github.event.merge_group.head_sha }}',
-              status: 'completed',
-              conclusion: 'success',
-              completed_at: new Date().toISOString(),
-              output: {
-                title: 'Auto-approved for merge queue',
-                summary: '✅ Tests already passed on PR head commit. Skipping duplicate test run.'
-              }
-            });
+            const headSha = '${{ github.event.merge_group.head_sha }}';
+            for (const name of ['Integration Tests', 'Rust Integration Tests']) {
+              await github.rest.checks.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name,
+                head_sha: headSha,
+                status: 'completed',
+                conclusion: 'success',
+                completed_at: new Date().toISOString(),
+                output: {
+                  title: 'Auto-approved for merge queue',
+                  summary: '✅ Tests already passed on PR head commit. Skipping duplicate test run.'
+                }
+              });
+            }
