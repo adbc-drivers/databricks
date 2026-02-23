@@ -179,7 +179,7 @@ func TestUpload(t *testing.T) {
 
 		resp, err := c.httpClient.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, http.MethodPut, receivedMethod)
@@ -192,7 +192,7 @@ func TestUpload(t *testing.T) {
 	t.Run("upload failure", func(t *testing.T) {
 		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error": "access denied"}`))
+			_, _ = w.Write([]byte(`{"error": "access denied"}`))
 		}))
 		defer server.Close()
 
@@ -236,7 +236,7 @@ func TestDelete(t *testing.T) {
 	t.Run("delete failure", func(t *testing.T) {
 		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(`{"error": "not found"}`))
+			_, _ = w.Write([]byte(`{"error": "not found"}`))
 		}))
 		defer server.Close()
 

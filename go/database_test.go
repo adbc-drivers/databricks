@@ -24,12 +24,12 @@ import (
 
 func TestParseURIForStaging(t *testing.T) {
 	tests := []struct {
-		name         string
-		uri          string
-		wantHost     string
-		wantPort     int
-		wantToken    string
-		wantErr      bool
+		name      string
+		uri       string
+		wantHost  string
+		wantPort  int
+		wantToken string
+		wantErr   bool
 	}{
 		{
 			name:      "standard URI with token",
@@ -89,7 +89,7 @@ func TestStagingOptionsWithURI(t *testing.T) {
 
 	// Staging options should be allowed alongside URI
 	err := d.SetOptions(map[string]string{
-		adbc.OptionKeyURI: "databricks://token:mytoken@host.com:443/path",
+		adbc.OptionKeyURI:       "databricks://token:mytoken@host.com:443/path",
 		OptionStagingVolumePath: "cat.sch.vol",
 		OptionStagingPrefix:     "my_prefix",
 	})

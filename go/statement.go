@@ -196,7 +196,7 @@ func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
 		options:       &s.bulkIngestOptions,
 	}
 
-	alloc := s.conn.ConnectionImplBase.Alloc
+	alloc := s.conn.Alloc
 	if alloc == nil {
 		alloc = memory.DefaultAllocator
 	}
@@ -204,7 +204,7 @@ func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
 	mgr := &driverbase.BulkIngestManager{
 		Impl:        impl,
 		ErrorHelper: &s.ErrorHelper,
-		Logger:      s.conn.ConnectionImplBase.Logger,
+		Logger:      s.conn.Logger,
 		Alloc:       alloc,
 		Ctx:         ctx,
 		Options:     s.bulkIngestOptions,

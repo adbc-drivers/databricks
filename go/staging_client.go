@@ -92,7 +92,7 @@ func (c *stagingClient) uploadToURL(ctx context.Context, url string, data io.Rea
 	if err != nil {
 		return fmt.Errorf("upload request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
@@ -119,7 +119,7 @@ func (c *stagingClient) deleteFromURL(ctx context.Context, url string) error {
 	if err != nil {
 		return fmt.Errorf("delete request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
