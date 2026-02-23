@@ -76,6 +76,11 @@ func (c *stagingClient) generateFileName() (string, error) {
 // Upload uploads data to the staging area via the Databricks Files API.
 func (c *stagingClient) Upload(ctx context.Context, path string, data io.Reader) error {
 	url := fmt.Sprintf("%s/%s", c.baseURL(), path)
+	return c.uploadToURL(ctx, url, data)
+}
+
+// uploadToURL performs the actual PUT request to the given URL.
+func (c *stagingClient) uploadToURL(ctx context.Context, url string, data io.Reader) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, data)
 	if err != nil {
 		return fmt.Errorf("failed to create upload request: %w", err)
@@ -99,6 +104,11 @@ func (c *stagingClient) Upload(ctx context.Context, path string, data io.Reader)
 // Delete removes a file from the staging area via the Databricks Files API.
 func (c *stagingClient) Delete(ctx context.Context, path string) error {
 	url := fmt.Sprintf("%s/%s", c.baseURL(), path)
+	return c.deleteFromURL(ctx, url)
+}
+
+// deleteFromURL performs the actual DELETE request to the given URL.
+func (c *stagingClient) deleteFromURL(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create delete request: %w", err)
