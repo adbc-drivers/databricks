@@ -189,7 +189,7 @@ jobs:
             await github.rest.checks.create({
               owner: 'adbc-drivers',
               repo: 'databricks',
-              name: 'Integration Tests',
+              name: 'C# Integration Tests',
               head_sha: context.payload.pull_request.head.sha,
               status: 'completed',
               conclusion: 'success',
@@ -335,7 +335,7 @@ jobs:
             });
             console.log(`PR #${prNumber} head SHA: ${pr.head.sha}`);
             // Check both required checks passed on current PR head SHA
-            const checkNames = ['Integration Tests', 'Rust Integration Tests'];
+            const checkNames = ['C# Integration Tests', 'Rust Integration Tests'];
             const results = await Promise.all(checkNames.map(name =>
               github.rest.checks.listForRef({
                 owner: context.repo.owner,
@@ -419,7 +419,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const headSha = '${{ github.event.merge_group.head_sha }}';
-            for (const name of ['Integration Tests', 'Rust Integration Tests']) {
+            for (const name of ['C# Integration Tests', 'Rust Integration Tests']) {
               await github.rest.checks.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -453,7 +453,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const headSha = '${{ github.event.merge_group.head_sha }}';
-            for (const name of ['Integration Tests', 'Rust Integration Tests']) {
+            for (const name of ['C# Integration Tests', 'Rust Integration Tests']) {
               await github.rest.checks.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
