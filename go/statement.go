@@ -32,6 +32,7 @@ import (
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 type statementImpl struct {
@@ -146,7 +147,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 	if s.bulkIngestOptions.IsSet() {
-		return s.executeIngest(ctx)
+		return s.executeBulkIngest(ctx)
 	}
 
 	if s.boundStream != nil {
@@ -174,6 +175,54 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 	}
 
 	return rowsAffected, nil
+}
+
+// executeBulkIngest uses the driverbase BulkIngestManager to orchestrate the
+// Staging + COPY INTO pattern: write Parquet -> upload to volume -> COPY INTO -> cleanup.
+func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
+	if s.boundStream == nil {
+		return -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no data bound for ingestion")
+	}
+
+	if s.conn.stagingClient == nil || s.conn.stagingClient.volumePath == "" {
+		return -1, s.ErrorHelper.Errorf(adbc.StatusInvalidArgument,
+			"staging volume path must be configured via %s for bulk ingest", OptionStagingVolumePath)
+	}
+
+	impl := &databricksBulkIngest{
+		conn:          s.conn,
+		stagingClient: s.conn.stagingClient,
+		errorHelper:   &s.ErrorHelper,
+		options:       &s.bulkIngestOptions,
+	}
+
+	alloc := s.conn.ConnectionImplBase.Alloc
+	if alloc == nil {
+		alloc = memory.DefaultAllocator
+	}
+
+	mgr := &driverbase.BulkIngestManager{
+		Impl:        impl,
+		ErrorHelper: &s.ErrorHelper,
+		Logger:      s.conn.ConnectionImplBase.Logger,
+		Alloc:       alloc,
+		Ctx:         ctx,
+		Options:     s.bulkIngestOptions,
+		Data:        s.boundStream,
+	}
+	defer mgr.Close()
+
+	if err := mgr.Init(); err != nil {
+		return -1, err
+	}
+
+	rowsWritten, err := mgr.ExecuteIngest()
+
+	// The manager's Close() releases the bound stream, so nil it out
+	// to prevent double-release in statement.Close()
+	s.boundStream = nil
+
+	return rowsWritten, err
 }
 
 func (s *statementImpl) Bind(ctx context.Context, values arrow.RecordBatch) error {
