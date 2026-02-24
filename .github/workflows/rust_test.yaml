@@ -88,7 +88,7 @@ jobs:
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
@@ -96,7 +96,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -197,7 +197,7 @@ jobs:
       packages: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
@@ -205,7 +205,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -250,7 +250,7 @@ jobs:
           set +a
           pixi run adbc-make check CI=true VERBOSE=true DRIVER=databricks IMPL_LANG=rust TARGET_NAME=databricks_adbc
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      - uses: actions/upload-artifact@47309c993abb98030a35d55ef7ff34b7fa1074b5  # v6.0.0
         with:
           name: drivers-${{ matrix.platform }}-${{ matrix.arch }}
           path: "rust/build/libadbc_driver_databricks.*"
@@ -264,7 +264,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
@@ -272,7 +272,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -290,7 +290,7 @@ jobs:
           pixi-version: v0.63.2
           run-install: false
 
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v7.0.0
         with:
           pattern: "drivers-*"
           path: "~/drivers"
@@ -315,7 +315,7 @@ jobs:
 
           ls ~/packages
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      - uses: actions/upload-artifact@47309c993abb98030a35d55ef7ff34b7fa1074b5  # v6.0.0
         with:
           name: all-packages
           path: ~/packages
@@ -342,7 +342,7 @@ jobs:
         with:
           pixi-version: v0.63.2
           run-install: false
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v7.0.0
         with:
           name: "all-packages"
           path: "~/packages"
@@ -359,14 +359,14 @@ jobs:
           echo "Installing ${driver_pkg}"
           ./dbc install --no-verify "${driver_pkg}"
           echo "Installed ${driver_pkg}"
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 1
           persist-credentials: false
           submodules: 'recursive'
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -402,7 +402,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
@@ -410,7 +410,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -424,7 +424,7 @@ jobs:
           pixi-version: v0.63.2
           run-install: false
 
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v7.0.0
         with:
           name: "all-packages"
           path: "~/packages"
@@ -448,7 +448,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -468,7 +468,7 @@ jobs:
             --lcov --output-path lcov.info
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@47309c993abb98030a35d55ef7ff34b7fa1074b5  # v6.0.0
         with:
           name: rust-coverage
           path: rust/lcov.info
