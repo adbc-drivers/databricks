@@ -1,0 +1,65 @@
+# Copyright (c) 2025-2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This workflow runs in the context of the base repository after the
+# "Rust Test" workflow completes. It downloads the coverage artifact
+# and posts the coverage report as a PR comment. This two-workflow
+# approach is necessary because fork PRs do not receive write
+# permissions on the GITHUB_TOKEN.
+
+name: Rust Coverage Report
+
+on:
+  workflow_run:
+    workflows: ["Rust Test"]
+    types:
+      - completed
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  report:
+    name: "Post Coverage Report"
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+      actions: read
+    steps:
+      - name: Download coverage artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: rust-coverage
+          path: coverage
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Coverage report
+        uses: getsentry/codecov-action@bee8d919178e87c35ada22280d7da8b77dda2cbb  # main (2025-02-10)
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: coverage/lcov.info
+          coverage-format: lcov
+          post-pr-comment: true
+          commit-sha: ${{ github.event.workflow_run.head_sha }}
+          target-project: auto
+          threshold-project: 1
+          target-patch: 80
+          fail-on-error: false
