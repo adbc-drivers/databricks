@@ -115,6 +115,44 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
         }
 
         [Fact]
+        public void TelemetryFrontendLog_Deserialization_WorksCorrectly()
+        {
+            // Arrange - wrapper uses snake_case, proto uses camelCase
+            var json = @"{
+                ""workspace_id"": 999,
+                ""frontend_log_event_id"": ""test-event"",
+                ""context"": {
+                    ""timestamp_millis"": 1700000000000,
+                    ""client_context"": {
+                        ""user_agent"": ""TestAgent/1.0""
+                    }
+                },
+                ""entry"": {
+                    ""sql_driver_log"": {
+                        ""sessionId"": ""session-abc"",
+                        ""sqlStatementId"": ""statement-xyz""
+                    }
+                }
+            }";
+
+            // Act
+            var frontendLog = JsonSerializer.Deserialize<TelemetryFrontendLog>(json, TelemetryJsonOptions.Default);
+
+            // Assert
+            Assert.NotNull(frontendLog);
+            Assert.Equal(999L, frontendLog.WorkspaceId);
+            Assert.Equal("test-event", frontendLog.FrontendLogEventId);
+            Assert.NotNull(frontendLog.Context);
+            Assert.Equal(1700000000000L, frontendLog.Context.TimestampMillis);
+            Assert.NotNull(frontendLog.Context.ClientContext);
+            Assert.Equal("TestAgent/1.0", frontendLog.Context.ClientContext.UserAgent);
+            Assert.NotNull(frontendLog.Entry);
+            Assert.NotNull(frontendLog.Entry.SqlDriverLog);
+            Assert.Equal("session-abc", frontendLog.Entry.SqlDriverLog.SessionId);
+            Assert.Equal("statement-xyz", frontendLog.Entry.SqlDriverLog.SqlStatementId);
+        }
+
+        [Fact]
         public void TelemetryFrontendLog_FullStructure_SerializesCorrectly()
         {
             // Arrange
