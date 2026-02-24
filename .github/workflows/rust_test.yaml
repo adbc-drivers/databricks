@@ -131,10 +131,11 @@ jobs:
           set +a
 
           cargo build --locked
+          cargo build --locked --features ffi
 
       - name: Lint
         working-directory: rust
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       - name: Start Test Dependencies
         # Can't use Docker on macOS AArch64 runners, and Windows containers
@@ -172,6 +173,7 @@ jobs:
           fi
 
           cargo test --locked
+          cargo test --locked --features ffi
 
           if [[ -f ci/scripts/post-test.sh ]]; then
             ./ci/scripts/post-test.sh
