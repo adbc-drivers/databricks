@@ -131,10 +131,11 @@ jobs:
           set +a
 
           cargo build --locked
+          cargo build --locked --features ffi
 
       - name: Lint
         working-directory: rust
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       - name: Start Test Dependencies
         # Can't use Docker on macOS AArch64 runners, and Windows containers
@@ -172,6 +173,7 @@ jobs:
           fi
 
           cargo test --locked
+          cargo test --locked --features ffi
 
           if [[ -f ci/scripts/post-test.sh ]]; then
             ./ci/scripts/post-test.sh
@@ -445,8 +447,6 @@ jobs:
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
-      pull-requests: write
-      actions: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -467,14 +467,9 @@ jobs:
             --ignore-filename-regex "tests/" \
             --lcov --output-path lcov.info
 
-      - name: Coverage report
-        uses: getsentry/codecov-action@bee8d919178e87c35ada22280d7da8b77dda2cbb  # main (2025-02-10)
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          files: rust/lcov.info
-          coverage-format: lcov
-          post-pr-comment: true
-          target-project: auto
-          threshold-project: 1
-          target-patch: 80
-          fail-on-error: false
+          name: rust-coverage
+          path: rust/lcov.info
+          retention-days: 1
