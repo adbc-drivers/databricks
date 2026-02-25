@@ -445,12 +445,34 @@ impl StreamingCloudFetchProvider {
                     // Update state to retry
                     if let Some(mut entry) = chunks.get_mut(&chunk_index) {
                         entry.state = ChunkState::DownloadRetry;
+
+                        // HTTP 403/404 from cloud storage means the presigned URL was
+                        // revoked or expired early (before its timestamp). Clear the
+                        // cached link so the next iteration calls refetch_link() to get
+                        // a fresh URL from the Databricks API.
+                        if Self::is_cloud_storage_auth_error(&e.to_string()) {
+                            debug!(
+                                "Chunk {} got auth/not-found error from cloud storage, clearing cached link for refetch",
+                                chunk_index
+                            );
+                            entry.link = None;
+                        }
                     }
 
                     tokio::time::sleep(retry_delay).await;
                 }
             }
         }
+    }
+
+    /// Returns true if the error indicates the presigned URL is no longer valid
+    /// (HTTP 401 Unauthorized, HTTP 403 Forbidden, or HTTP 404 Not Found from cloud storage).
+    ///
+    /// These errors mean the URL was revoked or expired before its timestamp,
+    /// so we should refetch a fresh URL from Databricks rather than retrying
+    /// the same invalid URL.
+    fn is_cloud_storage_auth_error(err_str: &str) -> bool {
+        err_str.contains("HTTP 401") || err_str.contains("HTTP 403") || err_str.contains("HTTP 404")
     }
 
     /// Wait for a specific chunk to be ready (Downloaded state).
@@ -635,6 +657,52 @@ mod tests {
         assert!(result.next_chunk_index.is_none());
     }
 
-    // Note: Full streaming provider tests require integration test setup
-    // with mock HTTP responses for the chunk downloader
+    #[test]
+    fn test_is_cloud_storage_auth_error_detects_401() {
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "HTTP 401 - Unauthorized"
+        ));
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "HTTP 401 - "
+        ));
+    }
+
+    #[test]
+    fn test_is_cloud_storage_auth_error_detects_403() {
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "HTTP 403 - Forbidden"
+        ));
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "HTTP 403 - "
+        ));
+    }
+
+    #[test]
+    fn test_is_cloud_storage_auth_error_detects_404() {
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "HTTP 404 - Not Found"
+        ));
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "HTTP 404 - "
+        ));
+    }
+
+    #[test]
+    fn test_is_cloud_storage_auth_error_ignores_other_statuses() {
+        assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "HTTP 500 - Internal Server Error"
+        ));
+        assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "HTTP 429 - Too Many Requests"
+        ));
+        assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            "network timeout"
+        ));
+        assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            ""
+        ));
+    }
+
+    // Note: Full download_chunk_with_retry tests require a mockable ChunkDownloader
+    // (integration tests cover end-to-end 401/403/404 scenarios)
 }
