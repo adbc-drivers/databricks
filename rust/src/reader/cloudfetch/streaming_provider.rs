@@ -407,25 +407,33 @@ impl StreamingCloudFetchProvider {
                 return Err(DatabricksErrorHelper::invalid_state().message("Download cancelled"));
             }
 
-            // Get link (may need to refetch if expired)
-            let link = {
+            // Get link (may need to refetch if expired).
+            //
+            // IMPORTANT: The DashMap read guard (`entry`) must be dropped BEFORE
+            // calling `refetch_link().await` and `chunks.get_mut()`. If `entry`
+            // is still alive (holding the shard read lock) when `get_mut()` tries
+            // to acquire the exclusive write lock on the same shard, the task
+            // deadlocks with itself — it can never release the read lock because
+            // it is blocked waiting for the write lock.
+            let stored_link = {
                 let entry = chunks.get(&chunk_index);
-                let stored_link = entry.as_ref().and_then(|e| e.link.clone());
+                entry.as_ref().and_then(|e| e.link.clone())
+                // `entry` (and its read lock) is dropped here
+            };
 
-                match stored_link {
-                    Some(link) if !link.is_expired() => link,
-                    _ => {
-                        // Link missing or expired - refetch it
-                        debug!("Refetching expired link for chunk {}", chunk_index);
-                        let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
+            let link = match stored_link {
+                Some(link) if !link.is_expired() => link,
+                _ => {
+                    // Link missing or expired - refetch it (no read lock held)
+                    debug!("Refetching expired link for chunk {}", chunk_index);
+                    let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
 
-                        // Store the new link
-                        if let Some(mut entry) = chunks.get_mut(&chunk_index) {
-                            entry.link = Some(new_link.clone());
-                        }
-
-                        new_link
+                    // Store the new link (safe: no read lock held)
+                    if let Some(mut entry) = chunks.get_mut(&chunk_index) {
+                        entry.link = Some(new_link.clone());
                     }
+
+                    new_link
                 }
             };
 
