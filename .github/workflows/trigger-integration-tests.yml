@@ -275,6 +275,13 @@ jobs:
               output: { title: 'Skipped - no C# changes', summary: '✅ No C# driver files changed.' }
             });
 
+      - name: Extract PR number
+        if: steps.changed.outputs.changed == 'true'
+        id: extract-pr
+        run: |
+          REF="${{ github.event.merge_group.head_ref }}"
+          [[ $REF =~ pr-([0-9]+) ]] && echo "pr_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT || echo "pr_number=0" >> $GITHUB_OUTPUT
+
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.changed == 'true'
         id: app-token
@@ -294,8 +301,10 @@ jobs:
           event-type: adbc-csharp-pr-test
           client-payload: |
             {
+              "pr_number": "${{ steps.extract-pr.outputs.pr_number }}",
               "commit_sha": "${{ github.event.merge_group.head_sha }}",
               "pr_repo": "${{ github.repository }}",
+              "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
               "pr_title": "Merge queue validation",
               "pr_author": "merge-queue"
             }
@@ -354,6 +363,13 @@ jobs:
               output: { title: 'Skipped - no Rust changes', summary: '✅ No Rust driver files changed.' }
             });
 
+      - name: Extract PR number
+        if: steps.changed.outputs.changed == 'true'
+        id: extract-pr
+        run: |
+          REF="${{ github.event.merge_group.head_ref }}"
+          [[ $REF =~ pr-([0-9]+) ]] && echo "pr_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT || echo "pr_number=0" >> $GITHUB_OUTPUT
+
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.changed == 'true'
         id: app-token
@@ -373,8 +389,10 @@ jobs:
           event-type: adbc-rust-pr-test
           client-payload: |
             {
+              "pr_number": "${{ steps.extract-pr.outputs.pr_number }}",
               "commit_sha": "${{ github.event.merge_group.head_sha }}",
               "pr_repo": "${{ github.repository }}",
+              "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
               "pr_title": "Merge queue validation",
               "pr_author": "merge-queue"
             }
