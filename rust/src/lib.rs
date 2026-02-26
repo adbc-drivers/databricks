@@ -100,8 +100,3 @@ pub use client::{DatabricksClient, DatabricksHttpClient, HttpClientConfig, SeaCl
 
 // Re-export configuration types
 pub use types::cloudfetch::CloudFetchConfig;
-
-// FFI export — produces AdbcDatabricksInit and AdbcDriverInit symbols
-// when built with `cargo build --features ffi`
-#[cfg(feature = "ffi")]
-adbc_ffi::export_driver!(AdbcDatabricksInit, crate::driver::Driver);

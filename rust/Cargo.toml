@@ -25,7 +25,6 @@ categories = ["database"]
 
 [dependencies]
 adbc_core = "0.22"
-adbc_ffi = { version = "0.22", optional = true }
 driverbase = { git = "https://github.com/adbc-drivers/driverbase-rs.git", rev = "a824debf9cbc2236bc12a09c178576b8254c04c4" }
 tracing = "0.1"
 
@@ -67,11 +66,6 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"
 tracing-subscriber = "0.3"
-adbc_driver_manager = "0.22"
-
-[features]
-default = []
-ffi = ["adbc_ffi"]
 
 [lib]
 name = "databricks_adbc"

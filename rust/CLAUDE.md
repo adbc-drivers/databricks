@@ -228,25 +228,15 @@ Key steps:
 
 Reference the [Databricks SQL Statement Execution API documentation](https://docs.databricks.com/api/workspace/statementexecution) for endpoint details and request/response formats.
 
-## Local Development Environment
+## Testing Against Databricks
 
-Connection configuration for examples and E2E tests is stored in `rust/.cargo/config.toml`
-(gitignored) under the `[env]` section. Cargo automatically injects these as environment
-variables when running `cargo run`, `cargo test`, etc. — no manual `export` needed.
+Environment variables for E2E tests:
 
-```toml
-# rust/.cargo/config.toml
-[env]
-DATABRICKS_HOST = "https://your-workspace.databricks.com"
-DATABRICKS_HTTP_PATH = "/sql/1.0/warehouses/abc123"
-DATABRICKS_TOKEN = "your-pat-token"
-RUST_LOG = "databricks_adbc=debug"
+```bash
+export DATABRICKS_HOST="https://your-workspace.databricks.com"
+export DATABRICKS_HTTP_PATH="/sql/1.0/warehouses/abc123"
+export DATABRICKS_TOKEN="your-pat-token"
 ```
-
-The three required variables are:
-- `DATABRICKS_HOST` — Workspace URL
-- `DATABRICKS_HTTP_PATH` — SQL warehouse HTTP path (e.g. `/sql/1.0/warehouses/<id>`)
-- `DATABRICKS_TOKEN` — Personal access token
 
 ## Common Patterns
 
