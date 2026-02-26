@@ -67,6 +67,10 @@ const (
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
 
+	// Staging options for bulk ingest
+	OptionStagingVolumePath = "databricks.staging.volume_path" // Three-part name: "catalog.schema.volume"
+	OptionStagingPrefix     = "databricks.staging.prefix"      // Subfolder prefix within volume, default "adbc_staging"
+
 	// Default values
 	DefaultPort    = 443
 	DefaultSSLMode = "require"
