@@ -280,7 +280,12 @@ jobs:
         id: extract-pr
         run: |
           REF="${{ github.event.merge_group.head_ref }}"
-          [[ $REF =~ pr-([0-9]+) ]] && echo "pr_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT || echo "pr_number=0" >> $GITHUB_OUTPUT
+          if [[ $REF =~ pr-([0-9]+) ]]; then
+            echo "pr_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+          else
+            echo "Error: failed to extract PR number from merge group ref: '$REF'" >&2
+            exit 1
+          fi
 
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.changed == 'true'
@@ -368,7 +373,12 @@ jobs:
         id: extract-pr
         run: |
           REF="${{ github.event.merge_group.head_ref }}"
-          [[ $REF =~ pr-([0-9]+) ]] && echo "pr_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT || echo "pr_number=0" >> $GITHUB_OUTPUT
+          if [[ $REF =~ pr-([0-9]+) ]]; then
+            echo "pr_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+          else
+            echo "Error: failed to extract PR number from merge group ref: '$REF'" >&2
+            exit 1
+          fi
 
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.changed == 'true'
