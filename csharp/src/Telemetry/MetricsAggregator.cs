@@ -22,6 +22,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 
 namespace AdbcDrivers.Databricks.Telemetry
@@ -418,15 +419,25 @@ namespace AdbcDrivers.Databricks.Telemetry
         private void ProcessConnectionActivity(Activity activity)
         {
             var sessionId = GetTagValue(activity, "session.id");
-            var telemetryEvent = new TelemetryEvent
+            var telemetryLog = new OssSqlDriverTelemetryLog
             {
-                SessionId = sessionId,
-                OperationLatencyMs = (long)activity.Duration.TotalMilliseconds,
-                SystemConfiguration = ExtractSystemConfiguration(activity),
-                ConnectionParameters = ExtractConnectionParameters(activity)
+                SessionId = sessionId ?? string.Empty,
+                OperationLatencyMs = (long)activity.Duration.TotalMilliseconds
             };
 
-            var frontendLog = WrapInFrontendLog(telemetryEvent);
+            var systemConfig = ExtractSystemConfiguration(activity);
+            if (systemConfig != null)
+            {
+                telemetryLog.SystemConfiguration = systemConfig;
+            }
+
+            var connectionParams = ExtractConnectionParameters(activity);
+            if (connectionParams != null)
+            {
+                telemetryLog.DriverConnectionParams = connectionParams;
+            }
+
+            var frontendLog = WrapInFrontendLog(telemetryLog);
             _pendingEvents.Enqueue(frontendLog);
 
             Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.ConnectionEventEmitted"));
@@ -443,14 +454,19 @@ namespace AdbcDrivers.Databricks.Telemetry
             if (string.IsNullOrEmpty(statementId))
             {
                 // No statement ID, cannot aggregate - emit immediately
-                var telemetryEvent = new TelemetryEvent
+                var telemetryLog = new OssSqlDriverTelemetryLog
                 {
-                    SessionId = sessionId,
-                    OperationLatencyMs = (long)activity.Duration.TotalMilliseconds,
-                    SqlExecutionEvent = ExtractSqlExecutionEvent(activity)
+                    SessionId = sessionId ?? string.Empty,
+                    OperationLatencyMs = (long)activity.Duration.TotalMilliseconds
                 };
 
-                var frontendLog = WrapInFrontendLog(telemetryEvent);
+                var sqlOperation = ExtractSqlExecutionEvent(activity);
+                if (sqlOperation != null)
+                {
+                    telemetryLog.SqlOperation = sqlOperation;
+                }
+
+                var frontendLog = WrapInFrontendLog(telemetryLog);
                 _pendingEvents.Enqueue(frontendLog);
                 return;
             }
@@ -473,23 +489,19 @@ namespace AdbcDrivers.Databricks.Telemetry
             var statementId = GetTagValue(activity, "statement.id");
             var sessionId = GetTagValue(activity, "session.id");
             var errorType = GetTagValue(activity, "error.type");
-            var errorMessage = GetTagValue(activity, "error.message");
-            var errorCode = GetTagValue(activity, "error.code");
 
-            var telemetryEvent = new TelemetryEvent
+            var telemetryLog = new OssSqlDriverTelemetryLog
             {
-                SessionId = sessionId,
-                SqlStatementId = statementId,
+                SessionId = sessionId ?? string.Empty,
+                SqlStatementId = statementId ?? string.Empty,
                 OperationLatencyMs = (long)activity.Duration.TotalMilliseconds,
                 ErrorInfo = new DriverErrorInfo
                 {
-                    ErrorType = errorType,
-                    ErrorMessage = errorMessage,
-                    ErrorCode = errorCode
+                    ErrorName = errorType ?? string.Empty
                 }
             };
 
-            var frontendLog = WrapInFrontendLog(telemetryEvent);
+            var frontendLog = WrapInFrontendLog(telemetryLog);
             _pendingEvents.Enqueue(frontendLog);
 
             Activity.Current?.AddEvent(new ActivityEvent("MetricsAggregator.ErrorEventEmitted"));
@@ -562,78 +574,79 @@ namespace AdbcDrivers.Databricks.Telemetry
         }
 
         /// <summary>
-        /// Creates a TelemetryEvent from a statement context.
+        /// Creates a TelemetryLog from a statement context.
         /// </summary>
-        private TelemetryEvent CreateTelemetryEvent(StatementTelemetryContext context)
+        private OssSqlDriverTelemetryLog CreateTelemetryEvent(StatementTelemetryContext context)
         {
-            return new TelemetryEvent
+            var telemetryLog = new OssSqlDriverTelemetryLog
             {
-                SessionId = context.SessionId,
+                SessionId = context.SessionId ?? string.Empty,
                 SqlStatementId = context.StatementId,
                 OperationLatencyMs = context.TotalLatencyMs,
-                SqlExecutionEvent = new SqlExecutionEvent
+                SqlOperation = new SqlExecutionEvent
                 {
-                    ResultFormat = context.ResultFormat,
-                    ChunkCount = context.ChunkCount,
-                    BytesDownloaded = context.BytesDownloaded,
-                    CompressionEnabled = context.CompressionEnabled,
-                    RowCount = context.RowCount,
-                    PollCount = context.PollCount,
-                    PollLatencyMs = context.PollLatencyMs,
-                    ExecutionStatus = context.ExecutionStatus,
-                    StatementType = context.StatementType
+                    IsCompressed = context.CompressionEnabled ?? false,
+                    ChunkDetails = new ChunkDetails
+                    {
+                        TotalChunksPresent = context.ChunkCount ?? 0,
+                        SumChunksDownloadTimeMillis = context.BytesDownloaded ?? 0
+                    },
+                    OperationDetail = new OperationDetail
+                    {
+                        NOperationStatusCalls = context.PollCount ?? 0,
+                        OperationStatusLatencyMillis = context.PollLatencyMs ?? 0
+                    }
                 }
             };
+
+            // Map result format to ExecutionResultFormat enum
+            if (!string.IsNullOrEmpty(context.ResultFormat))
+            {
+                telemetryLog.SqlOperation.ExecutionResult = context.ResultFormat.ToLowerInvariant() switch
+                {
+                    "cloudfetch" or "external_links" => ExecutionResultFormat.ExecutionResultExternalLinks,
+                    "arrow" or "inline_arrow" => ExecutionResultFormat.ExecutionResultInlineArrow,
+                    "json" or "inline_json" => ExecutionResultFormat.ExecutionResultInlineJson,
+                    _ => ExecutionResultFormat.Unspecified
+                };
+            }
+
+            // Map statement type to StatementType enum
+            if (!string.IsNullOrEmpty(context.StatementType))
+            {
+                telemetryLog.SqlOperation.StatementType = context.StatementType.ToLowerInvariant() switch
+                {
+                    "query" => StatementType.StatementQuery,
+                    "sql" => StatementType.StatementSql,
+                    "update" => StatementType.StatementUpdate,
+                    "metadata" => StatementType.StatementMetadata,
+                    _ => StatementType.Unspecified
+                };
+            }
+
+            return telemetryLog;
         }
 
         /// <summary>
-        /// Creates an error TelemetryEvent from an exception.
+        /// Creates an error TelemetryLog from an exception.
         /// </summary>
-        private TelemetryEvent CreateErrorTelemetryEvent(
+        private OssSqlDriverTelemetryLog CreateErrorTelemetryEvent(
             string? sessionId,
             string statementId,
             Exception exception)
         {
-            var isTerminal = ExceptionClassifier.IsTerminalException(exception);
-            int? httpStatusCode = ExtractHttpStatusCode(exception);
-
-            return new TelemetryEvent
+            // Note: Proto DriverErrorInfo only has ErrorName and StackTrace
+            // HttpStatusCode and IsTerminal are not part of the proto schema
+            return new OssSqlDriverTelemetryLog
             {
-                SessionId = sessionId,
+                SessionId = sessionId ?? string.Empty,
                 SqlStatementId = statementId,
                 ErrorInfo = new DriverErrorInfo
                 {
-                    ErrorType = exception.GetType().Name,
-                    ErrorMessage = TruncateErrorMessage(exception.Message),
-                    IsTerminal = isTerminal,
-                    HttpStatusCode = httpStatusCode
+                    ErrorName = exception.GetType().Name,
+                    StackTrace = TruncateErrorMessage(exception.Message)
                 }
             };
-        }
-
-        /// <summary>
-        /// Extracts HTTP status code from an exception.
-        /// Uses HttpExceptionWithStatusCode which works across all .NET versions.
-        /// </summary>
-        /// <remarks>
-        /// The codebase uses HttpResponseExtensions.EnsureSuccessOrThrow() which throws
-        /// HttpExceptionWithStatusCode for all HTTP errors, ensuring the status code
-        /// is always available regardless of .NET version.
-        /// </remarks>
-        private static int? ExtractHttpStatusCode(Exception exception)
-        {
-            if (exception is HttpExceptionWithStatusCode httpEx)
-            {
-                return (int)httpEx.StatusCode;
-            }
-
-            // Check inner exception for wrapped HTTP exceptions
-            if (exception.InnerException is HttpExceptionWithStatusCode innerHttpEx)
-            {
-                return (int)innerHttpEx.StatusCode;
-            }
-
-            return null;
         }
 
         /// <summary>
@@ -658,9 +671,9 @@ namespace AdbcDrivers.Databricks.Telemetry
         }
 
         /// <summary>
-        /// Wraps a TelemetryEvent in a TelemetryFrontendLog.
+        /// Wraps a TelemetryLog in a TelemetryFrontendLog.
         /// </summary>
-        internal TelemetryFrontendLog WrapInFrontendLog(TelemetryEvent telemetryEvent)
+        internal TelemetryFrontendLog WrapInFrontendLog(OssSqlDriverTelemetryLog telemetryLog)
         {
             return new TelemetryFrontendLog
             {
@@ -676,7 +689,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 },
                 Entry = new FrontendLogEntry
                 {
-                    SqlDriverLog = telemetryEvent
+                    SqlDriverLog = telemetryLog
                 }
             };
         }
@@ -698,10 +711,10 @@ namespace AdbcDrivers.Databricks.Telemetry
             return new DriverSystemConfiguration
             {
                 DriverName = "Databricks ADBC Driver",
-                DriverVersion = driverVersion,
-                OsName = osName,
+                DriverVersion = driverVersion ?? string.Empty,
+                OsName = osName ?? string.Empty,
                 RuntimeName = ".NET",
-                RuntimeVersion = runtime
+                RuntimeVersion = runtime ?? string.Empty
             };
         }
 
@@ -710,21 +723,27 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         private static DriverConnectionParameters? ExtractConnectionParameters(Activity activity)
         {
-            var cloudFetchEnabled = GetTagValue(activity, "feature.cloudfetch");
-            var lz4Enabled = GetTagValue(activity, "feature.lz4");
             var directResultsEnabled = GetTagValue(activity, "feature.direct_results");
+            var arrowEnabled = GetTagValue(activity, "feature.arrow");
 
-            if (cloudFetchEnabled == null && lz4Enabled == null && directResultsEnabled == null)
+            if (directResultsEnabled == null && arrowEnabled == null)
             {
                 return null;
             }
 
-            return new DriverConnectionParameters
+            var parameters = new DriverConnectionParameters();
+
+            if (bool.TryParse(directResultsEnabled, out var dr))
             {
-                CloudFetchEnabled = bool.TryParse(cloudFetchEnabled, out var cf) ? cf : (bool?)null,
-                Lz4CompressionEnabled = bool.TryParse(lz4Enabled, out var lz4) ? lz4 : (bool?)null,
-                DirectResultsEnabled = bool.TryParse(directResultsEnabled, out var dr) ? dr : (bool?)null
-            };
+                parameters.EnableDirectResults = dr;
+            }
+
+            if (bool.TryParse(arrowEnabled, out var arrow))
+            {
+                parameters.EnableArrow = arrow;
+            }
+
+            return parameters;
         }
 
         /// <summary>
@@ -734,21 +753,38 @@ namespace AdbcDrivers.Databricks.Telemetry
         {
             var resultFormat = GetTagValue(activity, "result.format");
             var chunkCountStr = GetTagValue(activity, "result.chunk_count");
-            var bytesDownloadedStr = GetTagValue(activity, "result.bytes_downloaded");
             var pollCountStr = GetTagValue(activity, "poll.count");
 
-            if (resultFormat == null && chunkCountStr == null && bytesDownloadedStr == null && pollCountStr == null)
+            if (resultFormat == null && chunkCountStr == null && pollCountStr == null)
             {
                 return null;
             }
 
-            return new SqlExecutionEvent
+            var sqlEvent = new SqlExecutionEvent();
+
+            // Map result format to ExecutionResultFormat enum
+            if (!string.IsNullOrEmpty(resultFormat))
             {
-                ResultFormat = resultFormat,
-                ChunkCount = int.TryParse(chunkCountStr, out var cc) ? cc : (int?)null,
-                BytesDownloaded = long.TryParse(bytesDownloadedStr, out var bd) ? bd : (long?)null,
-                PollCount = int.TryParse(pollCountStr, out var pc) ? pc : (int?)null
-            };
+                sqlEvent.ExecutionResult = resultFormat.ToLowerInvariant() switch
+                {
+                    "cloudfetch" or "external_links" => ExecutionResultFormat.ExecutionResultExternalLinks,
+                    "arrow" or "inline_arrow" => ExecutionResultFormat.ExecutionResultInlineArrow,
+                    "json" or "inline_json" => ExecutionResultFormat.ExecutionResultInlineJson,
+                    _ => ExecutionResultFormat.Unspecified
+                };
+            }
+
+            if (int.TryParse(chunkCountStr, out var cc))
+            {
+                sqlEvent.ChunkDetails = new ChunkDetails { TotalChunksPresent = cc };
+            }
+
+            if (int.TryParse(pollCountStr, out var pc))
+            {
+                sqlEvent.OperationDetail = new OperationDetail { NOperationStatusCalls = pc };
+            }
+
+            return sqlEvent;
         }
 
         /// <summary>

@@ -26,6 +26,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
@@ -538,10 +539,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
         #endregion
 
-        #region HTTP Status Code Extraction Tests
+        #region Error Info Tests
 
         [Fact]
-        public async Task MetricsAggregator_RecordException_HttpExceptionWithStatusCode_ExtractsStatusCode()
+        public async Task MetricsAggregator_RecordException_HttpException_CapturesErrorName()
         {
             // Arrange
             _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
@@ -557,11 +558,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal(1, _mockExporter.ExportCallCount);
             var exportedLog = _mockExporter.ExportedLogs.First();
             Assert.NotNull(exportedLog.Entry?.SqlDriverLog?.ErrorInfo);
-            Assert.Equal(401, exportedLog.Entry.SqlDriverLog.ErrorInfo.HttpStatusCode);
+            Assert.Equal("HttpExceptionWithStatusCode", exportedLog.Entry.SqlDriverLog.ErrorInfo.ErrorName);
         }
 
         [Fact]
-        public async Task MetricsAggregator_RecordException_RetryableHttpException_ExtractsStatusCodeOnFailed()
+        public async Task MetricsAggregator_RecordException_RetryableHttpException_EmitsOnFailed()
         {
             // Arrange
             _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
@@ -583,11 +584,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var errorLog = _mockExporter.ExportedLogs.FirstOrDefault(
                 log => log.Entry?.SqlDriverLog?.ErrorInfo != null);
             Assert.NotNull(errorLog);
-            Assert.Equal(503, errorLog.Entry!.SqlDriverLog!.ErrorInfo!.HttpStatusCode);
+            Assert.Equal("HttpExceptionWithStatusCode", errorLog.Entry!.SqlDriverLog!.ErrorInfo!.ErrorName);
         }
 
         [Fact]
-        public async Task MetricsAggregator_RecordException_WrappedTerminalHttpException_ExtractsStatusCode()
+        public async Task MetricsAggregator_RecordException_WrappedTerminalHttpException_CapturesWrapperErrorName()
         {
             // Arrange
             _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
@@ -604,11 +605,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal(1, _mockExporter.ExportCallCount);
             var exportedLog = _mockExporter.ExportedLogs.First();
             Assert.NotNull(exportedLog.Entry?.SqlDriverLog?.ErrorInfo);
-            Assert.Equal(403, exportedLog.Entry.SqlDriverLog.ErrorInfo.HttpStatusCode);
+            // Note: ErrorName captures the wrapper exception type, not the inner
+            Assert.Equal("Exception", exportedLog.Entry.SqlDriverLog.ErrorInfo.ErrorName);
         }
 
         [Fact]
-        public async Task MetricsAggregator_RecordException_RegularException_NoStatusCode()
+        public async Task MetricsAggregator_RecordException_RegularException_CapturesErrorName()
         {
             // Arrange
             _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
@@ -628,7 +630,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var errorLog = _mockExporter.ExportedLogs.FirstOrDefault(
                 log => log.Entry?.SqlDriverLog?.ErrorInfo != null);
             Assert.NotNull(errorLog);
-            Assert.Null(errorLog.Entry!.SqlDriverLog!.ErrorInfo!.HttpStatusCode);
+            Assert.Equal("InvalidOperationException", errorLog.Entry!.SqlDriverLog!.ErrorInfo!.ErrorName);
         }
 
         #endregion
@@ -721,7 +723,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Arrange
             _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
 
-            var telemetryEvent = new TelemetryEvent
+            var telemetryLog = new OssSqlDriverTelemetryLog
             {
                 SessionId = "session-wrap-123",
                 SqlStatementId = "stmt-wrap-456",
@@ -729,7 +731,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             };
 
             // Act
-            var frontendLog = _aggregator.WrapInFrontendLog(telemetryEvent);
+            var frontendLog = _aggregator.WrapInFrontendLog(telemetryLog);
 
             // Assert
             Assert.NotNull(frontendLog);
@@ -741,8 +743,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.True(frontendLog.Context.TimestampMillis > 0);
             Assert.NotNull(frontendLog.Entry);
             Assert.NotNull(frontendLog.Entry.SqlDriverLog);
-            Assert.Equal(telemetryEvent.SessionId, frontendLog.Entry.SqlDriverLog.SessionId);
-            Assert.Equal(telemetryEvent.SqlStatementId, frontendLog.Entry.SqlDriverLog.SqlStatementId);
+            Assert.Equal(telemetryLog.SessionId, frontendLog.Entry.SqlDriverLog.SessionId);
+            Assert.Equal(telemetryLog.SqlStatementId, frontendLog.Entry.SqlDriverLog.SqlStatementId);
         }
 
         [Fact]
@@ -751,11 +753,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Arrange
             _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
 
-            var telemetryEvent = new TelemetryEvent { SessionId = "session-unique" };
+            var telemetryLog = new OssSqlDriverTelemetryLog { SessionId = "session-unique" };
 
             // Act
-            var frontendLog1 = _aggregator.WrapInFrontendLog(telemetryEvent);
-            var frontendLog2 = _aggregator.WrapInFrontendLog(telemetryEvent);
+            var frontendLog1 = _aggregator.WrapInFrontendLog(telemetryLog);
+            var frontendLog2 = _aggregator.WrapInFrontendLog(telemetryLog);
 
             // Assert
             Assert.NotEqual(frontendLog1.FrontendLogEventId, frontendLog2.FrontendLogEventId);
