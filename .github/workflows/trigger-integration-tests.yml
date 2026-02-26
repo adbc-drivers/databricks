@@ -99,7 +99,7 @@ jobs:
   # =============================================================================
   skip-integration-tests-pr:
     if: github.event_name == 'pull_request' && github.event.action != 'labeled'
-    runs-on: [self-hosted, Linux, X64, peco-driver]
+    runs-on: ubuntu-latest
     steps:
       - name: Generate GitHub App Token
         id: adbc-token
