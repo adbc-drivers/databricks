@@ -299,6 +299,26 @@ jobs:
             echo "pr_number=" >> $GITHUB_OUTPUT
           fi
 
+      - name: Fail check (PR number not extractable)
+        if: steps.changed.outputs.changed == 'true' && steps.extract-pr.outputs.pr_number == ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers',
+              repo: 'databricks',
+              name: 'C# Integration Tests',
+              head_sha: '${{ github.event.merge_group.head_sha }}',
+              status: 'completed',
+              conclusion: 'failure',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Failed - unable to determine PR number',
+                summary: '❌ C# files changed but PR number could not be extracted from head_ref (`${{ github.event.merge_group.head_ref }}`). Please check the merge queue ref format.'
+              }
+            });
+
       - name: Check if C# tests already passed on PR head
         if: steps.changed.outputs.changed == 'true' && steps.extract-pr.outputs.pr_number != ''
         id: check-prev
@@ -423,6 +443,26 @@ jobs:
             echo "❌ Could not extract PR number from ref: $REF"
             echo "pr_number=" >> $GITHUB_OUTPUT
           fi
+
+      - name: Fail check (PR number not extractable)
+        if: steps.changed.outputs.changed == 'true' && steps.extract-pr.outputs.pr_number == ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers',
+              repo: 'databricks',
+              name: 'Rust Integration Tests',
+              head_sha: '${{ github.event.merge_group.head_sha }}',
+              status: 'completed',
+              conclusion: 'failure',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Failed - unable to determine PR number',
+                summary: '❌ Rust files changed but PR number could not be extracted from head_ref (`${{ github.event.merge_group.head_ref }}`). Please check the merge queue ref format.'
+              }
+            });
 
       - name: Check if Rust tests already passed on PR head
         if: steps.changed.outputs.changed == 'true' && steps.extract-pr.outputs.pr_number != ''
