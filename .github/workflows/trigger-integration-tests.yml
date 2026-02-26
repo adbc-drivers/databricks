@@ -14,7 +14,7 @@
 name: Trigger Integration Tests
 on:
   pull_request:
-    types: [labeled, synchronize]  # Trigger on label add or new commits
+    types: [opened, synchronize, reopened, labeled]
   merge_group:  # Trigger when added to merge queue
 jobs:
   # =============================================================================
@@ -94,7 +94,62 @@ jobs:
             });
 
   # =============================================================================
-  # For PRs: Trigger tests when label is added
+  # For PRs: Always skip integration tests on non-label events
+  # (they run as a required gate in the merge queue)
+  # =============================================================================
+  skip-integration-tests-pr:
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: adbc-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
+          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
+          owner: adbc-drivers
+          repositories: databricks
+
+      - name: Skip C# Integration Tests
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers',
+              repo: 'databricks',
+              name: 'C# Integration Tests',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Skipped on PR - runs in merge queue',
+                summary: '✅ Integration tests are skipped on PRs and run as a required gate in the merge queue.'
+              }
+            });
+
+      - name: Skip Rust Integration Tests
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers',
+              repo: 'databricks',
+              name: 'Rust Integration Tests',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Skipped on PR - runs in merge queue',
+                summary: '✅ Integration tests are skipped on PRs and run as a required gate in the merge queue.'
+              }
+            });
+
+  # =============================================================================
+  # For PRs: Dispatch real tests when integration-test label is added
   # =============================================================================
   trigger-tests-pr:
     if: |
@@ -231,136 +286,64 @@ jobs:
               body: '🚀 Integration tests triggered! [View workflow run](https://github.com/databricks/databricks-driver-test/actions)'
             });
   # =============================================================================
-  # For Merge Queue: Check if relevant files changed
+  # For Merge Queue: Per-driver jobs (run in parallel)
+  # Each job: if driver files changed → dispatch tests; otherwise → auto-pass
   # =============================================================================
-  check-merge-queue-paths:
+  merge-queue-csharp:
     if: github.event_name == 'merge_group'
     runs-on: [self-hosted, Linux, X64, peco-driver]
-    outputs:
-      csharp-changed: ${{ steps.check-paths.outputs.csharp_changed }}
-      rust-changed: ${{ steps.check-paths.outputs.rust_changed }}
-      should-test: ${{ steps.check-paths.outputs.should_test }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Check if relevant files changed
-        id: check-paths
+
+      - name: Check if C# files changed
+        id: changed
         run: |
-          BASE_SHA="${{ github.event.merge_group.base_sha }}"
-          HEAD_SHA="${{ github.event.merge_group.head_sha }}"
-          echo "Checking files changed between $BASE_SHA and $HEAD_SHA"
-          CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-
-          CSHARP_CHANGED=false
-          RUST_CHANGED=false
-
-          if echo "$CHANGED_FILES" | grep -q "^csharp/"; then
-            echo "✅ C# files changed"
-            CSHARP_CHANGED=true
-          fi
-          if echo "$CHANGED_FILES" | grep -q "^rust/"; then
-            echo "✅ Rust files changed"
-            RUST_CHANGED=true
-          fi
-          if echo "$CHANGED_FILES" | grep -q "^\.github/workflows/"; then
-            echo "✅ Workflow files changed - triggering all targets"
-            CSHARP_CHANGED=true
-            RUST_CHANGED=true
-          fi
-
-          echo "csharp_changed=$CSHARP_CHANGED" >> $GITHUB_OUTPUT
-          echo "rust_changed=$RUST_CHANGED" >> $GITHUB_OUTPUT
-
-          if [ "$CSHARP_CHANGED" = true ] || [ "$RUST_CHANGED" = true ]; then
-            echo "should_test=true" >> $GITHUB_OUTPUT
-            echo "✅ Relevant files changed - will run tests"
+          CHANGED=$(git diff --name-only "${{ github.event.merge_group.base_sha }}" "${{ github.event.merge_group.head_sha }}")
+          if echo "$CHANGED" | grep -qE "^(csharp/|\.github/workflows/)"; then
+            echo "changed=true" >> $GITHUB_OUTPUT && echo "✅ C# files changed"
           else
-            echo "should_test=false" >> $GITHUB_OUTPUT
-            echo "⏭️ No driver/workflow files changed - will auto-approve"
+            echo "changed=false" >> $GITHUB_OUTPUT && echo "⏭️ No C# files changed"
           fi
-  # =============================================================================
-  # For Merge Queue: Check if tests already passed on PR
-  # =============================================================================
-  check-previous-run:
-    needs: check-merge-queue-paths
-    if: github.event_name == 'merge_group' && needs.check-merge-queue-paths.outputs.should-test == 'true'
-    runs-on: [self-hosted, Linux, X64, peco-driver]
-    outputs:
-      already-passed: ${{ steps.check-pr.outputs.passed }}
-      pr-number: ${{ steps.extract-pr.outputs.pr_number }}
-    steps:
-      - name: Extract PR number from merge queue ref
-        id: extract-pr
-        run: |
-          # Merge queue ref format: refs/heads/gh-readonly-queue/{base_branch}/pr-{pr_number}-{sha}
-          REF="${{ github.event.merge_group.head_ref }}"
-          echo "Full ref: $REF"
-          # Extract PR number
-          if [[ $REF =~ pr-([0-9]+) ]]; then
-            PR_NUMBER="${BASH_REMATCH[1]}"
-            echo "Extracted PR number: $PR_NUMBER"
-            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Could not extract PR number from ref"
-            echo "pr_number=" >> $GITHUB_OUTPUT
-          fi
-      - name: Generate GitHub App Token
-        if: steps.extract-pr.outputs.pr_number != ''
-        id: app-token
+
+      - name: Generate GitHub App Token (public repo)
+        id: adbc-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
           owner: adbc-drivers
           repositories: databricks
-      - name: Check if tests passed on current PR head
-        if: steps.extract-pr.outputs.pr_number != ''
-        id: check-pr
+
+      - name: Auto-pass (no C# changes)
+        if: steps.changed.outputs.changed != 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
-            const prNumber = '${{ steps.extract-pr.outputs.pr_number }}';
-            if (!prNumber) {
-              console.log('No PR number found');
-              return false;
-            }
-            // Get PR details
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
+            await github.rest.checks.create({
+              owner: 'adbc-drivers', repo: 'databricks', name: 'C# Integration Tests',
+              head_sha: '${{ github.event.merge_group.head_sha }}', status: 'completed',
+              conclusion: 'success', completed_at: new Date().toISOString(),
+              output: { title: 'Skipped - no C# changes', summary: '✅ No C# driver files changed.' }
             });
-            console.log(`PR #${prNumber} head SHA: ${pr.head.sha}`);
-            // Check both required checks passed on current PR head SHA
-            const checkNames = ['C# Integration Tests', 'Rust Integration Tests'];
-            const results = await Promise.all(checkNames.map(name =>
-              github.rest.checks.listForRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: pr.head.sha,
-                check_name: name
-              })
-            ));
-            for (let i = 0; i < checkNames.length; i++) {
-              const name = checkNames[i];
-              const runs = results[i].data.check_runs;
-              const passing = runs.filter(r => r.conclusion === 'success' && r.head_sha === pr.head.sha);
-              if (passing.length === 0) {
-                console.log(`❌ No passing check found for "${name}"`);
-                return false;
-              }
-              console.log(`✅ "${name}" passed on current head`);
-            }
-            return true;
-  trigger-tests-merge:
-    needs: [check-merge-queue-paths, check-previous-run]
-    if: needs.check-previous-run.outputs.already-passed != 'true'
-    runs-on: [self-hosted, Linux, X64, peco-driver]
-    steps:
-      - name: Generate GitHub App Token
+
+      - name: Extract PR number
+        if: steps.changed.outputs.changed == 'true'
+        id: extract-pr
+        run: |
+          REF="${{ github.event.merge_group.head_ref }}"
+          if [[ $REF =~ pr-([0-9]+) ]]; then
+            echo "pr_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+          else
+            echo "Error: failed to extract PR number from merge group ref: '$REF'" >&2
+            exit 1
+          fi
+
+      - name: Generate GitHub App Token (internal repo)
+        if: steps.changed.outputs.changed == 'true'
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
@@ -368,8 +351,9 @@ jobs:
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
           owner: databricks
           repositories: databricks-driver-test
-      - name: Dispatch C# tests to internal repo
-        if: needs.check-merge-queue-paths.outputs.csharp-changed == 'true'
+
+      - name: Dispatch C# tests
+        if: steps.changed.outputs.changed == 'true'
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -377,15 +361,92 @@ jobs:
           event-type: adbc-csharp-pr-test
           client-payload: |
             {
-              "pr_number": "${{ needs.check-previous-run.outputs.pr-number }}",
+              "pr_number": "${{ steps.extract-pr.outputs.pr_number }}",
               "commit_sha": "${{ github.event.merge_group.head_sha }}",
               "pr_repo": "${{ github.repository }}",
-              "pr_url": "https://github.com/${{ github.repository }}/pull/${{ needs.check-previous-run.outputs.pr-number }}",
+              "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
               "pr_title": "Merge queue validation",
               "pr_author": "merge-queue"
             }
-      - name: Dispatch Rust tests to internal repo
-        if: needs.check-merge-queue-paths.outputs.rust-changed == 'true'
+
+      - name: Fail check on dispatch error
+        if: failure() && steps.changed.outputs.changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers', repo: 'databricks', name: 'C# Integration Tests',
+              head_sha: '${{ github.event.merge_group.head_sha }}', status: 'completed',
+              conclusion: 'failure', completed_at: new Date().toISOString(),
+              output: { title: 'Failed - error dispatching tests', summary: '❌ An error occurred while dispatching C# integration tests. Check the workflow run logs.' }
+            });
+
+  merge-queue-rust:
+    if: github.event_name == 'merge_group'
+    runs-on: [self-hosted, Linux, X64, peco-driver]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if Rust files changed
+        id: changed
+        run: |
+          CHANGED=$(git diff --name-only "${{ github.event.merge_group.base_sha }}" "${{ github.event.merge_group.head_sha }}")
+          if echo "$CHANGED" | grep -qE "^(rust/|\.github/workflows/)"; then
+            echo "changed=true" >> $GITHUB_OUTPUT && echo "✅ Rust files changed"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT && echo "⏭️ No Rust files changed"
+          fi
+
+      - name: Generate GitHub App Token (public repo)
+        id: adbc-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
+          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
+          owner: adbc-drivers
+          repositories: databricks
+
+      - name: Auto-pass (no Rust changes)
+        if: steps.changed.outputs.changed != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers', repo: 'databricks', name: 'Rust Integration Tests',
+              head_sha: '${{ github.event.merge_group.head_sha }}', status: 'completed',
+              conclusion: 'success', completed_at: new Date().toISOString(),
+              output: { title: 'Skipped - no Rust changes', summary: '✅ No Rust driver files changed.' }
+            });
+
+      - name: Extract PR number
+        if: steps.changed.outputs.changed == 'true'
+        id: extract-pr
+        run: |
+          REF="${{ github.event.merge_group.head_ref }}"
+          if [[ $REF =~ pr-([0-9]+) ]]; then
+            echo "pr_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+          else
+            echo "Error: failed to extract PR number from merge group ref: '$REF'" >&2
+            exit 1
+          fi
+
+      - name: Generate GitHub App Token (internal repo)
+        if: steps.changed.outputs.changed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
+          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
+          owner: databricks
+          repositories: databricks-driver-test
+
+      - name: Dispatch Rust tests
+        if: steps.changed.outputs.changed == 'true'
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -393,78 +454,23 @@ jobs:
           event-type: adbc-rust-pr-test
           client-payload: |
             {
-              "pr_number": "${{ needs.check-previous-run.outputs.pr-number }}",
+              "pr_number": "${{ steps.extract-pr.outputs.pr_number }}",
               "commit_sha": "${{ github.event.merge_group.head_sha }}",
               "pr_repo": "${{ github.repository }}",
-              "pr_url": "https://github.com/${{ github.repository }}/pull/${{ needs.check-previous-run.outputs.pr-number }}",
+              "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
               "pr_title": "Merge queue validation",
               "pr_author": "merge-queue"
             }
-  auto-approve-no-relevant-changes:
-    needs: check-merge-queue-paths
-    if: github.event_name == 'merge_group' && needs.check-merge-queue-paths.outputs.should-test == 'false'
-    runs-on: [self-hosted, Linux, X64, peco-driver]
-    steps:
-      - name: Generate GitHub App Token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
-          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
-          owner: adbc-drivers
-          repositories: databricks
-      - name: Create passing checks (no relevant changes)
+
+      - name: Fail check on dispatch error
+        if: failure() && steps.changed.outputs.changed == 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
-            const headSha = '${{ github.event.merge_group.head_sha }}';
-            for (const name of ['C# Integration Tests', 'Rust Integration Tests']) {
-              await github.rest.checks.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name,
-                head_sha: headSha,
-                status: 'completed',
-                conclusion: 'success',
-                completed_at: new Date().toISOString(),
-                output: {
-                  title: 'Auto-approved - no relevant changes',
-                  summary: '✅ No driver or workflow files changed. Skipping tests.'
-                }
-              });
-            }
-  auto-approve-already-passed:
-    needs: check-previous-run
-    if: needs.check-previous-run.outputs.already-passed == 'true'
-    runs-on: [self-hosted, Linux, X64, peco-driver]
-    steps:
-      - name: Generate GitHub App Token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
-          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
-          owner: adbc-drivers
-          repositories: databricks
-      - name: Create passing checks (auto-approve)
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const headSha = '${{ github.event.merge_group.head_sha }}';
-            for (const name of ['C# Integration Tests', 'Rust Integration Tests']) {
-              await github.rest.checks.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name,
-                head_sha: headSha,
-                status: 'completed',
-                conclusion: 'success',
-                completed_at: new Date().toISOString(),
-                output: {
-                  title: 'Auto-approved for merge queue',
-                  summary: '✅ Tests already passed on PR head commit. Skipping duplicate test run.'
-                }
-              });
-            }
+            await github.rest.checks.create({
+              owner: 'adbc-drivers', repo: 'databricks', name: 'Rust Integration Tests',
+              head_sha: '${{ github.event.merge_group.head_sha }}', status: 'completed',
+              conclusion: 'failure', completed_at: new Date().toISOString(),
+              output: { title: 'Failed - error dispatching tests', summary: '❌ An error occurred while dispatching Rust integration tests. Check the workflow run logs.' }
+            });
