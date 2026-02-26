@@ -100,12 +100,20 @@ jobs:
   skip-integration-tests-pr:
     if: github.event_name == 'pull_request' && github.event.action != 'labeled'
     runs-on: ubuntu-latest
-    permissions:
-      checks: write
     steps:
+      - name: Generate GitHub App Token
+        id: adbc-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
+          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
+          owner: adbc-drivers
+          repositories: databricks
+
       - name: Skip C# Integration Tests
         uses: actions/github-script@v7
         with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
             await github.rest.checks.create({
               owner: 'adbc-drivers',
@@ -124,6 +132,7 @@ jobs:
       - name: Skip Rust Integration Tests
         uses: actions/github-script@v7
         with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
             await github.rest.checks.create({
               owner: 'adbc-drivers',
