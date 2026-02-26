@@ -400,7 +400,8 @@ impl StreamingCloudFetchProvider {
         retry_delay: std::time::Duration,
         cancel_token: &CancellationToken,
     ) -> Result<Vec<RecordBatch>> {
-        let mut attempts = 0;
+        let mut attempts = 0u32;
+        let mut refresh_attempts = 0u32;
 
         loop {
             if cancel_token.is_cancelled() {
@@ -424,9 +425,18 @@ impl StreamingCloudFetchProvider {
             let link = match stored_link {
                 Some(link) if !link.is_expired() => link,
                 _ => {
-                    // Link missing or expired - refetch it (no read lock held)
+                    // Link missing or expired - refetch it (no read lock held).
+                    // Bounded by max_retries to prevent infinite loops if Databricks
+                    // keeps returning already-expired links (mirrors C# maxUrlRefreshAttempts).
+                    if refresh_attempts >= max_retries {
+                        return Err(DatabricksErrorHelper::io().message(format!(
+                            "Chunk {} link repeatedly expired after {} refresh attempts",
+                            chunk_index, refresh_attempts
+                        )));
+                    }
                     debug!("Refetching expired link for chunk {}", chunk_index);
                     let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
+                    refresh_attempts += 1;
 
                     // Store the new link (safe: no read lock held)
                     if let Some(mut entry) = chunks.get_mut(&chunk_index) {
