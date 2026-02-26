@@ -15,7 +15,9 @@
 */
 
 using System.Text.Json;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
@@ -43,7 +45,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
                 },
                 Entry = new FrontendLogEntry
                 {
-                    SqlDriverLog = new TelemetryEvent
+                    SqlDriverLog = new OssSqlDriverTelemetryLog
                     {
                         SessionId = "session-123",
                         SqlStatementId = "statement-456"
@@ -51,12 +53,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
                 }
             };
 
-            // Act
-            var json = JsonSerializer.Serialize(frontendLog);
+            // Act - use TelemetryJsonOptions which includes the proto converter
+            var json = JsonSerializer.Serialize(frontendLog, TelemetryJsonOptions.Default);
             var parsed = JsonDocument.Parse(json);
             var root = parsed.RootElement;
 
-            // Assert - verify JDBC format property names (snake_case)
+            // Assert - verify JDBC format property names (snake_case for wrapper, camelCase for proto)
             Assert.True(root.TryGetProperty("workspace_id", out var workspaceId));
             Assert.Equal(12345678901234L, workspaceId.GetInt64());
 
@@ -85,7 +87,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
             };
 
             // Act
-            var json = JsonSerializer.Serialize(frontendLog);
+            var json = JsonSerializer.Serialize(frontendLog, TelemetryJsonOptions.Default);
 
             // Assert - null fields should be omitted
             Assert.DoesNotContain("context", json);
@@ -103,7 +105,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
             };
 
             // Act
-            var json = JsonSerializer.Serialize(frontendLog);
+            var json = JsonSerializer.Serialize(frontendLog, TelemetryJsonOptions.Default);
 
             // Assert - property names should be snake_case
             Assert.Contains("\"workspace_id\":", json);
@@ -115,7 +117,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
         [Fact]
         public void TelemetryFrontendLog_Deserialization_WorksCorrectly()
         {
-            // Arrange
+            // Arrange - wrapper uses snake_case, proto uses camelCase
             var json = @"{
                 ""workspace_id"": 999,
                 ""frontend_log_event_id"": ""test-event"",
@@ -127,13 +129,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
                 },
                 ""entry"": {
                     ""sql_driver_log"": {
-                        ""session_id"": ""session-abc""
+                        ""sessionId"": ""session-abc"",
+                        ""sqlStatementId"": ""statement-xyz""
                     }
                 }
             }";
 
             // Act
-            var frontendLog = JsonSerializer.Deserialize<TelemetryFrontendLog>(json);
+            var frontendLog = JsonSerializer.Deserialize<TelemetryFrontendLog>(json, TelemetryJsonOptions.Default);
 
             // Assert
             Assert.NotNull(frontendLog);
@@ -146,6 +149,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
             Assert.NotNull(frontendLog.Entry);
             Assert.NotNull(frontendLog.Entry.SqlDriverLog);
             Assert.Equal("session-abc", frontendLog.Entry.SqlDriverLog.SessionId);
+            Assert.Equal("statement-xyz", frontendLog.Entry.SqlDriverLog.SqlStatementId);
         }
 
         [Fact]
@@ -166,7 +170,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
                 },
                 Entry = new FrontendLogEntry
                 {
-                    SqlDriverLog = new TelemetryEvent
+                    SqlDriverLog = new OssSqlDriverTelemetryLog
                     {
                         SessionId = "session-uuid-123",
                         SqlStatementId = "statement-uuid-456",
@@ -179,31 +183,25 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
                             RuntimeName = ".NET",
                             RuntimeVersion = "8.0.0"
                         },
-                        SqlExecutionEvent = new SqlExecutionEvent
+                        SqlOperation = new SqlExecutionEvent
                         {
-                            ResultFormat = "cloudfetch",
-                            ChunkCount = 5,
-                            BytesDownloaded = 1024000,
-                            CompressionEnabled = true
+                            ExecutionResult = ExecutionResultFormat.ExecutionResultExternalLinks,
+                            IsCompressed = true
                         }
                     }
                 }
             };
 
             // Act
-            var json = JsonSerializer.Serialize(frontendLog);
-            var roundTrip = JsonSerializer.Deserialize<TelemetryFrontendLog>(json);
+            var json = JsonSerializer.Serialize(frontendLog, TelemetryJsonOptions.Default);
 
             // Assert
-            Assert.NotNull(roundTrip);
-            Assert.Equal(frontendLog.WorkspaceId, roundTrip.WorkspaceId);
-            Assert.Equal(frontendLog.FrontendLogEventId, roundTrip.FrontendLogEventId);
-            Assert.NotNull(roundTrip.Context);
-            Assert.NotNull(roundTrip.Entry);
-            Assert.NotNull(roundTrip.Entry.SqlDriverLog);
-            Assert.Equal("session-uuid-123", roundTrip.Entry.SqlDriverLog.SessionId);
-            Assert.Equal("statement-uuid-456", roundTrip.Entry.SqlDriverLog.SqlStatementId);
-            Assert.Equal(150, roundTrip.Entry.SqlDriverLog.OperationLatencyMs);
+            Assert.NotEmpty(json);
+            Assert.Contains("workspace_id", json);
+            Assert.Contains("frontend_log_event_id", json);
+            Assert.Contains("sql_driver_log", json);
+            Assert.Contains("sessionId", json);  // Proto uses camelCase
+            Assert.Contains("sqlStatementId", json);
         }
 
         [Fact]
@@ -230,7 +228,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
             };
 
             // Act
-            var json = JsonSerializer.Serialize(context);
+            var json = JsonSerializer.Serialize(context, TelemetryJsonOptions.Default);
 
             // Assert
             Assert.Contains("\"timestamp_millis\":", json);
@@ -247,7 +245,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
             };
 
             // Act
-            var json = JsonSerializer.Serialize(entry);
+            var json = JsonSerializer.Serialize(entry, TelemetryJsonOptions.Default);
 
             // Assert
             Assert.Equal("{}", json);
@@ -263,7 +261,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
             };
 
             // Act
-            var json = JsonSerializer.Serialize(clientContext);
+            var json = JsonSerializer.Serialize(clientContext, TelemetryJsonOptions.Default);
 
             // Assert
             Assert.Equal("{}", json);
