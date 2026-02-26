@@ -212,11 +212,13 @@ impl DatabricksHttpClient {
 
                     // Non-retryable HTTP error or max retries exceeded
                     let error_body = response.text().await.unwrap_or_default();
-                    return Err(DatabricksErrorHelper::io().message(format!(
-                        "HTTP {} - {}",
-                        status.as_u16(),
-                        error_body
-                    )));
+                    return Err(DatabricksErrorHelper::io()
+                        .vendor_code(status.as_u16() as i32)
+                        .message(format!(
+                            "HTTP {} - {}",
+                            status.as_u16(),
+                            error_body
+                        )));
                 }
                 Err(e) => {
                     // Network or other error
