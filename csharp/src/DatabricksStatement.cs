@@ -393,7 +393,7 @@ namespace AdbcDrivers.Databricks
                     activity?.AddEvent("statement.get_catalogs.complete");
 
                     // Return the result without making an RPC call
-                    return new QueryResult(1, new HiveServer2Connection.HiveInfoArrowStream(schema, new[] { array }));
+                    return new QueryResult(1, new HiveInfoArrowStream(schema, new[] { array }));
                 }
 
                 // If EnableMultipleCatalogSupport is true, delegate to base class implementation
@@ -449,7 +449,7 @@ namespace AdbcDrivers.Databricks
                     activity?.AddEvent("statement.get_schemas.complete");
 
                     // Return empty result
-                    return new QueryResult(0, new HiveServer2Connection.HiveInfoArrowStream(schema, new[] { catalogArray, schemaArray }));
+                    return new QueryResult(0, new HiveInfoArrowStream(schema, new[] { catalogArray, schemaArray }));
                 }
 
                 // Call the base implementation with the potentially modified catalog name
@@ -527,7 +527,7 @@ namespace AdbcDrivers.Databricks
                     activity?.AddEvent("statement.get_tables.complete");
 
                     // Return empty result
-                    return new QueryResult(0, new HiveServer2Connection.HiveInfoArrowStream(schema, arrays));
+                    return new QueryResult(0, new HiveInfoArrowStream(schema, arrays));
                 }
 
                 // Call the base implementation with the potentially modified catalog name
@@ -580,7 +580,7 @@ namespace AdbcDrivers.Databricks
                     activity?.AddEvent("statement.get_columns.complete");
 
                     // Return empty result
-                    return new QueryResult(0, new HiveServer2Connection.HiveInfoArrowStream(schema, arrays));
+                    return new QueryResult(0, new HiveInfoArrowStream(schema, arrays));
                 }
 
                 // Call the base implementation with the potentially modified catalog name
@@ -608,25 +608,7 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal bool ShouldReturnEmptyPkFkResult()
         {
-            if (!enablePKFK)
-                return true;
-
-            var catalogInvalid = string.IsNullOrEmpty(CatalogName) ||
-                string.Equals(CatalogName, "SPARK", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(CatalogName, "hive_metastore", StringComparison.OrdinalIgnoreCase);
-
-            var foreignCatalogInvalid = string.IsNullOrEmpty(ForeignCatalogName) ||
-                string.Equals(ForeignCatalogName, "SPARK", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(ForeignCatalogName, "hive_metastore", StringComparison.OrdinalIgnoreCase);
-
-            // Handle special catalog cases
-            // Only when both catalog and foreignCatalog is Invalid, we return empty results
-            if (catalogInvalid && foreignCatalogInvalid)
-            {
-                return true;
-            }
-
-            return false;
+            return MetadataUtilities.ShouldReturnEmptyPKFKResult(CatalogName, ForeignCatalogName, enablePKFK);
         }
 
         protected override async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken = default)
@@ -660,28 +642,7 @@ namespace AdbcDrivers.Databricks
 
         private QueryResult EmptyPrimaryKeysResult()
         {
-            var fields = new[]
-            {
-                new Field("TABLE_CAT", StringType.Default, true),
-                new Field("TABLE_SCHEM", StringType.Default, true),
-                new Field("TABLE_NAME", StringType.Default, true),
-                new Field("COLUMN_NAME", StringType.Default, true),
-                new Field("KEQ_SEQ", Int32Type.Default, true),
-                new Field("PK_NAME", StringType.Default, true)
-            };
-            var schema = new Schema(fields, null);
-
-            var arrays = new IArrowArray[]
-            {
-                new StringArray.Builder().Build(), // TABLE_CAT
-                new StringArray.Builder().Build(), // TABLE_SCHEM
-                new StringArray.Builder().Build(), // TABLE_NAME
-                new StringArray.Builder().Build(), // COLUMN_NAME
-                new Int32Array.Builder().Build(),  // KEQ_SEQ
-                new StringArray.Builder().Build()  // PK_NAME
-            };
-
-            return new QueryResult(0, new HiveServer2Connection.HiveInfoArrowStream(schema, arrays));
+            return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
         }
 
         protected override async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken = default)
@@ -744,44 +705,7 @@ namespace AdbcDrivers.Databricks
 
         private QueryResult EmptyCrossReferenceResult()
         {
-            var fields = new[]
-            {
-                new Field("PKTABLE_CAT", StringType.Default, true),
-                new Field("PKTABLE_SCHEM", StringType.Default, true),
-                new Field("PKTABLE_NAME", StringType.Default, true),
-                new Field("PKCOLUMN_NAME", StringType.Default, true),
-                new Field("FKTABLE_CAT", StringType.Default, true),
-                new Field("FKTABLE_SCHEM", StringType.Default, true),
-                new Field("FKTABLE_NAME", StringType.Default, true),
-                new Field("FKCOLUMN_NAME", StringType.Default, true),
-                new Field("KEQ_SEQ", Int32Type.Default, true),
-                new Field("UPDATE_RULE", Int32Type.Default, true),
-                new Field("DELETE_RULE", Int32Type.Default, true),
-                new Field("FK_NAME", StringType.Default, true),
-                new Field("PK_NAME", StringType.Default, true),
-                new Field("DEFERRABILITY", Int32Type.Default, true)
-            };
-            var schema = new Schema(fields, null);
-
-            var arrays = new IArrowArray[]
-            {
-                new StringArray.Builder().Build(), // PKTABLE_CAT
-                new StringArray.Builder().Build(), // PKTABLE_SCHEM
-                new StringArray.Builder().Build(), // PKTABLE_NAME
-                new StringArray.Builder().Build(), // PKCOLUMN_NAME
-                new StringArray.Builder().Build(), // FKTABLE_CAT
-                new StringArray.Builder().Build(), // FKTABLE_SCHEM
-                new StringArray.Builder().Build(), // FKTABLE_NAME
-                new StringArray.Builder().Build(), // FKCOLUMN_NAME
-                new Int32Array.Builder().Build(),  // KEQ_SEQ
-                new Int32Array.Builder().Build(),  // UPDATE_RULE
-                new Int32Array.Builder().Build(),  // DELETE_RULE
-                new StringArray.Builder().Build(), // FK_NAME
-                new StringArray.Builder().Build(), // PK_NAME
-                new Int32Array.Builder().Build()   // DEFERRABILITY
-            };
-
-            return new QueryResult(0, new HiveServer2Connection.HiveInfoArrowStream(schema, arrays));
+            return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
         }
 
         protected override async Task<QueryResult> GetColumnsExtendedAsync(CancellationToken cancellationToken = default)
@@ -1140,7 +1064,7 @@ namespace AdbcDrivers.Databricks
                 fkColumnKeySeqBuilder.Build()
             };
 
-            return new QueryResult(descResult.Columns.Count, new HiveServer2Connection.HiveInfoArrowStream(combinedSchema, combinedData));
+            return new QueryResult(descResult.Columns.Count, new HiveInfoArrowStream(combinedSchema, combinedData));
         }
     }
 }
