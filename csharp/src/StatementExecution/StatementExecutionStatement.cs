@@ -690,7 +690,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 string sql = new ShowCatalogsCommand(_metadataCatalogName).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = _connection.ExecuteMetadataSql(sql);
+                var batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
 
                 var tableCatBuilder = new StringArray.Builder();
                 int count = 0;
@@ -723,7 +723,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 string sql = new ShowSchemasCommand(EffectiveCatalog, _metadataSchemaName).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = _connection.ExecuteMetadataSql(sql);
+                var batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
 
                 var tableSchemaBuilder = new StringArray.Builder();
                 var tableCatalogBuilder = new StringArray.Builder();
@@ -764,7 +764,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 string sql = new ShowTablesCommand(EffectiveCatalog, _metadataSchemaName, _metadataTableName).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = _connection.ExecuteMetadataSql(sql);
+                var batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
 
             var tableCatBuilder = new StringArray.Builder();
             var tableSchemaBuilder = new StringArray.Builder();
@@ -828,7 +828,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     EffectiveCatalog, _metadataSchemaName,
                     _metadataTableName, _metadataColumnName).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = _connection.ExecuteMetadataSql(sql);
+                var batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
 
             var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
 
@@ -891,7 +891,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
                 activity?.SetTag("sql_query", query);
-                var batches = _connection.ExecuteMetadataSql(query);
+                var batches = _connection.ExecuteMetadataSql(query, _connection.CreateMetadataTimeoutToken());
 
                 string? resultJson = null;
                 foreach (var batch in batches)
@@ -939,7 +939,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
                     activity?.SetTag("sql_query", sql);
-                    batches = _connection.ExecuteMetadataSql(sql);
+                    batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
                 }
                 catch
                 {
@@ -993,7 +993,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     string sql = new ShowForeignKeysCommand(
                         _metadataForeignCatalogName!, _metadataForeignSchemaName!, _metadataForeignTableName!).Build();
                     activity?.SetTag("sql_query", sql);
-                    batches = _connection.ExecuteMetadataSql(sql);
+                    batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
                 }
                 catch
                 {

@@ -451,10 +451,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("db_schema", dbSchema ?? "(none)");
                 activity?.SetTag("table_name", tableName);
 
+                var cancellationToken = CreateMetadataTimeoutToken();
                 string sql = new ShowColumnsCommand(
                     catalog ?? _catalog, dbSchema, tableName).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = ExecuteMetadataSql(sql);
+                var batches = ExecuteMetadataSql(sql, cancellationToken);
 
                 var fields = new List<Field>();
                 foreach (var batch in batches)
@@ -489,8 +490,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         IReadOnlyList<string> IGetObjectsDataProvider.GetCatalogs(string? catalogPattern)
         {
+            var cancellationToken = CreateMetadataTimeoutToken();
             string sql = new ShowCatalogsCommand(catalogPattern).Build();
-            var batches = ExecuteMetadataSql(sql);
+            var batches = ExecuteMetadataSql(sql, cancellationToken);
             var result = new List<string>();
             foreach (var batch in batches)
             {
@@ -507,8 +509,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         IReadOnlyList<(string catalog, string schema)> IGetObjectsDataProvider.GetSchemas(string? catalogPattern, string? schemaPattern)
         {
+            var cancellationToken = CreateMetadataTimeoutToken();
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
-            var batches = ExecuteMetadataSql(sql);
+            var batches = ExecuteMetadataSql(sql, cancellationToken);
             var result = new List<(string, string)>();
             foreach (var batch in batches)
             {
@@ -534,8 +537,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         IReadOnlyList<(string catalog, string schema, string table, string tableType)> IGetObjectsDataProvider.GetTables(
             string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes)
         {
+            var cancellationToken = CreateMetadataTimeoutToken();
             string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
-            var batches = ExecuteMetadataSql(sql);
+            var batches = ExecuteMetadataSql(sql, cancellationToken);
             var result = new List<(string, string, string, string)>();
             foreach (var batch in batches)
             {
@@ -572,8 +576,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string? tablePattern, string? columnPattern,
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap)
         {
+            var cancellationToken = CreateMetadataTimeoutToken();
             string sql = new ShowColumnsCommand(catalogPattern, schemaPattern, tablePattern, columnPattern).Build();
-            var batches = ExecuteMetadataSql(sql);
+            var batches = ExecuteMetadataSql(sql, cancellationToken);
 
             var tablePositions = new Dictionary<string, int>();
 
@@ -633,7 +638,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
         }
 
-        internal List<RecordBatch> ExecuteMetadataSql(string sql)
+        internal List<RecordBatch> ExecuteMetadataSql(string sql, CancellationToken cancellationToken = default)
         {
             var batches = new List<RecordBatch>();
             using var stmt = CreateStatement();
@@ -643,11 +648,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (stream == null) return batches;
             while (true)
             {
-                var batch = stream.ReadNextRecordBatchAsync().AsTask().GetAwaiter().GetResult();
+                cancellationToken.ThrowIfCancellationRequested();
+                var batch = stream.ReadNextRecordBatchAsync(cancellationToken).AsTask().GetAwaiter().GetResult();
                 if (batch == null) break;
                 batches.Add(batch);
             }
             return batches;
+        }
+
+        internal CancellationToken CreateMetadataTimeoutToken()
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_waitTimeoutSeconds));
+            return cts.Token;
         }
 
         /// <summary>
