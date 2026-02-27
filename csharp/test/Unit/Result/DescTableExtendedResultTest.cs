@@ -351,7 +351,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Result
         [InlineData("CHAR", ColumnTypeId.CHAR, false, 20)]
         [InlineData("VARCHAR", ColumnTypeId.VARCHAR, false, 20)]
         [InlineData("STRING", ColumnTypeId.VARCHAR, false, int.MaxValue)]
-        [InlineData("BINARY", ColumnTypeId.BINARY, false, 0)]
+        [InlineData("BINARY", ColumnTypeId.BINARY, false, int.MaxValue)]
         [InlineData("DATE", ColumnTypeId.DATE, false, 4)]
         [InlineData("TIMESTAMP", ColumnTypeId.TIMESTAMP, false, 8)]
         [InlineData("TIMESTAMP_LTZ", ColumnTypeId.TIMESTAMP, false, 8)]

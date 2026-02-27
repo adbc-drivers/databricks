@@ -25,6 +25,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using AdbcDrivers.HiveServer2.Hive2;
 using static AdbcDrivers.HiveServer2.Hive2.HiveServer2Connection;
 
 namespace AdbcDrivers.Databricks.Result
@@ -88,112 +89,38 @@ namespace AdbcDrivers.Databricks.Result
             {
                 get
                 {
-                    string normalizedTypeName = Type.Name.Trim().ToUpper();
-
-                    return normalizedTypeName switch
-                    {
-                        "BOOLEAN" => ColumnTypeId.BOOLEAN,
-                        "TINYINT" or "BYTE" => ColumnTypeId.TINYINT,
-                        "SMALLINT" or "SHORT" => ColumnTypeId.SMALLINT,
-                        "INT" or "INTEGER" => ColumnTypeId.INTEGER,
-                        "BIGINT" or "LONG" => ColumnTypeId.BIGINT,
-                        "FLOAT" or "REAL" => ColumnTypeId.FLOAT,
-                        "DOUBLE" => ColumnTypeId.DOUBLE,
-                        "DECIMAL" or "NUMERIC" => ColumnTypeId.DECIMAL,
-
-                        "CHAR" => ColumnTypeId.CHAR,
-                        "STRING" or "VARCHAR" => ColumnTypeId.VARCHAR,
-                        "BINARY" => ColumnTypeId.BINARY,
-
-                        "TIMESTAMP" => ColumnTypeId.TIMESTAMP,
-                        "TIMESTAMP_LTZ" => ColumnTypeId.TIMESTAMP,
-                        "TIMESTAMP_NTZ" => ColumnTypeId.TIMESTAMP,
-                        "DATE" => ColumnTypeId.DATE,
-
-                        "ARRAY" => ColumnTypeId.ARRAY,
-                        "MAP" => ColumnTypeId.JAVA_OBJECT,
-                        "STRUCT" => ColumnTypeId.STRUCT,
-                        "INTERVAL" => ColumnTypeId.OTHER, // Intervals don't have a direct JDBC mapping
-                        "VOID" => ColumnTypeId.NULL,
-                        "VARIANT" => ColumnTypeId.OTHER,
-                        _ => ColumnTypeId.OTHER // Default fallback for unknown types
-                    };
+                    var code = (ColumnTypeId)ColumnMetadataHelper.GetDataTypeCode(Type.Name);
+                    // REAL maps to FLOAT for backward compatibility
+                    return code == ColumnTypeId.REAL ? ColumnTypeId.FLOAT : code;
                 }
             }
 
             [JsonIgnore]
-            public bool IsNumber
-            {
-                get
-                {
-                    return DataType switch
-                    {
-                        ColumnTypeId.TINYINT or ColumnTypeId.SMALLINT or ColumnTypeId.INTEGER or
-                        ColumnTypeId.BIGINT or ColumnTypeId.FLOAT or ColumnTypeId.DOUBLE or
-                        ColumnTypeId.DECIMAL or ColumnTypeId.NUMERIC => true,
-                        _ => false
-                    };
-                }
-            }
+            public bool IsNumber => ColumnMetadataHelper.GetNumPrecRadix(Type.Name) != null;
 
             [JsonIgnore]
-            public int DecimalDigits
-            {
-                get
-                {
-                    return DataType switch
-                    {
-                        ColumnTypeId.DECIMAL or ColumnTypeId.NUMERIC => Type.Scale ?? 0,
-                        ColumnTypeId.DOUBLE => 15,
-                        ColumnTypeId.FLOAT or ColumnTypeId.REAL => 7,
-                        ColumnTypeId.TIMESTAMP => 6,
-                        _ => 0
-                    };
-                }
-            }
+            public int DecimalDigits => ColumnMetadataHelper.GetDecimalDigitsDefault(Type.FullTypeName) ?? 0;
 
-            /// <summary>
-            /// Get column size
-            ///
-            /// Currently the query `DESC TABLE EXTNEDED AS JSON` does not return the column size,
-            /// we can calculate it based on the data type and some type specific properties
-            /// </summary>
             [JsonIgnore]
             public int? ColumnSize
             {
                 get
                 {
-                    return DataType switch
+                    // For INTERVAL types, FullTypeName may not include the qualifier
+                    // when only StartUnit is set. Use StartUnit directly in that case.
+                    if (Type.Name.Trim().Equals("INTERVAL", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrEmpty(Type.StartUnit)
+                        && Type.EndUnit == null)
                     {
-                        ColumnTypeId.TINYINT or ColumnTypeId.BOOLEAN => 1,
-                        ColumnTypeId.SMALLINT => 2,
-                        ColumnTypeId.INTEGER or ColumnTypeId.FLOAT or ColumnTypeId.DATE => 4,
-                        ColumnTypeId.BIGINT or ColumnTypeId.DOUBLE or ColumnTypeId.TIMESTAMP or ColumnTypeId.TIMESTAMP_WITH_TIMEZONE => 8,
-                        ColumnTypeId.CHAR => Type.Length,
-                        ColumnTypeId.VARCHAR => Type.Name.Trim().ToUpper() == "STRING" ? int.MaxValue : Type.Length,
-                        ColumnTypeId.DECIMAL => Type.Precision ?? 0,
-                        ColumnTypeId.NULL => 1,
-                        _ => Type.Name.Trim().ToUpper() == "INTERVAL" ? GetIntervalSize() : 0
-                    };
+                        return Type.StartUnit!.ToUpper() switch
+                        {
+                            "YEAR" or "MONTH" => 4,
+                            "DAY" or "HOUR" or "MINUTE" or "SECOND" => 8,
+                            _ => 4
+                        };
+                    }
+                    return ColumnMetadataHelper.GetColumnSizeDefault(Type.FullTypeName);
                 }
-            }
-
-            private int GetIntervalSize()
-            {
-                if (String.IsNullOrEmpty(Type.StartUnit))
-                {
-                    return 0;
-                }
-
-                // Check whether interval is yearMonthIntervalQualifier or dayTimeIntervalQualifier
-                // yearMonthIntervalQualifier size is 4, dayTimeIntervalQualifier size is 8
-                // see https://docs.databricks.com/aws/en/sql/language-manual/data-types/interval-type
-                return Type.StartUnit!.ToUpper() switch
-                {
-                    "YEAR" or "MONTH" => 4,
-                    "DAY" or "HOUR" or "MINUTE" or "SECOND" => 8,
-                    _ => 4
-                };
             }
         }
 
