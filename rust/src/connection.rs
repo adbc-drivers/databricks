@@ -94,8 +94,6 @@ impl Connection {
         let span = info_span!("ADBC", session_id = %session_info.session_id);
         let entered = span.entered();
 
-        debug!("Created session: {}", session_info.session_id);
-
         Ok(Self {
             host: config.host,
             warehouse_id: config.warehouse_id,
