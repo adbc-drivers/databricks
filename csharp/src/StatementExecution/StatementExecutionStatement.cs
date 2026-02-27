@@ -836,7 +836,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
 
-            return GetObjectsResultBuilder.BuildFlatColumnsResult(tableInfos.Values);
+            return FlatColumnsResultBuilder.BuildFlatColumnsResult(tableInfos.Values);
         }
 
         private QueryResult GetPrimaryKeys()

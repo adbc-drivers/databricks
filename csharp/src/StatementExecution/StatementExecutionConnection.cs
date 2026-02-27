@@ -422,7 +422,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
                         !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
 
-                    IArrowType arrowType = ColumnMetadataHelper.GetArrowType(colType);
+                    short typeCode = ColumnMetadataHelper.GetDataTypeCode(colType);
+                    IArrowType arrowType = HiveServer2Connection.GetArrowType(typeCode, colType, false, null, null);
                     fields.Add(new Field(colName, arrowType, nullable));
                 }
             }
