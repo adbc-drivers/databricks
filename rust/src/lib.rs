@@ -63,6 +63,8 @@
 //! | `databricks.access_token` | Personal access token |
 //! | `databricks.catalog` | Default catalog |
 //! | `databricks.schema` | Default schema |
+//! | `databricks.log_level` | Log level: `off`, `error`, `warn`, `info`, `debug`, `trace` |
+//! | `databricks.log_file` | Log file path. If unset, logs go to stderr |
 //!
 //! ### CloudFetch Options
 //!
@@ -81,6 +83,7 @@ pub mod connection;
 pub mod database;
 pub mod driver;
 pub mod error;
+pub(crate) mod logging;
 pub mod metadata;
 pub mod reader;
 pub mod result;

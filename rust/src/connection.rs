@@ -34,7 +34,8 @@ use arrow_schema::{ArrowError, Schema};
 use driverbase::error::ErrorHelper;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tracing::debug;
+use tracing::span::EnteredSpan;
+use tracing::{debug, info_span};
 
 /// Configuration passed from Database to Connection.
 pub struct ConnectionConfig {
@@ -64,6 +65,9 @@ pub struct Connection {
 
     // Tokio runtime for async operations
     runtime: tokio::runtime::Runtime,
+
+    // Tracing span that attaches session_id to all log lines within this connection
+    _log_span: EnteredSpan,
 }
 
 /// Type alias for our empty reader used in stub implementations.
@@ -87,7 +91,8 @@ impl Connection {
             HashMap::new(),
         ))?;
 
-        debug!("Created session: {}", session_info.session_id);
+        let span = info_span!("ADBC", session_id = %session_info.session_id);
+        let entered = span.entered();
 
         Ok(Self {
             host: config.host,
@@ -95,6 +100,7 @@ impl Connection {
             client: config.client,
             session_id: session_info.session_id,
             runtime,
+            _log_span: entered,
         })
     }
 
