@@ -221,8 +221,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.TagDefinitions
             // Act
             var tags = StatementExecutionEvent.GetDatabricksExportTags();
 
-            // Assert - 8 tags should be exported (excludes db.statement)
-            Assert.Equal(8, tags.Count);
+            // Assert - 10 tags should be exported (excludes db.statement)
+            // Includes: StatementId, SessionId, ResultFormat, ResultChunkCount, ResultBytesDownloaded,
+            //           ResultCompressionEnabled, PollCount, PollLatencyMs, ChunkInitialLatencyMs, ChunkSlowestLatencyMs
+            Assert.Equal(10, tags.Count);
         }
 
         #endregion

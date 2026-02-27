@@ -103,6 +103,24 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
         public const string PollLatencyMs = "poll.latency_ms";
 
         /// <summary>
+        /// Latency of first chunk download in milliseconds.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("chunk.initial_latency_ms",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Latency of first chunk download in milliseconds")]
+        public const string ChunkInitialLatencyMs = "chunk.initial_latency_ms";
+
+        /// <summary>
+        /// Latency of slowest chunk download in milliseconds.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("chunk.slowest_latency_ms",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Latency of slowest chunk download in milliseconds")]
+        public const string ChunkSlowestLatencyMs = "chunk.slowest_latency_ms";
+
+        /// <summary>
         /// SQL query text.
         /// Only exported to local diagnostics (sensitive data).
         /// </summary>
@@ -126,7 +144,9 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
                 ResultBytesDownloaded,
                 ResultCompressionEnabled,
                 PollCount,
-                PollLatencyMs
+                PollLatencyMs,
+                ChunkInitialLatencyMs,
+                ChunkSlowestLatencyMs
             };
         }
     }
