@@ -34,8 +34,8 @@ use arrow_schema::{ArrowError, Schema};
 use driverbase::error::ErrorHelper;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tracing::{debug, info_span};
 use tracing::span::EnteredSpan;
+use tracing::{debug, info_span};
 
 /// Configuration passed from Database to Connection.
 pub struct ConnectionConfig {

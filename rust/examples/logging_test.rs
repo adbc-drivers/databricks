@@ -88,20 +88,23 @@ fn main() {
 
     // Connect — this triggers logging initialization and emits the first log lines
     let mut connection = database.new_connection().expect("Failed to connect");
-    println!(
-        "Connected (session_id: {})\n",
-        connection.session_id()
-    );
+    println!("Connected (session_id: {})\n", connection.session_id());
 
     // Execute a query so we can see statement and result-fetch logs
-    let mut statement = connection.new_statement().expect("Failed to create statement");
+    let mut statement = connection
+        .new_statement()
+        .expect("Failed to create statement");
     statement
         .set_sql_query("SELECT 1 AS value")
         .expect("Failed to set query");
 
     let mut reader = statement.execute().expect("Failed to execute");
     let batch = reader.next().expect("No batch").expect("Batch error");
-    println!("Query returned {} row(s), {} column(s)\n", batch.num_rows(), batch.num_columns());
+    println!(
+        "Query returned {} row(s), {} column(s)\n",
+        batch.num_rows(),
+        batch.num_columns()
+    );
 
     // Show the log file contents
     println!("=== Log file contents ({}) ===\n", log_file);
