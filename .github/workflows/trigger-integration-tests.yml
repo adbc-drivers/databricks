@@ -29,7 +29,7 @@ jobs:
     steps:
       - name: Check if integration-test label exists
         id: check-label
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const labels = context.payload.pull_request.labels.map(l => l.name);
@@ -39,7 +39,7 @@ jobs:
 
       - name: Remove integration-test label
         if: steps.check-label.outputs.result == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             try {
@@ -60,7 +60,7 @@ jobs:
 
       - name: Comment on PR about label removal
         if: steps.check-label.outputs.result == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -103,7 +103,7 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: adbc-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -111,7 +111,7 @@ jobs:
           repositories: databricks
 
       - name: Skip C# Integration Tests
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -130,7 +130,7 @@ jobs:
             });
 
       - name: Skip Rust Integration Tests
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -163,7 +163,7 @@ jobs:
     steps:
       - name: Detect changed driver paths
         id: changed
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const { data: files } = await github.rest.pulls.listFiles({
@@ -185,7 +185,7 @@ jobs:
 
       - name: Generate GitHub App Token (internal repo)
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -194,7 +194,7 @@ jobs:
 
       - name: Generate GitHub App Token (public repo)
         id: adbc-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -203,7 +203,7 @@ jobs:
 
       - name: Dispatch C# tests to internal repo
         if: steps.changed.outputs.csharp == 'true'
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
@@ -220,7 +220,7 @@ jobs:
 
       - name: Dispatch Rust tests to internal repo
         if: steps.changed.outputs.rust == 'true'
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
@@ -237,7 +237,7 @@ jobs:
 
       - name: Pass Integration Tests check (C# not needed)
         if: steps.changed.outputs.csharp != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -257,7 +257,7 @@ jobs:
 
       - name: Pass Rust Integration Tests check (Rust not needed)
         if: steps.changed.outputs.rust != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -276,7 +276,7 @@ jobs:
             });
 
       - name: Comment on PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.issues.createComment({
@@ -294,7 +294,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, peco-driver]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -310,7 +310,7 @@ jobs:
 
       - name: Generate GitHub App Token (public repo)
         id: adbc-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -319,7 +319,7 @@ jobs:
 
       - name: Auto-pass (no C# changes)
         if: steps.changed.outputs.changed != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -345,7 +345,7 @@ jobs:
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.changed == 'true'
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -354,7 +354,7 @@ jobs:
 
       - name: Dispatch C# tests
         if: steps.changed.outputs.changed == 'true'
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
@@ -371,7 +371,7 @@ jobs:
 
       - name: Fail check on dispatch error
         if: failure() && steps.changed.outputs.changed == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -387,7 +387,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, peco-driver]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -403,7 +403,7 @@ jobs:
 
       - name: Generate GitHub App Token (public repo)
         id: adbc-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -412,7 +412,7 @@ jobs:
 
       - name: Auto-pass (no Rust changes)
         if: steps.changed.outputs.changed != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -438,7 +438,7 @@ jobs:
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.changed == 'true'
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -447,7 +447,7 @@ jobs:
 
       - name: Dispatch Rust tests
         if: steps.changed.outputs.changed == 'true'
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
@@ -464,7 +464,7 @@ jobs:
 
       - name: Fail check on dispatch error
         if: failure() && steps.changed.outputs.changed == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
