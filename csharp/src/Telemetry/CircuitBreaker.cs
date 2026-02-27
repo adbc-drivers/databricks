@@ -56,11 +56,9 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// </remarks>
     internal sealed class CircuitBreaker
     {
-        private const int DefaultFailureThreshold = 5;
-        private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(1);
-
         private readonly ResiliencePipeline _pipeline;
         private readonly CircuitBreakerManualControl _manualControl;
+        private readonly CircuitBreakerConfig _config;
 
         // Track state transitions for the State property
         private volatile CircuitBreakerState _lastKnownState = CircuitBreakerState.Closed;
@@ -72,17 +70,47 @@ namespace AdbcDrivers.Databricks.Telemetry
         public CircuitBreakerState State => _lastKnownState;
 
         /// <summary>
+        /// Gets the configuration used by this circuit breaker.
+        /// </summary>
+        public CircuitBreakerConfig Config => _config;
+
+        /// <summary>
         /// Creates a new circuit breaker with the specified configuration.
+        /// </summary>
+        /// <param name="config">The configuration for this circuit breaker.</param>
+        /// <exception cref="ArgumentNullException">Thrown when config is null.</exception>
+        public CircuitBreaker(CircuitBreakerConfig config)
+            : this(config?.FailureThreshold ?? CircuitBreakerConfig.DefaultFailureThreshold,
+                   config?.Timeout ?? CircuitBreakerConfig.DefaultTimeout,
+                   config)
+        {
+        }
+
+        /// <summary>
+        /// Creates a new circuit breaker with the specified parameters.
         /// </summary>
         /// <param name="failureThreshold">Number of failures before the circuit opens. Default is 5.</param>
         /// <param name="timeout">Duration the circuit stays open before transitioning to half-open. Default is 1 minute.</param>
-        public CircuitBreaker(int failureThreshold = DefaultFailureThreshold, TimeSpan? timeout = null)
+        public CircuitBreaker(int failureThreshold = CircuitBreakerConfig.DefaultFailureThreshold, TimeSpan? timeout = null)
+            : this(failureThreshold, timeout, null)
         {
-            var actualTimeout = timeout ?? DefaultTimeout;
+        }
+
+        /// <summary>
+        /// Private constructor that does the actual initialization.
+        /// </summary>
+        private CircuitBreaker(int failureThreshold, TimeSpan? timeout, CircuitBreakerConfig? config)
+        {
+            _config = config ?? new CircuitBreakerConfig
+            {
+                FailureThreshold = failureThreshold,
+                Timeout = timeout ?? CircuitBreakerConfig.DefaultTimeout
+            };
+            var actualTimeout = _config.Timeout;
             _manualControl = new CircuitBreakerManualControl();
 
             // Polly has minimum constraints: MinimumThroughput >= 2, BreakDuration >= 500ms
-            var minimumThroughput = Math.Max(2, failureThreshold);
+            var minimumThroughput = Math.Max(2, _config.FailureThreshold);
             var breakDuration = actualTimeout < TimeSpan.FromMilliseconds(500)
                 ? TimeSpan.FromMilliseconds(500)
                 : actualTimeout;

@@ -30,6 +30,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Microsoft.IO;
@@ -62,6 +63,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private bool _isCompleted;
         private Exception? _error;
         private readonly object _errorLock = new object();
+
+        // Chunk latency tracking for telemetry
+        private long _initialChunkLatencyMs = -1;
+        private long _slowestChunkLatencyMs = 0;
+        private readonly object _latencyLock = new object();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class.
@@ -434,8 +440,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         new("total_bytes", totalBytes),
                         new("total_mb", totalBytes / 1024.0 / 1024.0),
                         new("total_time_ms", overallStopwatch.ElapsedMilliseconds),
-                        new("total_time_sec", overallStopwatch.ElapsedMilliseconds / 1000.0)
+                        new("total_time_sec", overallStopwatch.ElapsedMilliseconds / 1000.0),
+                        new("initial_chunk_latency_ms", _initialChunkLatencyMs),
+                        new("slowest_chunk_latency_ms", _slowestChunkLatencyMs)
                     ]);
+
+                    // Set telemetry tags for result metrics (Section 4.2 of telemetry-design.md)
+                    activity?.SetTag(StatementExecutionEvent.ResultChunkCount, successfulDownloads);
+                    activity?.SetTag(StatementExecutionEvent.ResultBytesDownloaded, totalBytes);
 
                     // If there's an error, add the error to the result queue
                     if (HasError)
@@ -642,15 +654,32 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 // Stop the stopwatch and log download completion
                 stopwatch.Stop();
-                double throughputMBps = (actualSize / 1024.0 / 1024.0) / (stopwatch.ElapsedMilliseconds / 1000.0);
+                long chunkLatencyMs = stopwatch.ElapsedMilliseconds;
+                double throughputMBps = (actualSize / 1024.0 / 1024.0) / (chunkLatencyMs / 1000.0);
                 activity?.AddEvent("cloudfetch.download_complete", [
                     new("offset", downloadResult.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("actual_size_bytes", actualSize),
                     new("actual_size_kb", actualSize / 1024.0),
-                    new("latency_ms", stopwatch.ElapsedMilliseconds),
+                    new("latency_ms", chunkLatencyMs),
                     new("throughput_mbps", throughputMBps)
                 ]);
+
+                // Track chunk latency for telemetry
+                lock (_latencyLock)
+                {
+                    // Track initial chunk latency (first successful download)
+                    if (_initialChunkLatencyMs < 0)
+                    {
+                        _initialChunkLatencyMs = chunkLatencyMs;
+                    }
+
+                    // Track slowest chunk latency (max)
+                    if (chunkLatencyMs > _slowestChunkLatencyMs)
+                    {
+                        _slowestChunkLatencyMs = chunkLatencyMs;
+                    }
+                }
 
                 // Set the download as completed with the original size
                 downloadResult.SetCompleted(dataStream, size);

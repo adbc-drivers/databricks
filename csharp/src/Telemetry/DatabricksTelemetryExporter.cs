@@ -219,10 +219,22 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <summary>
         /// Gets the telemetry endpoint URL based on authentication status.
         /// </summary>
+        /// <remarks>
+        /// Returns a full URL with https:// scheme. The host parameter may be
+        /// just a hostname or a full URL with scheme.
+        /// </remarks>
         internal string GetEndpointUrl()
         {
             var endpoint = _isAuthenticated ? AuthenticatedEndpoint : UnauthenticatedEndpoint;
             var host = _host.TrimEnd('/');
+
+            // Ensure the host has a scheme
+            if (!host.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+                !host.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                host = $"https://{host}";
+            }
+
             return $"{host}{endpoint}";
         }
 
