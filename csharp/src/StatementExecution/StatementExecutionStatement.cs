@@ -848,10 +848,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 string.IsNullOrEmpty(_metadataTableName))
                 return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-            string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
             List<RecordBatch> batches;
             try
             {
+                string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
                 batches = _connection.ExecuteMetadataSql(sql);
             }
             catch
@@ -859,14 +859,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
             }
 
-            var tableCatBuilder = new StringArray.Builder();
-            var tableSchemaBuilder = new StringArray.Builder();
-            var tableNameBuilder = new StringArray.Builder();
-            var columnNameBuilder = new StringArray.Builder();
-            var keySeqBuilder = new Int32Array.Builder();
-            var pkNameBuilder = new StringArray.Builder();
-            int count = 0;
-
+            var keys = new List<(string, string, string, string, int, string)>();
+            int seq = 0;
             foreach (var batch in batches)
             {
                 var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
@@ -876,23 +870,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 for (int i = 0; i < batch.Length; i++)
                 {
                     if (colNameArray.IsNull(i)) continue;
-                    tableCatBuilder.Append(_metadataCatalogName!);
-                    tableSchemaBuilder.Append(_metadataSchemaName!);
-                    tableNameBuilder.Append(_metadataTableName!);
-                    columnNameBuilder.Append(colNameArray.GetString(i));
-                    keySeqBuilder.Append(keySeqArray != null && !keySeqArray.IsNull(i)
-                        ? keySeqArray.GetValue(i)!.Value : count + 1);
-                    pkNameBuilder.Append(keyNameArray != null && !keyNameArray.IsNull(i)
-                        ? keyNameArray.GetString(i) : "");
-                    count++;
+                    int keySeq = keySeqArray != null && !keySeqArray.IsNull(i) ? keySeqArray.GetValue(i)!.Value : ++seq;
+                    string pkName = keyNameArray != null && !keyNameArray.IsNull(i) ? keyNameArray.GetString(i) : "";
+                    keys.Add((_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!,
+                        colNameArray.GetString(i), keySeq, pkName));
                 }
             }
-            var schema = MetadataSchemaFactory.CreatePrimaryKeysSchema();
-            return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
-            {
-                tableCatBuilder.Build(), tableSchemaBuilder.Build(), tableNameBuilder.Build(),
-                columnNameBuilder.Build(), keySeqBuilder.Build(), pkNameBuilder.Build()
-            }));
+            return MetadataSchemaFactory.BuildPrimaryKeysResult(keys);
         }
 
         private QueryResult GetCrossReference()
@@ -904,81 +888,60 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 string.IsNullOrEmpty(_metadataForeignTableName))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
+            List<RecordBatch> batches;
             try
             {
                 string sql = new ShowForeignKeysCommand(
                     _metadataForeignCatalogName!, _metadataForeignSchemaName!, _metadataForeignTableName!).Build();
-                var batches = _connection.ExecuteMetadataSql(sql);
-
-                var pkTableCatBuilder = new StringArray.Builder();
-                var pkTableSchemaBuilder = new StringArray.Builder();
-                var pkTableNameBuilder = new StringArray.Builder();
-                var pkColumnNameBuilder = new StringArray.Builder();
-                var fkTableCatBuilder = new StringArray.Builder();
-                var fkTableSchemaBuilder = new StringArray.Builder();
-                var fkTableNameBuilder = new StringArray.Builder();
-                var fkColumnNameBuilder = new StringArray.Builder();
-                var keySeqBuilder = new Int32Array.Builder();
-                var updateRuleBuilder = new Int32Array.Builder();
-                var deleteRuleBuilder = new Int32Array.Builder();
-                var fkNameBuilder = new StringArray.Builder();
-                var pkNameBuilder = new StringArray.Builder();
-                var deferrabilityBuilder = new Int32Array.Builder();
-                int count = 0;
-
-                foreach (var batch in batches)
-                {
-                    var pkCatalogArray = TryGetColumn<StringArray>(batch, "parentCatalogName");
-                    var pkSchemaArray = TryGetColumn<StringArray>(batch, "parentNamespace");
-                    var pkTableArray = TryGetColumn<StringArray>(batch, "parentTableName");
-                    var pkColArray = TryGetColumn<StringArray>(batch, "parentColName");
-                    var fkCatalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                    var fkSchemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                    var fkTableArray = TryGetColumn<StringArray>(batch, "tableName");
-                    var fkColArray = TryGetColumn<StringArray>(batch, "col_name");
-                    var fkNameArray = TryGetColumn<StringArray>(batch, "constraintName");
-                    var fkKeySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
-                    var fkUpdateRuleArray = TryGetColumn<Int32Array>(batch, "updateRule");
-                    var fkDeleteRuleArray = TryGetColumn<Int32Array>(batch, "deleteRule");
-                    var fkDeferrabilityArray = TryGetColumn<Int32Array>(batch, "deferrability");
-
-                    if (fkColArray == null) continue;
-
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (fkColArray.IsNull(i)) continue;
-                        pkTableCatBuilder.Append(pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : _metadataCatalogName ?? "");
-                        pkTableSchemaBuilder.Append(pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : _metadataSchemaName ?? "");
-                        pkTableNameBuilder.Append(pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : _metadataTableName ?? "");
-                        pkColumnNameBuilder.Append(pkColArray != null && !pkColArray.IsNull(i) ? pkColArray.GetString(i) : "");
-                        fkTableCatBuilder.Append(fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : _metadataForeignCatalogName!);
-                        fkTableSchemaBuilder.Append(fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : _metadataForeignSchemaName!);
-                        fkTableNameBuilder.Append(fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : _metadataForeignTableName!);
-                        fkColumnNameBuilder.Append(fkColArray.GetString(i));
-                        keySeqBuilder.Append(fkKeySeqArray != null && !fkKeySeqArray.IsNull(i) ? fkKeySeqArray.GetValue(i)!.Value : count + 1);
-                        updateRuleBuilder.Append(fkUpdateRuleArray != null && !fkUpdateRuleArray.IsNull(i) ? fkUpdateRuleArray.GetValue(i)!.Value : 0);
-                        deleteRuleBuilder.Append(fkDeleteRuleArray != null && !fkDeleteRuleArray.IsNull(i) ? fkDeleteRuleArray.GetValue(i)!.Value : 0);
-                        fkNameBuilder.Append(fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : "");
-                        pkNameBuilder.AppendNull();
-                        deferrabilityBuilder.Append(fkDeferrabilityArray != null && !fkDeferrabilityArray.IsNull(i) ? fkDeferrabilityArray.GetValue(i)!.Value : 5);
-                        count++;
-                    }
-                }
-
-                var schema = MetadataSchemaFactory.CreateCrossReferenceSchema();
-                return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
-                {
-                    pkTableCatBuilder.Build(), pkTableSchemaBuilder.Build(), pkTableNameBuilder.Build(),
-                    pkColumnNameBuilder.Build(), fkTableCatBuilder.Build(), fkTableSchemaBuilder.Build(),
-                    fkTableNameBuilder.Build(), fkColumnNameBuilder.Build(), keySeqBuilder.Build(),
-                    updateRuleBuilder.Build(), deleteRuleBuilder.Build(), fkNameBuilder.Build(),
-                    pkNameBuilder.Build(), deferrabilityBuilder.Build()
-                }));
+                batches = _connection.ExecuteMetadataSql(sql);
             }
             catch
             {
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
             }
+
+            var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
+            int seq = 0;
+            foreach (var batch in batches)
+            {
+                var pkCatalogArray = TryGetColumn<StringArray>(batch, "parentCatalogName");
+                var pkSchemaArray = TryGetColumn<StringArray>(batch, "parentNamespace");
+                var pkTableArray = TryGetColumn<StringArray>(batch, "parentTableName");
+                var pkColArray = TryGetColumn<StringArray>(batch, "parentColName");
+                var fkCatalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                var fkSchemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                var fkTableArray = TryGetColumn<StringArray>(batch, "tableName");
+                var fkColArray = TryGetColumn<StringArray>(batch, "col_name");
+                var fkNameArray = TryGetColumn<StringArray>(batch, "constraintName");
+                var fkKeySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
+                var fkUpdateRuleArray = TryGetColumn<Int32Array>(batch, "updateRule");
+                var fkDeleteRuleArray = TryGetColumn<Int32Array>(batch, "deleteRule");
+                var fkDeferrabilityArray = TryGetColumn<Int32Array>(batch, "deferrability");
+
+                if (fkColArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (fkColArray.IsNull(i)) continue;
+                    refs.Add((
+                        pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : _metadataCatalogName ?? "",
+                        pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : _metadataSchemaName ?? "",
+                        pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : _metadataTableName ?? "",
+                        pkColArray != null && !pkColArray.IsNull(i) ? pkColArray.GetString(i) : "",
+                        fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : _metadataForeignCatalogName!,
+                        fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : _metadataForeignSchemaName!,
+                        fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : _metadataForeignTableName!,
+                        fkColArray.GetString(i),
+                        fkKeySeqArray != null && !fkKeySeqArray.IsNull(i) ? fkKeySeqArray.GetValue(i)!.Value : ++seq,
+                        fkUpdateRuleArray != null && !fkUpdateRuleArray.IsNull(i) ? fkUpdateRuleArray.GetValue(i)!.Value : 0,
+                        fkDeleteRuleArray != null && !fkDeleteRuleArray.IsNull(i) ? fkDeleteRuleArray.GetValue(i)!.Value : 0,
+                        fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : "",
+                        (string?)null,
+                        fkDeferrabilityArray != null && !fkDeferrabilityArray.IsNull(i) ? fkDeferrabilityArray.GetValue(i)!.Value : 5
+                    ));
+                }
+            }
+            return MetadataSchemaFactory.BuildCrossReferenceResult(refs);
         }
 
         private static T? TryGetColumn<T>(RecordBatch batch, string name) where T : class, IArrowArray

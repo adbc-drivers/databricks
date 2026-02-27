@@ -99,29 +99,18 @@ namespace AdbcDrivers.Databricks.Result
             public bool IsNumber => ColumnMetadataHelper.GetNumPrecRadix(Type.Name) != null;
 
             [JsonIgnore]
-            public int DecimalDigits
-            {
-                get
-                {
-                    if ((DataType == ColumnTypeId.DECIMAL || DataType == ColumnTypeId.NUMERIC) && Type.Scale.HasValue)
-                        return Type.Scale.Value;
-                    return ColumnMetadataHelper.GetDecimalDigitsDefault(Type.FullTypeName) ?? 0;
-                }
-            }
+            public int DecimalDigits => ColumnMetadataHelper.GetDecimalDigitsDefault(Type.FullTypeName) ?? 0;
 
             [JsonIgnore]
             public int? ColumnSize
             {
                 get
                 {
-                    if ((DataType == ColumnTypeId.DECIMAL || DataType == ColumnTypeId.NUMERIC) && Type.Precision.HasValue)
-                        return Type.Precision.Value;
-                    if (Type.Name.Trim().Equals("STRING", StringComparison.OrdinalIgnoreCase))
-                        return int.MaxValue;
-                    if ((DataType == ColumnTypeId.CHAR || DataType == ColumnTypeId.VARCHAR) && Type.Length.HasValue)
-                        return Type.Length.Value;
-                    // Use StartUnit for INTERVAL when available from server
-                    if (Type.Name.Trim().Equals("INTERVAL", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(Type.StartUnit))
+                    // For INTERVAL types, FullTypeName may not include the qualifier
+                    // when only StartUnit is set. Use StartUnit directly in that case.
+                    if (Type.Name.Trim().Equals("INTERVAL", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrEmpty(Type.StartUnit)
+                        && Type.EndUnit == null)
                     {
                         return Type.StartUnit!.ToUpper() switch
                         {
@@ -130,12 +119,6 @@ namespace AdbcDrivers.Databricks.Result
                             _ => 4
                         };
                     }
-                    // BINARY/VARBINARY: DESC TABLE EXTENDED doesn't provide size
-                    if (DataType == ColumnTypeId.BINARY || DataType == ColumnTypeId.VARBINARY)
-                        return 0;
-                    // VOID/NULL: fixed size 1
-                    if (DataType == ColumnTypeId.NULL)
-                        return 1;
                     return ColumnMetadataHelper.GetColumnSizeDefault(Type.FullTypeName);
                 }
             }
