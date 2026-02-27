@@ -22,6 +22,9 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Result;
+using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
@@ -60,9 +63,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // HTTP client for CloudFetch downloads
         private readonly HttpClient _httpClient;
 
+        // Connection reference for metadata queries
+        private readonly StatementExecutionConnection _connection;
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
+
+        // Metadata command support
+        private bool _isMetadataCommand;
+        private string? _metadataCatalogName;
+        private string? _metadataSchemaName;
+        private string? _metadataTableName;
+        private string? _metadataColumnName;
+        private string? _metadataForeignCatalogName;
+        private string? _metadataForeignSchemaName;
+        private string? _metadataForeignTableName;
 
         public StatementExecutionStatement(
             IStatementExecutionClient client,
@@ -80,8 +96,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             System.Buffers.ArrayPool<byte> lz4BufferPool,
             HttpClient httpClient,
             StatementExecutionConnection connection)
-            : base(connection) // Initialize TracingStatement base class with TracingConnection
+            : base(connection)
         {
+            _connection = connection ?? throw new ArgumentNullException(nameof(connection));
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _sessionId = sessionId;
             _warehouseId = warehouseId ?? throw new ArgumentNullException(nameof(warehouseId));
@@ -107,19 +124,52 @@ namespace AdbcDrivers.Databricks.StatementExecution
             set => _sqlQuery = value;
         }
 
-        /// <summary>
-        /// Executes the query and returns a result set.
-        /// </summary>
+        public override void SetOption(string key, string value)
+        {
+            switch (key)
+            {
+                case ApacheParameters.IsMetadataCommand:
+                    _isMetadataCommand = bool.TryParse(value, out bool b) && b;
+                    break;
+                case ApacheParameters.CatalogName:
+                    _metadataCatalogName = value;
+                    break;
+                case ApacheParameters.SchemaName:
+                    _metadataSchemaName = value;
+                    break;
+                case ApacheParameters.TableName:
+                    _metadataTableName = value;
+                    break;
+                case ApacheParameters.ColumnName:
+                    _metadataColumnName = value;
+                    break;
+                case ApacheParameters.ForeignCatalogName:
+                    _metadataForeignCatalogName = value;
+                    break;
+                case ApacheParameters.ForeignSchemaName:
+                    _metadataForeignSchemaName = value;
+                    break;
+                case ApacheParameters.ForeignTableName:
+                    _metadataForeignTableName = value;
+                    break;
+                default:
+                    base.SetOption(key, value);
+                    break;
+            }
+        }
+
         public override QueryResult ExecuteQuery()
         {
             return ExecuteQueryAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
 
-        /// <summary>
-        /// Executes the query asynchronously and returns a result set.
-        /// </summary>
         public async Task<QueryResult> ExecuteQueryAsync(CancellationToken cancellationToken = default)
         {
+            if (_isMetadataCommand)
+            {
+                return ExecuteMetadataCommand();
+            }
+
             if (string.IsNullOrEmpty(_sqlQuery))
             {
                 throw new InvalidOperationException("SQL query is required");
@@ -611,6 +661,396 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 return result;
             }
+        }
+
+        // Metadata command routing
+
+        private string? EffectiveCatalog => MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) ?? _catalog;
+
+        private QueryResult ExecuteMetadataCommand()
+        {
+            return _sqlQuery?.ToLowerInvariant() switch
+            {
+                "getcatalogs" => GetCatalogs(),
+                "getschemas" => GetSchemas(),
+                "gettables" => GetTables(),
+                "getcolumns" => GetColumns(),
+                "getcolumnsextended" => GetColumnsExtended(),
+                "getprimarykeys" => GetPrimaryKeys(),
+                "getcrossreference" => GetCrossReference(),
+                _ => throw new NotSupportedException($"Metadata command '{_sqlQuery}' is not supported"),
+            };
+        }
+
+        private QueryResult GetCatalogs()
+        {
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("catalog_pattern", _metadataCatalogName ?? "(none)");
+
+                string sql = new ShowCatalogsCommand(_metadataCatalogName).Build();
+                activity?.SetTag("sql_query", sql);
+                var batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
+
+                var tableCatBuilder = new StringArray.Builder();
+                int count = 0;
+                foreach (var batch in batches)
+                {
+                    var catalogArray = TryGetColumn<StringArray>(batch, "catalog");
+                    if (catalogArray == null) continue;
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (!catalogArray.IsNull(i))
+                        {
+                            tableCatBuilder.Append(catalogArray.GetString(i));
+                            count++;
+                        }
+                    }
+                }
+
+                activity?.SetTag("result_count", count);
+                var schema = MetadataSchemaFactory.CreateCatalogsSchema();
+                return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[] { tableCatBuilder.Build() }));
+            }, "GetCatalogs");
+        }
+
+        private QueryResult GetSchemas()
+        {
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
+
+                string sql = new ShowSchemasCommand(EffectiveCatalog, _metadataSchemaName).Build();
+                activity?.SetTag("sql_query", sql);
+                var batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
+
+                var tableSchemaBuilder = new StringArray.Builder();
+                var tableCatalogBuilder = new StringArray.Builder();
+                int count = 0;
+                foreach (var batch in batches)
+                {
+                    var schemaArray = TryGetColumn<StringArray>(batch, "databaseName");
+                    var catalogArray = TryGetColumn<StringArray>(batch, "catalog_name");
+                    if (schemaArray == null) continue;
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (schemaArray.IsNull(i)) continue;
+                        tableSchemaBuilder.Append(schemaArray.GetString(i));
+                        string catalog = catalogArray != null && !catalogArray.IsNull(i)
+                            ? catalogArray.GetString(i)
+                            : EffectiveCatalog ?? "";
+                        tableCatalogBuilder.Append(catalog);
+                        count++;
+                    }
+                }
+
+                activity?.SetTag("result_count", count);
+                var schema = MetadataSchemaFactory.CreateSchemasSchema();
+                return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
+                {
+                    tableSchemaBuilder.Build(), tableCatalogBuilder.Build()
+                }));
+            }, "GetSchemas");
+        }
+
+        private QueryResult GetTables()
+        {
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
+                activity?.SetTag("table_pattern", _metadataTableName ?? "(none)");
+
+                string sql = new ShowTablesCommand(EffectiveCatalog, _metadataSchemaName, _metadataTableName).Build();
+                activity?.SetTag("sql_query", sql);
+                var batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
+
+            var tableCatBuilder = new StringArray.Builder();
+            var tableSchemaBuilder = new StringArray.Builder();
+            var tableNameBuilder = new StringArray.Builder();
+            var tableTypeBuilder = new StringArray.Builder();
+            var remarksBuilder = new StringArray.Builder();
+            var typeCatBuilder = new StringArray.Builder();
+            var typeSchemaBuilder = new StringArray.Builder();
+            var typeNameBuilder = new StringArray.Builder();
+            var selfRefColBuilder = new StringArray.Builder();
+            var refGenBuilder = new StringArray.Builder();
+            int count = 0;
+            foreach (var batch in batches)
+            {
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                var tableArray = TryGetColumn<StringArray>(batch, "tableName");
+                var tableTypeArray = TryGetColumn<StringArray>(batch, "tableType");
+                var remarksArray = TryGetColumn<StringArray>(batch, "remarks");
+                if (catalogArray == null || schemaArray == null || tableArray == null) continue;
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableArray.IsNull(i)) continue;
+                    tableCatBuilder.Append(catalogArray.GetString(i));
+                    tableSchemaBuilder.Append(schemaArray.GetString(i));
+                    tableNameBuilder.Append(tableArray.GetString(i));
+                    string tableType = tableTypeArray != null && !tableTypeArray.IsNull(i) ? tableTypeArray.GetString(i) : "TABLE";
+                    tableTypeBuilder.Append(tableType);
+                    remarksBuilder.Append(remarksArray != null && !remarksArray.IsNull(i) ? remarksArray.GetString(i) : "");
+                    typeCatBuilder.AppendNull();
+                    typeSchemaBuilder.AppendNull();
+                    typeNameBuilder.AppendNull();
+                    selfRefColBuilder.AppendNull();
+                    refGenBuilder.AppendNull();
+                    count++;
+                }
+            }
+
+                activity?.SetTag("result_count", count);
+                var schema = MetadataSchemaFactory.CreateTablesSchema();
+                return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
+                {
+                    tableCatBuilder.Build(), tableSchemaBuilder.Build(), tableNameBuilder.Build(),
+                    tableTypeBuilder.Build(), remarksBuilder.Build(), typeCatBuilder.Build(),
+                    typeSchemaBuilder.Build(), typeNameBuilder.Build(), selfRefColBuilder.Build(),
+                    refGenBuilder.Build()
+                }));
+            }, "GetTables");
+        }
+
+        private QueryResult GetColumns()
+        {
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
+                activity?.SetTag("table_pattern", _metadataTableName ?? "(none)");
+                activity?.SetTag("column_pattern", _metadataColumnName ?? "(none)");
+
+                string sql = new ShowColumnsCommand(
+                    EffectiveCatalog, _metadataSchemaName,
+                    _metadataTableName, _metadataColumnName).Build();
+                activity?.SetTag("sql_query", sql);
+                var batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
+
+            var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
+
+            foreach (var batch in batches)
+            {
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                var tableArray = TryGetColumn<StringArray>(batch, "tableName");
+                var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
+                var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
+                var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
+
+                if (catalogArray == null || schemaArray == null || tableArray == null ||
+                    colNameArray == null || columnTypeArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableArray.IsNull(i) ||
+                        colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
+
+                    string cat = catalogArray.GetString(i);
+                    string sch = schemaArray.GetString(i);
+                    string tbl = tableArray.GetString(i);
+                    string key = $"{cat}.{sch}.{tbl}";
+
+                    if (!tableInfos.ContainsKey(key))
+                        tableInfos[key] = (cat, sch, tbl, new TableInfo("TABLE"));
+
+                    var entry = tableInfos[key];
+                    bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
+                        !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+
+                    ColumnMetadataHelper.PopulateTableInfoFromTypeName(
+                        entry.info,
+                        colNameArray.GetString(i),
+                        columnTypeArray.GetString(i),
+                        entry.info.ColumnName.Count,
+                        nullable);
+                }
+            }
+
+                activity?.SetTag("result_tables", tableInfos.Count);
+                return FlatColumnsResultBuilder.BuildFlatColumnsResult(tableInfos.Values);
+            }, "GetColumns");
+        }
+
+        private QueryResult GetColumnsExtended()
+        {
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
+                activity?.SetTag("table", _metadataTableName ?? "(none)");
+
+                string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
+                    EffectiveCatalog, _metadataSchemaName, _metadataTableName);
+
+                if (string.IsNullOrEmpty(fullTableName))
+                    throw new ArgumentException("Catalog, schema, and table name are required for GetColumnsExtended");
+
+                string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+                activity?.SetTag("sql_query", query);
+                var batches = _connection.ExecuteMetadataSql(query, _connection.CreateMetadataTimeoutToken());
+
+                string? resultJson = null;
+                foreach (var batch in batches)
+                {
+                    if (batch.Length > 0)
+                    {
+                        resultJson = ((StringArray)batch.Column(0)).GetString(0);
+                        break;
+                    }
+                }
+
+                if (string.IsNullOrEmpty(resultJson))
+                    throw new FormatException($"Empty result from {query}");
+
+                var descResult = System.Text.Json.JsonSerializer.Deserialize<DescTableExtendedResult>(resultJson!);
+                if (descResult == null)
+                    throw new FormatException($"Failed to parse JSON result from {query}");
+
+                activity?.SetTag("result_columns", descResult.Columns?.Count ?? 0);
+                activity?.SetTag("result_pk_count", descResult.PrimaryKeys?.Count ?? 0);
+                activity?.SetTag("result_fk_count", descResult.ForeignKeys?.Count ?? 0);
+
+                return DatabricksStatement.CreateExtendedColumnsResult(
+                    MetadataSchemaFactory.CreateColumnMetadataSchema(), descResult);
+            }, "GetColumnsExtended");
+        }
+
+        private QueryResult GetPrimaryKeys()
+        {
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("catalog", _metadataCatalogName ?? "(none)");
+                activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
+                activity?.SetTag("table", _metadataTableName ?? "(none)");
+
+                if (MetadataUtilities.IsInvalidPKFKCatalog(_metadataCatalogName))
+                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
+
+                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName) ||
+                    string.IsNullOrEmpty(_metadataTableName))
+                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
+
+                List<RecordBatch> batches;
+                try
+                {
+                    string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
+                    activity?.SetTag("sql_query", sql);
+                    batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
+                }
+                catch
+                {
+                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
+                }
+
+                var keys = new List<(string, string, string, string, int, string)>();
+                int seq = 0;
+                foreach (var batch in batches)
+                {
+                    var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
+                    var keyNameArray = TryGetColumn<StringArray>(batch, "constraintName");
+                    var keySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
+                    if (colNameArray == null) continue;
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (colNameArray.IsNull(i)) continue;
+                        int keySeq = keySeqArray != null && !keySeqArray.IsNull(i) ? keySeqArray.GetValue(i)!.Value : ++seq;
+                        string pkName = keyNameArray != null && !keyNameArray.IsNull(i) ? keyNameArray.GetString(i) : "";
+                        keys.Add((_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!,
+                            colNameArray.GetString(i), keySeq, pkName));
+                    }
+                }
+
+                activity?.SetTag("result_count", keys.Count);
+                return MetadataSchemaFactory.BuildPrimaryKeysResult(keys);
+            }, "GetPrimaryKeys");
+        }
+
+        private QueryResult GetCrossReference()
+        {
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("pk_catalog", _metadataCatalogName ?? "(none)");
+                activity?.SetTag("pk_schema", _metadataSchemaName ?? "(none)");
+                activity?.SetTag("pk_table", _metadataTableName ?? "(none)");
+                activity?.SetTag("fk_catalog", _metadataForeignCatalogName ?? "(none)");
+                activity?.SetTag("fk_schema", _metadataForeignSchemaName ?? "(none)");
+                activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
+
+                if (MetadataUtilities.IsInvalidPKFKCatalog(_metadataForeignCatalogName))
+                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+
+                if (string.IsNullOrEmpty(_metadataForeignCatalogName) || string.IsNullOrEmpty(_metadataForeignSchemaName) ||
+                    string.IsNullOrEmpty(_metadataForeignTableName))
+                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+
+                List<RecordBatch> batches;
+                try
+                {
+                    string sql = new ShowForeignKeysCommand(
+                        _metadataForeignCatalogName!, _metadataForeignSchemaName!, _metadataForeignTableName!).Build();
+                    activity?.SetTag("sql_query", sql);
+                    batches = _connection.ExecuteMetadataSql(sql, _connection.CreateMetadataTimeoutToken());
+                }
+                catch
+                {
+                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+                }
+
+                var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
+                int seq = 0;
+                foreach (var batch in batches)
+                {
+                    var pkCatalogArray = TryGetColumn<StringArray>(batch, "parentCatalogName");
+                    var pkSchemaArray = TryGetColumn<StringArray>(batch, "parentNamespace");
+                    var pkTableArray = TryGetColumn<StringArray>(batch, "parentTableName");
+                    var pkColArray = TryGetColumn<StringArray>(batch, "parentColName");
+                    var fkCatalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                    var fkSchemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                    var fkTableArray = TryGetColumn<StringArray>(batch, "tableName");
+                    var fkColArray = TryGetColumn<StringArray>(batch, "col_name");
+                    var fkNameArray = TryGetColumn<StringArray>(batch, "constraintName");
+                    var fkKeySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
+                    var fkUpdateRuleArray = TryGetColumn<Int32Array>(batch, "updateRule");
+                    var fkDeleteRuleArray = TryGetColumn<Int32Array>(batch, "deleteRule");
+                    var fkDeferrabilityArray = TryGetColumn<Int32Array>(batch, "deferrability");
+
+                    if (fkColArray == null) continue;
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (fkColArray.IsNull(i)) continue;
+                        refs.Add((
+                            pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : _metadataCatalogName ?? "",
+                            pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : _metadataSchemaName ?? "",
+                            pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : _metadataTableName ?? "",
+                            pkColArray != null && !pkColArray.IsNull(i) ? pkColArray.GetString(i) : "",
+                            fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : _metadataForeignCatalogName!,
+                            fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : _metadataForeignSchemaName!,
+                            fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : _metadataForeignTableName!,
+                            fkColArray.GetString(i),
+                            fkKeySeqArray != null && !fkKeySeqArray.IsNull(i) ? fkKeySeqArray.GetValue(i)!.Value : ++seq,
+                            fkUpdateRuleArray != null && !fkUpdateRuleArray.IsNull(i) ? fkUpdateRuleArray.GetValue(i)!.Value : 0,
+                            fkDeleteRuleArray != null && !fkDeleteRuleArray.IsNull(i) ? fkDeleteRuleArray.GetValue(i)!.Value : 0,
+                            fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : "",
+                            (string?)null,
+                            fkDeferrabilityArray != null && !fkDeferrabilityArray.IsNull(i) ? fkDeferrabilityArray.GetValue(i)!.Value : 5
+                        ));
+                    }
+                }
+
+                activity?.SetTag("result_count", refs.Count);
+                return MetadataSchemaFactory.BuildCrossReferenceResult(refs);
+            }, "GetCrossReference");
+        }
+
+        private static T? TryGetColumn<T>(RecordBatch batch, string name) where T : class, IArrowArray
+        {
+            try { return batch.Column(name) as T; }
+            catch (ArgumentOutOfRangeException) { return null; }
         }
 
         // TracingStatement implementation
