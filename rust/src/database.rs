@@ -20,6 +20,7 @@ use crate::client::{
 };
 use crate::connection::{Connection, ConnectionConfig};
 use crate::error::DatabricksErrorHelper;
+use crate::logging::{self, LogConfig};
 use crate::reader::ResultReaderFactory;
 use crate::types::cloudfetch::CloudFetchConfig;
 use adbc_core::error::Result;
@@ -49,6 +50,10 @@ pub struct Database {
 
     // CloudFetch configuration
     cloudfetch_config: CloudFetchConfig,
+
+    // Logging configuration
+    log_level: Option<String>,
+    log_file: Option<String>,
 }
 
 impl Database {
@@ -235,6 +240,24 @@ impl Optionable for Database {
                     }
                 }
 
+                // Logging options
+                "databricks.log_level" => {
+                    if let OptionValue::String(v) = value {
+                        self.log_level = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.log_file" => {
+                    if let OptionValue::String(v) = value {
+                        self.log_file = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+
                 // HTTP client options
                 "databricks.http.connect_timeout_ms" => {
                     if let Some(v) = Self::parse_int_option(&value) {
@@ -290,6 +313,16 @@ impl Optionable for Database {
                         .message("option 'databricks.schema' is not set")
                         .to_adbc()
                 }),
+                "databricks.log_level" => self.log_level.clone().ok_or_else(|| {
+                    DatabricksErrorHelper::invalid_state()
+                        .message("option 'databricks.log_level' is not set")
+                        .to_adbc()
+                }),
+                "databricks.log_file" => self.log_file.clone().ok_or_else(|| {
+                    DatabricksErrorHelper::invalid_state()
+                        .message("option 'databricks.log_file' is not set")
+                        .to_adbc()
+                }),
                 _ => Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
             },
             _ => Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
@@ -335,6 +368,12 @@ impl adbc_core::Database for Database {
     type ConnectionType = Connection;
 
     fn new_connection(&self) -> Result<Self::ConnectionType> {
+        // Initialize logging (first call wins, subsequent calls are no-ops)
+        logging::init_logging(&LogConfig {
+            level: self.log_level.clone(),
+            file: self.log_file.clone(),
+        });
+
         // Validate required options
         let host = self.uri.as_ref().ok_or_else(|| {
             DatabricksErrorHelper::invalid_argument()
@@ -496,5 +535,66 @@ mod tests {
         let db = Database::new();
         let result = db.new_connection();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_database_log_level_option() {
+        let mut db = Database::new();
+        db.set_option(
+            OptionDatabase::Other("databricks.log_level".into()),
+            OptionValue::String("DEBUG".into()),
+        )
+        .unwrap();
+
+        assert_eq!(db.log_level, Some("DEBUG".to_string()));
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other("databricks.log_level".into()))
+                .unwrap(),
+            "DEBUG"
+        );
+    }
+
+    #[test]
+    fn test_database_log_file_option() {
+        let mut db = Database::new();
+        db.set_option(
+            OptionDatabase::Other("databricks.log_file".into()),
+            OptionValue::String("/tmp/test.log".into()),
+        )
+        .unwrap();
+
+        assert_eq!(db.log_file, Some("/tmp/test.log".to_string()));
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other("databricks.log_file".into()))
+                .unwrap(),
+            "/tmp/test.log"
+        );
+    }
+
+    #[test]
+    fn test_database_log_options_reject_non_string() {
+        let mut db = Database::new();
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.log_level".into()),
+            OptionValue::Int(5),
+        );
+        assert!(result.is_err());
+
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.log_file".into()),
+            OptionValue::Int(5),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_database_log_options_unset_returns_error() {
+        let db = Database::new();
+        assert!(db
+            .get_option_string(OptionDatabase::Other("databricks.log_level".into()))
+            .is_err());
+        assert!(db
+            .get_option_string(OptionDatabase::Other("databricks.log_file".into()))
+            .is_err());
     }
 }
