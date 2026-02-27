@@ -577,7 +577,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
         }
 
-        private List<RecordBatch> ExecuteMetadataSql(string sql)
+        internal List<RecordBatch> ExecuteMetadataSql(string sql)
         {
             var batches = new List<RecordBatch>();
             using var stmt = CreateStatement();
