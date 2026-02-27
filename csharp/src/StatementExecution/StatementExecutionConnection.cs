@@ -389,6 +389,34 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 tableNamePattern, tableTypes, columnNamePattern);
         }
 
+        public override IArrowArrayStream GetInfo(IReadOnlyList<AdbcInfoCode> codes)
+        {
+            var supportedCodes = new AdbcInfoCode[]
+            {
+                AdbcInfoCode.DriverName,
+                AdbcInfoCode.DriverVersion,
+                AdbcInfoCode.DriverArrowVersion,
+                AdbcInfoCode.VendorName,
+                AdbcInfoCode.VendorVersion,
+                AdbcInfoCode.VendorSql,
+            };
+
+            if (codes == null || codes.Count == 0)
+                codes = supportedCodes;
+
+            var values = new Dictionary<AdbcInfoCode, object>
+            {
+                { AdbcInfoCode.DriverName, "ADBC Databricks Driver" },
+                { AdbcInfoCode.DriverVersion, AssemblyVersion },
+                { AdbcInfoCode.DriverArrowVersion, "1.0.0" },
+                { AdbcInfoCode.VendorName, "Databricks" },
+                { AdbcInfoCode.VendorVersion, AssemblyVersion },
+                { AdbcInfoCode.VendorSql, true },
+            };
+
+            return MetadataSchemaFactory.BuildGetInfoResult(codes, values);
+        }
+
         public override IArrowArrayStream GetTableTypes()
         {
             var builder = new StringArray.Builder();

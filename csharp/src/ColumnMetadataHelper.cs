@@ -136,7 +136,7 @@ namespace AdbcDrivers.Databricks
                 case "BINARY":
                 case "VARBINARY":
                 case "LONGVARBINARY":
-                    return int.MaxValue;
+                    return 0;
                 case "NULL":
                 case "VOID":
                     return 1;

@@ -80,8 +80,8 @@ namespace AdbcDrivers.Databricks
                     if (radix.HasValue) numPrecRadixBuilder.Append(radix.Value); else numPrecRadixBuilder.AppendNull();
 
                     nullableBuilder.Append(info.Nullable[i]);
-                    remarksBuilder.Append(info.TypeName[i]);
-                    columnDefBuilder.Append(info.ColumnDefault[i]);
+                    remarksBuilder.Append("");
+                    columnDefBuilder.AppendNull();
 
                     sqlDataTypeBuilder.Append(info.ColType[i]);
 

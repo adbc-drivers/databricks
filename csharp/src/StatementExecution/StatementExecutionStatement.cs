@@ -22,6 +22,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Result;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
@@ -674,7 +675,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 "getschemas" => GetSchemas(),
                 "gettables" => GetTables(),
                 "getcolumns" => GetColumns(),
-                "getcolumnsextended" => GetColumns(),
+                "getcolumnsextended" => GetColumnsExtended(),
                 "getprimarykeys" => GetPrimaryKeys(),
                 "getcrossreference" => GetCrossReference(),
                 _ => throw new NotSupportedException($"Metadata command '{_sqlQuery}' is not supported"),
@@ -752,6 +753,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var tableNameBuilder = new StringArray.Builder();
             var tableTypeBuilder = new StringArray.Builder();
             var remarksBuilder = new StringArray.Builder();
+            var typeCatBuilder = new StringArray.Builder();
+            var typeSchemaBuilder = new StringArray.Builder();
+            var typeNameBuilder = new StringArray.Builder();
+            var selfRefColBuilder = new StringArray.Builder();
+            var refGenBuilder = new StringArray.Builder();
             int count = 0;
             foreach (var batch in batches)
             {
@@ -770,22 +776,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     string tableType = tableTypeArray != null && !tableTypeArray.IsNull(i) ? tableTypeArray.GetString(i) : "TABLE";
                     tableTypeBuilder.Append(tableType);
                     remarksBuilder.Append(remarksArray != null && !remarksArray.IsNull(i) ? remarksArray.GetString(i) : "");
+                    typeCatBuilder.AppendNull();
+                    typeSchemaBuilder.AppendNull();
+                    typeNameBuilder.AppendNull();
+                    selfRefColBuilder.AppendNull();
+                    refGenBuilder.AppendNull();
                     count++;
                 }
             }
 
-            var schema = new Schema(new[]
-            {
-                new Field("TABLE_CAT", StringType.Default, true),
-                new Field("TABLE_SCHEM", StringType.Default, true),
-                new Field("TABLE_NAME", StringType.Default, true),
-                new Field("TABLE_TYPE", StringType.Default, true),
-                new Field("REMARKS", StringType.Default, true),
-            }, null);
+            var schema = MetadataSchemaFactory.CreateTablesSchema();
             return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
             {
                 tableCatBuilder.Build(), tableSchemaBuilder.Build(), tableNameBuilder.Build(),
-                tableTypeBuilder.Build(), remarksBuilder.Build()
+                tableTypeBuilder.Build(), remarksBuilder.Build(), typeCatBuilder.Build(),
+                typeSchemaBuilder.Build(), typeNameBuilder.Build(), selfRefColBuilder.Build(),
+                refGenBuilder.Build()
             }));
         }
 
@@ -831,12 +837,44 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         entry.info,
                         colNameArray.GetString(i),
                         columnTypeArray.GetString(i),
-                        entry.info.ColumnName.Count + 1,
+                        entry.info.ColumnName.Count,
                         nullable);
                 }
             }
 
             return FlatColumnsResultBuilder.BuildFlatColumnsResult(tableInfos.Values);
+        }
+
+        private QueryResult GetColumnsExtended()
+        {
+            string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
+                EffectiveCatalog, _metadataSchemaName, _metadataTableName);
+
+            if (string.IsNullOrEmpty(fullTableName))
+                throw new ArgumentException("Catalog, schema, and table name are required for GetColumnsExtended");
+
+            string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+            var batches = _connection.ExecuteMetadataSql(query);
+
+            string? resultJson = null;
+            foreach (var batch in batches)
+            {
+                if (batch.Length > 0)
+                {
+                    resultJson = ((StringArray)batch.Column(0)).GetString(0);
+                    break;
+                }
+            }
+
+            if (string.IsNullOrEmpty(resultJson))
+                throw new FormatException($"Empty result from {query}");
+
+            var descResult = System.Text.Json.JsonSerializer.Deserialize<DescTableExtendedResult>(resultJson!);
+            if (descResult == null)
+                throw new FormatException($"Failed to parse JSON result from {query}");
+
+            return DatabricksStatement.CreateExtendedColumnsResult(
+                MetadataSchemaFactory.CreateColumnMetadataSchema(), descResult);
         }
 
         private QueryResult GetPrimaryKeys()

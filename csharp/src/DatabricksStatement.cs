@@ -380,20 +380,14 @@ namespace AdbcDrivers.Databricks
                         new("reason", "Multiple catalog support disabled")
                     ]);
 
-                    // Create a schema with a single column TABLE_CAT
-                    var field = new Field("TABLE_CAT", StringType.Default, true);
-                    var schema = new Schema(new[] { field }, null);
-
-                    // Create a single row with value "SPARK"
+                    var schema = MetadataSchemaFactory.CreateCatalogsSchema();
                     var builder = new StringArray.Builder();
                     builder.Append("SPARK");
-                    var array = builder.Build();
 
                     activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 1);
                     activity?.AddEvent("statement.get_catalogs.complete");
 
-                    // Return the result without making an RPC call
-                    return new QueryResult(1, new HiveInfoArrowStream(schema, new[] { array }));
+                    return new QueryResult(1, new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() }));
                 }
 
                 // If EnableMultipleCatalogSupport is true, delegate to base class implementation
@@ -433,23 +427,10 @@ namespace AdbcDrivers.Databricks
                         new("reason", "Multiple catalog support disabled and catalog is not null")
                     ]);
 
-                    // Create a schema with TABLE_SCHEM and TABLE_CATALOG columns
-                    var fields = new[]
-                    {
-                        new Field("TABLE_SCHEM", StringType.Default, true),
-                        new Field("TABLE_CATALOG", StringType.Default, true)
-                    };
-                    var schema = new Schema(fields, null);
-
-                    // Create empty arrays for both columns
-                    var catalogArray = new StringArray.Builder().Build();
-                    var schemaArray = new StringArray.Builder().Build();
-
                     activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
                     activity?.AddEvent("statement.get_schemas.complete");
 
-                    // Return empty result
-                    return new QueryResult(0, new HiveInfoArrowStream(schema, new[] { catalogArray, schemaArray }));
+                    return MetadataSchemaFactory.CreateEmptySchemasResult();
                 }
 
                 // Call the base implementation with the potentially modified catalog name
@@ -492,42 +473,10 @@ namespace AdbcDrivers.Databricks
                         new("reason", "Multiple catalog support disabled and catalog is not null")
                     ]);
 
-                    // Correct schema for GetTables
-                    var fields = new[]
-                    {
-                        new Field("TABLE_CAT", StringType.Default, true),
-                        new Field("TABLE_SCHEM", StringType.Default, true),
-                        new Field("TABLE_NAME", StringType.Default, true),
-                        new Field("TABLE_TYPE", StringType.Default, true),
-                        new Field("REMARKS", StringType.Default, true),
-                        new Field("TYPE_CAT", StringType.Default, true),
-                        new Field("TYPE_SCHEM", StringType.Default, true),
-                        new Field("TYPE_NAME", StringType.Default, true),
-                        new Field("SELF_REFERENCING_COL_NAME", StringType.Default, true),
-                        new Field("REF_GENERATION", StringType.Default, true)
-                    };
-                    var schema = new Schema(fields, null);
-
-                    // Create empty arrays for all columns
-                    var arrays = new IArrowArray[]
-                    {
-                        new StringArray.Builder().Build(), // TABLE_CAT
-                        new StringArray.Builder().Build(), // TABLE_SCHEM
-                        new StringArray.Builder().Build(), // TABLE_NAME
-                        new StringArray.Builder().Build(), // TABLE_TYPE
-                        new StringArray.Builder().Build(), // REMARKS
-                        new StringArray.Builder().Build(), // TYPE_CAT
-                        new StringArray.Builder().Build(), // TYPE_SCHEM
-                        new StringArray.Builder().Build(), // TYPE_NAME
-                        new StringArray.Builder().Build(), // SELF_REFERENCING_COL_NAME
-                        new StringArray.Builder().Build()  // REF_GENERATION
-                    };
-
                     activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
                     activity?.AddEvent("statement.get_tables.complete");
 
-                    // Return empty result
-                    return new QueryResult(0, new HiveInfoArrowStream(schema, arrays));
+                    return MetadataSchemaFactory.CreateEmptyTablesResult();
                 }
 
                 // Call the base implementation with the potentially modified catalog name
@@ -853,7 +802,7 @@ namespace AdbcDrivers.Databricks
             ];
         }
 
-        private QueryResult CreateExtendedColumnsResult(Schema columnMetadataSchema, DescTableExtendedResult descResult)
+        internal static QueryResult CreateExtendedColumnsResult(Schema columnMetadataSchema, DescTableExtendedResult descResult)
         {
             var allFields = new List<Field>(columnMetadataSchema.FieldsList);
             foreach (var field in PrimaryKeyFields)
