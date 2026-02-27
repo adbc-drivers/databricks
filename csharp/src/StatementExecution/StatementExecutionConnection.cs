@@ -16,15 +16,19 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
-using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
+using static Apache.Arrow.Adbc.AdbcConnection;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -33,7 +37,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// Manages session lifecycle and creates statements for query execution.
     /// Extends TracingConnection for consistent tracing support with Thrift protocol.
     /// </summary>
-    internal class StatementExecutionConnection : TracingConnection
+    internal class StatementExecutionConnection : TracingConnection, IGetObjectsDataProvider
     {
         private readonly IStatementExecutionClient _client;
         private readonly string _warehouseId;
@@ -378,31 +382,216 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 this); // Pass connection as TracingConnection for tracing support
         }
 
-        /// <summary>
-        /// Gets objects (metadata) from the database.
-        /// </summary>
         public override IArrowArrayStream GetObjects(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            return GetObjectsResultBuilder.BuildGetObjectsResult(
+                this, depth, catalogPattern, schemaPattern,
+                tableNamePattern, tableTypes, columnNamePattern);
         }
 
-        /// <summary>
-        /// Gets table types from the database.
-        /// </summary>
         public override IArrowArrayStream GetTableTypes()
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            var builder = new StringArray.Builder();
+            builder.Append("TABLE");
+            builder.Append("VIEW");
+            var schema = new Schema(new[] { new Field("table_type", StringType.Default, false) }, null);
+            return new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() });
         }
 
-        /// <summary>
-        /// Gets the schema for a specific table.
-        /// </summary>
         public override Schema GetTableSchema(string? catalog, string? dbSchema, string tableName)
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            string sql = new ShowColumnsCommand(
+                catalog ?? _catalog, dbSchema, tableName).Build();
+            var batches = ExecuteMetadataSql(sql);
+
+            var fields = new List<Field>();
+            foreach (var batch in batches)
+            {
+                var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
+                var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
+                var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
+
+                if (colNameArray == null || columnTypeArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
+
+                    string colName = colNameArray.GetString(i);
+                    string colType = columnTypeArray.GetString(i);
+                    bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
+                        !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+
+                    IArrowType arrowType = ColumnMetadataHelper.GetArrowType(colType);
+                    fields.Add(new Field(colName, arrowType, nullable));
+                }
+            }
+            return new Schema(fields, null);
+        }
+
+        // IGetObjectsDataProvider implementation
+
+        IReadOnlyList<string> IGetObjectsDataProvider.GetCatalogs(string? catalogPattern)
+        {
+            string sql = new ShowCatalogsCommand(catalogPattern).Build();
+            var batches = ExecuteMetadataSql(sql);
+            var result = new List<string>();
+            foreach (var batch in batches)
+            {
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalog");
+                if (catalogArray == null) continue;
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (!catalogArray.IsNull(i))
+                        result.Add(catalogArray.GetString(i));
+                }
+            }
+            return result;
+        }
+
+        IReadOnlyList<(string catalog, string schema)> IGetObjectsDataProvider.GetSchemas(string? catalogPattern, string? schemaPattern)
+        {
+            string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
+            var batches = ExecuteMetadataSql(sql);
+            var result = new List<(string, string)>();
+            foreach (var batch in batches)
+            {
+                var schemaArray = TryGetColumn<StringArray>(batch, "databaseName");
+                if (schemaArray == null) continue;
+
+                // SHOW SCHEMAS IN ALL CATALOGS has catalog_name column;
+                // SHOW SCHEMAS IN `catalog` does not — use the catalogPattern as the catalog.
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalog_name");
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (schemaArray.IsNull(i)) continue;
+                    string catalog = catalogArray != null && !catalogArray.IsNull(i)
+                        ? catalogArray.GetString(i)
+                        : catalogPattern ?? "";
+                    result.Add((catalog, schemaArray.GetString(i)));
+                }
+            }
+            return result;
+        }
+
+        IReadOnlyList<(string catalog, string schema, string table, string tableType)> IGetObjectsDataProvider.GetTables(
+            string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes)
+        {
+            string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
+            var batches = ExecuteMetadataSql(sql);
+            var result = new List<(string, string, string, string)>();
+            foreach (var batch in batches)
+            {
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                var tableArray = TryGetColumn<StringArray>(batch, "tableName");
+                var tableTypeArray = TryGetColumn<StringArray>(batch, "tableType");
+
+                if (catalogArray == null || schemaArray == null || tableArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableArray.IsNull(i)) continue;
+
+                    string tableType = "TABLE";
+                    if (tableTypeArray != null && !tableTypeArray.IsNull(i))
+                    {
+                        string serverType = tableTypeArray.GetString(i);
+                        if (!string.IsNullOrEmpty(serverType))
+                            tableType = serverType;
+                    }
+
+                    if (tableTypes != null && tableTypes.Count > 0 && !tableTypes.Contains(tableType))
+                        continue;
+
+                    result.Add((catalogArray.GetString(i), schemaArray.GetString(i),
+                        tableArray.GetString(i), tableType));
+                }
+            }
+            return result;
+        }
+
+        void IGetObjectsDataProvider.PopulateColumnInfo(string? catalogPattern, string? schemaPattern,
+            string? tablePattern, string? columnPattern,
+            Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap)
+        {
+            string sql = new ShowColumnsCommand(catalogPattern, schemaPattern, tablePattern, columnPattern).Build();
+            var batches = ExecuteMetadataSql(sql);
+
+            var tablePositions = new Dictionary<string, int>();
+
+            foreach (var batch in batches)
+            {
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                var tableNameArray = TryGetColumn<StringArray>(batch, "tableName");
+                var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
+                var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
+                var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
+
+                if (catalogArray == null || schemaArray == null || tableNameArray == null ||
+                    colNameArray == null || columnTypeArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableNameArray.IsNull(i) ||
+                        colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
+
+                    string cat = catalogArray.GetString(i);
+                    string sch = schemaArray.GetString(i);
+                    string tbl = tableNameArray.GetString(i);
+                    string colName = colNameArray.GetString(i);
+                    string colType = columnTypeArray.GetString(i);
+
+                    if (string.IsNullOrEmpty(colName)) continue;
+
+                    string tableKey = $"{cat}.{sch}.{tbl}";
+                    if (!tablePositions.ContainsKey(tableKey))
+                        tablePositions[tableKey] = 1;
+                    int position = tablePositions[tableKey]++;
+
+                    bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
+                        !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+
+                    if (catalogMap.TryGetValue(cat, out var schemaMap)
+                        && schemaMap.TryGetValue(sch, out var tableMap)
+                        && tableMap.TryGetValue(tbl, out var tableInfo))
+                    {
+                        ColumnMetadataHelper.PopulateTableInfoFromTypeName(
+                            tableInfo, colName, colType, position, nullable);
+                    }
+                }
+            }
+        }
+
+        private static T? TryGetColumn<T>(RecordBatch batch, string name) where T : class, IArrowArray
+        {
+            try
+            {
+                return batch.Column(name) as T;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return null;
+            }
+        }
+
+        private List<RecordBatch> ExecuteMetadataSql(string sql)
+        {
+            var batches = new List<RecordBatch>();
+            using var stmt = CreateStatement();
+            stmt.SqlQuery = sql;
+            var result = stmt.ExecuteQuery();
+            using var stream = result.Stream;
+            if (stream == null) return batches;
+            while (true)
+            {
+                var batch = stream.ReadNextRecordBatchAsync().AsTask().GetAwaiter().GetResult();
+                if (batch == null) break;
+                batches.Add(batch);
+            }
+            return batches;
         }
 
         /// <summary>
