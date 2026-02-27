@@ -665,7 +665,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Metadata command routing
 
-        private string? EffectiveCatalog => _metadataCatalogName ?? _catalog;
+        private string? EffectiveCatalog => MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) ?? _catalog;
 
         private QueryResult ExecuteMetadataCommand()
         {
