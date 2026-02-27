@@ -563,12 +563,81 @@ namespace AdbcDrivers.Databricks.Telemetry
                             context.AddPollLatencyMs(pollLatencyMs);
                         }
                         break;
+                    case "chunk.initial_latency_ms":
+                        if (long.TryParse(tag.Value, out long initialLatency))
+                        {
+                            context.SetInitialChunkLatency(initialLatency);
+                        }
+                        break;
+                    case "chunk.slowest_latency_ms":
+                        if (long.TryParse(tag.Value, out long slowestLatency))
+                        {
+                            context.UpdateSlowestChunkLatency(slowestLatency);
+                        }
+                        break;
                     case "execution.status":
                         context.ExecutionStatus = tag.Value;
                         break;
                     case "statement.type":
                         context.StatementType = tag.Value;
                         break;
+                }
+            }
+
+            // Process Activity events (like cloudfetch.download_summary)
+            ProcessActivityEvents(context, activity);
+        }
+
+        /// <summary>
+        /// Processes Activity events to extract telemetry metrics.
+        /// </summary>
+        private void ProcessActivityEvents(StatementTelemetryContext context, Activity activity)
+        {
+            foreach (var activityEvent in activity.Events)
+            {
+                if (activityEvent.Name == "cloudfetch.download_summary")
+                {
+                    foreach (var tag in activityEvent.Tags)
+                    {
+                        switch (tag.Key)
+                        {
+                            case "initial_chunk_latency_ms":
+                                if (tag.Value is long initialLatencyLong)
+                                {
+                                    context.SetInitialChunkLatency(initialLatencyLong);
+                                }
+                                else if (tag.Value is int initialLatencyInt)
+                                {
+                                    context.SetInitialChunkLatency(initialLatencyInt);
+                                }
+                                break;
+
+                            case "slowest_chunk_latency_ms":
+                                if (tag.Value is long slowestLatencyLong)
+                                {
+                                    context.UpdateSlowestChunkLatency(slowestLatencyLong);
+                                }
+                                else if (tag.Value is int slowestLatencyInt)
+                                {
+                                    context.UpdateSlowestChunkLatency(slowestLatencyInt);
+                                }
+                                break;
+
+                            case "total_files":
+                                if (tag.Value is int totalFiles)
+                                {
+                                    context.AddChunkCount(totalFiles);
+                                }
+                                break;
+
+                            case "total_bytes":
+                                if (tag.Value is long totalBytes)
+                                {
+                                    context.AddBytesDownloaded(totalBytes);
+                                }
+                                break;
+                        }
+                    }
                 }
             }
         }
@@ -589,7 +658,9 @@ namespace AdbcDrivers.Databricks.Telemetry
                     ChunkDetails = new ChunkDetails
                     {
                         TotalChunksPresent = context.ChunkCount ?? 0,
-                        SumChunksDownloadTimeMillis = context.BytesDownloaded ?? 0
+                        SumChunksDownloadTimeMillis = context.BytesDownloaded ?? 0,
+                        InitialChunkLatencyMillis = context.InitialChunkLatencyMs ?? 0,
+                        SlowestChunkLatencyMillis = context.SlowestChunkLatencyMs ?? 0
                     },
                     OperationDetail = new OperationDetail
                     {
@@ -811,10 +882,14 @@ namespace AdbcDrivers.Databricks.Telemetry
             private long _bytesDownloaded;
             private int _pollCount;
             private long _pollLatencyMs;
+            private long _initialChunkLatencyMs = -1;
+            private long _slowestChunkLatencyMs;
             private volatile bool _hasChunkCount;
             private volatile bool _hasBytesDownloaded;
             private volatile bool _hasPollCount;
             private volatile bool _hasPollLatencyMs;
+            private volatile bool _hasInitialChunkLatency;
+            private volatile bool _hasSlowestChunkLatency;
 
             public string StatementId { get; }
             public string? SessionId { get; set; }
@@ -832,6 +907,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             public long? BytesDownloaded => _hasBytesDownloaded ? Interlocked.Read(ref _bytesDownloaded) : (long?)null;
             public int? PollCount => _hasPollCount ? Interlocked.CompareExchange(ref _pollCount, 0, 0) : (int?)null;
             public long? PollLatencyMs => _hasPollLatencyMs ? Interlocked.Read(ref _pollLatencyMs) : (long?)null;
+            public long? InitialChunkLatencyMs => _hasInitialChunkLatency ? Interlocked.Read(ref _initialChunkLatencyMs) : (long?)null;
+            public long? SlowestChunkLatencyMs => _hasSlowestChunkLatency ? Interlocked.Read(ref _slowestChunkLatencyMs) : (long?)null;
 
             // Buffered exceptions for retryable errors
             public ConcurrentBag<Exception> BufferedExceptions { get; } = new ConcurrentBag<Exception>();
@@ -869,6 +946,38 @@ namespace AdbcDrivers.Databricks.Telemetry
             {
                 Interlocked.Add(ref _pollLatencyMs, latencyMs);
                 _hasPollLatencyMs = true;
+            }
+
+            /// <summary>
+            /// Sets the initial chunk latency. Only the first call has effect.
+            /// </summary>
+            public void SetInitialChunkLatency(long latencyMs)
+            {
+                // Only set once (first chunk)
+                if (!_hasInitialChunkLatency && latencyMs >= 0)
+                {
+                    Interlocked.Exchange(ref _initialChunkLatencyMs, latencyMs);
+                    _hasInitialChunkLatency = true;
+                }
+            }
+
+            /// <summary>
+            /// Updates the slowest chunk latency if the new value is greater.
+            /// Thread-safe using Interlocked.
+            /// </summary>
+            public void UpdateSlowestChunkLatency(long latencyMs)
+            {
+                if (latencyMs <= 0) return;
+
+                // Thread-safe max update using compare-and-swap
+                long current;
+                do
+                {
+                    current = Interlocked.Read(ref _slowestChunkLatencyMs);
+                    if (latencyMs <= current) return;
+                } while (Interlocked.CompareExchange(ref _slowestChunkLatencyMs, latencyMs, current) != current);
+
+                _hasSlowestChunkLatency = true;
             }
         }
 

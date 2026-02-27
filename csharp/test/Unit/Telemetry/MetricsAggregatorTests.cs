@@ -901,6 +901,176 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
         #endregion
 
+        #region Chunk Latency Tests
+
+        [Fact]
+        public async Task MetricsAggregator_ChunkLatency_TracksInitialAndSlowest()
+        {
+            // Arrange
+            _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
+
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = _ => true,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            var statementId = "stmt-chunk-latency";
+            var sessionId = "session-chunk-latency";
+
+            // Create activity with chunk latency tags
+            using (var activity = _activitySource.StartActivity("Statement.Execute"))
+            {
+                Assert.NotNull(activity);
+                activity.SetTag("statement.id", statementId);
+                activity.SetTag("session.id", sessionId);
+                activity.SetTag("chunk.initial_latency_ms", "100");
+                activity.SetTag("chunk.slowest_latency_ms", "500");
+                activity.Stop();
+
+                _aggregator.ProcessActivity(activity);
+            }
+
+            // Complete and flush
+            _aggregator.CompleteStatement(statementId);
+            await _aggregator.FlushAsync();
+
+            // Assert
+            Assert.Equal(1, _mockExporter.ExportCallCount);
+            var log = _mockExporter.ExportedLogs.First();
+            Assert.NotNull(log.Entry?.SqlDriverLog?.SqlOperation?.ChunkDetails);
+            Assert.Equal(100, log.Entry.SqlDriverLog.SqlOperation.ChunkDetails.InitialChunkLatencyMillis);
+            Assert.Equal(500, log.Entry.SqlDriverLog.SqlOperation.ChunkDetails.SlowestChunkLatencyMillis);
+        }
+
+        [Fact]
+        public async Task MetricsAggregator_ChunkLatency_InitialOnlySetOnce()
+        {
+            // Arrange
+            _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
+
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = _ => true,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            var statementId = "stmt-initial-once";
+            var sessionId = "session-initial-once";
+
+            // First activity sets initial latency
+            using (var activity1 = _activitySource.StartActivity("CloudFetch.Download"))
+            {
+                Assert.NotNull(activity1);
+                activity1.SetTag("statement.id", statementId);
+                activity1.SetTag("session.id", sessionId);
+                activity1.SetTag("chunk.initial_latency_ms", "100");
+                activity1.Stop();
+                _aggregator.ProcessActivity(activity1);
+            }
+
+            // Second activity should NOT override initial latency
+            using (var activity2 = _activitySource.StartActivity("CloudFetch.Download"))
+            {
+                Assert.NotNull(activity2);
+                activity2.SetTag("statement.id", statementId);
+                activity2.SetTag("session.id", sessionId);
+                activity2.SetTag("chunk.initial_latency_ms", "50");  // Should be ignored
+                activity2.Stop();
+                _aggregator.ProcessActivity(activity2);
+            }
+
+            // Complete and flush
+            _aggregator.CompleteStatement(statementId);
+            await _aggregator.FlushAsync();
+
+            // Assert - initial latency should be 100, not 50
+            Assert.Equal(1, _mockExporter.ExportCallCount);
+            var log = _mockExporter.ExportedLogs.First();
+            Assert.Equal(100, log.Entry?.SqlDriverLog?.SqlOperation?.ChunkDetails?.InitialChunkLatencyMillis);
+        }
+
+        [Fact]
+        public async Task MetricsAggregator_ChunkLatency_SlowestTracksMax()
+        {
+            // Arrange
+            _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
+
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = _ => true,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            var statementId = "stmt-slowest-max";
+            var sessionId = "session-slowest-max";
+
+            // Multiple activities with varying latencies
+            int[] latencies = { 100, 300, 200, 500, 150 };
+            foreach (var latency in latencies)
+            {
+                using var activity = _activitySource.StartActivity("CloudFetch.Download");
+                Assert.NotNull(activity);
+                activity.SetTag("statement.id", statementId);
+                activity.SetTag("session.id", sessionId);
+                activity.SetTag("chunk.slowest_latency_ms", latency.ToString());
+                activity.Stop();
+                _aggregator.ProcessActivity(activity);
+            }
+
+            // Complete and flush
+            _aggregator.CompleteStatement(statementId);
+            await _aggregator.FlushAsync();
+
+            // Assert - slowest latency should be 500 (the max)
+            Assert.Equal(1, _mockExporter.ExportCallCount);
+            var log = _mockExporter.ExportedLogs.First();
+            Assert.Equal(500, log.Entry?.SqlDriverLog?.SqlOperation?.ChunkDetails?.SlowestChunkLatencyMillis);
+        }
+
+        [Fact]
+        public async Task MetricsAggregator_ChunkLatency_ZeroWhenNotSet()
+        {
+            // Arrange
+            _aggregator = new MetricsAggregator(_mockExporter, _config, TestWorkspaceId, TestUserAgent);
+
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = _ => true,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            var statementId = "stmt-no-latency";
+            var sessionId = "session-no-latency";
+
+            // Activity without chunk latency tags
+            using (var activity = _activitySource.StartActivity("Statement.Execute"))
+            {
+                Assert.NotNull(activity);
+                activity.SetTag("statement.id", statementId);
+                activity.SetTag("session.id", sessionId);
+                activity.SetTag("result.format", "inline");  // No CloudFetch, no chunk latency
+                activity.Stop();
+                _aggregator.ProcessActivity(activity);
+            }
+
+            // Complete and flush
+            _aggregator.CompleteStatement(statementId);
+            await _aggregator.FlushAsync();
+
+            // Assert - chunk latency should default to 0
+            Assert.Equal(1, _mockExporter.ExportCallCount);
+            var log = _mockExporter.ExportedLogs.First();
+            Assert.Equal(0, log.Entry?.SqlDriverLog?.SqlOperation?.ChunkDetails?.InitialChunkLatencyMillis);
+            Assert.Equal(0, log.Entry?.SqlDriverLog?.SqlOperation?.ChunkDetails?.SlowestChunkLatencyMillis);
+        }
+
+        #endregion
+
         #region Mock Classes
 
         /// <summary>
