@@ -20,7 +20,7 @@
 //! - Memory management via chunk limits
 //! - Consumer API via RecordBatchReader trait
 
-use crate::error::{DatabricksErrorHelper, Result};
+use crate::error::{DatabricksErrorHelper, Error, Result};
 use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
 use crate::reader::cloudfetch::link_fetcher::ChunkLinkFetcher;
 use crate::types::cloudfetch::{
@@ -468,7 +468,7 @@ impl StreamingCloudFetchProvider {
                         // revoked or expired early (before its timestamp). Clear the
                         // cached link so the next iteration calls refetch_link() to get
                         // a fresh URL from the Databricks API.
-                        if Self::is_cloud_storage_auth_error(&e.to_string()) {
+                        if Self::is_cloud_storage_auth_error(&e) {
                             debug!(
                                 "Chunk {} got auth/not-found error from cloud storage, clearing cached link for refetch",
                                 chunk_index
@@ -489,8 +489,8 @@ impl StreamingCloudFetchProvider {
     /// These errors mean the URL was revoked or expired before its timestamp,
     /// so we should refetch a fresh URL from Databricks rather than retrying
     /// the same invalid URL.
-    fn is_cloud_storage_auth_error(err_str: &str) -> bool {
-        err_str.contains("HTTP 401") || err_str.contains("HTTP 403") || err_str.contains("HTTP 404")
+    fn is_cloud_storage_auth_error(e: &Error) -> bool {
+        matches!(e.get_vendor_code(), 401 | 403 | 404)
     }
 
     /// Wait for a specific chunk to be ready (Downloaded state).
@@ -677,47 +677,52 @@ mod tests {
 
     #[test]
     fn test_is_cloud_storage_auth_error_detects_401() {
-        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "HTTP 401 - Unauthorized"
-        ));
-        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "HTTP 401 - "
-        ));
+        let err = DatabricksErrorHelper::io()
+            .vendor_code(401)
+            .message("HTTP 401 - Unauthorized");
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(&err));
     }
 
     #[test]
     fn test_is_cloud_storage_auth_error_detects_403() {
-        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "HTTP 403 - Forbidden"
-        ));
-        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "HTTP 403 - "
-        ));
+        let err = DatabricksErrorHelper::io()
+            .vendor_code(403)
+            .message("HTTP 403 - Forbidden");
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(&err));
     }
 
     #[test]
     fn test_is_cloud_storage_auth_error_detects_404() {
-        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "HTTP 404 - Not Found"
-        ));
-        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "HTTP 404 - "
-        ));
+        let err = DatabricksErrorHelper::io()
+            .vendor_code(404)
+            .message("HTTP 404 - Not Found");
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(&err));
     }
 
     #[test]
     fn test_is_cloud_storage_auth_error_ignores_other_statuses() {
+        let err_500 = DatabricksErrorHelper::io()
+            .vendor_code(500)
+            .message("HTTP 500 - Internal Server Error");
         assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "HTTP 500 - Internal Server Error"
+            &err_500
         ));
+
+        let err_429 = DatabricksErrorHelper::io()
+            .vendor_code(429)
+            .message("HTTP 429 - Too Many Requests");
         assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "HTTP 429 - Too Many Requests"
+            &err_429
         ));
+
+        let err_network = DatabricksErrorHelper::io().message("network timeout");
         assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            "network timeout"
+            &err_network
         ));
+
+        let err_empty = DatabricksErrorHelper::io().message("");
         assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
-            ""
+            &err_empty
         ));
     }
 
