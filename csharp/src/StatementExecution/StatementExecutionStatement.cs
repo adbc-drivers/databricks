@@ -664,6 +664,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Metadata command routing
 
+        private string? EffectiveCatalog => _metadataCatalogName ?? _catalog;
+
         private QueryResult ExecuteMetadataCommand()
         {
             return _sqlQuery?.ToLowerInvariant() switch
@@ -706,7 +708,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private QueryResult GetSchemas()
         {
-            string sql = new ShowSchemasCommand(_metadataCatalogName, _metadataSchemaName).Build();
+            string sql = new ShowSchemasCommand(EffectiveCatalog, _metadataSchemaName).Build();
             var batches = _connection.ExecuteMetadataSql(sql);
 
             var tableSchemaBuilder = new StringArray.Builder();
@@ -723,7 +725,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     tableSchemaBuilder.Append(schemaArray.GetString(i));
                     string catalog = catalogArray != null && !catalogArray.IsNull(i)
                         ? catalogArray.GetString(i)
-                        : _metadataCatalogName ?? "";
+                        : EffectiveCatalog ?? "";
                     tableCatalogBuilder.Append(catalog);
                     count++;
                 }
@@ -742,7 +744,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private QueryResult GetTables()
         {
-            string sql = new ShowTablesCommand(_metadataCatalogName, _metadataSchemaName, _metadataTableName).Build();
+            string sql = new ShowTablesCommand(EffectiveCatalog, _metadataSchemaName, _metadataTableName).Build();
             var batches = _connection.ExecuteMetadataSql(sql);
 
             var tableCatBuilder = new StringArray.Builder();
@@ -790,7 +792,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private QueryResult GetColumns()
         {
             string sql = new ShowColumnsCommand(
-                _metadataCatalogName, _metadataSchemaName,
+                EffectiveCatalog, _metadataSchemaName,
                 _metadataTableName, _metadataColumnName).Build();
             var batches = _connection.ExecuteMetadataSql(sql);
 
