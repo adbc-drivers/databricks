@@ -384,78 +384,105 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         public override IArrowArrayStream GetObjects(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
         {
-            return GetObjectsResultBuilder.BuildGetObjectsResult(
-                this, depth, catalogPattern, schemaPattern,
-                tableNamePattern, tableTypes, columnNamePattern);
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("depth", depth.ToString());
+                activity?.SetTag("catalog_pattern", catalogPattern ?? "(none)");
+                activity?.SetTag("schema_pattern", schemaPattern ?? "(none)");
+                activity?.SetTag("table_pattern", tableNamePattern ?? "(none)");
+                activity?.SetTag("column_pattern", columnNamePattern ?? "(none)");
+
+                return GetObjectsResultBuilder.BuildGetObjectsResult(
+                    this, depth, catalogPattern, schemaPattern,
+                    tableNamePattern, tableTypes, columnNamePattern);
+            }, nameof(GetObjects));
         }
 
         public override IArrowArrayStream GetInfo(IReadOnlyList<AdbcInfoCode> codes)
         {
-            var supportedCodes = new AdbcInfoCode[]
+            return this.TraceActivity(activity =>
             {
-                AdbcInfoCode.DriverName,
-                AdbcInfoCode.DriverVersion,
-                AdbcInfoCode.DriverArrowVersion,
-                AdbcInfoCode.VendorName,
-                AdbcInfoCode.VendorVersion,
-                AdbcInfoCode.VendorSql,
-            };
+                var supportedCodes = new AdbcInfoCode[]
+                {
+                    AdbcInfoCode.DriverName,
+                    AdbcInfoCode.DriverVersion,
+                    AdbcInfoCode.DriverArrowVersion,
+                    AdbcInfoCode.VendorName,
+                    AdbcInfoCode.VendorVersion,
+                    AdbcInfoCode.VendorSql,
+                };
 
-            if (codes == null || codes.Count == 0)
-                codes = supportedCodes;
+                if (codes == null || codes.Count == 0)
+                    codes = supportedCodes;
 
-            var values = new Dictionary<AdbcInfoCode, object>
-            {
-                { AdbcInfoCode.DriverName, "ADBC Databricks Driver" },
-                { AdbcInfoCode.DriverVersion, AssemblyVersion },
-                { AdbcInfoCode.DriverArrowVersion, "1.0.0" },
-                { AdbcInfoCode.VendorName, "Databricks" },
-                { AdbcInfoCode.VendorVersion, AssemblyVersion },
-                { AdbcInfoCode.VendorSql, true },
-            };
+                activity?.SetTag("requested_codes", string.Join(",", codes));
 
-            return MetadataSchemaFactory.BuildGetInfoResult(codes, values);
+                var values = new Dictionary<AdbcInfoCode, object>
+                {
+                    { AdbcInfoCode.DriverName, "ADBC Databricks Driver" },
+                    { AdbcInfoCode.DriverVersion, AssemblyVersion },
+                    { AdbcInfoCode.DriverArrowVersion, "1.0.0" },
+                    { AdbcInfoCode.VendorName, "Databricks" },
+                    { AdbcInfoCode.VendorVersion, AssemblyVersion },
+                    { AdbcInfoCode.VendorSql, true },
+                };
+
+                return MetadataSchemaFactory.BuildGetInfoResult(codes, values);
+            }, nameof(GetInfo));
         }
 
         public override IArrowArrayStream GetTableTypes()
         {
-            var builder = new StringArray.Builder();
-            builder.Append("TABLE");
-            builder.Append("VIEW");
-            var schema = new Schema(new[] { new Field("table_type", StringType.Default, false) }, null);
-            return new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() });
+            return this.TraceActivity(activity =>
+            {
+                var builder = new StringArray.Builder();
+                builder.Append("TABLE");
+                builder.Append("VIEW");
+                var schema = new Schema(new[] { new Field("table_type", StringType.Default, false) }, null);
+                return new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() });
+            }, nameof(GetTableTypes));
         }
 
         public override Schema GetTableSchema(string? catalog, string? dbSchema, string tableName)
         {
-            string sql = new ShowColumnsCommand(
-                catalog ?? _catalog, dbSchema, tableName).Build();
-            var batches = ExecuteMetadataSql(sql);
-
-            var fields = new List<Field>();
-            foreach (var batch in batches)
+            return this.TraceActivity(activity =>
             {
-                var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
-                var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
-                var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
+                activity?.SetTag("catalog", catalog ?? "(none)");
+                activity?.SetTag("db_schema", dbSchema ?? "(none)");
+                activity?.SetTag("table_name", tableName);
 
-                if (colNameArray == null || columnTypeArray == null) continue;
+                string sql = new ShowColumnsCommand(
+                    catalog ?? _catalog, dbSchema, tableName).Build();
+                activity?.SetTag("sql_query", sql);
+                var batches = ExecuteMetadataSql(sql);
 
-                for (int i = 0; i < batch.Length; i++)
+                var fields = new List<Field>();
+                foreach (var batch in batches)
                 {
-                    if (colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
+                    var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
+                    var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
+                    var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
 
-                    string colName = colNameArray.GetString(i);
-                    string colType = columnTypeArray.GetString(i);
-                    bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
-                        !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+                    if (colNameArray == null || columnTypeArray == null) continue;
 
-                    short typeCode = ColumnMetadataHelper.GetDataTypeCode(colType);
-                    IArrowType arrowType = HiveServer2Connection.GetArrowType(typeCode, colType, false, null, null);
-                    fields.Add(new Field(colName, arrowType, nullable));
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
+
+                        string colName = colNameArray.GetString(i);
+                        string colType = columnTypeArray.GetString(i);
+                        bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
+                            !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+
+                        short typeCode = ColumnMetadataHelper.GetDataTypeCode(colType);
+                        IArrowType arrowType = HiveServer2Connection.GetArrowType(typeCode, colType, false, null, null);
+                        fields.Add(new Field(colName, arrowType, nullable));
+                    }
                 }
-            }
-            return new Schema(fields, null);
+
+                activity?.SetTag("result_fields", fields.Count);
+                return new Schema(fields, null);
+            }, nameof(GetTableSchema));
         }
 
         // IGetObjectsDataProvider implementation
