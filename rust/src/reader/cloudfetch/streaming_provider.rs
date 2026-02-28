@@ -468,30 +468,36 @@ impl StreamingCloudFetchProvider {
                         chunk_index, attempts, max_retries, e
                     );
 
-                    let is_auth_error = Self::is_cloud_storage_auth_error(&e);
-
-                    // Update state to retry
+                    // Update state (guard dropped at end of block — must not hold it
+                    // across any .await below, or we risk a deadlock on the same shard).
                     if let Some(mut entry) = chunks.get_mut(&chunk_index) {
                         entry.state = ChunkState::DownloadRetry;
+                    } // ← write lock released here
 
-                        // HTTP 401/403/404 from cloud storage means the presigned URL was
-                        // revoked or expired early (before its timestamp). Clear the
-                        // cached link so the next iteration calls refetch_link() to get
-                        // a fresh URL from the Databricks API.
-                        if is_auth_error {
-                            debug!(
-                                "Chunk {} got auth/not-found error from cloud storage, clearing cached link for refetch",
-                                chunk_index
-                            );
-                            entry.link = None;
+                    if Self::is_cloud_storage_auth_error(&e) {
+                        // HTTP 401/403/404: the presigned URL was revoked or expired early.
+                        // Refetch inline (same iteration, no sleep) — mirrors C# behaviour.
+                        if refresh_attempts >= max_refresh_retries {
+                            return Err(DatabricksErrorHelper::io().message(format!(
+                                "Chunk {} presigned URL repeatedly rejected after {} refresh attempts",
+                                chunk_index, refresh_attempts
+                            )));
                         }
-                    }
-
-                    if is_auth_error {
-                        // Skip the backoff delay — we know exactly what's wrong (stale URL)
-                        // and the fix is to refetch immediately on the next iteration.
+                        debug!(
+                            "Chunk {} got auth/not-found error, refetching presigned URL",
+                            chunk_index
+                        );
+                        // row_offset=0: SEA backend ignores this; meaningful for Thrift.
+                        let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
+                        refresh_attempts += 1;
+                        if let Some(mut entry) = chunks.get_mut(&chunk_index) {
+                            entry.link = Some(new_link.clone());
+                        }
+                        attempts = 0;
+                        // Loop back with the fresh link already stored — no sleep needed.
                         continue;
                     }
+
                     tokio::select! {
                         _ = cancel_token.cancelled() => {
                             return Err(DatabricksErrorHelper::invalid_state().message("Download cancelled"));
