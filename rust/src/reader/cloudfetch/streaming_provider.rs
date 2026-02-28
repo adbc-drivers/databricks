@@ -460,15 +460,17 @@ impl StreamingCloudFetchProvider {
                         chunk_index, attempts, max_retries, e
                     );
 
+                    let is_auth_error = Self::is_cloud_storage_auth_error(&e);
+
                     // Update state to retry
                     if let Some(mut entry) = chunks.get_mut(&chunk_index) {
                         entry.state = ChunkState::DownloadRetry;
 
-                        // HTTP 403/404 from cloud storage means the presigned URL was
+                        // HTTP 401/403/404 from cloud storage means the presigned URL was
                         // revoked or expired early (before its timestamp). Clear the
                         // cached link so the next iteration calls refetch_link() to get
                         // a fresh URL from the Databricks API.
-                        if Self::is_cloud_storage_auth_error(&e) {
+                        if is_auth_error {
                             debug!(
                                 "Chunk {} got auth/not-found error from cloud storage, clearing cached link for refetch",
                                 chunk_index
@@ -477,6 +479,11 @@ impl StreamingCloudFetchProvider {
                         }
                     }
 
+                    if is_auth_error {
+                        // Skip the backoff delay — we know exactly what's wrong (stale URL)
+                        // and the fix is to refetch immediately on the next iteration.
+                        continue;
+                    }
                     tokio::time::sleep(retry_delay).await;
                 }
             }
