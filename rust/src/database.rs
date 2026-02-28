@@ -29,7 +29,6 @@ use adbc_core::Optionable;
 use driverbase::error::ErrorHelper;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::debug;
 
 /// Represents a database instance that holds connection configuration.
 ///
@@ -390,11 +389,6 @@ impl adbc_core::Database for Database {
                 .message("access_token not set")
                 .to_adbc()
         })?;
-
-        debug!(
-            "Creating connection to {} with warehouse {}",
-            host, warehouse_id
-        );
 
         // Create auth provider
         let auth_provider = Arc::new(PersonalAccessToken::new(access_token.clone()));
