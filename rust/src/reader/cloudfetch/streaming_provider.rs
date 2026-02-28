@@ -356,6 +356,7 @@ impl StreamingCloudFetchProvider {
             let chunk_state_changed = Arc::clone(&self.chunk_state_changed);
             let cancel_token = self.cancel_token.clone();
             let max_retries = self.config.max_retries;
+            let max_refresh_retries = self.config.max_refresh_retries;
             let retry_delay = self.config.retry_delay;
 
             self.runtime_handle.spawn(async move {
@@ -365,6 +366,7 @@ impl StreamingCloudFetchProvider {
                     &link_fetcher,
                     &chunks,
                     max_retries,
+                    max_refresh_retries,
                     retry_delay,
                     &cancel_token,
                 )
@@ -397,6 +399,7 @@ impl StreamingCloudFetchProvider {
         link_fetcher: &Arc<dyn ChunkLinkFetcher>,
         chunks: &Arc<DashMap<i64, ChunkEntry>>,
         max_retries: u32,
+        max_refresh_retries: u32,
         retry_delay: std::time::Duration,
         cancel_token: &CancellationToken,
     ) -> Result<Vec<RecordBatch>> {
@@ -426,15 +429,16 @@ impl StreamingCloudFetchProvider {
                 Some(link) if !link.is_expired() => link,
                 _ => {
                     // Link missing or expired - refetch it (no read lock held).
-                    // Bounded by max_retries to prevent infinite loops if Databricks
-                    // keeps returning already-expired links (mirrors C# maxUrlRefreshAttempts).
-                    if refresh_attempts >= max_retries {
+                    // Bounded independently by max_refresh_retries (mirrors C# maxUrlRefreshAttempts).
+                    if refresh_attempts >= max_refresh_retries {
                         return Err(DatabricksErrorHelper::io().message(format!(
                             "Chunk {} link repeatedly expired after {} refresh attempts",
                             chunk_index, refresh_attempts
                         )));
                     }
                     debug!("Refetching expired link for chunk {}", chunk_index);
+                    // row_offset=0: the SEA backend is chunk-index based and ignores this
+                    // parameter; it would be meaningful for a Thrift (row-offset based) backend.
                     let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
                     refresh_attempts += 1;
 
@@ -442,6 +446,10 @@ impl StreamingCloudFetchProvider {
                     if let Some(mut entry) = chunks.get_mut(&chunk_index) {
                         entry.link = Some(new_link.clone());
                     }
+
+                    // Reset download attempt counter: the previous failures were against a
+                    // stale URL; the fresh URL gets its own full retry budget.
+                    attempts = 0;
 
                     new_link
                 }
@@ -484,7 +492,12 @@ impl StreamingCloudFetchProvider {
                         // and the fix is to refetch immediately on the next iteration.
                         continue;
                     }
-                    tokio::time::sleep(retry_delay).await;
+                    tokio::select! {
+                        _ = cancel_token.cancelled() => {
+                            return Err(DatabricksErrorHelper::invalid_state().message("Download cancelled"));
+                        }
+                        _ = tokio::time::sleep(retry_delay) => {}
+                    }
                 }
             }
         }
