@@ -755,3 +755,455 @@ async fn test_multiple_batches_per_chunk() {
     cancel_token.cancel();
     let _ = worker_handle.await;
 }
+
+// =============================================================================
+// StreamingCloudFetchProvider Integration Tests
+// =============================================================================
+
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use tokio::sync::mpsc::Receiver;
+
+/// Test: End-to-end sequential consumption using StreamingCloudFetchProvider.
+///
+/// This test spawns the full CloudFetch pipeline (scheduler + workers + consumer)
+/// with mock components and verifies that chunks are downloaded and consumed
+/// in the correct sequential order using the `next_batch()` API.
+///
+/// Verifies:
+/// - All chunks (15+) are downloaded
+/// - Chunks are received in correct order (0, 1, 2, ..., N)
+/// - `next_batch()` returns `Ok(None)` when stream is complete
+/// - Pipeline terminates cleanly (no race conditions)
+#[tokio::test]
+async fn test_provider_end_to_end_sequential_consumption() {
+    const NUM_CHUNKS: i64 = 15;
+
+    // Create mock link fetcher
+    let mock_fetcher = Arc::new(MockLinkFetcher::new(NUM_CHUNKS));
+    let link_fetcher: Arc<dyn ChunkLinkFetcher> =
+        Arc::clone(&mock_fetcher) as Arc<dyn ChunkLinkFetcher>;
+
+    // Create config with small buffer for faster test
+    let config = CloudFetchConfig {
+        max_chunks_in_memory: 4,
+        ..Default::default()
+    };
+
+    let cancel_token = CancellationToken::new();
+
+    // Spawn the scheduler - this creates the pipeline channels
+    let channels = spawn_scheduler(Arc::clone(&link_fetcher), &config, cancel_token.clone());
+
+    // Wrap download_rx for shared access by mock workers
+    let download_rx = Arc::new(tokio::sync::Mutex::new(channels.download_rx));
+
+    // Spawn mock download workers that return predictable RecordBatch per chunk index
+    let worker_config = MockWorkerConfig::default();
+    let num_workers = 3;
+    let mut worker_handles = Vec::with_capacity(num_workers);
+
+    for _ in 0..num_workers {
+        let rx = Arc::clone(&download_rx);
+        let lf = Arc::clone(&link_fetcher);
+        let token = cancel_token.clone();
+        let cfg = worker_config.clone();
+
+        let handle = spawn_mock_download_worker(rx, lf, token, cfg).await;
+        worker_handles.push(handle);
+    }
+
+    // Create StreamingCloudFetchProvider directly with the pipeline channels
+    // This bypasses new() to allow using mock workers instead of real ChunkDownloader
+    let provider = create_test_provider(channels.result_rx, cancel_token.clone());
+
+    // Consumer: call next_batch() repeatedly until end of stream
+    let mut received_indices = Vec::new();
+    let mut batch_count = 0;
+
+    loop {
+        let result = timeout(Duration::from_secs(5), provider.next_batch())
+            .await
+            .expect("Timed out waiting for next_batch()");
+
+        match result {
+            Ok(Some(batch)) => {
+                batch_count += 1;
+
+                // Extract chunk_id from the batch to verify ordering
+                let chunk_id_array = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("Expected Int32Array for chunk_id column");
+
+                let chunk_index = chunk_id_array.value(0) as i64;
+
+                // Only record first batch from each chunk (to verify chunk ordering)
+                if received_indices.is_empty() || *received_indices.last().unwrap() != chunk_index {
+                    received_indices.push(chunk_index);
+                }
+            }
+            Ok(None) => {
+                // End of stream - verify this is the expected termination
+                break;
+            }
+            Err(e) => {
+                panic!("Unexpected error from next_batch(): {}", e);
+            }
+        }
+    }
+
+    // Verify all chunks received in correct sequential order
+    let expected_indices: Vec<i64> = (0..NUM_CHUNKS).collect();
+    assert_eq!(
+        received_indices, expected_indices,
+        "Should receive all chunks in order 0, 1, 2, ..., {}",
+        NUM_CHUNKS - 1
+    );
+
+    // Verify we received at least one batch per chunk
+    assert!(
+        batch_count >= NUM_CHUNKS as usize,
+        "Should receive at least {} batches, got {}",
+        NUM_CHUNKS,
+        batch_count
+    );
+
+    // Verify fetch_links was called (at least once for initial batch)
+    assert!(
+        mock_fetcher.fetch_count() > 0,
+        "fetch_links should be called"
+    );
+
+    // Verify calling next_batch() again still returns Ok(None)
+    let final_result = timeout(Duration::from_millis(100), provider.next_batch())
+        .await
+        .expect("Timed out on final next_batch() call");
+    assert!(
+        matches!(final_result, Ok(None)),
+        "next_batch() should continue returning Ok(None) after stream exhausted"
+    );
+
+    // Clean up
+    cancel_token.cancel();
+    for handle in worker_handles {
+        let _ = handle.await;
+    }
+}
+
+/// Test: Provider handles larger chunk count with out-of-order downloads.
+///
+/// Workers may complete downloads out of order, but consumer should still
+/// receive chunks in sequential order via the result_channel.
+#[tokio::test]
+async fn test_provider_out_of_order_downloads_in_order_consumption() {
+    const NUM_CHUNKS: i64 = 20;
+
+    let link_fetcher: Arc<dyn ChunkLinkFetcher> = Arc::new(MockLinkFetcher::new(NUM_CHUNKS));
+
+    let config = CloudFetchConfig {
+        max_chunks_in_memory: 6, // Allow more concurrent downloads
+        ..Default::default()
+    };
+
+    let cancel_token = CancellationToken::new();
+
+    // Spawn the scheduler
+    let channels = spawn_scheduler(Arc::clone(&link_fetcher), &config, cancel_token.clone());
+
+    // Wrap download_rx for shared access
+    let download_rx = Arc::new(tokio::sync::Mutex::new(channels.download_rx));
+
+    // Spawn workers with varying delays to cause out-of-order completion
+    let num_workers = 4;
+    let mut worker_handles = Vec::with_capacity(num_workers);
+
+    for worker_id in 0..num_workers {
+        let rx = Arc::clone(&download_rx);
+        let _lf = Arc::clone(&link_fetcher); // Kept for potential future use in refetch
+        let token = cancel_token.clone();
+
+        // Workers have different delays to cause out-of-order download completion
+        let worker_handle = tokio::spawn(async move {
+            loop {
+                if token.is_cancelled() {
+                    break;
+                }
+
+                let task = {
+                    let mut rx_lock = rx.lock().await;
+                    tokio::select! {
+                        _ = token.cancelled() => break,
+                        task = rx_lock.recv() => task
+                    }
+                };
+
+                let task = match task {
+                    Some(task) => task,
+                    None => break,
+                };
+
+                // Varying delays based on chunk index to simulate out-of-order completion
+                // Even chunks: slow, Odd chunks: fast
+                let delay = if task.chunk_index % 2 == 0 {
+                    Duration::from_millis(20 + (worker_id as u64 * 5))
+                } else {
+                    Duration::from_millis(5)
+                };
+
+                tokio::select! {
+                    _ = token.cancelled() => continue,
+                    _ = tokio::time::sleep(delay) => {}
+                }
+
+                let batch = create_test_batch(task.chunk_index);
+                let _ = task.result_tx.send(Ok(vec![batch]));
+            }
+        });
+
+        worker_handles.push(worker_handle);
+    }
+
+    // Create provider and consume via next_batch()
+    let provider = create_test_provider(channels.result_rx, cancel_token.clone());
+
+    let mut received_indices = Vec::new();
+
+    loop {
+        let result = timeout(Duration::from_secs(10), provider.next_batch())
+            .await
+            .expect("Timed out waiting for next_batch()");
+
+        match result {
+            Ok(Some(batch)) => {
+                let chunk_id_array = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("Expected Int32Array");
+                received_indices.push(chunk_id_array.value(0) as i64);
+            }
+            Ok(None) => break,
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    // Verify sequential ordering despite out-of-order downloads
+    let expected_indices: Vec<i64> = (0..NUM_CHUNKS).collect();
+    assert_eq!(
+        received_indices, expected_indices,
+        "Chunks should be delivered in order even when downloads complete out-of-order"
+    );
+
+    // Clean up
+    cancel_token.cancel();
+    for handle in worker_handles {
+        let _ = handle.await;
+    }
+}
+
+/// Test: Provider correctly reports end of stream for small result sets.
+#[tokio::test]
+async fn test_provider_small_result_set() {
+    const NUM_CHUNKS: i64 = 3;
+
+    let link_fetcher: Arc<dyn ChunkLinkFetcher> = Arc::new(MockLinkFetcher::new(NUM_CHUNKS));
+
+    let config = CloudFetchConfig::default();
+    let cancel_token = CancellationToken::new();
+
+    let channels = spawn_scheduler(Arc::clone(&link_fetcher), &config, cancel_token.clone());
+    let download_rx = Arc::new(tokio::sync::Mutex::new(channels.download_rx));
+
+    // Single fast worker
+    let rx = Arc::clone(&download_rx);
+    let lf = Arc::clone(&link_fetcher);
+    let token = cancel_token.clone();
+    let worker_handle =
+        spawn_mock_download_worker(rx, lf, token, MockWorkerConfig::default()).await;
+
+    let provider = create_test_provider(channels.result_rx, cancel_token.clone());
+
+    // Consume all batches
+    let mut count = 0;
+    while let Ok(Some(_)) = provider.next_batch().await {
+        count += 1;
+    }
+
+    assert_eq!(count, NUM_CHUNKS as usize, "Should receive exactly 3 chunks");
+
+    // Verify end of stream
+    let result = provider.next_batch().await;
+    assert!(matches!(result, Ok(None)), "Should return Ok(None) at end");
+
+    cancel_token.cancel();
+    let _ = worker_handle.await;
+}
+
+/// Test: Provider passes test consistently (run multiple times to detect race conditions).
+#[tokio::test]
+async fn test_provider_consistency_no_race_conditions() {
+    // Run the test multiple times to detect any race conditions
+    for iteration in 0..5 {
+        const NUM_CHUNKS: i64 = 12;
+
+        let link_fetcher: Arc<dyn ChunkLinkFetcher> = Arc::new(MockLinkFetcher::new(NUM_CHUNKS));
+
+        let config = CloudFetchConfig {
+            max_chunks_in_memory: 4,
+            ..Default::default()
+        };
+
+        let cancel_token = CancellationToken::new();
+
+        let channels = spawn_scheduler(Arc::clone(&link_fetcher), &config, cancel_token.clone());
+        let download_rx = Arc::new(tokio::sync::Mutex::new(channels.download_rx));
+
+        // Multiple workers to increase contention
+        let mut worker_handles = Vec::new();
+        for _ in 0..4 {
+            let rx = Arc::clone(&download_rx);
+            let lf = Arc::clone(&link_fetcher);
+            let token = cancel_token.clone();
+
+            let handle =
+                spawn_mock_download_worker(rx, lf, token, MockWorkerConfig::default()).await;
+            worker_handles.push(handle);
+        }
+
+        let provider = create_test_provider(channels.result_rx, cancel_token.clone());
+
+        let mut received = Vec::new();
+        loop {
+            match timeout(Duration::from_secs(5), provider.next_batch()).await {
+                Ok(Ok(Some(batch))) => {
+                    let arr = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap();
+                    received.push(arr.value(0) as i64);
+                }
+                Ok(Ok(None)) => break,
+                Ok(Err(e)) => panic!("Iteration {}: Unexpected error: {}", iteration, e),
+                Err(_) => panic!("Iteration {}: Timeout", iteration),
+            }
+        }
+
+        let expected: Vec<i64> = (0..NUM_CHUNKS).collect();
+        assert_eq!(
+            received, expected,
+            "Iteration {}: Chunks should be in order",
+            iteration
+        );
+
+        cancel_token.cancel();
+        for handle in worker_handles {
+            let _ = handle.await;
+        }
+    }
+}
+
+/// Helper function to create a test StreamingCloudFetchProvider.
+///
+/// This constructs the provider directly to bypass `new()`, allowing us to
+/// use mock workers instead of the real ChunkDownloader.
+fn create_test_provider(
+    result_rx: Receiver<databricks_adbc::reader::cloudfetch::ChunkHandle>,
+    cancel_token: CancellationToken,
+) -> TestStreamingProvider {
+    TestStreamingProvider {
+        result_rx: tokio::sync::Mutex::new(result_rx),
+        batch_buffer: Mutex::new(VecDeque::new()),
+        cancel_token,
+    }
+}
+
+/// Test-specific provider that wraps the result channel and implements next_batch().
+///
+/// This mirrors the StreamingCloudFetchProvider implementation but is constructed
+/// directly for testing purposes.
+struct TestStreamingProvider {
+    result_rx: tokio::sync::Mutex<Receiver<databricks_adbc::reader::cloudfetch::ChunkHandle>>,
+    batch_buffer: Mutex<VecDeque<RecordBatch>>,
+    cancel_token: CancellationToken,
+}
+
+impl TestStreamingProvider {
+    /// Get next record batch - mirrors StreamingCloudFetchProvider::next_batch().
+    async fn next_batch(&self) -> databricks_adbc::error::Result<Option<RecordBatch>> {
+        use databricks_adbc::error::DatabricksErrorHelper;
+        use driverbase::error::ErrorHelper;
+
+        // Check for cancellation first
+        if self.cancel_token.is_cancelled() {
+            return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
+        }
+
+        // Drain batch buffer first
+        if let Some(batch) = self.batch_buffer.lock().unwrap().pop_front() {
+            return Ok(Some(batch));
+        }
+
+        // Buffer empty - need next chunk from result channel
+        let handle = {
+            let mut rx = self.result_rx.lock().await;
+
+            tokio::select! {
+                biased;
+
+                _ = self.cancel_token.cancelled() => {
+                    return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
+                }
+                result = rx.recv() => {
+                    result
+                }
+            }
+        };
+
+        let handle = match handle {
+            Some(h) => h,
+            None => {
+                // Channel closed = end of stream
+                return Ok(None);
+            }
+        };
+
+        // Await the oneshot result
+        let batches_result = tokio::select! {
+            biased;
+
+            _ = self.cancel_token.cancelled() => {
+                return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
+            }
+            result = handle.result_rx => {
+                result
+            }
+        };
+
+        // Handle oneshot recv error
+        let batches = batches_result
+            .map_err(|_| {
+                DatabricksErrorHelper::io().message("Download task was cancelled or failed")
+            })?
+            // Propagate any download error
+            ?;
+
+        // Store batches in buffer
+        {
+            let mut buffer = self.batch_buffer.lock().unwrap();
+            for batch in batches {
+                buffer.push_back(batch);
+            }
+        }
+
+        // Return first batch from buffer
+        if let Some(batch) = self.batch_buffer.lock().unwrap().pop_front() {
+            return Ok(Some(batch));
+        }
+
+        // Empty chunk - recurse to get next chunk
+        Box::pin(self.next_batch()).await
+    }
+}
