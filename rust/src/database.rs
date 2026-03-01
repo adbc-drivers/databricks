@@ -222,10 +222,25 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "databricks.cloudfetch.chunk_ready_timeout_ms" => {
+                "databricks.cloudfetch.max_refresh_retries" => {
                     if let Some(v) = Self::parse_int_option(&value) {
-                        self.cloudfetch_config.chunk_ready_timeout =
-                            Some(Duration::from_millis(v as u64));
+                        self.cloudfetch_config.max_refresh_retries = v as u32;
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.cloudfetch.num_download_workers" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.cloudfetch_config.num_download_workers = v as usize;
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.cloudfetch.url_expiration_buffer_secs" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.cloudfetch_config.url_expiration_buffer_secs = v as u32;
                         Ok(())
                     } else {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
