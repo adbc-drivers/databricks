@@ -278,7 +278,7 @@ pub struct StreamingCloudFetchProvider {
 | Test | What it verifies |
 |---|---|
 | `end_to_end_sequential_consumption` | All chunks downloaded and read in order (channel-level) |
-| `end_to_end_cancellation_mid_stream` | Cancel during active download — no deadlock or panic |
+| `end_to_end_cancellation_mid_stream` | Cancel during active download — no deadlock or panic; uses `next_batch()` API, consumes 3-5 chunks before cancel, verifies remaining calls return cancellation error or `Ok(None)` |
 | `end_to_end_401_recovery` | Presigned URL expires mid-stream; driver refetches and continues |
 | `provider_end_to_end_sequential_consumption` | Full pipeline with `next_batch()` API — 15 chunks in order, `Ok(None)` at end |
 | `provider_out_of_order_downloads_in_order_consumption` | Workers complete out-of-order, consumer receives in order |
