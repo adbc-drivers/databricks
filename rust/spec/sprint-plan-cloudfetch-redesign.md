@@ -8,6 +8,12 @@
 
 ---
 
+## Orchestration Settings
+
+**E2E task:** When `rust/spec/e2e-test-spec.md` is present, the generator always appends a final E2E task to the sprint. This task runs after all implementation tasks are complete. The E2E Agent reads the design doc and e2e-test-spec.md only — it has no knowledge of individual task implementations. See `rust/spec/orchestration_spec.md` for the E2E Agent protocol.
+
+---
+
 ## Sprint Goal
 
 Replace the `DashMap<i64, ChunkEntry>` coordination structure in `StreamingCloudFetchProvider` with a two-channel pipeline (`download_channel` + `result_channel`) aligned with the C# reference implementation, eliminating lock discipline issues, large data in concurrent maps, and poll-based consumer synchronisation.
@@ -95,7 +101,9 @@ struct ChunkHandle {
 
 ---
 
-### PECO-2928 — Implement `ChunkDownloadTask`, `ChunkHandle`, and Scheduler
+### PECO-2928 — Implement `ChunkDownloadTask`, `ChunkHandle`, and Scheduler ✅
+
+**Status:** Complete
 
 **Scope:** New types + new scheduler task in `rust/src/reader/cloudfetch/`
 
@@ -116,17 +124,24 @@ struct ChunkHandle {
   - Bounded `result_channel` provides automatic backpressure (blocks scheduler when `max_chunks_in_memory` reached)
   - Exits when `has_more = false`
   - Supports cancellation via `CancellationToken`
-- Returns `SchedulerChannels` struct containing both channel receivers
+- Returns `SchedulerChannels` struct containing both channel receivers and the JoinHandle
+- `SchedulerChannels` struct includes `join_handle: JoinHandle<()>` for awaiting scheduler completion
 
 **Key invariant:** `ChunkHandle` is enqueued to `result_channel` _before_ the corresponding `ChunkDownloadTask` is dispatched to `download_channel`, preserving sequential ordering even when downloads complete out of order.
 
-**Tests implemented:**
+**Implementation notes:**
+- `scheduler_task()` is private; only `spawn_scheduler()` is public API
+- Cancellation is checked at 4 points: before fetch, during fetch (via `tokio::select!`), before each link, and during handle send
+- On fetch_links error, scheduler logs and exits (drops senders, signaling end-of-stream)
+- Tracks `next_chunk_index` and `next_row_offset` from both link iteration and batch metadata
+
+**Tests implemented (all 8 passing):**
 - `scheduler_sends_handles_in_chunk_index_order` — verify handles received in sequence
 - `scheduler_processes_batch_links` — verify all tasks/handles enqueued from batch
 - `backpressure_blocks_scheduler_at_capacity` — verify bounded channel blocks scheduler
 - `scheduler_exits_when_has_more_false` — verify clean exit
 - `scheduler_cancellation` — verify early termination on cancel
-- `scheduler_handle_before_task` — verify ordering invariant
+- `scheduler_handle_before_task` — verify ordering invariant (uses capacity=1 to make ordering observable)
 - `scheduler_multiple_batches` — verify multiple fetch_links calls
 - `scheduler_empty_batch` — verify empty batch handling
 
@@ -274,3 +289,5 @@ pub struct StreamingCloudFetchProvider {
 - [ ] `ChunkEntry`, `ChunkState` types deleted
 - [ ] `chunk_ready_timeout` config field removed
 - [ ] `LINK_EXPIRY_BUFFER_SECS` constant removed
+
+E2E validation is handled by the auto-appended E2E task. See `rust/spec/e2e-test-spec.md` and `rust/spec/orchestration_spec.md`.
