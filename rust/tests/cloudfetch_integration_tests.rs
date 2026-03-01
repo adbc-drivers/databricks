@@ -98,6 +98,8 @@ struct MockLinkFetcher {
     fetch_count: AtomicUsize,
     /// Track refetch_link calls
     refetch_count: AtomicUsize,
+    /// Track refetch_link calls per chunk_index
+    refetch_calls_per_chunk: Arc<dashmap::DashMap<i64, AtomicUsize>>,
     /// Whether to simulate slow fetching
     slow_fetch: bool,
 }
@@ -108,6 +110,7 @@ impl MockLinkFetcher {
             total_chunks,
             fetch_count: AtomicUsize::new(0),
             refetch_count: AtomicUsize::new(0),
+            refetch_calls_per_chunk: Arc::new(dashmap::DashMap::new()),
             slow_fetch: false,
         }
     }
@@ -117,6 +120,7 @@ impl MockLinkFetcher {
             total_chunks,
             fetch_count: AtomicUsize::new(0),
             refetch_count: AtomicUsize::new(0),
+            refetch_calls_per_chunk: Arc::new(dashmap::DashMap::new()),
             slow_fetch: true,
         }
     }
@@ -127,6 +131,14 @@ impl MockLinkFetcher {
 
     fn refetch_count(&self) -> usize {
         self.refetch_count.load(Ordering::Relaxed)
+    }
+
+    /// Get the refetch call count for a specific chunk
+    fn refetch_count_for_chunk(&self, chunk_index: i64) -> usize {
+        self.refetch_calls_per_chunk
+            .get(&chunk_index)
+            .map(|entry| entry.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 }
 
@@ -165,6 +177,11 @@ impl ChunkLinkFetcher for MockLinkFetcher {
 
     async fn refetch_link(&self, chunk_index: i64, _row_offset: i64) -> Result<CloudFetchLink> {
         self.refetch_count.fetch_add(1, Ordering::Relaxed);
+        // Track per-chunk refetch calls
+        self.refetch_calls_per_chunk
+            .entry(chunk_index)
+            .or_insert_with(|| AtomicUsize::new(0))
+            .fetch_add(1, Ordering::Relaxed);
         // Return a fresh link
         Ok(create_test_link(chunk_index))
     }
@@ -566,20 +583,31 @@ async fn test_end_to_end_cancellation_mid_stream() {
 /// Test: End-to-end 401 recovery.
 ///
 /// Verifies that:
-/// - When a presigned URL expires (401), the pipeline refetches the link
-/// - Fresh URL is used for retry (no sleep delay)
+/// - When a presigned URL expires (401/403/404), the pipeline refetches the link
+/// - Fresh URL is used for retry **immediately** (no sleep delay)
 /// - All chunks are eventually delivered successfully
+/// - refetch_link() is called for the specific chunks that failed
+///
+/// Retry contract being tested:
+/// | Error type | Sleep before retry | Counts against max_retries | Counts against max_refresh_retries |
+/// |---|---|---|---|
+/// | 401/403/404 | No | Yes | Yes |
 #[tokio::test]
 async fn test_end_to_end_401_recovery() {
     const NUM_CHUNKS: i64 = 10;
+    // Chunks that will fail with 401 on first attempt
+    const FAILING_CHUNKS: &[i64] = &[3, 7];
 
     // Create mock link fetcher - keep concrete type for assertions
     let mock_fetcher = Arc::new(MockLinkFetcher::new(NUM_CHUNKS));
     let link_fetcher: Arc<dyn ChunkLinkFetcher> =
         Arc::clone(&mock_fetcher) as Arc<dyn ChunkLinkFetcher>;
 
+    // Use a VERY LONG retry_delay for transient errors
+    // This ensures that if auth errors incorrectly triggered sleep, the test would timeout
     let config = CloudFetchConfig {
         max_chunks_in_memory: 4,
+        retry_delay: Duration::from_secs(30), // Long delay - auth errors should NOT sleep
         ..Default::default()
     };
 
@@ -591,11 +619,11 @@ async fn test_end_to_end_401_recovery() {
     // Wrap download_rx for shared access
     let download_rx = Arc::new(tokio::sync::Mutex::new(channels.download_rx));
 
-    // Configure workers to simulate 401 errors on specific chunks
-    // Chunks 2, 5, 7 will fail with 401 on first attempt
+    // Configure workers to simulate 401 errors on specific chunks (3 and 7)
+    // These chunks will fail with 401 on first attempt, then succeed after refetch
     let worker_config = MockWorkerConfig {
         fail_401_until_refetch: true,
-        fail_401_chunks: vec![2, 5, 7],
+        fail_401_chunks: FAILING_CHUNKS.to_vec(),
         ..Default::default()
     };
 
@@ -613,38 +641,90 @@ async fn test_end_to_end_401_recovery() {
     }
 
     // Consumer: read from result_channel and collect results
+    // TIMING ASSERTION: The entire operation should complete within a short time
+    // If any 401 error incorrectly triggered the 30-second sleep, this would timeout
+    let start_time = std::time::Instant::now();
     let mut result_rx = channels.result_rx;
     let mut received_indices = Vec::new();
 
-    while let Some(handle) = result_rx.recv().await {
-        let chunk_index = handle.chunk_index;
+    // Use a timeout that's long enough for normal operation but would catch any sleeps
+    // With 10 chunks and no sleeps, this should complete in <5 seconds
+    // With even a single 30-second sleep, it would timeout
+    let consume_result = timeout(Duration::from_secs(10), async {
+        while let Some(handle) = result_rx.recv().await {
+            let chunk_index = handle.chunk_index;
 
-        // Await the download result
-        let result = timeout(Duration::from_secs(5), handle.result_rx)
-            .await
-            .expect("Timed out waiting for download result")
-            .expect("Download task sender was dropped")
-            .expect("Download failed");
+            // Await the download result
+            let result = timeout(Duration::from_secs(5), handle.result_rx)
+                .await
+                .expect("Timed out waiting for download result")
+                .expect("Download task sender was dropped")
+                .expect("Download failed");
 
-        // Verify batch was received
-        assert!(!result.is_empty(), "Expected at least one batch");
+            // Verify batch was received
+            assert!(!result.is_empty(), "Expected at least one batch");
 
-        received_indices.push(chunk_index);
-    }
+            received_indices.push(chunk_index);
+        }
+    })
+    .await;
 
-    // Verify all chunks received in order
+    let elapsed = start_time.elapsed();
+
+    // VERIFY: Operation completed within timeout (no spurious sleeps)
+    assert!(
+        consume_result.is_ok(),
+        "Test should complete within timeout - if this fails, auth errors may be incorrectly sleeping"
+    );
+
+    // VERIFY: No sleep occurred between 401 and retry
+    // With a 30-second retry_delay, if ANY sleep occurred, elapsed would be >= 30s
+    // A properly functioning system should complete in a few seconds
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "Expected completion in <5s (no sleep on auth error), but took {:?}. \
+         This indicates auth errors may have incorrectly triggered sleep.",
+        elapsed
+    );
+
+    // VERIFY: All chunks received in order
     let expected_indices: Vec<i64> = (0..NUM_CHUNKS).collect();
     assert_eq!(
         received_indices, expected_indices,
-        "Should receive all chunks in order despite 401 errors"
+        "Should receive all {} chunks in order despite 401 errors",
+        NUM_CHUNKS
     );
 
-    // Verify refetch_link was called for the failing chunks
-    let refetch_count = mock_fetcher.refetch_count();
+    // VERIFY: Total refetch_link calls matches expected count
+    let total_refetch_count = mock_fetcher.refetch_count();
     assert_eq!(
-        refetch_count, 3,
-        "refetch_link should be called for each 401 failure (chunks 2, 5, 7)"
+        total_refetch_count,
+        FAILING_CHUNKS.len(),
+        "refetch_link should be called for each 401 failure (chunks {:?})",
+        FAILING_CHUNKS
     );
+
+    // VERIFY: refetch_link() was called for the specific failing chunks
+    for &chunk_idx in FAILING_CHUNKS {
+        let chunk_refetch_count = mock_fetcher.refetch_count_for_chunk(chunk_idx);
+        assert_eq!(
+            chunk_refetch_count, 1,
+            "refetch_link should be called exactly once for chunk {} that failed with 401",
+            chunk_idx
+        );
+    }
+
+    // VERIFY: refetch_link() was NOT called for non-failing chunks
+    for chunk_idx in 0..NUM_CHUNKS {
+        if !FAILING_CHUNKS.contains(&chunk_idx) {
+            let chunk_refetch_count = mock_fetcher.refetch_count_for_chunk(chunk_idx);
+            assert_eq!(
+                chunk_refetch_count, 0,
+                "refetch_link should NOT be called for chunk {} that did not fail",
+                chunk_idx
+            );
+        }
+    }
 
     // Clean up
     cancel_token.cancel();

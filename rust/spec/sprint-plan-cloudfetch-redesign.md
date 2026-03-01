@@ -279,7 +279,7 @@ pub struct StreamingCloudFetchProvider {
 |---|---|
 | `end_to_end_sequential_consumption` | All chunks downloaded and read in order (channel-level) |
 | `end_to_end_cancellation_mid_stream` | Cancel during active download — no deadlock or panic; uses `next_batch()` API, consumes 3-5 chunks before cancel, verifies remaining calls return cancellation error or `Ok(None)` |
-| `end_to_end_401_recovery` | Presigned URL expires mid-stream; driver refetches and continues |
+| `end_to_end_401_recovery` | 401/403/404 recovery with timing verification; mock returns 401 for chunks 3 and 7 on first attempt; verifies refetch_link() called per-chunk; timing assertion proves no sleep on auth error (30s retry_delay, <5s completion) |
 | `provider_end_to_end_sequential_consumption` | Full pipeline with `next_batch()` API — 15 chunks in order, `Ok(None)` at end |
 | `provider_out_of_order_downloads_in_order_consumption` | Workers complete out-of-order, consumer receives in order |
 | `provider_small_result_set` | Small result sets terminate cleanly |
@@ -288,6 +288,8 @@ pub struct StreamingCloudFetchProvider {
 **Implementation Notes:**
 - Added `TestStreamingProvider` helper that mirrors `StreamingCloudFetchProvider::next_batch()` behavior
 - Tests construct provider directly to use mock workers instead of real `ChunkDownloader`
+- `MockLinkFetcher` tracks refetch_link() calls per chunk_index for precise verification
+- 401 recovery test uses timing assertion: 30s retry_delay for transient errors, verifies <5s completion to prove auth errors don't sleep
 - All tests pass consistently across multiple runs
 
 ---
