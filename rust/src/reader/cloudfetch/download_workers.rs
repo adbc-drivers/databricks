@@ -92,9 +92,7 @@ fn classify_error(error: &crate::error::Error) -> DownloadErrorKind {
 
     // Check for auth-related HTTP status codes (401, 403, 404)
     // The format is "HTTP {status} - {body}"
-    if message.contains("HTTP 401")
-        || message.contains("HTTP 403")
-        || message.contains("HTTP 404")
+    if message.contains("HTTP 401") || message.contains("HTTP 403") || message.contains("HTTP 404")
     {
         return DownloadErrorKind::AuthError;
     }
@@ -267,7 +265,10 @@ async fn process_task(
             worker_id, chunk_index
         );
 
-        match link_fetcher.refetch_link(chunk_index, link.row_offset).await {
+        match link_fetcher
+            .refetch_link(chunk_index, link.row_offset)
+            .await
+        {
             Ok(fresh_link) => {
                 link = fresh_link;
                 refresh_count += 1;
@@ -342,7 +343,10 @@ async fn process_task(
                         );
 
                         // Refetch link immediately (no sleep)
-                        match link_fetcher.refetch_link(chunk_index, link.row_offset).await {
+                        match link_fetcher
+                            .refetch_link(chunk_index, link.row_offset)
+                            .await
+                        {
                             Ok(fresh_link) => {
                                 link = fresh_link;
                                 debug!(
@@ -586,8 +590,7 @@ mod tests {
 
     #[test]
     fn test_classify_error_transient_errors() {
-        let error_500 =
-            DatabricksErrorHelper::io().message("HTTP 500 - Internal Server Error");
+        let error_500 = DatabricksErrorHelper::io().message("HTTP 500 - Internal Server Error");
         assert_eq!(
             classify_error(&error_500),
             DownloadErrorKind::TransientError
@@ -834,7 +837,10 @@ mod tests {
 
         // Proactive expiry check before first HTTP request
         if link.is_expired(config.url_expiration_buffer_secs) {
-            match link_fetcher.refetch_link(chunk_index, link.row_offset).await {
+            match link_fetcher
+                .refetch_link(chunk_index, link.row_offset)
+                .await
+            {
                 Ok(fresh_link) => {
                     link = fresh_link;
                     refresh_count += 1;
@@ -874,7 +880,10 @@ mod tests {
                             }
 
                             // Refetch link immediately (no sleep)
-                            match link_fetcher.refetch_link(chunk_index, link.row_offset).await {
+                            match link_fetcher
+                                .refetch_link(chunk_index, link.row_offset)
+                                .await
+                            {
                                 Ok(fresh_link) => link = fresh_link,
                                 Err(refetch_err) => return Err(refetch_err),
                             }
@@ -915,7 +924,10 @@ mod tests {
     ) -> Result<Vec<RecordBatch>> {
         // Proactive expiry check before first HTTP request
         if link.is_expired(config.url_expiration_buffer_secs) {
-            match link_fetcher.refetch_link(chunk_index, link.row_offset).await {
+            match link_fetcher
+                .refetch_link(chunk_index, link.row_offset)
+                .await
+            {
                 Ok(fresh_link) => link = fresh_link,
                 Err(e) => return Err(e),
             }
@@ -943,7 +955,10 @@ mod tests {
 
         // Proactive expiry check before first HTTP request
         if link.is_expired(config.url_expiration_buffer_secs) {
-            match link_fetcher.refetch_link(chunk_index, link.row_offset).await {
+            match link_fetcher
+                .refetch_link(chunk_index, link.row_offset)
+                .await
+            {
                 Ok(fresh_link) => {
                     link = fresh_link;
                     refresh_count += 1;
@@ -983,7 +998,10 @@ mod tests {
                             }
 
                             // Refetch link immediately (no sleep)
-                            match link_fetcher.refetch_link(chunk_index, link.row_offset).await {
+                            match link_fetcher
+                                .refetch_link(chunk_index, link.row_offset)
+                                .await
+                            {
                                 Ok(fresh_link) => link = fresh_link,
                                 Err(refetch_err) => return Err(refetch_err),
                             }

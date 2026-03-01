@@ -127,7 +127,10 @@ pub struct ChunkHandle {
 /// // Later, consumer awaits the handle
 /// let batches = handle.result_rx.await??;
 /// ```
-pub fn create_chunk_pair(chunk_index: i64, link: CloudFetchLink) -> (ChunkDownloadTask, ChunkHandle) {
+pub fn create_chunk_pair(
+    chunk_index: i64,
+    link: CloudFetchLink,
+) -> (ChunkDownloadTask, ChunkHandle) {
     let (result_tx, result_rx) = oneshot::channel();
 
     let task = ChunkDownloadTask {

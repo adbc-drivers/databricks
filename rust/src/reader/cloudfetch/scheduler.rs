@@ -40,7 +40,9 @@
 //! 2. Even if downloads complete out of order, results are consumed in order
 
 use crate::reader::cloudfetch::link_fetcher::ChunkLinkFetcher;
-use crate::reader::cloudfetch::pipeline_types::{create_chunk_pair, ChunkDownloadTask, ChunkHandle};
+use crate::reader::cloudfetch::pipeline_types::{
+    create_chunk_pair, ChunkDownloadTask, ChunkHandle,
+};
 use crate::types::cloudfetch::CloudFetchConfig;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -534,8 +536,7 @@ mod tests {
 
         // Read all remaining handles
         let mut count = 1; // Already read one
-        while let Ok(Some(_)) =
-            timeout(Duration::from_millis(100), channels.result_rx.recv()).await
+        while let Ok(Some(_)) = timeout(Duration::from_millis(100), channels.result_rx.recv()).await
         {
             count += 1;
         }
@@ -613,9 +614,21 @@ mod tests {
 
         // Immediately receive handles without touching download_rx
         // This proves handles are sent first and independently
-        let handle0 = channels.result_rx.recv().await.expect("Should get handle 0");
-        let handle1 = channels.result_rx.recv().await.expect("Should get handle 1");
-        let handle2 = channels.result_rx.recv().await.expect("Should get handle 2");
+        let handle0 = channels
+            .result_rx
+            .recv()
+            .await
+            .expect("Should get handle 0");
+        let handle1 = channels
+            .result_rx
+            .recv()
+            .await
+            .expect("Should get handle 1");
+        let handle2 = channels
+            .result_rx
+            .recv()
+            .await
+            .expect("Should get handle 2");
 
         assert_eq!(handle0.chunk_index, 0);
         assert_eq!(handle1.chunk_index, 1);
