@@ -175,9 +175,11 @@ struct ChunkHandle {
 
 ---
 
-### PECO-2930 — Implement Consumer (`next_batch`)
+### PECO-2930 — Implement Consumer (`next_batch`) ✅ COMPLETED
 
 **Scope:** `rust/src/reader/cloudfetch/streaming_provider.rs`
+
+**Status:** Completed
 
 **Changes:**
 - Replace `wait_for_chunk` + Notify poll loop with:
@@ -188,11 +190,29 @@ struct ChunkHandle {
 - `Ok(None)` when `result_rx` returns `None` (channel closed = end of stream)
 - Consumer selects on `cancel_token.cancelled()` when awaiting `result_rx`
 
+**Implementation Notes:**
+- `next_batch()` now uses `tokio::select!` with `biased;` to check cancellation first
+- Uses `tokio::sync::Mutex` for `result_rx` to allow holding lock across await
+- Properly awaits `handle.result_rx` oneshot for download results
+- Error propagation: oneshot recv error = "Download task was cancelled or failed"
+- Recursive call via `Box::pin()` for empty chunks
+
+**Tests implemented:**
+- `test_sequential_consumption` — verify batches received in chunk order
+- `test_end_of_stream_detection` — verify Ok(None) when channel closes
+- `test_cancellation_during_await` — verify cancellation error returned
+- `test_download_error_propagation` — verify errors passed through
+- `test_sender_dropped_error` — verify error when worker crashes
+- `test_schema_extraction` — verify schema captured from first batch
+- `test_multiple_batches_per_chunk` — verify all batches returned
+
 ---
 
-### PECO-2931 — Refactor `StreamingCloudFetchProvider` struct
+### PECO-2931 — Refactor `StreamingCloudFetchProvider` struct ✅ COMPLETED
 
 **Scope:** `rust/src/reader/cloudfetch/streaming_provider.rs`
+
+**Status:** Completed
 
 **Remove these fields:**
 
@@ -205,16 +225,33 @@ struct ChunkHandle {
 | `next_download_index: AtomicI64` | Sequential counter owned by scheduler task |
 | `current_chunk_index: AtomicI64` | Implicit in sequential `result_rx.recv()` calls |
 | `end_of_stream: AtomicBool` | Implicit when `result_rx` returns `None` |
+| `link_fetcher: Arc<dyn ChunkLinkFetcher>` | Passed to scheduler/workers |
+| `chunk_downloader: Arc<ChunkDownloader>` | Passed to workers |
+| `config: CloudFetchConfig` | Used during initialization only |
+| `runtime_handle: tokio::runtime::Handle` | No longer needed (scheduler spawns internally) |
 
 **New struct:**
 ```rust
 pub struct StreamingCloudFetchProvider {
-    result_rx: Mutex<mpsc::Receiver<ChunkHandle>>,
+    result_rx: tokio::sync::Mutex<mpsc::Receiver<ChunkHandle>>,
     schema: OnceLock<SchemaRef>,
     batch_buffer: Mutex<VecDeque<RecordBatch>>,
     cancel_token: CancellationToken,
+    scheduler_handle: JoinHandle<()>,
+    worker_handles: Vec<JoinHandle<()>>,
 }
 ```
+
+**Implementation Notes:**
+- `new()` spawns scheduler and workers immediately via `spawn_scheduler()` and `spawn_download_workers()`
+- Uses `tokio::sync::Mutex` for `result_rx` (needs to hold across await)
+- Uses `std::sync::Mutex` for `batch_buffer` (only accessed synchronously)
+- Removed `initialize()` method — scheduler handles initial link fetch
+- Removed `schedule_downloads()` method — scheduler handles scheduling
+- Removed `wait_for_chunk()` method — direct await on oneshot
+- Removed `fetch_and_store_links()` method — scheduler handles this
+- Removed `download_chunk_with_retry()` method — workers handle this
+- Removed `ChunkState`, `ChunkEntry` local types — no longer needed
 
 ---
 
@@ -283,12 +320,12 @@ pub struct StreamingCloudFetchProvider {
 
 ## Definition of Done
 
-- [ ] `cargo build` passes with no warnings
-- [ ] `cargo clippy -- -D warnings` passes
-- [ ] All 9 unit tests pass
-- [ ] All 3 integration tests pass
-- [ ] `cargo fmt` applied
-- [ ] `DashMap` dependency removed from `streaming_provider.rs`
-- [ ] `ChunkEntry`, `ChunkState` types deleted
-- [ ] `chunk_ready_timeout` config field removed
-- [ ] `LINK_EXPIRY_BUFFER_SECS` constant removed
+- [x] `cargo build` passes with no warnings
+- [x] `cargo clippy -- -D warnings` passes
+- [x] All 9 unit tests pass (56 cloudfetch tests total)
+- [ ] All 3 integration tests pass (pending E2E testing)
+- [x] `cargo fmt` applied
+- [x] `DashMap` dependency removed from `streaming_provider.rs`
+- [x] `ChunkEntry`, `ChunkState` types deleted
+- [x] `chunk_ready_timeout` config field removed
+- [x] `LINK_EXPIRY_BUFFER_SECS` constant removed
