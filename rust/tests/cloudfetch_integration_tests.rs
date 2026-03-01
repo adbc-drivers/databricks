@@ -389,17 +389,19 @@ async fn test_end_to_end_sequential_consumption() {
 /// - Cancellation during active downloads doesn't cause deadlock
 /// - No panic occurs
 /// - Test completes within timeout
+/// - Remaining next_batch() calls return cancellation error or Ok(None)
 #[tokio::test]
 async fn test_end_to_end_cancellation_mid_stream() {
     const NUM_CHUNKS: i64 = 20;
     const TIMEOUT_SECS: u64 = 5;
+    const CHUNKS_BEFORE_CANCEL: i64 = 5; // Consume 5 chunks before cancelling
 
     // Create mock link fetcher with slow fetching
     let link_fetcher: Arc<dyn ChunkLinkFetcher> =
         Arc::new(MockLinkFetcher::with_slow_fetch(NUM_CHUNKS));
 
     let config = CloudFetchConfig {
-        max_chunks_in_memory: 4,
+        max_chunks_in_memory: 6, // Allow more in-flight for cancellation testing
         ..Default::default()
     };
 
@@ -411,9 +413,9 @@ async fn test_end_to_end_cancellation_mid_stream() {
     // Wrap download_rx for shared access
     let download_rx = Arc::new(tokio::sync::Mutex::new(channels.download_rx));
 
-    // Spawn mock download workers with delays
+    // Spawn mock download workers with delays (100ms+ per chunk as required)
     let worker_config = MockWorkerConfig {
-        download_delay: Duration::from_millis(100), // Slow downloads
+        download_delay: Duration::from_millis(150), // 150ms delay per chunk
         ..Default::default()
     };
 
@@ -430,38 +432,107 @@ async fn test_end_to_end_cancellation_mid_stream() {
         worker_handles.push(handle);
     }
 
-    // Spawn consumer task
-    let consumer_cancel = cancel_token.clone();
-    let mut result_rx = channels.result_rx;
-    let consumer_task = tokio::spawn(async move {
-        let mut count = 0;
-        while let Some(handle) = result_rx.recv().await {
-            if consumer_cancel.is_cancelled() {
-                break;
-            }
+    // Create provider with next_batch() API
+    let provider = create_test_provider(channels.result_rx, cancel_token.clone());
 
-            // Try to get result with short timeout
-            match timeout(Duration::from_millis(500), handle.result_rx).await {
-                Ok(Ok(Ok(_))) => count += 1,
-                Ok(Ok(Err(_))) => break, // Download error (expected on cancel)
-                Ok(Err(_)) => break,     // Sender dropped (expected on cancel)
-                Err(_) => break,         // Timeout (expected on cancel)
+    // Consume first few chunks successfully via next_batch()
+    let mut consumed_count = 0;
+    let mut successful_chunks = Vec::new();
+
+    // Use timeout to detect deadlocks during chunk consumption
+    let consume_result = timeout(Duration::from_secs(TIMEOUT_SECS), async {
+        while consumed_count < CHUNKS_BEFORE_CANCEL {
+            match provider.next_batch().await {
+                Ok(Some(batch)) => {
+                    // Extract chunk ID to track progress
+                    let chunk_id_array = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .expect("Expected Int32Array for chunk_id column");
+                    let chunk_idx = chunk_id_array.value(0) as i64;
+
+                    // Only count unique chunks (there may be multiple batches per chunk)
+                    if successful_chunks.is_empty()
+                        || *successful_chunks.last().unwrap() != chunk_idx
+                    {
+                        successful_chunks.push(chunk_idx);
+                        consumed_count += 1;
+                    }
+                }
+                Ok(None) => {
+                    // Unexpected end of stream
+                    break;
+                }
+                Err(e) => {
+                    panic!("Unexpected error during chunk consumption: {}", e);
+                }
             }
         }
-        count
-    });
+        consumed_count
+    })
+    .await;
 
-    // Let some downloads complete
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        consume_result.is_ok(),
+        "Should consume {} chunks within timeout (no deadlock during consumption)",
+        CHUNKS_BEFORE_CANCEL
+    );
 
-    // Cancel mid-stream
+    let chunks_consumed = consume_result.unwrap();
+    assert!(
+        chunks_consumed >= 3,
+        "Should have consumed at least 3 chunks before cancellation, got {}",
+        chunks_consumed
+    );
+
+    // Trigger cancellation while downloads are still in progress
     cancel_token.cancel();
 
-    // Verify test completes within timeout (no deadlock)
-    let result = timeout(Duration::from_secs(TIMEOUT_SECS), async {
-        // Wait for consumer to finish
-        let consumed = consumer_task.await.expect("Consumer task panicked");
+    // Verify: Remaining next_batch() calls return cancellation error or Ok(None)
+    // Use timeout to detect deadlocks
+    let post_cancel_result = timeout(Duration::from_secs(TIMEOUT_SECS), async {
+        // Try to get more batches after cancellation
+        let mut post_cancel_attempts = 0;
+        let mut got_cancellation_or_none = false;
 
+        for _ in 0..5 {
+            post_cancel_attempts += 1;
+            match provider.next_batch().await {
+                Ok(None) => {
+                    // End of stream - acceptable after cancellation
+                    got_cancellation_or_none = true;
+                    break;
+                }
+                Ok(Some(_)) => {
+                    // May still get buffered batches - continue checking
+                    continue;
+                }
+                Err(_) => {
+                    // Cancellation error - this is the expected result
+                    got_cancellation_or_none = true;
+                    break;
+                }
+            }
+        }
+
+        (got_cancellation_or_none, post_cancel_attempts)
+    })
+    .await;
+
+    assert!(
+        post_cancel_result.is_ok(),
+        "Post-cancellation next_batch() calls should complete within timeout (no deadlock)"
+    );
+
+    let (got_cancellation_or_none, _attempts) = post_cancel_result.unwrap();
+    assert!(
+        got_cancellation_or_none,
+        "After cancellation, next_batch() should eventually return cancellation error or Ok(None)"
+    );
+
+    // Wait for all tasks to complete within timeout (verify clean shutdown)
+    let shutdown_result = timeout(Duration::from_secs(TIMEOUT_SECS), async {
         // Wait for workers to finish
         for handle in worker_handles {
             handle.await.expect("Worker task panicked");
@@ -472,20 +543,22 @@ async fn test_end_to_end_cancellation_mid_stream() {
             .scheduler_handle
             .await
             .expect("Scheduler task panicked");
-
-        consumed
     })
     .await;
 
     assert!(
-        result.is_ok(),
-        "Test should complete within {} seconds (no deadlock)",
+        shutdown_result.is_ok(),
+        "Pipeline should shut down cleanly within {} seconds (no deadlock)",
         TIMEOUT_SECS
     );
 
-    let consumed_count = result.unwrap();
+    // Verify some chunks were consumed before cancellation
     assert!(
-        consumed_count < NUM_CHUNKS as usize,
+        !successful_chunks.is_empty(),
+        "Should have consumed at least one chunk successfully"
+    );
+    assert!(
+        successful_chunks.len() < NUM_CHUNKS as usize,
         "Should have consumed fewer than all chunks due to cancellation"
     );
 }
@@ -857,7 +930,8 @@ async fn test_provider_end_to_end_sequential_consumption() {
     // Verify all chunks received in correct sequential order
     let expected_indices: Vec<i64> = (0..NUM_CHUNKS).collect();
     assert_eq!(
-        received_indices, expected_indices,
+        received_indices,
+        expected_indices,
         "Should receive all chunks in order 0, 1, 2, ..., {}",
         NUM_CHUNKS - 1
     );
@@ -1031,7 +1105,10 @@ async fn test_provider_small_result_set() {
         count += 1;
     }
 
-    assert_eq!(count, NUM_CHUNKS as usize, "Should receive exactly 3 chunks");
+    assert_eq!(
+        count, NUM_CHUNKS as usize,
+        "Should receive exactly 3 chunks"
+    );
 
     // Verify end of stream
     let result = provider.next_batch().await;
