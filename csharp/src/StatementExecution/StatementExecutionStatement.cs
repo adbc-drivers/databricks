@@ -981,25 +981,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("catalog", _metadataCatalogName ?? "(none)");
                 activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
+                activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-                if (MetadataUtilities.IsInvalidPKFKCatalog(_metadataCatalogName))
+                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
                 if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName) ||
                     string.IsNullOrEmpty(_metadataTableName))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-                List<RecordBatch> batches;
-                try
-                {
-                    string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
-                    activity?.SetTag("sql_query", sql);
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch
-                {
-                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
-                }
+                string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
+                activity?.SetTag("sql_query", sql);
+                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
                 var keys = new List<(string, string, string, string, int, string)>();
                 int seq = 0;
@@ -1034,26 +1027,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("fk_catalog", _metadataForeignCatalogName ?? "(none)");
                 activity?.SetTag("fk_schema", _metadataForeignSchemaName ?? "(none)");
                 activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
+                activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-                if (MetadataUtilities.IsInvalidPKFKCatalog(_metadataForeignCatalogName))
+                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
                 if (string.IsNullOrEmpty(_metadataForeignCatalogName) || string.IsNullOrEmpty(_metadataForeignSchemaName) ||
                     string.IsNullOrEmpty(_metadataForeignTableName))
                     return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-                List<RecordBatch> batches;
-                try
-                {
-                    string sql = new ShowForeignKeysCommand(
-                        _metadataForeignCatalogName!, _metadataForeignSchemaName!, _metadataForeignTableName!).Build();
-                    activity?.SetTag("sql_query", sql);
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch
-                {
-                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-                }
+                string sql = new ShowForeignKeysCommand(
+                    _metadataForeignCatalogName!, _metadataForeignSchemaName!, _metadataForeignTableName!).Build();
+                activity?.SetTag("sql_query", sql);
+                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
                 var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
                 int seq = 0;

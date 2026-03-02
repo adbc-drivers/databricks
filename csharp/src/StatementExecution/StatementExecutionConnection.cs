@@ -59,6 +59,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string? _resultCompression;
         private readonly int _waitTimeoutSeconds;
         private readonly int _pollingIntervalMs;
+        private readonly bool _enablePKFK;
 
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
@@ -195,6 +196,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
+            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
@@ -678,6 +680,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return ExecuteMetadataSqlAsync(sql, cancellationToken).GetAwaiter().GetResult();
         }
+
+        internal bool EnablePKFK => _enablePKFK;
 
         internal CancellationTokenSource CreateMetadataTimeoutCts()
         {
