@@ -28,38 +28,6 @@ use std::ffi::c_void;
 /// Opaque handle representing a Databricks connection for metadata FFI.
 pub type OdbcConnectionHandle = *mut c_void;
 
-/// Create a metadata handle from connection components.
-///
-/// The ODBC wrapper calls this after establishing a connection. The handle
-/// wraps a `ConnectionMetadataService` that can execute metadata queries.
-///
-/// # Safety
-///
-/// The returned handle must be freed with `odbc_connection_free()` when done.
-/// The caller must ensure the underlying ADBC connection remains alive while
-/// this handle is in use.
-#[no_mangle]
-pub unsafe extern "C" fn odbc_connection_create(
-    client_ptr: *const c_void,
-    session_id_ptr: *const std::ffi::c_char,
-    runtime_ptr: *const c_void,
-) -> OdbcConnectionHandle {
-    if client_ptr.is_null() || session_id_ptr.is_null() || runtime_ptr.is_null() {
-        set_last_error("Null pointer passed to odbc_connection_create", "HY009", -1);
-        return std::ptr::null_mut();
-    }
-
-    // This function is intended to be called from the ODBC wrapper which has
-    // access to the connection internals. For now, provide a simpler API
-    // that creates the service from a Connection reference.
-    set_last_error(
-        "Use odbc_connection_from_ref instead",
-        "HY000",
-        -1,
-    );
-    std::ptr::null_mut()
-}
-
 /// Create a metadata handle directly from a Connection reference.
 ///
 /// This is the primary way the ODBC wrapper creates handles. It takes a
@@ -109,10 +77,12 @@ pub unsafe extern "C" fn odbc_connection_free(handle: OdbcConnectionHandle) {
 ///
 /// # Safety
 ///
-/// The handle must be a valid pointer returned by `odbc_connection_from_ref()`.
-pub(crate) unsafe fn handle_to_service(
+/// The handle must be a valid pointer returned by `odbc_connection_from_ref()`
+/// and must not have been freed via `odbc_connection_free()`. The returned
+/// reference is only valid as long as the handle is alive.
+pub(crate) unsafe fn handle_to_service<'a>(
     handle: OdbcConnectionHandle,
-) -> Option<&'static ConnectionMetadataService> {
+) -> Option<&'a ConnectionMetadataService> {
     if handle.is_null() {
         None
     } else {

@@ -31,7 +31,7 @@ use crate::metadata::sql::SqlCommandBuilder;
 use crate::metadata::type_info::TYPE_INFO_ENTRIES;
 use crate::metadata::type_mapping::databricks_type_to_xdbc;
 use crate::types::sea::ExecuteParams;
-use arrow_array::builder::{BooleanBuilder, Int16Builder, Int32Builder, StringBuilder};
+use arrow_array::builder::{Int16Builder, Int32Builder, StringBuilder};
 use arrow_array::{ArrayRef, RecordBatch, StringArray};
 use driverbase::error::ErrorHelper;
 use std::sync::Arc;
@@ -245,7 +245,6 @@ impl MetadataService for ConnectionMetadataService {
             tables.retain(|t| types.iter().any(|tt| t.table_type.eq_ignore_ascii_case(tt)));
         }
 
-        let n = tables.len();
         let cat: Vec<Option<&str>> = tables.iter().map(|t| Some(t.catalog_name.as_str())).collect();
         let schem: Vec<Option<&str>> =
             tables.iter().map(|t| Some(t.schema_name.as_str())).collect();
@@ -264,7 +263,6 @@ impl MetadataService for ConnectionMetadataService {
             Arc::new(StringArray::from(remarks)),
         ];
 
-        let _ = n; // suppress unused warning
         RecordBatch::try_new(TABLES_SCHEMA.clone(), arrays).map_err(|e| {
             DatabricksErrorHelper::io().message(format!("Failed to build tables result: {}", e))
         })
@@ -314,76 +312,7 @@ impl MetadataService for ConnectionMetadataService {
     }
 
     fn get_type_info(&self, data_type: Option<i16>) -> Result<RecordBatch> {
-        let entries: Vec<_> = TYPE_INFO_ENTRIES
-            .iter()
-            .filter(|e| data_type.is_none() || data_type == Some(e.data_type))
-            .collect();
-
-        let n = entries.len();
-        let mut type_name = StringBuilder::with_capacity(n, n * 16);
-        let mut data_type_col = Int16Builder::with_capacity(n);
-        let mut column_size = Int32Builder::with_capacity(n);
-        let mut literal_prefix = StringBuilder::with_capacity(n, n * 4);
-        let mut literal_suffix = StringBuilder::with_capacity(n, n * 4);
-        let mut create_params = StringBuilder::with_capacity(n, n * 16);
-        let mut nullable = Int16Builder::with_capacity(n);
-        let mut case_sensitive = BooleanBuilder::with_capacity(n);
-        let mut searchable = Int16Builder::with_capacity(n);
-        let mut unsigned_attribute = BooleanBuilder::with_capacity(n);
-        let mut fixed_prec_scale = BooleanBuilder::with_capacity(n);
-        let mut auto_unique_value = BooleanBuilder::with_capacity(n);
-        let mut local_type_name = StringBuilder::with_capacity(n, n * 16);
-        let mut minimum_scale = Int16Builder::with_capacity(n);
-        let mut maximum_scale = Int16Builder::with_capacity(n);
-        let mut sql_data_type = Int16Builder::with_capacity(n);
-        let mut sql_datetime_sub = Int16Builder::with_capacity(n);
-        let mut num_prec_radix = Int32Builder::with_capacity(n);
-
-        for e in &entries {
-            type_name.append_value(e.type_name);
-            data_type_col.append_value(e.data_type);
-            append_opt_i32(&mut column_size, e.column_size);
-            append_opt_str(&mut literal_prefix, e.literal_prefix);
-            append_opt_str(&mut literal_suffix, e.literal_suffix);
-            append_opt_str(&mut create_params, e.create_params);
-            nullable.append_value(e.nullable);
-            case_sensitive.append_value(e.case_sensitive);
-            searchable.append_value(e.searchable);
-            append_opt_bool(&mut unsigned_attribute, e.unsigned_attribute);
-            fixed_prec_scale.append_value(e.fixed_prec_scale);
-            append_opt_bool(&mut auto_unique_value, e.auto_unique_value);
-            append_opt_str(&mut local_type_name, e.local_type_name);
-            append_opt_i16(&mut minimum_scale, e.minimum_scale);
-            append_opt_i16(&mut maximum_scale, e.maximum_scale);
-            sql_data_type.append_value(e.sql_data_type);
-            append_opt_i16(&mut sql_datetime_sub, e.sql_datetime_sub);
-            append_opt_i32(&mut num_prec_radix, e.num_prec_radix);
-        }
-
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(type_name.finish()),
-            Arc::new(data_type_col.finish()),
-            Arc::new(column_size.finish()),
-            Arc::new(literal_prefix.finish()),
-            Arc::new(literal_suffix.finish()),
-            Arc::new(create_params.finish()),
-            Arc::new(nullable.finish()),
-            Arc::new(case_sensitive.finish()),
-            Arc::new(searchable.finish()),
-            Arc::new(unsigned_attribute.finish()),
-            Arc::new(fixed_prec_scale.finish()),
-            Arc::new(auto_unique_value.finish()),
-            Arc::new(local_type_name.finish()),
-            Arc::new(minimum_scale.finish()),
-            Arc::new(maximum_scale.finish()),
-            Arc::new(sql_data_type.finish()),
-            Arc::new(sql_datetime_sub.finish()),
-            Arc::new(num_prec_radix.finish()),
-        ];
-
-        RecordBatch::try_new(TYPE_INFO_SCHEMA.clone(), arrays).map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to build type info result: {}", e))
-        })
+        build_type_info_batch(data_type)
     }
 
     fn get_primary_keys(
@@ -400,7 +329,6 @@ impl MetadataService for ConnectionMetadataService {
         ))?;
         let keys = parse_primary_keys(result, catalog, schema, table)?;
 
-        let n = keys.len();
         let cat: Vec<Option<&str>> = keys.iter().map(|k| Some(k.catalog_name.as_str())).collect();
         let schem: Vec<Option<&str>> = keys.iter().map(|k| Some(k.schema_name.as_str())).collect();
         let tbl: Vec<&str> = keys.iter().map(|k| k.table_name.as_str()).collect();
@@ -408,7 +336,6 @@ impl MetadataService for ConnectionMetadataService {
         let seq: Vec<i16> = keys.iter().map(|k| k.key_seq).collect();
         let pk_name: Vec<Option<&str>> = keys.iter().map(|k| k.pk_name.as_deref()).collect();
 
-        let _ = n;
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(StringArray::from(cat)),
             Arc::new(StringArray::from(schem)),
@@ -438,7 +365,6 @@ impl MetadataService for ConnectionMetadataService {
         ))?;
         let keys = parse_foreign_keys(result, catalog, schema, table)?;
 
-        let n = keys.len();
         let pk_cat: Vec<Option<&str>> = keys.iter().map(|k| Some(k.pk_catalog.as_str())).collect();
         let pk_schem: Vec<Option<&str>> =
             keys.iter().map(|k| Some(k.pk_schema.as_str())).collect();
@@ -456,7 +382,6 @@ impl MetadataService for ConnectionMetadataService {
         let pk_name: Vec<Option<&str>> = keys.iter().map(|k| k.pk_name.as_deref()).collect();
         let deferrability: Vec<i16> = keys.iter().map(|k| k.deferrability).collect();
 
-        let _ = n;
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(StringArray::from(pk_cat)),
             Arc::new(StringArray::from(pk_schem)),
@@ -573,11 +498,92 @@ fn append_opt_i16(builder: &mut Int16Builder, val: Option<i16>) {
     }
 }
 
-fn append_opt_bool(builder: &mut BooleanBuilder, val: Option<bool>) {
+fn bool_to_i16(val: bool) -> i16 {
+    if val { 1 } else { 0 }
+}
+
+fn append_opt_bool_as_i16(builder: &mut Int16Builder, val: Option<bool>) {
     match val {
-        Some(v) => builder.append_value(v),
+        Some(v) => builder.append_value(bool_to_i16(v)),
         None => builder.append_null(),
     }
+}
+
+/// Build the type info RecordBatch from the static TYPE_INFO_ENTRIES catalog.
+///
+/// Optionally filters by a specific data type code.
+/// Used by both `MetadataService::get_type_info()` and tests.
+fn build_type_info_batch(data_type: Option<i16>) -> Result<RecordBatch> {
+    let entries: Vec<_> = TYPE_INFO_ENTRIES
+        .iter()
+        .filter(|e| data_type.is_none() || data_type == Some(e.data_type))
+        .collect();
+
+    let n = entries.len();
+    let mut type_name = StringBuilder::with_capacity(n, n * 16);
+    let mut data_type_col = Int16Builder::with_capacity(n);
+    let mut column_size = Int32Builder::with_capacity(n);
+    let mut literal_prefix = StringBuilder::with_capacity(n, n * 4);
+    let mut literal_suffix = StringBuilder::with_capacity(n, n * 4);
+    let mut create_params = StringBuilder::with_capacity(n, n * 16);
+    let mut nullable = Int16Builder::with_capacity(n);
+    let mut case_sensitive = Int16Builder::with_capacity(n);
+    let mut searchable = Int16Builder::with_capacity(n);
+    let mut unsigned_attribute = Int16Builder::with_capacity(n);
+    let mut fixed_prec_scale = Int16Builder::with_capacity(n);
+    let mut auto_unique_value = Int16Builder::with_capacity(n);
+    let mut local_type_name = StringBuilder::with_capacity(n, n * 16);
+    let mut minimum_scale = Int16Builder::with_capacity(n);
+    let mut maximum_scale = Int16Builder::with_capacity(n);
+    let mut sql_data_type = Int16Builder::with_capacity(n);
+    let mut sql_datetime_sub = Int16Builder::with_capacity(n);
+    let mut num_prec_radix = Int32Builder::with_capacity(n);
+
+    for e in &entries {
+        type_name.append_value(e.type_name);
+        data_type_col.append_value(e.data_type);
+        append_opt_i32(&mut column_size, e.column_size);
+        append_opt_str(&mut literal_prefix, e.literal_prefix);
+        append_opt_str(&mut literal_suffix, e.literal_suffix);
+        append_opt_str(&mut create_params, e.create_params);
+        nullable.append_value(e.nullable);
+        case_sensitive.append_value(bool_to_i16(e.case_sensitive));
+        searchable.append_value(e.searchable);
+        append_opt_bool_as_i16(&mut unsigned_attribute, e.unsigned_attribute);
+        fixed_prec_scale.append_value(bool_to_i16(e.fixed_prec_scale));
+        append_opt_bool_as_i16(&mut auto_unique_value, e.auto_unique_value);
+        append_opt_str(&mut local_type_name, e.local_type_name);
+        append_opt_i16(&mut minimum_scale, e.minimum_scale);
+        append_opt_i16(&mut maximum_scale, e.maximum_scale);
+        sql_data_type.append_value(e.sql_data_type);
+        append_opt_i16(&mut sql_datetime_sub, e.sql_datetime_sub);
+        append_opt_i32(&mut num_prec_radix, e.num_prec_radix);
+    }
+
+    let arrays: Vec<ArrayRef> = vec![
+        Arc::new(type_name.finish()),
+        Arc::new(data_type_col.finish()),
+        Arc::new(column_size.finish()),
+        Arc::new(literal_prefix.finish()),
+        Arc::new(literal_suffix.finish()),
+        Arc::new(create_params.finish()),
+        Arc::new(nullable.finish()),
+        Arc::new(case_sensitive.finish()),
+        Arc::new(searchable.finish()),
+        Arc::new(unsigned_attribute.finish()),
+        Arc::new(fixed_prec_scale.finish()),
+        Arc::new(auto_unique_value.finish()),
+        Arc::new(local_type_name.finish()),
+        Arc::new(minimum_scale.finish()),
+        Arc::new(maximum_scale.finish()),
+        Arc::new(sql_data_type.finish()),
+        Arc::new(sql_datetime_sub.finish()),
+        Arc::new(num_prec_radix.finish()),
+    ];
+
+    RecordBatch::try_new(TYPE_INFO_SCHEMA.clone(), arrays).map_err(|e| {
+        DatabricksErrorHelper::io().message(format!("Failed to build type info result: {}", e))
+    })
 }
 
 /// Convert parsed ColumnInfo structs into a flat JDBC-compatible RecordBatch.
@@ -767,77 +773,10 @@ mod tests {
         assert_eq!(batch.num_rows(), 0);
     }
 
-    /// Helper to test type_info building without needing a full service.
-    fn build_type_info_batch(data_type: Option<i16>) -> Result<RecordBatch> {
-        let entries: Vec<_> = TYPE_INFO_ENTRIES
-            .iter()
-            .filter(|e| data_type.is_none() || data_type == Some(e.data_type))
-            .collect();
-
-        let n = entries.len();
-        let mut type_name = StringBuilder::with_capacity(n, n * 16);
-        let mut data_type_col = Int16Builder::with_capacity(n);
-        let mut column_size = Int32Builder::with_capacity(n);
-        let mut literal_prefix = StringBuilder::with_capacity(n, n * 4);
-        let mut literal_suffix = StringBuilder::with_capacity(n, n * 4);
-        let mut create_params = StringBuilder::with_capacity(n, n * 16);
-        let mut nullable_col = Int16Builder::with_capacity(n);
-        let mut case_sensitive = BooleanBuilder::with_capacity(n);
-        let mut searchable = Int16Builder::with_capacity(n);
-        let mut unsigned_attribute = BooleanBuilder::with_capacity(n);
-        let mut fixed_prec_scale = BooleanBuilder::with_capacity(n);
-        let mut auto_unique_value = BooleanBuilder::with_capacity(n);
-        let mut local_type_name = StringBuilder::with_capacity(n, n * 16);
-        let mut minimum_scale = Int16Builder::with_capacity(n);
-        let mut maximum_scale = Int16Builder::with_capacity(n);
-        let mut sql_data_type = Int16Builder::with_capacity(n);
-        let mut sql_datetime_sub = Int16Builder::with_capacity(n);
-        let mut num_prec_radix = Int32Builder::with_capacity(n);
-
-        for e in &entries {
-            type_name.append_value(e.type_name);
-            data_type_col.append_value(e.data_type);
-            append_opt_i32(&mut column_size, e.column_size);
-            append_opt_str(&mut literal_prefix, e.literal_prefix);
-            append_opt_str(&mut literal_suffix, e.literal_suffix);
-            append_opt_str(&mut create_params, e.create_params);
-            nullable_col.append_value(e.nullable);
-            case_sensitive.append_value(e.case_sensitive);
-            searchable.append_value(e.searchable);
-            append_opt_bool(&mut unsigned_attribute, e.unsigned_attribute);
-            fixed_prec_scale.append_value(e.fixed_prec_scale);
-            append_opt_bool(&mut auto_unique_value, e.auto_unique_value);
-            append_opt_str(&mut local_type_name, e.local_type_name);
-            append_opt_i16(&mut minimum_scale, e.minimum_scale);
-            append_opt_i16(&mut maximum_scale, e.maximum_scale);
-            sql_data_type.append_value(e.sql_data_type);
-            append_opt_i16(&mut sql_datetime_sub, e.sql_datetime_sub);
-            append_opt_i32(&mut num_prec_radix, e.num_prec_radix);
-        }
-
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(type_name.finish()),
-            Arc::new(data_type_col.finish()),
-            Arc::new(column_size.finish()),
-            Arc::new(literal_prefix.finish()),
-            Arc::new(literal_suffix.finish()),
-            Arc::new(create_params.finish()),
-            Arc::new(nullable_col.finish()),
-            Arc::new(case_sensitive.finish()),
-            Arc::new(searchable.finish()),
-            Arc::new(unsigned_attribute.finish()),
-            Arc::new(fixed_prec_scale.finish()),
-            Arc::new(auto_unique_value.finish()),
-            Arc::new(local_type_name.finish()),
-            Arc::new(minimum_scale.finish()),
-            Arc::new(maximum_scale.finish()),
-            Arc::new(sql_data_type.finish()),
-            Arc::new(sql_datetime_sub.finish()),
-            Arc::new(num_prec_radix.finish()),
-        ];
-
-        RecordBatch::try_new(TYPE_INFO_SCHEMA.clone(), arrays).map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to build type info: {}", e))
-        })
+    #[test]
+    fn test_type_info_timestamp_returns_two_entries() {
+        // TIMESTAMP (93) should return both TIMESTAMP and TIMESTAMP_NTZ
+        let batch = build_type_info_batch(Some(93)).unwrap();
+        assert_eq!(batch.num_rows(), 2);
     }
 }

@@ -541,11 +541,11 @@ pub fn parse_foreign_keys(
                 fk_table,
                 fk_column,
                 key_seq,
-                update_rule: 1,    // SQL_CASCADE (default)
-                delete_rule: 1,    // SQL_CASCADE (default)
+                update_rule: 3,    // SQL_NO_ACTION (Databricks FKs are informational)
+                delete_rule: 3,    // SQL_NO_ACTION (Databricks FKs are informational)
                 fk_name,
                 pk_name,
-                deferrability: 7, // SQL_NOT_DEFERRABLE
+                deferrability: 7,  // SQL_NOT_DEFERRABLE
             });
         }
     }

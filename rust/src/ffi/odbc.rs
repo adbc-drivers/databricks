@@ -37,7 +37,9 @@ use std::ffi::{c_char, c_int, CStr};
 /// # Safety
 ///
 /// `ptr` must be null or point to a valid null-terminated C string.
-unsafe fn c_str_to_option(ptr: *const c_char) -> std::result::Result<Option<&'static str>, ()> {
+/// The returned reference borrows the C string and is only valid as long as
+/// the caller keeps the C string alive.
+unsafe fn c_str_to_option<'a>(ptr: *const c_char) -> std::result::Result<Option<&'a str>, ()> {
     if ptr.is_null() {
         Ok(None)
     } else {
@@ -58,7 +60,9 @@ unsafe fn c_str_to_option(ptr: *const c_char) -> std::result::Result<Option<&'st
 /// # Safety
 ///
 /// `ptr` must be null or point to a valid null-terminated C string.
-unsafe fn c_str_to_str(ptr: *const c_char) -> std::result::Result<&'static str, ()> {
+/// The returned reference borrows the C string and is only valid as long as
+/// the caller keeps the C string alive.
+unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> std::result::Result<&'a str, ()> {
     if ptr.is_null() {
         set_last_error("Required string argument is null", "HY009", -1);
         Err(())
@@ -192,7 +196,9 @@ pub unsafe extern "C" fn odbc_get_columns(
 
 /// List supported SQL data types.
 ///
-/// `data_type`: filter by specific type code, or 0 for all types.
+/// `data_type`: filter by specific JDBC/ODBC type code, or 0 (`SQL_ALL_TYPES`)
+/// to return all supported types. Note: `SQL_ALL_TYPES` and `SQL_UNKNOWN_TYPE`
+/// share the value 0; in this context, 0 always means "return all types".
 ///
 /// # Safety
 ///

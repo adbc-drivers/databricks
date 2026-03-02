@@ -51,6 +51,20 @@ pub struct TypeInfoEntry {
 /// Static catalog of all Databricks SQL types.
 ///
 /// Type codes match `type_mapping::databricks_type_to_xdbc()`.
+///
+/// ## Design notes
+///
+/// - **INTERVAL**: Mapped to VARCHAR (12) to match the Databricks JDBC driver.
+///   ODBC 3.x defines specific `SQL_INTERVAL_*` subtypes, but Databricks represents
+///   intervals as strings. Applications needing ODBC interval subtypes should handle
+///   the conversion at the ODBC wrapper level.
+///
+/// - **ARRAY/MAP/STRUCT**: Use JDBC type codes (2003/2000/2002) rather than standard
+///   ODBC `SQL_*` constants, matching the Databricks JDBC driver behavior. ODBC
+///   applications may see unfamiliar type codes for these complex types.
+///
+/// - **TIMESTAMP and TIMESTAMP_NTZ** share `data_type: 93` (SQL_TIMESTAMP). A call to
+///   `get_type_info(93)` will return both entries, which is valid per the ODBC spec.
 pub static TYPE_INFO_ENTRIES: &[TypeInfoEntry] = &[
     TypeInfoEntry {
         type_name: "BOOLEAN",
