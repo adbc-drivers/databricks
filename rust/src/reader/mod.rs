@@ -24,7 +24,7 @@ pub mod inline;
 
 use crate::client::{DatabricksClient, DatabricksHttpClient, ExecuteResponse};
 use crate::error::{DatabricksErrorHelper, Result};
-use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
+use crate::reader::cloudfetch::chunk_downloader::{ChunkDownload, ChunkDownloader};
 use crate::reader::cloudfetch::link_fetcher::{SeaChunkLinkFetcher, SeaChunkLinkFetcherHandle};
 use crate::reader::cloudfetch::streaming_provider::StreamingCloudFetchProvider;
 use crate::reader::inline::InlineArrowProvider;
@@ -249,21 +249,17 @@ impl ResultReaderFactory {
         let link_fetcher: Arc<dyn crate::reader::cloudfetch::ChunkLinkFetcher> =
             Arc::new(SeaChunkLinkFetcherHandle::new(fetcher));
 
-        let chunk_downloader = Arc::new(ChunkDownloader::new(
+        let chunk_downloader: Arc<dyn ChunkDownload> = Arc::new(ChunkDownloader::new(
             self.http_client.clone(),
             compression,
             self.config.speed_threshold_mbps,
         ));
 
-        let provider = StreamingCloudFetchProvider::new(
-            self.config.clone(),
-            link_fetcher,
-            chunk_downloader,
-            self.runtime_handle.clone(),
-        );
+        let provider =
+            StreamingCloudFetchProvider::new(self.config.clone(), link_fetcher, chunk_downloader);
 
         Ok(Box::new(CloudFetchResultReader::new(
-            provider,
+            Arc::new(provider),
             self.runtime_handle.clone(),
         )))
     }
