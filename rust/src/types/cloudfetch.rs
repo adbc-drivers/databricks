@@ -226,5 +226,4 @@ mod tests {
         // Not expired with zero buffer either
         assert!(!link.is_expired(0));
     }
-
 }
