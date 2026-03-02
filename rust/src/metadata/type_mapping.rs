@@ -73,6 +73,7 @@ pub fn databricks_type_to_xdbc(type_name: &str) -> i16 {
         "ARRAY" => 2003,                                       // JDBC ARRAY
         "MAP" => 2000,                                         // JDBC JAVA_OBJECT
         "STRUCT" => 2002,                                      // JDBC STRUCT
+        "INTERVAL" => 12,                                      // JDBC VARCHAR (matches JDBC driver)
         _ => 12,                                               // Default to VARCHAR
     }
 }

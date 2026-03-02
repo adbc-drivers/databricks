@@ -22,5 +22,8 @@
 
 pub mod builder;
 pub mod parse;
+pub mod schemas;
+pub mod service;
 pub mod sql;
+pub mod type_info;
 pub mod type_mapping;
