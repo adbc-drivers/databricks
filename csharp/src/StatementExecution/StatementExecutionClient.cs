@@ -220,6 +220,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 Content = content
             };
 
+            if (request.IsMetadata)
+            {
+                httpRequest.Headers.TryAddWithoutValidation("x-databricks-sea-can-run-fully-sync", "true");
+            }
+
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
