@@ -222,15 +222,9 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "databricks.cloudfetch.chunk_ready_timeout_ms" => {
-                    if let Some(v) = Self::parse_int_option(&value) {
-                        self.cloudfetch_config.chunk_ready_timeout =
-                            Some(Duration::from_millis(v as u64));
-                        Ok(())
-                    } else {
-                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
-                    }
-                }
+                // "databricks.cloudfetch.chunk_ready_timeout_ms" was removed in the
+                // channel-based pipeline redesign (PECO-2927). The oneshot-based
+                // consumer resolves immediately — no timeout guard is needed.
                 "databricks.cloudfetch.speed_threshold_mbps" => {
                     if let Some(v) = Self::parse_float_option(&value) {
                         self.cloudfetch_config.speed_threshold_mbps = v;
