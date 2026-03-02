@@ -109,6 +109,26 @@ fn test_cloudfetch_options() {
         )
         .expect("Failed to set speed_threshold_mbps");
 
+    // Set new config fields
+    database
+        .set_option(
+            OptionDatabase::Other("databricks.cloudfetch.max_refresh_retries".into()),
+            OptionValue::String("5".into()),
+        )
+        .expect("Failed to set max_refresh_retries");
+    database
+        .set_option(
+            OptionDatabase::Other("databricks.cloudfetch.num_download_workers".into()),
+            OptionValue::String("4".into()),
+        )
+        .expect("Failed to set num_download_workers");
+    database
+        .set_option(
+            OptionDatabase::Other("databricks.cloudfetch.url_expiration_buffer_secs".into()),
+            OptionValue::String("90".into()),
+        )
+        .expect("Failed to set url_expiration_buffer_secs");
+
     // Verify options
     assert_eq!(
         database
@@ -125,6 +145,30 @@ fn test_cloudfetch_options() {
             ))
             .unwrap(),
         0.5
+    );
+    assert_eq!(
+        database
+            .get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.max_refresh_retries".into()
+            ))
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        database
+            .get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.num_download_workers".into()
+            ))
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        database
+            .get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.url_expiration_buffer_secs".into()
+            ))
+            .unwrap(),
+        90
     );
 }
 
