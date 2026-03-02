@@ -82,30 +82,6 @@ pub static COLUMNS_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     ]))
 });
 
-/// Schema for SQLGetTypeInfo result.
-pub static TYPE_INFO_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
-    Arc::new(Schema::new(vec![
-        Field::new("TYPE_NAME", DataType::Utf8, false),
-        Field::new("DATA_TYPE", DataType::Int16, false),
-        Field::new("COLUMN_SIZE", DataType::Int32, true),
-        Field::new("LITERAL_PREFIX", DataType::Utf8, true),
-        Field::new("LITERAL_SUFFIX", DataType::Utf8, true),
-        Field::new("CREATE_PARAMS", DataType::Utf8, true),
-        Field::new("NULLABLE", DataType::Int16, false),
-        Field::new("CASE_SENSITIVE", DataType::Int16, false),
-        Field::new("SEARCHABLE", DataType::Int16, false),
-        Field::new("UNSIGNED_ATTRIBUTE", DataType::Int16, true),
-        Field::new("FIXED_PREC_SCALE", DataType::Int16, false),
-        Field::new("AUTO_UNIQUE_VALUE", DataType::Int16, true),
-        Field::new("LOCAL_TYPE_NAME", DataType::Utf8, true),
-        Field::new("MINIMUM_SCALE", DataType::Int16, true),
-        Field::new("MAXIMUM_SCALE", DataType::Int16, true),
-        Field::new("SQL_DATA_TYPE", DataType::Int16, false),
-        Field::new("SQL_DATETIME_SUB", DataType::Int16, true),
-        Field::new("NUM_PREC_RADIX", DataType::Int32, true),
-    ]))
-});
-
 /// Schema for SQLPrimaryKeys result.
 pub static PRIMARY_KEYS_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     Arc::new(Schema::new(vec![
@@ -261,7 +237,6 @@ mod tests {
         assert_eq!(SCHEMAS_SCHEMA.fields().len(), 2);
         assert_eq!(TABLES_SCHEMA.fields().len(), 5);
         assert_eq!(COLUMNS_SCHEMA.fields().len(), 24);
-        assert_eq!(TYPE_INFO_SCHEMA.fields().len(), 18);
         assert_eq!(PRIMARY_KEYS_SCHEMA.fields().len(), 6);
         assert_eq!(FOREIGN_KEYS_SCHEMA.fields().len(), 14);
         assert_eq!(TABLE_TYPES_SCHEMA.fields().len(), 1);

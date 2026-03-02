@@ -28,7 +28,6 @@ use crate::metadata::parse::{
 };
 use crate::metadata::schemas::*;
 use crate::metadata::sql::SqlCommandBuilder;
-use crate::metadata::type_info::TYPE_INFO_ENTRIES;
 use crate::metadata::type_mapping::databricks_type_to_xdbc;
 use crate::types::sea::ExecuteParams;
 use arrow_array::builder::{Int16Builder, Int32Builder, StringBuilder};
@@ -68,9 +67,6 @@ pub trait MetadataService {
         table_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> Result<RecordBatch>;
-
-    /// List supported SQL data types.
-    fn get_type_info(&self, data_type: Option<i16>) -> Result<RecordBatch>;
 
     /// List primary key columns for a table.
     fn get_primary_keys(
@@ -311,10 +307,6 @@ impl MetadataService for ConnectionMetadataService {
         columns_to_record_batch(&all_columns)
     }
 
-    fn get_type_info(&self, data_type: Option<i16>) -> Result<RecordBatch> {
-        build_type_info_batch(data_type)
-    }
-
     fn get_primary_keys(
         &self,
         catalog: &str,
@@ -498,94 +490,6 @@ fn append_opt_i16(builder: &mut Int16Builder, val: Option<i16>) {
     }
 }
 
-fn bool_to_i16(val: bool) -> i16 {
-    if val { 1 } else { 0 }
-}
-
-fn append_opt_bool_as_i16(builder: &mut Int16Builder, val: Option<bool>) {
-    match val {
-        Some(v) => builder.append_value(bool_to_i16(v)),
-        None => builder.append_null(),
-    }
-}
-
-/// Build the type info RecordBatch from the static TYPE_INFO_ENTRIES catalog.
-///
-/// Optionally filters by a specific data type code.
-/// Used by both `MetadataService::get_type_info()` and tests.
-fn build_type_info_batch(data_type: Option<i16>) -> Result<RecordBatch> {
-    let entries: Vec<_> = TYPE_INFO_ENTRIES
-        .iter()
-        .filter(|e| data_type.is_none() || data_type == Some(e.data_type))
-        .collect();
-
-    let n = entries.len();
-    let mut type_name = StringBuilder::with_capacity(n, n * 16);
-    let mut data_type_col = Int16Builder::with_capacity(n);
-    let mut column_size = Int32Builder::with_capacity(n);
-    let mut literal_prefix = StringBuilder::with_capacity(n, n * 4);
-    let mut literal_suffix = StringBuilder::with_capacity(n, n * 4);
-    let mut create_params = StringBuilder::with_capacity(n, n * 16);
-    let mut nullable = Int16Builder::with_capacity(n);
-    let mut case_sensitive = Int16Builder::with_capacity(n);
-    let mut searchable = Int16Builder::with_capacity(n);
-    let mut unsigned_attribute = Int16Builder::with_capacity(n);
-    let mut fixed_prec_scale = Int16Builder::with_capacity(n);
-    let mut auto_unique_value = Int16Builder::with_capacity(n);
-    let mut local_type_name = StringBuilder::with_capacity(n, n * 16);
-    let mut minimum_scale = Int16Builder::with_capacity(n);
-    let mut maximum_scale = Int16Builder::with_capacity(n);
-    let mut sql_data_type = Int16Builder::with_capacity(n);
-    let mut sql_datetime_sub = Int16Builder::with_capacity(n);
-    let mut num_prec_radix = Int32Builder::with_capacity(n);
-
-    for e in &entries {
-        type_name.append_value(e.type_name);
-        data_type_col.append_value(e.data_type);
-        append_opt_i32(&mut column_size, e.column_size);
-        append_opt_str(&mut literal_prefix, e.literal_prefix);
-        append_opt_str(&mut literal_suffix, e.literal_suffix);
-        append_opt_str(&mut create_params, e.create_params);
-        nullable.append_value(e.nullable);
-        case_sensitive.append_value(bool_to_i16(e.case_sensitive));
-        searchable.append_value(e.searchable);
-        append_opt_bool_as_i16(&mut unsigned_attribute, e.unsigned_attribute);
-        fixed_prec_scale.append_value(bool_to_i16(e.fixed_prec_scale));
-        append_opt_bool_as_i16(&mut auto_unique_value, e.auto_unique_value);
-        append_opt_str(&mut local_type_name, e.local_type_name);
-        append_opt_i16(&mut minimum_scale, e.minimum_scale);
-        append_opt_i16(&mut maximum_scale, e.maximum_scale);
-        sql_data_type.append_value(e.sql_data_type);
-        append_opt_i16(&mut sql_datetime_sub, e.sql_datetime_sub);
-        append_opt_i32(&mut num_prec_radix, e.num_prec_radix);
-    }
-
-    let arrays: Vec<ArrayRef> = vec![
-        Arc::new(type_name.finish()),
-        Arc::new(data_type_col.finish()),
-        Arc::new(column_size.finish()),
-        Arc::new(literal_prefix.finish()),
-        Arc::new(literal_suffix.finish()),
-        Arc::new(create_params.finish()),
-        Arc::new(nullable.finish()),
-        Arc::new(case_sensitive.finish()),
-        Arc::new(searchable.finish()),
-        Arc::new(unsigned_attribute.finish()),
-        Arc::new(fixed_prec_scale.finish()),
-        Arc::new(auto_unique_value.finish()),
-        Arc::new(local_type_name.finish()),
-        Arc::new(minimum_scale.finish()),
-        Arc::new(maximum_scale.finish()),
-        Arc::new(sql_data_type.finish()),
-        Arc::new(sql_datetime_sub.finish()),
-        Arc::new(num_prec_radix.finish()),
-    ];
-
-    RecordBatch::try_new(TYPE_INFO_SCHEMA.clone(), arrays).map_err(|e| {
-        DatabricksErrorHelper::io().message(format!("Failed to build type info result: {}", e))
-    })
-}
-
 /// Convert parsed ColumnInfo structs into a flat JDBC-compatible RecordBatch.
 fn columns_to_record_batch(columns: &[ColumnInfo]) -> Result<RecordBatch> {
     let n = columns.len();
@@ -704,24 +608,6 @@ mod tests {
     use crate::metadata::schemas;
 
     #[test]
-    fn test_type_info_all_types() {
-        // Create a minimal mock service to test type_info builder
-        let batch = build_type_info_batch(None);
-        assert!(batch.is_ok());
-        let batch = batch.unwrap();
-        assert_eq!(batch.num_rows(), TYPE_INFO_ENTRIES.len());
-        assert_eq!(batch.schema(), *TYPE_INFO_SCHEMA);
-    }
-
-    #[test]
-    fn test_type_info_filtered() {
-        let batch = build_type_info_batch(Some(4)); // INTEGER
-        assert!(batch.is_ok());
-        let batch = batch.unwrap();
-        assert_eq!(batch.num_rows(), 1);
-    }
-
-    #[test]
     fn test_columns_to_record_batch_empty() {
         let batch = columns_to_record_batch(&[]).unwrap();
         assert_eq!(batch.num_rows(), 0);
@@ -773,10 +659,4 @@ mod tests {
         assert_eq!(batch.num_rows(), 0);
     }
 
-    #[test]
-    fn test_type_info_timestamp_returns_two_entries() {
-        // TIMESTAMP (93) should return both TIMESTAMP and TIMESTAMP_NTZ
-        let batch = build_type_info_batch(Some(93)).unwrap();
-        assert_eq!(batch.num_rows(), 2);
-    }
 }

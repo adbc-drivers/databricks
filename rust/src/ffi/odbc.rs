@@ -194,31 +194,6 @@ pub unsafe extern "C" fn odbc_get_columns(
     }
 }
 
-/// List supported SQL data types.
-///
-/// `data_type`: filter by specific JDBC/ODBC type code, or 0 (`SQL_ALL_TYPES`)
-/// to return all supported types. Note: `SQL_ALL_TYPES` and `SQL_UNKNOWN_TYPE`
-/// share the value 0; in this context, 0 always means "return all types".
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn odbc_get_type_info(
-    conn: OdbcConnectionHandle,
-    data_type: i16,
-    out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
-    let svc = get_service!(conn);
-    let filter = if data_type == 0 { None } else { Some(data_type) };
-
-    match svc.get_type_info(filter) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
 /// List primary key columns for a table.
 ///
 /// # Safety
