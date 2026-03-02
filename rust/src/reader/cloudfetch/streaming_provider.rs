@@ -23,9 +23,7 @@
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
 use crate::reader::cloudfetch::link_fetcher::ChunkLinkFetcher;
-use crate::types::cloudfetch::{
-    ChunkEntry, ChunkState, CloudFetchConfig, DEFAULT_CHUNK_READY_TIMEOUT_SECS,
-};
+use crate::types::cloudfetch::{CloudFetchConfig, CloudFetchLink};
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use dashmap::DashMap;
@@ -36,6 +34,43 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
+
+// ── Temporary local stubs ──────────────────────────────────────────────
+// These types used to live in `types::cloudfetch` but have been removed as part
+// of the pipeline redesign (PECO-2927).  They are kept here as file-local stubs
+// so that the existing `StreamingCloudFetchProvider` still compiles until the
+// full rewrite in PECO-2930/2931 replaces the DashMap-based coordination.
+
+/// Temporary: state of a chunk in the legacy DashMap-based pipeline.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum ChunkState {
+    UrlFetched,
+    Downloading,
+    Downloaded,
+    DownloadFailed(String),
+    DownloadRetry,
+    ProcessingFailed(String),
+    Cancelled,
+}
+
+/// Temporary: entry for a chunk in the legacy chunks DashMap.
+#[derive(Clone)]
+struct ChunkEntry {
+    link: Option<CloudFetchLink>,
+    state: ChunkState,
+    batches: Option<Vec<RecordBatch>>,
+}
+
+impl ChunkEntry {
+    fn with_link(link: CloudFetchLink) -> Self {
+        Self {
+            link: Some(link),
+            state: ChunkState::UrlFetched,
+            batches: None,
+        }
+    }
+}
 
 /// Orchestrates link fetching and chunk downloading for CloudFetch.
 ///
@@ -357,6 +392,7 @@ impl StreamingCloudFetchProvider {
             let cancel_token = self.cancel_token.clone();
             let max_retries = self.config.max_retries;
             let retry_delay = self.config.retry_delay;
+            let url_expiration_buffer_secs = self.config.url_expiration_buffer_secs;
 
             self.runtime_handle.spawn(async move {
                 let result = Self::download_chunk_with_retry(
@@ -366,6 +402,7 @@ impl StreamingCloudFetchProvider {
                     &chunks,
                     max_retries,
                     retry_delay,
+                    url_expiration_buffer_secs,
                     &cancel_token,
                 )
                 .await;
@@ -391,6 +428,7 @@ impl StreamingCloudFetchProvider {
     }
 
     /// Download a single chunk with retry and link refresh on expiry.
+    #[allow(clippy::too_many_arguments)]
     async fn download_chunk_with_retry(
         chunk_index: i64,
         downloader: &ChunkDownloader,
@@ -398,6 +436,7 @@ impl StreamingCloudFetchProvider {
         chunks: &Arc<DashMap<i64, ChunkEntry>>,
         max_retries: u32,
         retry_delay: std::time::Duration,
+        url_expiration_buffer_secs: u32,
         cancel_token: &CancellationToken,
     ) -> Result<Vec<RecordBatch>> {
         let mut attempts = 0;
@@ -413,7 +452,7 @@ impl StreamingCloudFetchProvider {
                 let stored_link = entry.as_ref().and_then(|e| e.link.clone());
 
                 match stored_link {
-                    Some(link) if !link.is_expired() => link,
+                    Some(link) if !link.is_expired(url_expiration_buffer_secs) => link,
                     _ => {
                         // Link missing or expired - refetch it
                         debug!("Refetching expired link for chunk {}", chunk_index);
@@ -485,12 +524,7 @@ impl StreamingCloudFetchProvider {
             }
 
             // Wait for any chunk state change with timeout
-            let timeout =
-                self.config
-                    .chunk_ready_timeout
-                    .unwrap_or(std::time::Duration::from_secs(
-                        DEFAULT_CHUNK_READY_TIMEOUT_SECS,
-                    ));
+            let timeout = std::time::Duration::from_secs(30);
 
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
