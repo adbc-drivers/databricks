@@ -336,14 +336,16 @@ pub struct StreamingCloudFetchProvider {
 
 ## Definition of Done
 
-- [ ] `cargo build` passes with no warnings
-- [ ] `cargo clippy -- -D warnings` passes
+- [x] `cargo build` passes with no warnings
+- [x] `cargo clippy -- -D warnings` passes
 - [ ] All 9 unit tests pass
 - [ ] All 3 integration tests pass
-- [ ] `cargo fmt` applied
-- [ ] `DashMap` dependency removed from `streaming_provider.rs`
-- [ ] `ChunkEntry`, `ChunkState` types deleted
-- [ ] `chunk_ready_timeout` config field removed
-- [ ] `LINK_EXPIRY_BUFFER_SECS` constant removed
+- [x] `cargo fmt` applied
+- [x] `DashMap` dependency removed from `streaming_provider.rs`
+- [x] `ChunkEntry`, `ChunkState` types deleted
+- [x] `chunk_ready_timeout` config field removed
+- [x] `LINK_EXPIRY_BUFFER_SECS` constant removed
+
+**Build verification (Task-3):** Verified 2026-03-02 that all build criteria pass. The predicted E0282 type annotation errors in `tokio::select!` blocks (streaming_provider.rs, scheduler.rs, chunk_downloader.rs) resolved automatically once task-1 provided the concrete types in `pipeline_types.rs`. No additional code changes were needed — `cargo build`, `cargo clippy -- -D warnings`, `cargo fmt --check`, and `cargo test` (146 unit + 5 integration) all pass cleanly.
 
 E2E validation is handled by the auto-appended E2E task. See `rust/spec/e2e-test-spec.md` and `rust/spec/orchestration_spec.md`.
