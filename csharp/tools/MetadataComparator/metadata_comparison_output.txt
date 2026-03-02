@@ -1,0 +1,73 @@
+============================================================
+METADATA COMPARISON: THRIFT vs SEA
+Catalog: main, Schema: adbc_testing, Table: all_column_types
+Timestamp: 2026-02-27T18:30:00.8953640Z
+============================================================
+
+--- GetCatalogs (catalog=main, schema=null, table=null) ---
+  Row count: Thrift=14, SEA=1
+  DIFF [TABLE_CAT] row 0: Thrift="adbc_test" SEA="main"
+  Mismatched columns:
+    TABLE_CAT: 14 mismatches
+  RESULT: 0/14 (0.0%) [GAPS]
+
+--- GetSchemas (catalog=main, schema=null, table=null) ---
+  Row count: Thrift=51, SEA=51
+  DIFF [TABLE_SCHEM] row 11: Thrift="jdbc_large_queries_benchmark_schema" SEA="information_schema"
+  DIFF [TABLE_CATALOG] row 50: Thrift="" SEA="main"
+  Mismatched columns:
+    TABLE_SCHEM: 40 mismatches
+    TABLE_CATALOG: 1 mismatches
+  RESULT: 61/102 (59.8%) [GAPS]
+
+--- GetTables (catalog=main, schema=adbc_testing, table=null) ---
+  Row count: Thrift=54, SEA=54
+  RESULT: 540/540 (100.0%) [PASS]
+
+--- GetColumns (catalog=main, schema=adbc_testing, table=all_column_types) ---
+  Row count: Thrift=20, SEA=20
+  DIFF [BUFFER_LENGTH] row 0: Thrift="null" SEA="1"
+  DIFF [SQL_DATA_TYPE] row 0: Thrift="null" SEA="-6"
+  DIFF [IS_NULLABLE] row 2: Thrift="YES" SEA="NO"
+  DIFF [CHAR_OCTET_LENGTH] row 7: Thrift="null" SEA="2147483647"
+  DIFF [SQL_DATETIME_SUB] row 10: Thrift="null" SEA="1"
+  Mismatched columns:
+    SQL_DATA_TYPE: 20 mismatches
+    BUFFER_LENGTH: 11 mismatches
+    SQL_DATETIME_SUB: 3 mismatches
+    IS_NULLABLE: 2 mismatches
+    CHAR_OCTET_LENGTH: 1 mismatches
+  RESULT: 443/480 (92.3%) [GAPS]
+
+--- GetColumnsExtended (catalog=main, schema=adbc_testing, table=all_column_types) ---
+  Row count: Thrift=20, SEA=20
+  DIFF [IS_NULLABLE] row 2: Thrift="YES" SEA="NO"
+  Mismatched columns:
+    IS_NULLABLE: 2 mismatches
+  RESULT: 638/640 (99.7%) [MOSTLY OK]
+
+--- GetPrimaryKeys (catalog=main, schema=adbc_testing, table=all_column_types) ---
+  Row count: Thrift=2, SEA=2
+  RESULT: 12/12 (100.0%) [PASS]
+
+--- GetCrossReference (catalog=main, schema=adbc_testing, table=all_column_types) ---
+  Row count: Thrift=0, SEA=0
+  RESULT: 0/0 (100.0%) [PASS]
+
+--- GetTableSchema (table=main.adbc_testing.cross_ref_customers) ---
+  [MATCH] customer_id (Apache.Arrow.Types.Int32Type) vs customer_id (Apache.Arrow.Types.Int32Type)
+  [MATCH] customer_name (Apache.Arrow.Types.StringType) vs customer_name (Apache.Arrow.Types.StringType)
+  [MATCH] email (Apache.Arrow.Types.StringType) vs email (Apache.Arrow.Types.StringType)
+  RESULT: 9/9 (100.0%)
+
+--- GetObjects(depth=All, catalog=main, schema=adbc_testing, table=all_column_types) ---
+  Row count: Thrift=20, SEA=20
+  DIFF [xdbc_column_size] row 0: Thrift="null" SEA="1"
+  DIFF [xdbc_decimal_digits] row 0: Thrift="null" SEA="0"
+  DIFF [xdbc_is_nullable] row 2: Thrift="YES" SEA="NO"
+  Mismatched columns:
+    xdbc_decimal_digits: 19 mismatches
+    xdbc_column_size: 18 mismatches
+    xdbc_is_nullable: 2 mismatches
+  RESULT: 341/380 (89.7%) [GAPS]
+
