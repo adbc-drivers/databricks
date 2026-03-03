@@ -175,8 +175,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.TagDefinitions
             // Act
             var tags = ConnectionOpenEvent.GetDatabricksExportTags();
 
-            // Assert - 7 tags should be exported (excludes server.address)
-            Assert.Equal(7, tags.Count);
+            // Assert - 27 tags should be exported (excludes server.address)
+            // Original 7 (workspace.id, session.id, driver.version, driver.os, driver.runtime,
+            //   feature.cloudfetch, feature.lz4) plus 20 new telemetry tags:
+            // driver.name, runtime.name, runtime.version, runtime.vendor,
+            // os.name, os.version, os.arch, client.app_name, locale.name,
+            // char_set_encoding, process.name, auth.type,
+            // connection.http_path, connection.host, connection.port, connection.mode,
+            // connection.auth_mech, connection.auth_flow,
+            // feature.arrow, feature.direct_results
+            Assert.Equal(27, tags.Count);
         }
 
         #endregion

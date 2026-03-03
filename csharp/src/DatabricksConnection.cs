@@ -24,15 +24,20 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
 using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -501,6 +506,9 @@ namespace AdbcDrivers.Databricks
 
                 activity?.SetTag("connection.configuration_count", req.Configuration.Count);
 
+                // Set system configuration tags for telemetry (driver, runtime, OS, client info)
+                SetSystemConfigurationTags(activity);
+
                 return req;
             });
         }
@@ -578,6 +586,18 @@ namespace AdbcDrivers.Databricks
                 ]);
                 await SetSchema(_defaultNamespace.SchemaName);
             }
+
+            // Set session.id from the Thrift session handle
+            if (SessionHandle?.SessionId?.Guid != null && SessionHandle.SessionId.Guid.Length == 16)
+            {
+                activity?.SetTag(ConnectionOpenEvent.SessionId, new Guid(SessionHandle.SessionId.Guid).ToString("N"));
+            }
+
+            // Set auth.type based on authentication method
+            activity?.SetTag(ConnectionOpenEvent.AuthType, DetermineAuthType());
+
+            // Set connection parameter tags for telemetry
+            SetConnectionParameterTags(activity);
 
             // Initialize telemetry pipeline after session is established
             InitializeTelemetry(activity);
@@ -881,6 +901,195 @@ namespace AdbcDrivers.Databricks
                 return null;
             }
             return CatalogName;
+        }
+
+        /// <summary>
+        /// Sets system configuration tags on the activity for telemetry.
+        /// Includes driver info, runtime info, OS info, and client info.
+        /// These tags are used by MetricsAggregator to populate DriverSystemConfiguration.
+        /// </summary>
+        /// <param name="activity">The activity to set tags on.</param>
+        internal void SetSystemConfigurationTags(Activity? activity)
+        {
+            if (activity == null) return;
+
+            // Driver info
+            activity.SetTag(ConnectionOpenEvent.DriverVersion, s_assemblyVersion);
+            activity.SetTag(ConnectionOpenEvent.DriverName, "Databricks ADBC Driver");
+
+            // Runtime info
+            string frameworkDescription = RuntimeInformation.FrameworkDescription;
+            activity.SetTag(ConnectionOpenEvent.RuntimeName, ExtractRuntimeName(frameworkDescription));
+            activity.SetTag(ConnectionOpenEvent.RuntimeVersion, ExtractRuntimeVersion(frameworkDescription));
+            activity.SetTag(ConnectionOpenEvent.RuntimeVendor, "Microsoft");
+
+            // OS info
+            activity.SetTag(ConnectionOpenEvent.OsName, RuntimeInformation.OSDescription);
+            activity.SetTag(ConnectionOpenEvent.OsVersion, Environment.OSVersion.Version.ToString());
+            activity.SetTag(ConnectionOpenEvent.OsArch, RuntimeInformation.ProcessArchitecture.ToString());
+
+            // Client info
+            activity.SetTag(ConnectionOpenEvent.ClientAppName, GetClientAppName());
+            activity.SetTag(ConnectionOpenEvent.LocaleName, CultureInfo.CurrentCulture.Name);
+            activity.SetTag(ConnectionOpenEvent.CharSetEncoding, Encoding.Default.WebName);
+            activity.SetTag(ConnectionOpenEvent.ProcessName, GetProcessName());
+        }
+
+        /// <summary>
+        /// Sets connection parameter tags on the activity for telemetry.
+        /// Includes connection details, auth configuration, and feature flags.
+        /// These tags are used by MetricsAggregator to populate DriverConnectionParameters.
+        /// </summary>
+        /// <param name="activity">The activity to set tags on.</param>
+        internal void SetConnectionParameterTags(Activity? activity)
+        {
+            if (activity == null) return;
+
+            // Basic connection info
+            Properties.TryGetValue(SparkParameters.Path, out string? httpPath);
+            activity.SetTag(ConnectionOpenEvent.ConnectionHttpPath, httpPath ?? "");
+
+            string host = "";
+            try { host = GetHost(); } catch { /* ignore - host not required for telemetry */ }
+            activity.SetTag(ConnectionOpenEvent.ConnectionHost, host);
+
+            Properties.TryGetValue(SparkParameters.Port, out string? port);
+            activity.SetTag(ConnectionOpenEvent.ConnectionPort, port ?? "443");
+
+            activity.SetTag(ConnectionOpenEvent.ConnectionMode, DetermineDriverMode());
+
+            // Auth configuration
+            activity.SetTag(ConnectionOpenEvent.ConnectionAuthMech, DetermineAuthMech());
+            activity.SetTag(ConnectionOpenEvent.ConnectionAuthFlow, DetermineAuthFlow());
+
+            // Feature flags
+            activity.SetTag(ConnectionOpenEvent.FeatureArrow, true);
+            activity.SetTag(ConnectionOpenEvent.FeatureDirectResults, _enableDirectResults);
+            activity.SetTag(ConnectionOpenEvent.FeatureCloudFetch, _useCloudFetch);
+            activity.SetTag(ConnectionOpenEvent.FeatureLz4, _canDecompressLz4);
+        }
+
+        /// <summary>
+        /// Extracts the runtime name from the framework description.
+        /// </summary>
+        /// <param name="frameworkDescription">The framework description string (e.g., ".NET 8.0.0").</param>
+        /// <returns>The runtime name (e.g., ".NET", ".NET Framework", ".NET Core").</returns>
+        private static string ExtractRuntimeName(string frameworkDescription)
+        {
+            // ".NET 8.0.0" -> ".NET"
+            // ".NET Framework 4.7.2" -> ".NET Framework"
+            // ".NET Core 3.1.0" -> ".NET Core"
+            var match = Regex.Match(frameworkDescription, @"^(\.NET[^\d]*)");
+            return match.Success ? match.Groups[1].Value.Trim() : ".NET";
+        }
+
+        /// <summary>
+        /// Extracts the runtime version from the framework description.
+        /// </summary>
+        /// <param name="frameworkDescription">The framework description string (e.g., ".NET 8.0.0").</param>
+        /// <returns>The version string (e.g., "8.0.0").</returns>
+        private static string ExtractRuntimeVersion(string frameworkDescription)
+        {
+            // ".NET 8.0.0" -> "8.0.0"
+            var match = Regex.Match(frameworkDescription, @"(\d+\.\d+\.?\d*)");
+            return match.Success ? match.Value : "unknown";
+        }
+
+        /// <summary>
+        /// Gets the client application name from connection properties or process info.
+        /// </summary>
+        /// <returns>The client application name.</returns>
+        private string GetClientAppName()
+        {
+            if (Properties.TryGetValue(SparkParameters.UserAgentEntry, out string? appName) && !string.IsNullOrEmpty(appName))
+                return appName;
+            return GetProcessName();
+        }
+
+        /// <summary>
+        /// Gets the current process name safely.
+        /// </summary>
+        /// <returns>The process name, or "unknown" if it cannot be determined.</returns>
+        private static string GetProcessName()
+        {
+            try
+            {
+                return System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+            }
+            catch
+            {
+                return "unknown";
+            }
+        }
+
+        /// <summary>
+        /// Determines the authentication type string for telemetry.
+        /// Maps connection properties to standard auth type identifiers.
+        /// </summary>
+        /// <returns>The auth type string (e.g., "pat", "oauth-m2m").</returns>
+        internal string DetermineAuthType()
+        {
+            // Check for PAT (personal access token) authentication
+            if (Properties.ContainsKey(SparkParameters.Token))
+                return "pat";
+
+            // Check for OAuth authentication
+            if (Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType))
+            {
+                if (string.Equals(grantType, DatabricksConstants.OAuthGrantTypes.ClientCredentials, StringComparison.OrdinalIgnoreCase))
+                    return "oauth-m2m";
+                return "oauth-token-exchange";
+            }
+
+            // Check for OAuth client ID (M2M) without explicit grant type
+            if (Properties.ContainsKey(DatabricksParameters.OAuthClientId))
+                return "oauth-m2m";
+
+            return "unknown";
+        }
+
+        /// <summary>
+        /// Determines the driver mode (protocol) for telemetry.
+        /// </summary>
+        /// <returns>The driver mode string.</returns>
+        internal string DetermineDriverMode()
+        {
+            if (Properties.TryGetValue(DatabricksParameters.Protocol, out string? protocol))
+            {
+                return protocol.ToLowerInvariant() switch
+                {
+                    "sea" => "sea",
+                    _ => "thrift"
+                };
+            }
+            return "thrift";
+        }
+
+        /// <summary>
+        /// Determines the authentication mechanism for telemetry.
+        /// </summary>
+        /// <returns>The auth mechanism string (e.g., "pat", "oauth", "other").</returns>
+        internal string DetermineAuthMech()
+        {
+            if (Properties.ContainsKey(SparkParameters.Token))
+                return "pat";
+            if (Properties.ContainsKey(DatabricksParameters.OAuthClientId) ||
+                Properties.ContainsKey(DatabricksParameters.OAuthGrantType))
+                return "oauth";
+            return "other";
+        }
+
+        /// <summary>
+        /// Determines the authentication flow type for telemetry.
+        /// </summary>
+        /// <returns>The auth flow string.</returns>
+        internal string DetermineAuthFlow()
+        {
+            if (Properties.ContainsKey(SparkParameters.Token))
+                return "token_passthrough";
+            if (Properties.ContainsKey(DatabricksParameters.OAuthClientId))
+                return "client_credentials";
+            return "unspecified";
         }
 
         /// <summary>
