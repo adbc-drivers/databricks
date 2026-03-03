@@ -38,9 +38,7 @@ pub type FfiConnectionHandle = *mut c_void;
 /// `conn` must be a valid pointer to a `crate::Connection`. The Connection
 /// must outlive this handle. Free the handle with `metadata_connection_free()`.
 #[no_mangle]
-pub unsafe extern "C" fn metadata_connection_from_ref(
-    conn: *const c_void,
-) -> FfiConnectionHandle {
+pub unsafe extern "C" fn metadata_connection_from_ref(conn: *const c_void) -> FfiConnectionHandle {
     if conn.is_null() {
         set_last_error("Null connection pointer", "HY009", -1);
         return std::ptr::null_mut();
@@ -65,9 +63,7 @@ pub unsafe extern "C" fn metadata_connection_from_ref(
 #[no_mangle]
 pub unsafe extern "C" fn metadata_connection_free(handle: FfiConnectionHandle) {
     if !handle.is_null() {
-        drop(Box::from_raw(
-            handle as *mut ConnectionMetadataService,
-        ));
+        drop(Box::from_raw(handle as *mut ConnectionMetadataService));
     }
 }
 

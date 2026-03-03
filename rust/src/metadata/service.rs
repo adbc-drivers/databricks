@@ -12,140 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! ODBC-style metadata service returning flat Arrow result sets.
+//! Metadata service returning raw Arrow result sets from Databricks.
 //!
-//! Each method corresponds to an ODBC catalog function and returns
-//! a `RecordBatch` with a well-defined schema matching the JDBC/ODBC specification.
-//! This is used by the ODBC FFI layer (`ffi/odbc.rs`), separate from the nested
-//! ADBC `get_objects` format.
+//! Each method executes a SQL metadata query via the Databricks client and
+//! returns the raw Arrow `RecordBatch` without reshaping. The caller (e.g.
+//! the ODBC wrapper) is responsible for column renaming, type mapping, and
+//! any other transformations.
 
-use crate::client::DatabricksClient;
+use crate::client::{DatabricksClient, ExecuteResult};
 use crate::error::{DatabricksErrorHelper, Result};
-use crate::metadata::builder::filter_by_pattern;
-use crate::metadata::parse::{
-    parse_catalogs, parse_columns, parse_foreign_keys, parse_primary_keys, parse_schemas,
-    parse_tables, ColumnInfo,
-};
-use crate::metadata::schemas::*;
+use crate::metadata::parse::parse_catalogs;
 use crate::metadata::sql::SqlCommandBuilder;
-use crate::metadata::type_mapping::databricks_type_to_xdbc;
 use crate::types::sea::ExecuteParams;
-use arrow_array::builder::{Int16Builder, Int32Builder, StringBuilder};
-use arrow_array::{ArrayRef, RecordBatch, StringArray};
+use arrow_array::RecordBatch;
+use arrow_select::concat::concat_batches;
 use driverbase::error::ErrorHelper;
 use std::sync::Arc;
 
-/// ODBC-style metadata operations returning flat Arrow result sets.
-///
-/// Each method corresponds to an ODBC catalog function and returns
-/// a RecordBatch with a well-defined schema matching the JDBC/ODBC specification.
-pub trait MetadataService {
-    /// List catalogs. Schema: [TABLE_CAT]
-    fn get_catalogs(&self) -> Result<RecordBatch>;
+/// Collect all batches from an `ExecuteResult` into a single `RecordBatch`.
+fn collect_batches(result: ExecuteResult) -> Result<RecordBatch> {
+    let mut reader = result.reader;
+    let schema = reader.schema()?;
+    let mut batches = Vec::new();
 
-    /// List schemas. Schema: [TABLE_SCHEM, TABLE_CATALOG]
-    fn get_schemas(
-        &self,
-        catalog: Option<&str>,
-        schema_pattern: Option<&str>,
-    ) -> Result<RecordBatch>;
+    while let Some(batch) = reader.next_batch()? {
+        if batch.num_rows() > 0 {
+            batches.push(batch);
+        }
+    }
 
-    /// List tables. Schema: [TABLE_CAT, TABLE_SCHEM, TABLE_NAME, TABLE_TYPE, REMARKS]
-    fn get_tables(
-        &self,
-        catalog: Option<&str>,
-        schema_pattern: Option<&str>,
-        table_pattern: Option<&str>,
-        table_types: Option<&[&str]>,
-    ) -> Result<RecordBatch>;
-
-    /// List columns (JDBC 24-column schema).
-    fn get_columns(
-        &self,
-        catalog: Option<&str>,
-        schema_pattern: Option<&str>,
-        table_pattern: Option<&str>,
-        column_pattern: Option<&str>,
-    ) -> Result<RecordBatch>;
-
-    /// List primary key columns for a table.
-    fn get_primary_keys(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-    ) -> Result<RecordBatch>;
-
-    /// List foreign key columns for a table.
-    fn get_foreign_keys(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-    ) -> Result<RecordBatch>;
-
-    /// List table types.
-    fn get_table_types(&self) -> Result<RecordBatch>;
-
-    /// Get statistics (returns empty result — Databricks has no traditional indexes).
-    fn get_statistics(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        unique: bool,
-    ) -> Result<RecordBatch>;
-
-    /// Get special columns (returns empty result — no ROWID in Databricks).
-    fn get_special_columns(
-        &self,
-        identifier_type: i16,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        scope: i16,
-        nullable: i16,
-    ) -> Result<RecordBatch>;
-
-    /// List procedures (returns empty result).
-    fn get_procedures(
-        &self,
-        catalog: Option<&str>,
-        schema_pattern: Option<&str>,
-        proc_pattern: Option<&str>,
-    ) -> Result<RecordBatch>;
-
-    /// List procedure columns (returns empty result).
-    fn get_procedure_columns(
-        &self,
-        catalog: Option<&str>,
-        schema_pattern: Option<&str>,
-        proc_pattern: Option<&str>,
-        column_pattern: Option<&str>,
-    ) -> Result<RecordBatch>;
-
-    /// List table privileges (returns empty result).
-    fn get_table_privileges(
-        &self,
-        catalog: Option<&str>,
-        schema_pattern: Option<&str>,
-        table_pattern: Option<&str>,
-    ) -> Result<RecordBatch>;
-
-    /// List column privileges (returns empty result).
-    fn get_column_privileges(
-        &self,
-        catalog: Option<&str>,
-        schema: Option<&str>,
-        table: &str,
-        column_pattern: Option<&str>,
-    ) -> Result<RecordBatch>;
+    if batches.is_empty() {
+        Ok(RecordBatch::new_empty(schema))
+    } else {
+        concat_batches(&schema, &batches).map_err(|e| {
+            DatabricksErrorHelper::io().message(format!("Failed to concat metadata batches: {}", e))
+        })
+    }
 }
 
-/// Implementation of `MetadataService` backed by a Databricks connection.
+/// Metadata service backed by a Databricks connection.
 ///
-/// Wraps the connection's client, session ID, and runtime to execute
-/// metadata queries and return flat Arrow RecordBatch results.
+/// Executes metadata SQL queries and returns raw Arrow `RecordBatch` results
+/// directly from the server, without intermediate parsing or schema reshaping.
 pub struct ConnectionMetadataService {
     client: Arc<dyn DatabricksClient>,
     session_id: String,
@@ -165,62 +73,31 @@ impl ConnectionMetadataService {
             runtime,
         }
     }
-}
 
-impl MetadataService for ConnectionMetadataService {
-    fn get_catalogs(&self) -> Result<RecordBatch> {
+    /// List catalogs. Returns raw Arrow data from `SHOW CATALOGS`.
+    pub fn get_catalogs(&self) -> Result<RecordBatch> {
         let result = self
             .runtime
             .block_on(self.client.list_catalogs(&self.session_id))?;
-        let catalogs = parse_catalogs(result)?;
-        let catalogs = filter_by_pattern(catalogs, None, |c| &c.catalog_name);
-
-        let cat_array = StringArray::from(
-            catalogs
-                .iter()
-                .map(|c| Some(c.catalog_name.as_str()))
-                .collect::<Vec<_>>(),
-        );
-
-        RecordBatch::try_new(CATALOGS_SCHEMA.clone(), vec![Arc::new(cat_array)]).map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to build catalogs result: {}", e))
-        })
+        collect_batches(result)
     }
 
-    fn get_schemas(
+    /// List schemas. Returns raw Arrow data from `SHOW SCHEMAS`.
+    pub fn get_schemas(
         &self,
         catalog: Option<&str>,
         schema_pattern: Option<&str>,
     ) -> Result<RecordBatch> {
-        let result = self.runtime.block_on(
-            self.client
-                .list_schemas(&self.session_id, catalog, schema_pattern),
-        )?;
-        let schemas = parse_schemas(result, catalog)?;
-
-        let schem_array = StringArray::from(
-            schemas
-                .iter()
-                .map(|s| Some(s.schema_name.as_str()))
-                .collect::<Vec<_>>(),
-        );
-        let cat_array = StringArray::from(
-            schemas
-                .iter()
-                .map(|s| Some(s.catalog_name.as_str()))
-                .collect::<Vec<_>>(),
-        );
-
-        RecordBatch::try_new(
-            SCHEMAS_SCHEMA.clone(),
-            vec![Arc::new(schem_array), Arc::new(cat_array)],
-        )
-        .map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to build schemas result: {}", e))
-        })
+        let result = self.runtime.block_on(self.client.list_schemas(
+            &self.session_id,
+            catalog,
+            schema_pattern,
+        ))?;
+        collect_batches(result)
     }
 
-    fn get_tables(
+    /// List tables. Returns raw Arrow data from `SHOW TABLES`.
+    pub fn get_tables(
         &self,
         catalog: Option<&str>,
         schema_pattern: Option<&str>,
@@ -234,64 +111,35 @@ impl MetadataService for ConnectionMetadataService {
             table_pattern,
             table_types,
         ))?;
-        let mut tables = parse_tables(result)?;
-
-        // Client-side table type filtering
-        if let Some(types) = table_types {
-            tables.retain(|t| types.iter().any(|tt| t.table_type.eq_ignore_ascii_case(tt)));
-        }
-
-        let cat: Vec<Option<&str>> = tables.iter().map(|t| Some(t.catalog_name.as_str())).collect();
-        let schem: Vec<Option<&str>> =
-            tables.iter().map(|t| Some(t.schema_name.as_str())).collect();
-        let name: Vec<&str> = tables.iter().map(|t| t.table_name.as_str()).collect();
-        let ttype: Vec<&str> = tables.iter().map(|t| t.table_type.as_str()).collect();
-        let remarks: Vec<Option<&str>> = tables
-            .iter()
-            .map(|t| t.remarks.as_deref())
-            .collect();
-
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(StringArray::from(cat)),
-            Arc::new(StringArray::from(schem)),
-            Arc::new(StringArray::from(name)),
-            Arc::new(StringArray::from(ttype)),
-            Arc::new(StringArray::from(remarks)),
-        ];
-
-        RecordBatch::try_new(TABLES_SCHEMA.clone(), arrays).map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to build tables result: {}", e))
-        })
+        collect_batches(result)
     }
 
-    fn get_columns(
+    /// List columns. Returns raw Arrow data from `SHOW COLUMNS`.
+    ///
+    /// `SHOW COLUMNS` requires a catalog. When catalog is `None`, empty, or a
+    /// wildcard (`%` / `*`), all catalogs are discovered first and each is
+    /// queried individually; the results are concatenated.
+    pub fn get_columns(
         &self,
         catalog: Option<&str>,
         schema_pattern: Option<&str>,
         table_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> Result<RecordBatch> {
-        // SHOW COLUMNS requires a catalog. If none specified, discover catalogs first.
-        let catalogs_to_query: Vec<String> = if let Some(cat) = catalog {
-            if cat.is_empty() || cat == "%" || cat == "*" {
-                // Query all catalogs
+        let catalogs_to_query: Vec<String> =
+            if let Some(cat) = catalog.filter(|c| !c.is_empty() && *c != "%" && *c != "*") {
+                vec![cat.to_string()]
+            } else {
                 let result = self
                     .runtime
                     .block_on(self.client.list_catalogs(&self.session_id))?;
                 let cats = parse_catalogs(result)?;
                 cats.into_iter().map(|c| c.catalog_name).collect()
-            } else {
-                vec![cat.to_string()]
-            }
-        } else {
-            let result = self
-                .runtime
-                .block_on(self.client.list_catalogs(&self.session_id))?;
-            let cats = parse_catalogs(result)?;
-            cats.into_iter().map(|c| c.catalog_name).collect()
-        };
+            };
 
-        let mut all_columns: Vec<ColumnInfo> = Vec::new();
+        let mut all_batches = Vec::new();
+        let mut schema = None;
+
         for cat in &catalogs_to_query {
             let result = self.runtime.block_on(self.client.list_columns(
                 &self.session_id,
@@ -300,14 +148,28 @@ impl MetadataService for ConnectionMetadataService {
                 table_pattern,
                 column_pattern,
             ))?;
-            let cols = parse_columns(result)?;
-            all_columns.extend(cols);
+            let batch = collect_batches(result)?;
+            if schema.is_none() {
+                schema = Some(batch.schema());
+            }
+            if batch.num_rows() > 0 {
+                all_batches.push(batch);
+            }
         }
 
-        columns_to_record_batch(&all_columns)
+        match schema {
+            Some(s) if all_batches.is_empty() => Ok(RecordBatch::new_empty(s)),
+            Some(s) => concat_batches(&s, &all_batches).map_err(|e| {
+                DatabricksErrorHelper::io()
+                    .message(format!("Failed to concat column batches: {}", e))
+            }),
+            None => Err(DatabricksErrorHelper::invalid_state()
+                .message("No catalogs found for column listing")),
+        }
     }
 
-    fn get_primary_keys(
+    /// List primary keys. Returns raw Arrow data from `SHOW KEYS`.
+    pub fn get_primary_keys(
         &self,
         catalog: &str,
         schema: &str,
@@ -319,31 +181,11 @@ impl MetadataService for ConnectionMetadataService {
             &sql,
             &ExecuteParams::default(),
         ))?;
-        let keys = parse_primary_keys(result, catalog, schema, table)?;
-
-        let cat: Vec<Option<&str>> = keys.iter().map(|k| Some(k.catalog_name.as_str())).collect();
-        let schem: Vec<Option<&str>> = keys.iter().map(|k| Some(k.schema_name.as_str())).collect();
-        let tbl: Vec<&str> = keys.iter().map(|k| k.table_name.as_str()).collect();
-        let col: Vec<&str> = keys.iter().map(|k| k.column_name.as_str()).collect();
-        let seq: Vec<i16> = keys.iter().map(|k| k.key_seq).collect();
-        let pk_name: Vec<Option<&str>> = keys.iter().map(|k| k.pk_name.as_deref()).collect();
-
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(StringArray::from(cat)),
-            Arc::new(StringArray::from(schem)),
-            Arc::new(StringArray::from(tbl)),
-            Arc::new(StringArray::from(col)),
-            Arc::new(arrow_array::Int16Array::from(seq)),
-            Arc::new(StringArray::from(pk_name)),
-        ];
-
-        RecordBatch::try_new(PRIMARY_KEYS_SCHEMA.clone(), arrays).map_err(|e| {
-            DatabricksErrorHelper::io()
-                .message(format!("Failed to build primary keys result: {}", e))
-        })
+        collect_batches(result)
     }
 
-    fn get_foreign_keys(
+    /// List foreign keys. Returns raw Arrow data from `SHOW FOREIGN KEYS`.
+    pub fn get_foreign_keys(
         &self,
         catalog: &str,
         schema: &str,
@@ -355,308 +197,6 @@ impl MetadataService for ConnectionMetadataService {
             &sql,
             &ExecuteParams::default(),
         ))?;
-        let keys = parse_foreign_keys(result, catalog, schema, table)?;
-
-        let pk_cat: Vec<Option<&str>> = keys.iter().map(|k| Some(k.pk_catalog.as_str())).collect();
-        let pk_schem: Vec<Option<&str>> =
-            keys.iter().map(|k| Some(k.pk_schema.as_str())).collect();
-        let pk_tbl: Vec<&str> = keys.iter().map(|k| k.pk_table.as_str()).collect();
-        let pk_col: Vec<&str> = keys.iter().map(|k| k.pk_column.as_str()).collect();
-        let fk_cat: Vec<Option<&str>> = keys.iter().map(|k| Some(k.fk_catalog.as_str())).collect();
-        let fk_schem: Vec<Option<&str>> =
-            keys.iter().map(|k| Some(k.fk_schema.as_str())).collect();
-        let fk_tbl: Vec<&str> = keys.iter().map(|k| k.fk_table.as_str()).collect();
-        let fk_col: Vec<&str> = keys.iter().map(|k| k.fk_column.as_str()).collect();
-        let seq: Vec<i16> = keys.iter().map(|k| k.key_seq).collect();
-        let update_rule: Vec<i16> = keys.iter().map(|k| k.update_rule).collect();
-        let delete_rule: Vec<i16> = keys.iter().map(|k| k.delete_rule).collect();
-        let fk_name: Vec<Option<&str>> = keys.iter().map(|k| k.fk_name.as_deref()).collect();
-        let pk_name: Vec<Option<&str>> = keys.iter().map(|k| k.pk_name.as_deref()).collect();
-        let deferrability: Vec<i16> = keys.iter().map(|k| k.deferrability).collect();
-
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(StringArray::from(pk_cat)),
-            Arc::new(StringArray::from(pk_schem)),
-            Arc::new(StringArray::from(pk_tbl)),
-            Arc::new(StringArray::from(pk_col)),
-            Arc::new(StringArray::from(fk_cat)),
-            Arc::new(StringArray::from(fk_schem)),
-            Arc::new(StringArray::from(fk_tbl)),
-            Arc::new(StringArray::from(fk_col)),
-            Arc::new(arrow_array::Int16Array::from(seq)),
-            Arc::new(arrow_array::Int16Array::from(update_rule)),
-            Arc::new(arrow_array::Int16Array::from(delete_rule)),
-            Arc::new(StringArray::from(fk_name)),
-            Arc::new(StringArray::from(pk_name)),
-            Arc::new(arrow_array::Int16Array::from(deferrability)),
-        ];
-
-        RecordBatch::try_new(FOREIGN_KEYS_SCHEMA.clone(), arrays).map_err(|e| {
-            DatabricksErrorHelper::io()
-                .message(format!("Failed to build foreign keys result: {}", e))
-        })
+        collect_batches(result)
     }
-
-    fn get_table_types(&self) -> Result<RecordBatch> {
-        let types = self.client.list_table_types();
-        let array = StringArray::from(types);
-        RecordBatch::try_new(TABLE_TYPES_SCHEMA.clone(), vec![Arc::new(array)]).map_err(|e| {
-            DatabricksErrorHelper::io()
-                .message(format!("Failed to build table types result: {}", e))
-        })
-    }
-
-    fn get_statistics(
-        &self,
-        _catalog: &str,
-        _schema: &str,
-        _table: &str,
-        _unique: bool,
-    ) -> Result<RecordBatch> {
-        Ok(empty_batch(&STATISTICS_SCHEMA))
-    }
-
-    fn get_special_columns(
-        &self,
-        _identifier_type: i16,
-        _catalog: &str,
-        _schema: &str,
-        _table: &str,
-        _scope: i16,
-        _nullable: i16,
-    ) -> Result<RecordBatch> {
-        Ok(empty_batch(&SPECIAL_COLUMNS_SCHEMA))
-    }
-
-    fn get_procedures(
-        &self,
-        _catalog: Option<&str>,
-        _schema_pattern: Option<&str>,
-        _proc_pattern: Option<&str>,
-    ) -> Result<RecordBatch> {
-        Ok(empty_batch(&PROCEDURES_SCHEMA))
-    }
-
-    fn get_procedure_columns(
-        &self,
-        _catalog: Option<&str>,
-        _schema_pattern: Option<&str>,
-        _proc_pattern: Option<&str>,
-        _column_pattern: Option<&str>,
-    ) -> Result<RecordBatch> {
-        Ok(empty_batch(&PROCEDURE_COLUMNS_SCHEMA))
-    }
-
-    fn get_table_privileges(
-        &self,
-        _catalog: Option<&str>,
-        _schema_pattern: Option<&str>,
-        _table_pattern: Option<&str>,
-    ) -> Result<RecordBatch> {
-        Ok(empty_batch(&TABLE_PRIVILEGES_SCHEMA))
-    }
-
-    fn get_column_privileges(
-        &self,
-        _catalog: Option<&str>,
-        _schema: Option<&str>,
-        _table: &str,
-        _column_pattern: Option<&str>,
-    ) -> Result<RecordBatch> {
-        Ok(empty_batch(&COLUMN_PRIVILEGES_SCHEMA))
-    }
-}
-
-// ─── Helper builders ──────────────────────────────────────────────────────────
-
-fn append_opt_str(builder: &mut StringBuilder, val: Option<&str>) {
-    match val {
-        Some(v) => builder.append_value(v),
-        None => builder.append_null(),
-    }
-}
-
-fn append_opt_i32(builder: &mut Int32Builder, val: Option<i32>) {
-    match val {
-        Some(v) => builder.append_value(v),
-        None => builder.append_null(),
-    }
-}
-
-fn append_opt_i16(builder: &mut Int16Builder, val: Option<i16>) {
-    match val {
-        Some(v) => builder.append_value(v),
-        None => builder.append_null(),
-    }
-}
-
-/// Convert parsed ColumnInfo structs into a flat JDBC-compatible RecordBatch.
-fn columns_to_record_batch(columns: &[ColumnInfo]) -> Result<RecordBatch> {
-    let n = columns.len();
-    let mut table_cat = StringBuilder::with_capacity(n, n * 16);
-    let mut table_schem = StringBuilder::with_capacity(n, n * 16);
-    let mut table_name = StringBuilder::with_capacity(n, n * 32);
-    let mut column_name = StringBuilder::with_capacity(n, n * 32);
-    let mut data_type = Int16Builder::with_capacity(n);
-    let mut type_name = StringBuilder::with_capacity(n, n * 16);
-    let mut column_size = Int32Builder::with_capacity(n);
-    let mut buffer_length = Int32Builder::with_capacity(n);
-    let mut decimal_digits = Int16Builder::with_capacity(n);
-    let mut num_prec_radix = Int16Builder::with_capacity(n);
-    let mut nullable_col = Int16Builder::with_capacity(n);
-    let mut remarks = StringBuilder::with_capacity(n, n * 16);
-    let mut column_def = StringBuilder::with_capacity(n, 0);
-    let mut sql_data_type = Int16Builder::with_capacity(n);
-    let mut sql_datetime_sub = Int16Builder::with_capacity(n);
-    let mut char_octet_length = Int32Builder::with_capacity(n);
-    let mut ordinal_position = Int32Builder::with_capacity(n);
-    let mut is_nullable = StringBuilder::with_capacity(n, n * 4);
-    let mut scope_catalog = StringBuilder::with_capacity(n, 0);
-    let mut scope_schema = StringBuilder::with_capacity(n, 0);
-    let mut scope_table = StringBuilder::with_capacity(n, 0);
-    let mut source_data_type = Int16Builder::with_capacity(n);
-    let mut is_autoincrement = StringBuilder::with_capacity(n, n * 4);
-    let mut is_generatedcolumn = StringBuilder::with_capacity(n, n * 4);
-
-    for c in columns {
-        let xdbc = databricks_type_to_xdbc(&c.column_type);
-
-        table_cat.append_value(&c.catalog_name);
-        table_schem.append_value(&c.schema_name);
-        table_name.append_value(&c.table_name);
-        column_name.append_value(&c.column_name);
-        data_type.append_value(xdbc);
-        type_name.append_value(&c.column_type);
-        append_opt_i32(&mut column_size, c.column_size);
-        buffer_length.append_null(); // not available from Databricks
-        append_opt_i16(&mut decimal_digits, c.decimal_digits.map(|v| v as i16));
-        append_opt_i16(&mut num_prec_radix, c.radix.map(|v| v as i16));
-
-        // NULLABLE: 0=no nulls, 1=nullable, 2=unknown
-        match &c.is_nullable {
-            Some(v) if v == "true" || v == "YES" => nullable_col.append_value(1),
-            Some(_) => nullable_col.append_value(0),
-            None => nullable_col.append_value(2), // unknown
-        }
-
-        append_opt_str(&mut remarks, c.remarks.as_deref());
-        column_def.append_null(); // default value not available
-        sql_data_type.append_value(xdbc);
-        sql_datetime_sub.append_null();
-        char_octet_length.append_null();
-        ordinal_position.append_value(c.ordinal_position.unwrap_or(0));
-
-        match &c.is_nullable {
-            Some(v) if v == "true" || v == "YES" => is_nullable.append_value("YES"),
-            Some(_) => is_nullable.append_value("NO"),
-            None => is_nullable.append_value(""),
-        }
-
-        scope_catalog.append_null();
-        scope_schema.append_null();
-        scope_table.append_null();
-        source_data_type.append_null();
-
-        match &c.is_auto_increment {
-            Some(v) if v == "YES" => is_autoincrement.append_value("YES"),
-            Some(_) => is_autoincrement.append_value("NO"),
-            None => is_autoincrement.append_value(""),
-        }
-
-        match &c.is_generated {
-            Some(v) if v == "YES" => is_generatedcolumn.append_value("YES"),
-            Some(_) => is_generatedcolumn.append_value("NO"),
-            None => is_generatedcolumn.append_value(""),
-        }
-    }
-
-    let arrays: Vec<ArrayRef> = vec![
-        Arc::new(table_cat.finish()),
-        Arc::new(table_schem.finish()),
-        Arc::new(table_name.finish()),
-        Arc::new(column_name.finish()),
-        Arc::new(data_type.finish()),
-        Arc::new(type_name.finish()),
-        Arc::new(column_size.finish()),
-        Arc::new(buffer_length.finish()),
-        Arc::new(decimal_digits.finish()),
-        Arc::new(num_prec_radix.finish()),
-        Arc::new(nullable_col.finish()),
-        Arc::new(remarks.finish()),
-        Arc::new(column_def.finish()),
-        Arc::new(sql_data_type.finish()),
-        Arc::new(sql_datetime_sub.finish()),
-        Arc::new(char_octet_length.finish()),
-        Arc::new(ordinal_position.finish()),
-        Arc::new(is_nullable.finish()),
-        Arc::new(scope_catalog.finish()),
-        Arc::new(scope_schema.finish()),
-        Arc::new(scope_table.finish()),
-        Arc::new(source_data_type.finish()),
-        Arc::new(is_autoincrement.finish()),
-        Arc::new(is_generatedcolumn.finish()),
-    ];
-
-    RecordBatch::try_new(COLUMNS_SCHEMA.clone(), arrays).map_err(|e| {
-        DatabricksErrorHelper::io().message(format!("Failed to build columns result: {}", e))
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::metadata::schemas;
-
-    #[test]
-    fn test_columns_to_record_batch_empty() {
-        let batch = columns_to_record_batch(&[]).unwrap();
-        assert_eq!(batch.num_rows(), 0);
-        assert_eq!(batch.schema(), *schemas::COLUMNS_SCHEMA);
-    }
-
-    #[test]
-    fn test_columns_to_record_batch() {
-        let columns = vec![ColumnInfo {
-            catalog_name: "main".to_string(),
-            schema_name: "default".to_string(),
-            table_name: "t1".to_string(),
-            column_name: "id".to_string(),
-            column_type: "INT".to_string(),
-            column_size: Some(10),
-            decimal_digits: Some(0),
-            radix: Some(10),
-            is_nullable: Some("true".to_string()),
-            remarks: None,
-            ordinal_position: Some(1),
-            is_auto_increment: Some("NO".to_string()),
-            is_generated: Some("NO".to_string()),
-        }];
-
-        let batch = columns_to_record_batch(&columns).unwrap();
-        assert_eq!(batch.num_rows(), 1);
-        assert_eq!(batch.schema(), *schemas::COLUMNS_SCHEMA);
-    }
-
-    #[test]
-    fn test_empty_batch_returns() {
-        let batch = empty_batch(&STATISTICS_SCHEMA);
-        assert_eq!(batch.num_rows(), 0);
-        assert_eq!(batch.schema(), *STATISTICS_SCHEMA);
-
-        let batch = empty_batch(&SPECIAL_COLUMNS_SCHEMA);
-        assert_eq!(batch.num_rows(), 0);
-
-        let batch = empty_batch(&PROCEDURES_SCHEMA);
-        assert_eq!(batch.num_rows(), 0);
-
-        let batch = empty_batch(&PROCEDURE_COLUMNS_SCHEMA);
-        assert_eq!(batch.num_rows(), 0);
-
-        let batch = empty_batch(&TABLE_PRIVILEGES_SCHEMA);
-        assert_eq!(batch.num_rows(), 0);
-
-        let batch = empty_batch(&COLUMN_PRIVILEGES_SCHEMA);
-        assert_eq!(batch.num_rows(), 0);
-    }
-
 }

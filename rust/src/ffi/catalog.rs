@@ -16,18 +16,17 @@
 //!
 //! Each function follows this pattern:
 //! 1. Validate handle (null check)
-//! 2. Recover `MetadataService` from handle
+//! 2. Recover `ConnectionMetadataService` from handle
 //! 3. Convert C strings to Rust &str
-//! 4. Call `MetadataService` method
+//! 4. Call service method
 //! 5. Export result via Arrow C Data Interface (`FFI_ArrowArrayStream`)
 //! 6. Return status code; on error, set thread-local error buffer
 
 use crate::ffi::error::{set_error_from_result, set_last_error, FfiStatus};
 use crate::ffi::handle::{handle_to_service, FfiConnectionHandle};
-use crate::metadata::service::MetadataService;
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
-use std::ffi::{c_char, c_int, CStr};
+use std::ffi::{c_char, CStr};
 
 /// Convert a nullable C string pointer to an `Option<&str>`.
 ///
@@ -113,6 +112,53 @@ macro_rules! get_service {
 }
 
 // ─── Exported FFI Functions ───────────────────────────────────────────────────
+
+/// List catalogs.
+///
+/// # Safety
+///
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
+/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
+#[no_mangle]
+pub unsafe extern "C" fn metadata_get_catalogs(
+    conn: FfiConnectionHandle,
+    out: *mut FFI_ArrowArrayStream,
+) -> FfiStatus {
+    let svc = get_service!(conn);
+
+    match svc.get_catalogs() {
+        Ok(batch) => export_batch(batch, out),
+        Err(e) => set_error_from_result(&e),
+    }
+}
+
+/// List schemas.
+///
+/// # Safety
+///
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
+/// - String arguments may be null (treated as no filter)
+/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
+#[no_mangle]
+pub unsafe extern "C" fn metadata_get_schemas(
+    conn: FfiConnectionHandle,
+    catalog: *const c_char,
+    schema_pattern: *const c_char,
+    out: *mut FFI_ArrowArrayStream,
+) -> FfiStatus {
+    let svc = get_service!(conn);
+    let Ok(catalog) = c_str_to_option(catalog) else {
+        return FfiStatus::Error;
+    };
+    let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
+        return FfiStatus::Error;
+    };
+
+    match svc.get_schemas(catalog, schema_pattern) {
+        Ok(batch) => export_batch(batch, out),
+        Err(e) => set_error_from_result(&e),
+    }
+}
 
 /// List tables matching the given filter criteria.
 ///
@@ -253,277 +299,6 @@ pub unsafe extern "C" fn metadata_get_foreign_keys(
     };
 
     match svc.get_foreign_keys(catalog, schema, table) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// List table types.
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_table_types(
-    conn: FfiConnectionHandle,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-
-    match svc.get_table_types() {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// List schemas.
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - String arguments may be null (treated as no filter)
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_schemas(
-    conn: FfiConnectionHandle,
-    catalog: *const c_char,
-    schema_pattern: *const c_char,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_option(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return FfiStatus::Error;
-    };
-
-    match svc.get_schemas(catalog, schema_pattern) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// List catalogs.
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_catalogs(
-    conn: FfiConnectionHandle,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-
-    match svc.get_catalogs() {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// Get table/index statistics (returns empty result).
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - `catalog`, `schema`, `table` must be valid non-null C strings
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_statistics(
-    conn: FfiConnectionHandle,
-    catalog: *const c_char,
-    schema: *const c_char,
-    table: *const c_char,
-    unique: c_int,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_str(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema) = c_str_to_str(schema) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table) = c_str_to_str(table) else {
-        return FfiStatus::Error;
-    };
-
-    match svc.get_statistics(catalog, schema, table, unique != 0) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// Get special columns (returns empty result).
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - `catalog`, `schema`, `table` must be valid non-null C strings
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_special_columns(
-    conn: FfiConnectionHandle,
-    identifier_type: i16,
-    catalog: *const c_char,
-    schema: *const c_char,
-    table: *const c_char,
-    scope: i16,
-    nullable: i16,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_str(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema) = c_str_to_str(schema) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table) = c_str_to_str(table) else {
-        return FfiStatus::Error;
-    };
-
-    match svc.get_special_columns(identifier_type, catalog, schema, table, scope, nullable) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// List procedures (returns empty result).
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - String arguments may be null (treated as no filter)
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_procedures(
-    conn: FfiConnectionHandle,
-    catalog: *const c_char,
-    schema_pattern: *const c_char,
-    proc_pattern: *const c_char,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_option(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return FfiStatus::Error;
-    };
-    let Ok(proc_pattern) = c_str_to_option(proc_pattern) else {
-        return FfiStatus::Error;
-    };
-
-    match svc.get_procedures(catalog, schema_pattern, proc_pattern) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// List procedure columns (returns empty result).
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - String arguments may be null (treated as no filter)
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_procedure_columns(
-    conn: FfiConnectionHandle,
-    catalog: *const c_char,
-    schema_pattern: *const c_char,
-    proc_pattern: *const c_char,
-    column_pattern: *const c_char,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_option(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return FfiStatus::Error;
-    };
-    let Ok(proc_pattern) = c_str_to_option(proc_pattern) else {
-        return FfiStatus::Error;
-    };
-    let Ok(column_pattern) = c_str_to_option(column_pattern) else {
-        return FfiStatus::Error;
-    };
-
-    match svc.get_procedure_columns(catalog, schema_pattern, proc_pattern, column_pattern) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// List table privileges (returns empty result).
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - String arguments may be null (treated as no filter)
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_table_privileges(
-    conn: FfiConnectionHandle,
-    catalog: *const c_char,
-    schema_pattern: *const c_char,
-    table_pattern: *const c_char,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_option(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table_pattern) = c_str_to_option(table_pattern) else {
-        return FfiStatus::Error;
-    };
-
-    match svc.get_table_privileges(catalog, schema_pattern, table_pattern) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
-}
-
-/// List column privileges (returns empty result).
-///
-/// # Safety
-///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
-/// - String arguments (except `table`) may be null (treated as no filter)
-/// - `table` must be a valid non-null C string
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_column_privileges(
-    conn: FfiConnectionHandle,
-    catalog: *const c_char,
-    schema: *const c_char,
-    table: *const c_char,
-    column_pattern: *const c_char,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_option(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema) = c_str_to_option(schema) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table) = c_str_to_str(table) else {
-        return FfiStatus::Error;
-    };
-    let Ok(column_pattern) = c_str_to_option(column_pattern) else {
-        return FfiStatus::Error;
-    };
-
-    match svc.get_column_privileges(catalog, schema, table, column_pattern) {
         Ok(batch) => export_batch(batch, out),
         Err(e) => set_error_from_result(&e),
     }
