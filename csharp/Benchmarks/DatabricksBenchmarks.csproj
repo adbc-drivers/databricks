@@ -21,7 +21,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\hiveserver2\csharp\arrow-adbc\csharp\src\Drivers\Apache\Apache.Arrow.Adbc.Drivers.Apache.csproj" />
     <ProjectReference Include="..\src\AdbcDrivers.Databricks.csproj" />
   </ItemGroup>
 

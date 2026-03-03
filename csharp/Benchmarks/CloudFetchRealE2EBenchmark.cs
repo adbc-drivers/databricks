@@ -30,7 +30,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Ipc;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
