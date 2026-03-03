@@ -25,7 +25,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 {
     /// <summary>
     /// Tests for CircuitBreakerManager singleton.
+    /// Uses the "CircuitBreakerTests" collection to avoid parallel execution
+    /// with other tests that call <see cref="CircuitBreakerManager.Reset"/>.
     /// </summary>
+    [Collection("CircuitBreakerTests")]
     public class CircuitBreakerManagerTests : IDisposable
     {
         private readonly CircuitBreakerManager _manager;
