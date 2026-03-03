@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Opaque handle management for the ODBC FFI layer.
+//! Opaque handle management for the metadata FFI layer.
 //!
-//! The ODBC wrapper creates connections via the standard ADBC FFI flow and then
-//! calls `odbc_connection_from_adbc()` to get a metadata handle. All `odbc_*`
-//! metadata functions accept this handle.
+//! Callers create connections via the standard ADBC FFI flow and then
+//! call `metadata_connection_from_ref()` to get a metadata handle. All
+//! `metadata_*` catalog functions accept this handle.
 //!
 //! Internally, the handle wraps a `ConnectionMetadataService` which holds
 //! the client, session ID, and runtime handle needed to execute metadata queries.
@@ -26,21 +26,21 @@ use crate::metadata::service::ConnectionMetadataService;
 use std::ffi::c_void;
 
 /// Opaque handle representing a Databricks connection for metadata FFI.
-pub type OdbcConnectionHandle = *mut c_void;
+pub type FfiConnectionHandle = *mut c_void;
 
 /// Create a metadata handle directly from a Connection reference.
 ///
-/// This is the primary way the ODBC wrapper creates handles. It takes a
-/// reference to the Rust Connection object and wraps it in a metadata service.
+/// This is the primary way callers create handles. It takes a reference
+/// to the Rust Connection object and wraps it in a metadata service.
 ///
 /// # Safety
 ///
 /// `conn` must be a valid pointer to a `crate::Connection`. The Connection
-/// must outlive this handle. Free the handle with `odbc_connection_free()`.
+/// must outlive this handle. Free the handle with `metadata_connection_free()`.
 #[no_mangle]
-pub unsafe extern "C" fn odbc_connection_from_ref(
+pub unsafe extern "C" fn metadata_connection_from_ref(
     conn: *const c_void,
-) -> OdbcConnectionHandle {
+) -> FfiConnectionHandle {
     if conn.is_null() {
         set_last_error("Null connection pointer", "HY009", -1);
         return std::ptr::null_mut();
@@ -53,17 +53,17 @@ pub unsafe extern "C" fn odbc_connection_from_ref(
         connection.runtime_handle().clone(),
     );
 
-    Box::into_raw(Box::new(service)) as OdbcConnectionHandle
+    Box::into_raw(Box::new(service)) as FfiConnectionHandle
 }
 
-/// Free a metadata handle created by `odbc_connection_from_ref()`.
+/// Free a metadata handle created by `metadata_connection_from_ref()`.
 ///
 /// # Safety
 ///
-/// `handle` must be a valid handle returned by `odbc_connection_from_ref()`,
+/// `handle` must be a valid handle returned by `metadata_connection_from_ref()`,
 /// or null (which is a no-op).
 #[no_mangle]
-pub unsafe extern "C" fn odbc_connection_free(handle: OdbcConnectionHandle) {
+pub unsafe extern "C" fn metadata_connection_free(handle: FfiConnectionHandle) {
     if !handle.is_null() {
         drop(Box::from_raw(
             handle as *mut ConnectionMetadataService,
@@ -77,11 +77,11 @@ pub unsafe extern "C" fn odbc_connection_free(handle: OdbcConnectionHandle) {
 ///
 /// # Safety
 ///
-/// The handle must be a valid pointer returned by `odbc_connection_from_ref()`
-/// and must not have been freed via `odbc_connection_free()`. The returned
+/// The handle must be a valid pointer returned by `metadata_connection_from_ref()`
+/// and must not have been freed via `metadata_connection_free()`. The returned
 /// reference is only valid as long as the handle is alive.
 pub(crate) unsafe fn handle_to_service<'a>(
-    handle: OdbcConnectionHandle,
+    handle: FfiConnectionHandle,
 ) -> Option<&'a ConnectionMetadataService> {
     if handle.is_null() {
         None

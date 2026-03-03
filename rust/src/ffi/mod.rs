@@ -12,33 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! FFI layer for ODBC metadata operations.
+//! FFI layer for catalog metadata operations.
 //!
 //! This module provides `extern "C"` functions that expose the driver's
 //! metadata capabilities via the Arrow C Data Interface. It is conditionally
-//! compiled with the `odbc-ffi` feature flag.
+//! compiled with the `metadata-ffi` feature flag.
 //!
 //! ## Usage from C/C++
 //!
 //! ```c
 //! // 1. Create connection via ADBC FFI (AdbcDriverInit, etc.)
 //! // 2. Get metadata handle
-//! OdbcConnectionHandle handle = odbc_connection_from_ref(adbc_conn_ptr);
+//! FfiConnectionHandle handle = metadata_connection_from_ref(adbc_conn_ptr);
 //!
 //! // 3. Call metadata functions
 //! FFI_ArrowArrayStream stream;
-//! OdbcFfiStatus status = odbc_get_tables(handle, "main", NULL, "%", NULL, &stream);
+//! FfiStatus status = metadata_get_tables(handle, "main", NULL, "%", NULL, &stream);
 //!
 //! // 4. Process Arrow stream...
 //!
 //! // 5. Free handle when done
-//! odbc_connection_free(handle);
+//! metadata_connection_free(handle);
 //! ```
 
+pub mod catalog;
 pub mod error;
 pub mod handle;
-pub mod odbc;
 
 // Re-export key types for convenience
-pub use error::{OdbcFfiError, OdbcFfiStatus};
-pub use handle::OdbcConnectionHandle;
+pub use error::{FfiError, FfiStatus};
+pub use handle::FfiConnectionHandle;

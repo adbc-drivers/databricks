@@ -120,13 +120,13 @@ impl Connection {
     }
 
     /// Returns a reference to the Databricks client.
-    #[cfg(feature = "odbc-ffi")]
+    #[cfg(feature = "metadata-ffi")]
     pub(crate) fn client(&self) -> &Arc<dyn DatabricksClient> {
         &self.client
     }
 
     /// Returns the tokio runtime handle.
-    #[cfg(feature = "odbc-ffi")]
+    #[cfg(feature = "metadata-ffi")]
     pub(crate) fn runtime_handle(&self) -> &tokio::runtime::Handle {
         self.runtime.handle()
     }

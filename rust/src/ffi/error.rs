@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! C-compatible error types and thread-local error propagation for the ODBC FFI layer.
+//! C-compatible error types and thread-local error propagation for the metadata FFI layer.
 //!
-//! The ODBC pattern: call a function, check the return status, then retrieve
-//! error details via `odbc_get_last_error()` if the status indicates failure.
+//! Call a function, check the return status, then retrieve error details
+//! via `metadata_get_last_error()` if the status indicates failure.
 
 use std::cell::RefCell;
 use std::ffi::c_char;
@@ -23,7 +23,7 @@ use std::ffi::c_char;
 /// FFI status codes matching ODBC conventions.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OdbcFfiStatus {
+pub enum FfiStatus {
     Success = 0,
     SuccessWithInfo = 1,
     Error = -1,
@@ -35,13 +35,13 @@ pub enum OdbcFfiStatus {
 ///
 /// Callers retrieve this via `odbc_get_last_error()` after a failed operation.
 #[repr(C)]
-pub struct OdbcFfiError {
+pub struct FfiError {
     pub message: [c_char; 1024],
     pub sql_state: [c_char; 6],
     pub native_error: i32,
 }
 
-impl Default for OdbcFfiError {
+impl Default for FfiError {
     fn default() -> Self {
         Self {
             message: [0; 1024],
@@ -53,7 +53,7 @@ impl Default for OdbcFfiError {
 
 // Thread-local storage for the last error.
 thread_local! {
-    static LAST_ERROR: RefCell<OdbcFfiError> = RefCell::new(OdbcFfiError::default());
+    static LAST_ERROR: RefCell<FfiError> = RefCell::new(FfiError::default());
 }
 
 /// Set the thread-local error details.
@@ -82,26 +82,26 @@ pub(crate) fn set_last_error(message: &str, sql_state: &str, native_error: i32) 
 }
 
 /// Set error from a Rust Error type and return the appropriate status code.
-pub(crate) fn set_error_from_result(err: &crate::error::Error) -> OdbcFfiStatus {
+pub(crate) fn set_error_from_result(err: &crate::error::Error) -> FfiStatus {
     set_last_error(&format!("{}", err), "HY000", -1);
-    OdbcFfiStatus::Error
+    FfiStatus::Error
 }
 
 /// Retrieve the last error into the provided buffer.
 ///
 /// # Safety
 ///
-/// `error_out` must point to a valid, writable `OdbcFfiError` struct.
+/// `error_out` must point to a valid, writable `FfiError` struct.
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_last_error(error_out: *mut OdbcFfiError) -> OdbcFfiStatus {
+pub unsafe extern "C" fn metadata_get_last_error(error_out: *mut FfiError) -> FfiStatus {
     if error_out.is_null() {
-        return OdbcFfiStatus::InvalidHandle;
+        return FfiStatus::InvalidHandle;
     }
 
     LAST_ERROR.with(|cell| {
         let err = cell.borrow();
-        std::ptr::copy_nonoverlapping(&*err as *const OdbcFfiError, error_out, 1);
+        std::ptr::copy_nonoverlapping(&*err as *const FfiError, error_out, 1);
     });
 
-    OdbcFfiStatus::Success
+    FfiStatus::Success
 }

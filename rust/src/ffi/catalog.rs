@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `extern "C"` functions for the ODBC metadata FFI layer.
+//! `extern "C"` catalog metadata functions.
 //!
 //! Each function follows this pattern:
 //! 1. Validate handle (null check)
@@ -22,8 +22,8 @@
 //! 5. Export result via Arrow C Data Interface (`FFI_ArrowArrayStream`)
 //! 6. Return status code; on error, set thread-local error buffer
 
-use crate::ffi::error::{set_error_from_result, set_last_error, OdbcFfiStatus};
-use crate::ffi::handle::{handle_to_service, OdbcConnectionHandle};
+use crate::ffi::error::{set_error_from_result, set_last_error, FfiStatus};
+use crate::ffi::handle::{handle_to_service, FfiConnectionHandle};
 use crate::metadata::service::MetadataService;
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
@@ -80,10 +80,10 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> std::result::Result<&'a str, (
 /// Export a RecordBatch as an FFI_ArrowArrayStream.
 ///
 /// The caller is responsible for releasing the stream.
-fn export_batch(batch: RecordBatch, out: *mut FFI_ArrowArrayStream) -> OdbcFfiStatus {
+fn export_batch(batch: RecordBatch, out: *mut FFI_ArrowArrayStream) -> FfiStatus {
     if out.is_null() {
         set_last_error("Output stream pointer is null", "HY009", -1);
-        return OdbcFfiStatus::InvalidHandle;
+        return FfiStatus::InvalidHandle;
     }
 
     let schema = batch.schema();
@@ -96,7 +96,7 @@ fn export_batch(batch: RecordBatch, out: *mut FFI_ArrowArrayStream) -> OdbcFfiSt
     unsafe {
         std::ptr::write(out, stream);
     }
-    OdbcFfiStatus::Success
+    FfiStatus::Success
 }
 
 /// Validate handle and recover service, or return error status.
@@ -106,7 +106,7 @@ macro_rules! get_service {
             Some(svc) => svc,
             None => {
                 set_last_error("Invalid connection handle", "08003", -1);
-                return OdbcFfiStatus::InvalidHandle;
+                return FfiStatus::InvalidHandle;
             }
         }
     };
@@ -121,31 +121,31 @@ macro_rules! get_service {
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - String arguments may be null (treated as no filter)
 /// - `table_types` is a comma-separated list if non-null
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_tables(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_tables(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     table_pattern: *const c_char,
     table_types: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_option(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table_pattern) = c_str_to_option(table_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table_types_str) = c_str_to_option(table_types) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     // Parse comma-separated table types
@@ -162,30 +162,30 @@ pub unsafe extern "C" fn odbc_get_tables(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - String arguments may be null (treated as no filter)
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_columns(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_columns(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     table_pattern: *const c_char,
     column_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_option(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table_pattern) = c_str_to_option(table_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(column_pattern) = c_str_to_option(column_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_columns(catalog, schema_pattern, table_pattern, column_pattern) {
@@ -198,26 +198,26 @@ pub unsafe extern "C" fn odbc_get_columns(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - `catalog`, `schema`, `table` must be valid non-null C strings
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_primary_keys(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_primary_keys(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema: *const c_char,
     table: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_str(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema) = c_str_to_str(schema) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table) = c_str_to_str(table) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_primary_keys(catalog, schema, table) {
@@ -230,26 +230,26 @@ pub unsafe extern "C" fn odbc_get_primary_keys(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - `catalog`, `schema`, `table` must be valid non-null C strings
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_foreign_keys(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_foreign_keys(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema: *const c_char,
     table: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_str(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema) = c_str_to_str(schema) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table) = c_str_to_str(table) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_foreign_keys(catalog, schema, table) {
@@ -262,13 +262,13 @@ pub unsafe extern "C" fn odbc_get_foreign_keys(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_table_types(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_table_types(
+    conn: FfiConnectionHandle,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
 
     match svc.get_table_types() {
@@ -281,22 +281,22 @@ pub unsafe extern "C" fn odbc_get_table_types(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - String arguments may be null (treated as no filter)
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_schemas(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_schemas(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_option(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_schemas(catalog, schema_pattern) {
@@ -309,13 +309,13 @@ pub unsafe extern "C" fn odbc_get_schemas(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_catalogs(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_catalogs(
+    conn: FfiConnectionHandle,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
 
     match svc.get_catalogs() {
@@ -328,27 +328,27 @@ pub unsafe extern "C" fn odbc_get_catalogs(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - `catalog`, `schema`, `table` must be valid non-null C strings
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_statistics(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_statistics(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema: *const c_char,
     table: *const c_char,
     unique: c_int,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_str(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema) = c_str_to_str(schema) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table) = c_str_to_str(table) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_statistics(catalog, schema, table, unique != 0) {
@@ -361,12 +361,12 @@ pub unsafe extern "C" fn odbc_get_statistics(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - `catalog`, `schema`, `table` must be valid non-null C strings
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_special_columns(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_special_columns(
+    conn: FfiConnectionHandle,
     identifier_type: i16,
     catalog: *const c_char,
     schema: *const c_char,
@@ -374,16 +374,16 @@ pub unsafe extern "C" fn odbc_get_special_columns(
     scope: i16,
     nullable: i16,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_str(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema) = c_str_to_str(schema) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table) = c_str_to_str(table) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_special_columns(identifier_type, catalog, schema, table, scope, nullable) {
@@ -396,26 +396,26 @@ pub unsafe extern "C" fn odbc_get_special_columns(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - String arguments may be null (treated as no filter)
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_procedures(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_procedures(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     proc_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_option(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(proc_pattern) = c_str_to_option(proc_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_procedures(catalog, schema_pattern, proc_pattern) {
@@ -428,30 +428,30 @@ pub unsafe extern "C" fn odbc_get_procedures(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - String arguments may be null (treated as no filter)
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_procedure_columns(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_procedure_columns(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     proc_pattern: *const c_char,
     column_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_option(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(proc_pattern) = c_str_to_option(proc_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(column_pattern) = c_str_to_option(column_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_procedure_columns(catalog, schema_pattern, proc_pattern, column_pattern) {
@@ -464,26 +464,26 @@ pub unsafe extern "C" fn odbc_get_procedure_columns(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - String arguments may be null (treated as no filter)
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_table_privileges(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_table_privileges(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     table_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_option(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table_pattern) = c_str_to_option(table_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_table_privileges(catalog, schema_pattern, table_pattern) {
@@ -496,31 +496,31 @@ pub unsafe extern "C" fn odbc_get_table_privileges(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `odbc_connection_from_ref()`
+/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
 /// - String arguments (except `table`) may be null (treated as no filter)
 /// - `table` must be a valid non-null C string
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
-pub unsafe extern "C" fn odbc_get_column_privileges(
-    conn: OdbcConnectionHandle,
+pub unsafe extern "C" fn metadata_get_column_privileges(
+    conn: FfiConnectionHandle,
     catalog: *const c_char,
     schema: *const c_char,
     table: *const c_char,
     column_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
-) -> OdbcFfiStatus {
+) -> FfiStatus {
     let svc = get_service!(conn);
     let Ok(catalog) = c_str_to_option(catalog) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(schema) = c_str_to_option(schema) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(table) = c_str_to_str(table) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
     let Ok(column_pattern) = c_str_to_option(column_pattern) else {
-        return OdbcFfiStatus::Error;
+        return FfiStatus::Error;
     };
 
     match svc.get_column_privileges(catalog, schema, table, column_pattern) {
