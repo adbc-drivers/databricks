@@ -32,6 +32,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Telemetry;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -97,6 +98,19 @@ namespace AdbcDrivers.Databricks
 
         // Request timeout configuration
         private int _operationStatusRequestTimeoutSeconds = DatabricksConstants.DefaultOperationStatusRequestTimeoutSeconds;
+
+        // Telemetry fields
+        private TelemetryConfiguration? _telemetryConfig;
+        private ITelemetryClient? _telemetryClient;
+        private MetricsAggregator? _metricsAggregator;
+        private string? _telemetryHost;
+
+        /// <summary>
+        /// For testing only: allows injecting a custom exporter factory.
+        /// When set, this factory is used instead of the default DatabricksTelemetryExporter
+        /// wrapped in CircuitBreakerTelemetryExporter.
+        /// </summary>
+        internal Func<ITelemetryExporter>? TestExporterFactory { get; set; }
 
         // Default namespace
         private TNamespace? _defaultNamespace;
@@ -564,6 +578,9 @@ namespace AdbcDrivers.Databricks
                 ]);
                 await SetSchema(_defaultNamespace.SchemaName);
             }
+
+            // Initialize telemetry pipeline after session is established
+            InitializeTelemetry(activity);
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
@@ -866,8 +883,168 @@ namespace AdbcDrivers.Databricks
             return CatalogName;
         }
 
+        /// <summary>
+        /// Initializes the telemetry pipeline after the session is established.
+        /// Parses TelemetryConfiguration from Properties, checks the enabled flag,
+        /// then creates the telemetry client, metrics aggregator, and registers
+        /// with the activity listener.
+        /// </summary>
+        /// <remarks>
+        /// All exceptions are swallowed to ensure telemetry initialization never
+        /// impacts connection lifecycle. This follows the telemetry design principle
+        /// that telemetry operations should never affect driver operations.
+        /// </remarks>
+        /// <param name="activity">Optional activity for tracing telemetry initialization.</param>
+        private void InitializeTelemetry(Activity? activity = null)
+        {
+            try
+            {
+                // Parse telemetry configuration from connection properties
+                _telemetryConfig = TelemetryConfiguration.FromProperties(Properties);
+
+                if (!_telemetryConfig.Enabled)
+                {
+                    activity?.AddEvent("telemetry.skipped", [
+                        new("reason", "telemetry_disabled")
+                    ]);
+                    return;
+                }
+
+                // Get the host for per-host telemetry client sharing
+                _telemetryHost = GetHost();
+
+                // Get or create shared telemetry client for this host
+                _telemetryClient = TelemetryClientManager.GetInstance()
+                    .GetOrCreateClient(
+                        _telemetryHost,
+                        () => CreateTelemetryExporter(),
+                        _telemetryConfig);
+
+                // Extract session ID from the session handle for aggregator routing
+                string? sessionId = null;
+                if (SessionHandle?.SessionId?.Guid != null && SessionHandle.SessionId.Guid.Length == 16)
+                {
+                    sessionId = new Guid(SessionHandle.SessionId.Guid).ToString("N");
+                }
+
+                // Create per-connection metrics aggregator
+                _metricsAggregator = new MetricsAggregator(
+                    _telemetryClient,
+                    _telemetryConfig,
+                    sessionId);
+
+                // Register aggregator with the global activity listener
+                if (!string.IsNullOrEmpty(sessionId))
+                {
+                    DatabricksActivityListener.Instance.RegisterAggregator(sessionId, _metricsAggregator);
+                    DatabricksActivityListener.Instance.Start();
+                }
+
+                activity?.AddEvent("telemetry.initialized", [
+                    new("host", _telemetryHost),
+                    new("session_id", sessionId ?? "(none)")
+                ]);
+            }
+            catch (Exception ex)
+            {
+                // Swallow all telemetry exceptions per design requirement
+                Debug.WriteLine($"[TRACE] Telemetry initialization error: {ex.Message}");
+                activity?.AddEvent("telemetry.initialization_error", [
+                    new("error.type", ex.GetType().Name),
+                    new("error.message", ex.Message)
+                ]);
+
+                // Clean up any partially initialized state
+                _telemetryClient = null;
+                _metricsAggregator = null;
+            }
+        }
+
+        /// <summary>
+        /// Creates a telemetry exporter for the current connection.
+        /// If <see cref="TestExporterFactory"/> is set, uses that factory.
+        /// Otherwise creates a <see cref="DatabricksTelemetryExporter"/> wrapped
+        /// in a <see cref="CircuitBreakerTelemetryExporter"/>.
+        /// </summary>
+        /// <returns>The telemetry exporter to use.</returns>
+        private ITelemetryExporter CreateTelemetryExporter()
+        {
+            // Use test factory if provided (for test injection)
+            if (TestExporterFactory != null)
+            {
+                return TestExporterFactory();
+            }
+
+            // Create default exporter with circuit breaker protection
+            var host = $"https://{_telemetryHost}";
+            var httpClient = Http.HttpClientFactory.CreateBasicHttpClient(Properties, TimeSpan.FromSeconds(10));
+            var innerExporter = new DatabricksTelemetryExporter(
+                httpClient,
+                host,
+                isAuthenticated: true,
+                _telemetryConfig!);
+
+            return new CircuitBreakerTelemetryExporter(_telemetryHost!, innerExporter);
+        }
+
+        /// <summary>
+        /// Cleans up telemetry resources during connection disposal.
+        /// Unregisters the aggregator from the activity listener, flushes pending
+        /// metrics, and releases the shared telemetry client.
+        /// </summary>
+        /// <remarks>
+        /// All exceptions are swallowed to ensure telemetry cleanup never
+        /// impacts connection disposal. This follows the telemetry design principle
+        /// that telemetry operations should never affect driver operations.
+        /// </remarks>
+        private void CleanupTelemetry()
+        {
+            try
+            {
+                // Unregister aggregator from the activity listener and flush pending metrics
+                if (_metricsAggregator != null)
+                {
+                    string? sessionId = null;
+                    if (SessionHandle?.SessionId?.Guid != null && SessionHandle.SessionId.Guid.Length == 16)
+                    {
+                        sessionId = new Guid(SessionHandle.SessionId.Guid).ToString("N");
+                    }
+
+                    if (!string.IsNullOrEmpty(sessionId))
+                    {
+                        // UnregisterAggregatorAsync flushes the aggregator before removing it
+                        DatabricksActivityListener.Instance.UnregisterAggregatorAsync(sessionId).GetAwaiter().GetResult();
+                    }
+                    else
+                    {
+                        // Flush directly if we can't unregister
+                        _metricsAggregator.FlushAsync().GetAwaiter().GetResult();
+                    }
+
+                    _metricsAggregator.Dispose();
+                    _metricsAggregator = null;
+                }
+
+                // Release shared telemetry client (decrements ref count, closes if last)
+                if (_telemetryClient != null && !string.IsNullOrEmpty(_telemetryHost))
+                {
+                    TelemetryClientManager.GetInstance().ReleaseClientAsync(_telemetryHost).GetAwaiter().GetResult();
+                    _telemetryClient = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Swallow all telemetry exceptions per design requirement
+                Debug.WriteLine($"[TRACE] Telemetry cleanup error: {ex.Message}");
+            }
+        }
+
         protected override void Dispose(bool disposing)
         {
+            if (disposing)
+            {
+                CleanupTelemetry();
+            }
             base.Dispose(disposing);
         }
     }
