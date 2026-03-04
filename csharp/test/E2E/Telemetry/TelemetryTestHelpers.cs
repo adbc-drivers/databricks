@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry;
 using Apache.Arrow.Adbc;
 
@@ -35,7 +36,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         /// <param name="parameters">The driver connection parameters.</param>
         /// <param name="exporterFactory">Factory function that creates the test exporter.</param>
         /// <returns>An open <see cref="AdbcConnection"/> with telemetry routed through the injected exporter.</returns>
-        public static AdbcConnection CreateConnectionWithTelemetry(
+        public static async Task<AdbcConnection> CreateConnectionWithTelemetryAsync(
             Dictionary<string, string> parameters,
             Func<ITelemetryExporter> exporterFactory)
         {
@@ -48,8 +49,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             try
             {
-                connection.OpenAsync().Wait();
-                connection.ApplyServerSidePropertiesAsync().Wait();
+                await connection.OpenAsync().ConfigureAwait(false);
+                await connection.ApplyServerSidePropertiesAsync().ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -69,11 +70,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         /// A tuple of (connection, capturingExporter) where the connection is open and all
         /// telemetry events are captured by the exporter.
         /// </returns>
-        public static (AdbcConnection Connection, CapturingTelemetryExporter Exporter) CreateConnectionWithCapturingTelemetry(
+        public static async Task<(AdbcConnection Connection, CapturingTelemetryExporter Exporter)> CreateConnectionWithCapturingTelemetryAsync(
             Dictionary<string, string> parameters)
         {
             CapturingTelemetryExporter exporter = new CapturingTelemetryExporter();
-            AdbcConnection connection = CreateConnectionWithTelemetry(parameters, () => exporter);
+            AdbcConnection connection = await CreateConnectionWithTelemetryAsync(parameters, () => exporter).ConfigureAwait(false);
             return (connection, exporter);
         }
 

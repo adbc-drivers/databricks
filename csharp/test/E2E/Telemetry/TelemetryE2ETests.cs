@@ -71,7 +71,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             // Act - Use a fresh TelemetryClientManager to ensure our exporter is used
             using (TelemetryTestHelpers.UseFreshTelemetryClientManager())
             {
-                using (AdbcConnection connection = TelemetryTestHelpers.CreateConnectionWithTelemetry(
+                using (AdbcConnection connection = await TelemetryTestHelpers.CreateConnectionWithTelemetryAsync(
                     parameters,
                     () => exporter))
                 {
@@ -110,7 +110,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             // Act
             using (TelemetryTestHelpers.UseFreshTelemetryClientManager())
             {
-                using (AdbcConnection connection = TelemetryTestHelpers.CreateConnectionWithTelemetry(
+                using (AdbcConnection connection = await TelemetryTestHelpers.CreateConnectionWithTelemetryAsync(
                     parameters,
                     () => exporter))
                 {
@@ -158,7 +158,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             // Act
             using (TelemetryTestHelpers.UseFreshTelemetryClientManager())
             {
-                using (AdbcConnection connection = TelemetryTestHelpers.CreateConnectionWithTelemetry(
+                using (AdbcConnection connection = await TelemetryTestHelpers.CreateConnectionWithTelemetryAsync(
                     parameters,
                     () => exporter))
                 {
@@ -226,7 +226,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             // When telemetry.enabled=false, InitializeTelemetry should skip pipeline setup
             using (TelemetryTestHelpers.UseFreshTelemetryClientManager())
             {
-                using (AdbcConnection connection = TelemetryTestHelpers.CreateConnectionWithTelemetry(
+                using (AdbcConnection connection = await TelemetryTestHelpers.CreateConnectionWithTelemetryAsync(
                     parameters,
                     () => exporter))
                 {
@@ -264,21 +264,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             // Act - Create 3 connections to the same host within the same manager scope
             using (TelemetryTestHelpers.UseFreshTelemetryClientManager())
             {
-                using (AdbcConnection connection1 = TelemetryTestHelpers.CreateConnectionWithTelemetry(
+                using (AdbcConnection connection1 = await TelemetryTestHelpers.CreateConnectionWithTelemetryAsync(
                     parameters,
                     () =>
                     {
                         exporterFactoryCallCount++;
                         return sharedExporter;
                     }))
-                using (AdbcConnection connection2 = TelemetryTestHelpers.CreateConnectionWithTelemetry(
+                using (AdbcConnection connection2 = await TelemetryTestHelpers.CreateConnectionWithTelemetryAsync(
                     parameters,
                     () =>
                     {
                         exporterFactoryCallCount++;
                         return sharedExporter;
                     }))
-                using (AdbcConnection connection3 = TelemetryTestHelpers.CreateConnectionWithTelemetry(
+                using (AdbcConnection connection3 = await TelemetryTestHelpers.CreateConnectionWithTelemetryAsync(
                     parameters,
                     () =>
                     {
@@ -333,7 +333,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             // Act - Execute multiple queries to generate pending events, then close
             using (TelemetryTestHelpers.UseFreshTelemetryClientManager())
             {
-                using (AdbcConnection connection = TelemetryTestHelpers.CreateConnectionWithTelemetry(
+                using (AdbcConnection connection = await TelemetryTestHelpers.CreateConnectionWithTelemetryAsync(
                     parameters,
                     () => exporter))
                 {

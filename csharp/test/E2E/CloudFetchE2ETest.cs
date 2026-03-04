@@ -157,6 +157,7 @@ namespace AdbcDrivers.Databricks.Tests
                 [DatabricksParameters.CanDecompressLz4] = "true",
                 [DatabricksParameters.MaxBytesPerFile] = "10485760", // 10MB
                 [DatabricksParameters.CloudFetchUrlExpirationBufferSeconds] = (15 * 60 - 2).ToString(),
+                ["telemetry.enabled"] = "true",
             };
 
             // For REST API, configure result disposition based on CloudFetch setting
