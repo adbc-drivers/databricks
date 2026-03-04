@@ -216,29 +216,40 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
-#### WI-2.2: TelemetryClientManager
+#### WI-2.2: TelemetryClientManager ✅ COMPLETED
 **Description**: Singleton that manages one telemetry client per host with reference counting.
 
-**Location**: `csharp/src/Telemetry/TelemetryClientManager.cs`
+**Location**: `csharp/src/Telemetry/TelemetryClientManager.cs`, `csharp/src/Telemetry/TelemetryClientHolder.cs`
 
 **Input**:
 - Host string
-- HttpClient
+- `Func<ITelemetryExporter>` exporter factory (changed from HttpClient to align with TelemetryClient constructor)
 - TelemetryConfiguration
 
 **Output**:
 - Shared ITelemetryClient instance per host
 - Reference counting for cleanup
 
+**Implementation Notes**:
+- Signature changed from `GetOrCreateClient(host, HttpClient, config)` to `GetOrCreateClient(host, Func<ITelemetryExporter> exporterFactory, config)` since `TelemetryClient` takes `ITelemetryExporter`, not `HttpClient`. The factory pattern defers exporter creation to first-access.
+- Uses `ConcurrentDictionary.AddOrUpdate` with `Interlocked.Increment` for thread-safe ref counting.
+- `UseTestInstance()` returns `IDisposable` that restores original singleton on dispose. `CreateForTesting()` creates isolated instances.
+- Case-insensitive host matching via `StringComparer.OrdinalIgnoreCase` (consistent with `CircuitBreakerManager`).
+- `Reset()` calls `CloseAsync()` on all clients during cleanup.
+
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `TelemetryClientManager_GetOrCreateClient_NewHost_CreatesClient` | "host1.databricks.com" | New client with RefCount=1 |
-| Unit | `TelemetryClientManager_GetOrCreateClient_ExistingHost_ReturnsSameClient` | Same host twice | Same client instance, RefCount=2 |
-| Unit | `TelemetryClientManager_ReleaseClientAsync_LastReference_ClosesClient` | Single reference, then release | Client.CloseAsync() called, removed from cache |
-| Unit | `TelemetryClientManager_ReleaseClientAsync_MultipleReferences_KeepsClient` | Two references, release one | RefCount=1, client still active |
-| Unit | `TelemetryClientManager_GetOrCreateClient_ThreadSafe_NoDuplicates` | Concurrent calls from 10 threads | Single client instance created |
+| Unit | `GetOrCreateClient_NewHost_CreatesClient` | "host1.databricks.com" | New client with RefCount=1 |
+| Unit | `GetOrCreateClient_ExistingHost_ReturnsSameClient` | Same host twice | Same client instance, RefCount=2 |
+| Unit | `ReleaseClientAsync_LastReference_ClosesClient` | Single reference, then release | Client.CloseAsync() called, removed from cache |
+| Unit | `ReleaseClientAsync_MultipleReferences_KeepsClient` | Two references, release one | RefCount=1, client still active |
+| Unit | `GetOrCreateClient_ThreadSafe_NoDuplicates` | Concurrent calls from 10 threads | Single client instance created |
+| Unit | `ReleaseClientAsync_UnknownHost_NoError` | Unknown host | No exception |
+| Unit | `GetInstance_ReturnsSingleton` | Multiple calls | Same instance |
+| Unit | `Reset_ClearsAllClients` | Add clients then reset | All removed and closed |
+| Unit | Additional: 18 more tests | Input validation, case-insensitive, concurrent get/release, test support | All pass (26 total) |
 
 ---
 
