@@ -444,6 +444,59 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ### Phase 5: Core Telemetry Components
 
+#### WI-5.0: StatementTelemetryContext
+**Description**: Core data model that holds all aggregated telemetry data for a single statement execution. Merges data from MULTIPLE activities (root + children) into a single complete proto message (OssSqlDriverTelemetryLog).
+
+**Status**: ✅ **COMPLETED**
+
+**Location**: `csharp/src/Telemetry/StatementTelemetryContext.cs`
+
+**Input**:
+- Activity instances from different stages of statement execution (ExecuteQuery, DownloadFiles, PollOperationStatus)
+
+**Output**:
+- Aggregated `OssSqlDriverTelemetryLog` proto message via `BuildTelemetryLog()`
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| Unit | `MergeFrom_ExecuteQuery_CapturesLatencyAndStatementType` | Root activity with Duration | TotalLatencyMs set from Duration |
+| Unit | `MergeFrom_ExecuteQuery_CapturesSessionAndStatementId` | Activity with session.id, statement.id | Both captured |
+| Unit | `MergeFrom_DownloadFiles_CapturesChunkDetailsFromTags` | Activity with cloudfetch.total_chunks tag | TotalChunksPresent set |
+| Unit | `MergeFrom_DownloadFiles_CapturesChunkDetailsFromEvents` | Activity with cloudfetch.download_summary event | Chunk metrics extracted |
+| Unit | `MergeFrom_PollOperationStatus_CapturesPollMetrics` | Activity with poll.count and poll.latency_ms | PollCount and PollLatencyMs set |
+| Unit | `MergeFrom_ErrorActivity_CapturesErrorInfo` | Activity with Error status | HasError=true, ErrorName/ErrorMessage set |
+| Unit | `MergeFrom_MultipleActivities_AggregatesCorrectly` | Root + child activities | All fields populated |
+| Unit | `BuildTelemetryLog_CreatesCompleteProto` | Fully populated context | OssSqlDriverTelemetryLog with all fields |
+| Unit | `BuildTelemetryLog_WithError_IncludesDriverErrorInfo` | Error context | Proto has error_info |
+| Unit | `BuildTelemetryLog_WithChunkDetails_IncludesCloudFetchMetrics` | Chunk details | Proto has chunk_details in sql_operation |
+| Unit | `ParseExecutionResult_MapsCorrectly` | 'cloudfetch'→ExternalLinks, 'inline_arrow'→InlineArrow | Correct enum values |
+| Unit | `TruncateMessage_LongMessage_Truncated` | 300 char message | 200 chars |
+
+**Implementation Notes**:
+- `internal sealed class` with nullable fields for all telemetry dimensions
+- `MergeFrom(Activity)` routes by `activity.OperationName` using `Contains()` checks for ExecuteQuery, ExecuteUpdate, DownloadFiles, CloudFetch, PollOperationStatus, GetOperationStatus
+- Always captures SessionId and StatementId from any activity via `CaptureIdentifiers()`
+- Handles `cloudfetch.download_summary` ActivityEvent for chunk details (matching existing `CloudFetchDownloader` event format)
+- Tags from activity take precedence over event data (event only fills null values)
+- Error info extracted from `ActivityStatusCode.Error` with fallback to `StatusDescription`
+- `BuildTelemetryLog()` creates complete proto with conditional sub-message creation (only creates ChunkDetails, ResultLatency, OperationDetail when data present)
+- Static parser methods for all proto enums: ParseExecutionResult, ParseDriverMode, ParseAuthMech, ParseAuthFlow, ParseStatementType, ParseOperationType
+- `TruncateMessage()` utility with 200 char max for error messages
+- All tag values support both native types (int, long, bool) and string parsing
+- Comprehensive test coverage with 86 tests including Theory-based enum parsing tests
+- Test file location: `csharp/test/Unit/Telemetry/StatementTelemetryContextTests.cs`
+
+**Key Design Decisions**:
+1. **OperationName routing**: Uses `Contains()` to match operation names flexibly (e.g., "Statement.ExecuteQuery" and "ExecuteQuery" both match)
+2. **Tags > Events priority**: Activity tags take precedence over ActivityEvent data for chunk details, avoiding accidental overwrites
+3. **Nullable fields**: All aggregated fields are nullable to distinguish "not set" from "zero"
+4. **Proto field mapping**: Error message is mapped to `DriverErrorInfo.StackTrace` field (proto's `error_message` field 3 is pending LPP review)
+5. **String parsing fallback**: All numeric tag reads support both native types and string values for robustness
+
+---
+
 #### WI-5.1: TelemetryMetric Data Model
 **Description**: Data model for aggregated telemetry metrics.
 
@@ -492,59 +545,98 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
-#### WI-5.3: MetricsAggregator
-**Description**: Aggregates Activity data by statement_id, handles exception buffering.
+#### WI-5.3: MetricsAggregator ✅
+**Description**: Per-connection aggregator that collects Activity data by statement_id, builds proto messages, and enqueues them to the shared ITelemetryClient. Uses ConcurrentDictionary keyed by statement_id with StatementTelemetryContext values. Root activity detection triggers proto emission.
+
+**Status**: Implemented
 
 **Location**: `csharp/src/Telemetry/MetricsAggregator.cs`
 
 **Input**:
 - Activity instances from ActivityListener
-- ITelemetryExporter for flushing
+- ITelemetryClient for enqueuing completed TelemetryFrontendLog messages
+- TelemetryConfiguration for settings
 
 **Output**:
-- Aggregated TelemetryMetric per statement
-- Batched flush on threshold or interval
+- TelemetryFrontendLog per completed statement (emitted on root activity completion or FlushAsync)
+- Each log populated with: WorkspaceId, FrontendLogEventId (Guid), Context (client context + timestamp), Entry (OssSqlDriverTelemetryLog proto)
+
+**Implementation Decisions**:
+- Constructor takes `(ITelemetryClient, TelemetryConfiguration)` - delegates batching/export to TelemetryClient instead of direct exporter usage
+- `SetSessionContext(sessionId, workspaceId, systemConfig, connectionParams)` includes workspaceId since TelemetryFrontendLog requires it
+- Root activity detection: `parent == null || parent.Source.Name != "Databricks.Adbc.Driver"`
+- Activity completion: `status == Ok || status == Error`
+- Activities without `statement.id` tag are silently ignored
+- All exceptions swallowed with `Debug.WriteLine` at TRACE level
+- `FlushAsync()` emits all pending contexts (called on connection close)
 
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `MetricsAggregator_ProcessActivity_ConnectionOpen_EmitsImmediately` | Connection.Open activity | Metric queued for export |
-| Unit | `MetricsAggregator_ProcessActivity_Statement_AggregatesByStatementId` | Multiple activities with same statement_id | Single aggregated metric |
-| Unit | `MetricsAggregator_CompleteStatement_EmitsAggregatedMetric` | Call CompleteStatement() | Queues aggregated metric |
-| Unit | `MetricsAggregator_FlushAsync_BatchSizeReached_ExportsMetrics` | 100 metrics (batch size) | Calls exporter |
-| Unit | `MetricsAggregator_FlushAsync_TimeInterval_ExportsMetrics` | Wait 5 seconds | Calls exporter |
-| Unit | `MetricsAggregator_RecordException_Terminal_FlushesImmediately` | Terminal exception | Immediately exports error metric |
-| Unit | `MetricsAggregator_RecordException_Retryable_BuffersUntilComplete` | Retryable exception | Buffers, exports on CompleteStatement |
-| Unit | `MetricsAggregator_ProcessActivity_ExceptionSwallowed_NoThrow` | Activity processing throws | No exception propagated |
-| Unit | `MetricsAggregator_ProcessActivity_FiltersTags_UsingRegistry` | Activity with sensitive tags | Only safe tags in metric |
+| Unit | `ProcessActivity_WithStatementId_CreatesContext` | Activity with statement.id | Context created in dictionary |
+| Unit | `ProcessActivity_WithoutStatementId_Ignored` | Activity without statement.id | No context created |
+| Unit | `ProcessActivity_SameStatementId_MergesIntoSameContext` | Multiple activities same ID | Single merged context |
+| Unit | `ProcessActivity_RootActivityComplete_EmitsProtoAndRemovesContext` | Root activity completes | Enqueue called, context removed |
+| Unit | `ProcessActivity_ChildActivity_DoesNotEmit` | Child activity completes | No Enqueue call |
+| Unit | `ProcessActivity_RootWithError_EmitsWithErrorInfo` | Root with Error status | Proto includes error_info |
+| Unit | `FlushAsync_EmitsPendingContexts` | Pending contexts | All emitted via Enqueue |
+| Unit | `FlushAsync_ClearsDictionary` | After flush | Dictionary empty |
+| Unit | `ProcessActivity_ExceptionSwallowed` | Aggregator error | No exception propagated |
+| Unit | `SetSessionContext_PropagatedToNewContexts` | Session config set | New contexts inherit data |
+| Unit | `ProcessActivity_MultipleStatements_SeparateContexts` | Different statement.ids | Separate contexts |
+| Unit | `ProcessActivity_FullStatementLifecycle_CorrectProto` | Full lifecycle (poll+download+root) | Complete proto with all data |
 
 ---
 
 #### WI-5.4: DatabricksActivityListener
-**Description**: Listens to Activity events and delegates to MetricsAggregator.
+**Description**: Global singleton ActivityListener that subscribes to the "Databricks.Adbc.Driver" ActivitySource and routes activities to per-connection MetricsAggregator instances based on session.id tag.
+
+**Status**: ✅ **COMPLETED**
 
 **Location**: `csharp/src/Telemetry/DatabricksActivityListener.cs`
 
 **Input**:
-- Host string
-- ITelemetryClient
-- TelemetryConfiguration
+- Activities from the "Databricks.Adbc.Driver" ActivitySource
+- Per-connection MetricsAggregator instances registered by session ID
 
 **Output**:
-- Metrics collected from driver activities
+- Activities routed to correct per-connection aggregator
 - All exceptions swallowed
 
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `DatabricksActivityListener_Start_ListensToDatabricksActivitySource` | N/A | ShouldListenTo returns true for "Databricks.Adbc.Driver" |
-| Unit | `DatabricksActivityListener_ActivityStopped_ProcessesActivity` | Activity stops | MetricsAggregator.ProcessActivity called |
-| Unit | `DatabricksActivityListener_ActivityStopped_ExceptionSwallowed` | Aggregator throws | No exception propagated |
-| Unit | `DatabricksActivityListener_Sample_FeatureFlagDisabled_ReturnsNone` | Config.Enabled=false | ActivitySamplingResult.None |
-| Unit | `DatabricksActivityListener_Sample_FeatureFlagEnabled_ReturnsAllData` | Config.Enabled=true | ActivitySamplingResult.AllDataAndRecorded |
-| Unit | `DatabricksActivityListener_StopAsync_FlushesAndDisposes` | N/A | Aggregator.FlushAsync called, resources disposed |
+| Unit | `Start_ListensToDatabricksActivitySource` | Driver ActivitySource | ShouldListenTo returns true for "Databricks.Adbc.Driver" |
+| Unit | `Start_IgnoresOtherActivitySources` | Other ActivitySource | ShouldListenTo returns false |
+| Unit | `RegisterAggregator_AddsToRegistry` | sessionId + aggregator | RegisteredAggregatorCount increases |
+| Unit | `UnregisterAggregatorAsync_RemovesAndFlushes` | Registered sessionId | Removed from registry, FlushAsync called |
+| Unit | `ActivityStopped_RoutesToCorrectAggregator` | Activity with session.id | Correct aggregator's ProcessActivity called |
+| Unit | `ActivityStopped_NoSessionId_Ignored` | Activity without session.id | No aggregator called |
+| Unit | `ActivityStopped_UnknownSessionId_Ignored` | Activity with unregistered session.id | No error |
+| Unit | `ActivityStopped_ExceptionSwallowed` | Aggregator throws | No exception propagated |
+| Unit | `Sample_ReturnsAllDataAndRecorded` | Sample callback | ActivitySamplingResult.AllDataAndRecorded |
+| Unit | `Dispose_DisposesListener` | Dispose | ActivityListener disposed, aggregators cleared |
+
+**Implementation Notes**:
+- **Global singleton with Lazy<T>**: Uses `Lazy<DatabricksActivityListener>` for thread-safe singleton initialization via `Instance` property
+- **ConcurrentDictionary<string, MetricsAggregator>**: Routes activities by `session.id` tag to per-connection aggregators
+- **RegisterAggregator/UnregisterAggregatorAsync**: Connections register on open, unregister on close (with flush)
+- **Start()**: Creates and registers ActivityListener with ShouldListenTo, ActivityStopped, and Sample callbacks
+- **OnActivityStopped**: Extracts `session.id` tag, looks up aggregator, calls `ProcessActivity`. Activities without session.id or with unknown session.id are silently ignored.
+- **Sample callback**: Always returns `AllDataAndRecorded` to capture all activity data
+- **Exception swallowing**: All callbacks wrapped in try-catch with `Debug.WriteLine` at TRACE level
+- **CreateForTesting()**: Factory method for test isolation (creates independent instance separate from singleton)
+- Comprehensive test coverage with 29 unit tests in `DatabricksActivityListenerTests.cs`
+- Test file location: `csharp/test/Unit/Telemetry/DatabricksActivityListenerTests.cs`
+
+**Key Design Decisions**:
+1. **Global singleton pattern**: Unlike the original design which described per-connection listeners, this is a global singleton that routes to per-connection aggregators. This avoids multiple ActivityListeners competing for the same ActivitySource.
+2. **Session.id routing**: Activities are routed based on `session.id` tag rather than creating separate listeners per connection. This is more efficient and avoids ActivityListener lifecycle management complexity.
+3. **No feature-flag-based sampling**: The Sample callback always returns AllDataAndRecorded. Feature flag control is handled at the connection level (whether to register an aggregator) rather than at the listener level.
+4. **Lazy initialization**: The singleton is created lazily on first access, not eagerly at application start.
+5. **Test isolation**: `CreateForTesting()` factory method allows tests to create independent instances without affecting the global singleton.
 
 ---
 
