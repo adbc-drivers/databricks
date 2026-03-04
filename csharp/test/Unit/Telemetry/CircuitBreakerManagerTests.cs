@@ -192,7 +192,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Arrange
             int threadCount = 10;
             ConcurrentBag<CircuitBreaker> breakers = new ConcurrentBag<CircuitBreaker>();
-            ManualResetEventSlim barrier = new ManualResetEventSlim(false);
+            using ManualResetEventSlim barrier = new ManualResetEventSlim(false);
             Task[] tasks = new Task[threadCount];
 
             // Act - 10 threads all requesting the same host concurrently
@@ -263,7 +263,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             int totalThreads = hostsPerGroup * threadsPerHost;
             ConcurrentDictionary<string, ConcurrentBag<CircuitBreaker>> hostBreakers =
                 new ConcurrentDictionary<string, ConcurrentBag<CircuitBreaker>>();
-            ManualResetEventSlim barrier = new ManualResetEventSlim(false);
+            using ManualResetEventSlim barrier = new ManualResetEventSlim(false);
             Task[] tasks = new Task[totalThreads];
 
             // Initialize bags

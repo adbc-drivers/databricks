@@ -80,18 +80,19 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <param name="ct">Cancellation token.</param>
         /// <returns>
         /// True if the export succeeded, false if the export failed or was dropped due to
-        /// an open circuit. Returns true for empty/null logs (delegates to inner exporter).
+        /// an open circuit. Returns true for empty/null logs since there is nothing to export.
         /// </returns>
         /// <remarks>
-        /// This method never throws exceptions. When the circuit is open, events are dropped
-        /// gracefully and logged at DEBUG level. When the inner exporter fails, the circuit
-        /// breaker tracks the failure before the exception is swallowed.
+        /// This method never throws exceptions (except <see cref="OperationCanceledException"/>).
+        /// When the circuit is open, events are dropped gracefully. When the inner exporter
+        /// fails, the circuit breaker tracks the failure before the exception is swallowed.
         /// </remarks>
         public async Task<bool> ExportAsync(IReadOnlyList<TelemetryFrontendLog> logs, CancellationToken ct = default)
         {
             if (logs == null || logs.Count == 0)
             {
-                return await _innerExporter.ExportAsync(logs, ct).ConfigureAwait(false);
+                // Nothing to export - return true without touching the circuit breaker
+                return true;
             }
 
             try
@@ -120,7 +121,13 @@ namespace AdbcDrivers.Databricks.Telemetry
             catch (BrokenCircuitException)
             {
                 // Circuit is open - drop events gracefully
-                Debug.WriteLine($"[DEBUG] Circuit breaker OPEN for host '{_host}' - dropping {logs.Count} telemetry event(s).");
+                Activity.Current?.AddEvent(new ActivityEvent(
+                    "CircuitBreakerOpen",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", _host },
+                        { "dropped_count", logs.Count }
+                    }));
                 return false;
             }
             catch (OperationCanceledException)
@@ -131,7 +138,13 @@ namespace AdbcDrivers.Databricks.Telemetry
             catch (Exception ex)
             {
                 // All other exceptions swallowed AFTER the circuit breaker has seen them
-                Debug.WriteLine($"[TRACE] Telemetry export error for host '{_host}': {ex.Message}");
+                Activity.Current?.AddEvent(new ActivityEvent(
+                    "TelemetryExportError",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", _host },
+                        { "error", ex.Message }
+                    }));
                 return false;
             }
         }

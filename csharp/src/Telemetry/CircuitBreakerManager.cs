@@ -59,16 +59,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <exception cref="ArgumentException">Thrown when <paramref name="host"/> is empty or whitespace.</exception>
         public CircuitBreaker GetCircuitBreaker(string host)
         {
-            if (host == null)
-            {
-                throw new ArgumentNullException(nameof(host));
-            }
-
-            if (string.IsNullOrWhiteSpace(host))
-            {
-                throw new ArgumentException("Host cannot be empty or whitespace.", nameof(host));
-            }
-
+            ValidateHost(host);
             return _circuitBreakers.GetOrAdd(host, _ => new CircuitBreaker());
         }
 
@@ -85,16 +76,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <exception cref="ArgumentException">Thrown when <paramref name="host"/> is empty or whitespace.</exception>
         public CircuitBreaker GetCircuitBreaker(string host, int failureThreshold, TimeSpan timeout)
         {
-            if (host == null)
-            {
-                throw new ArgumentNullException(nameof(host));
-            }
-
-            if (string.IsNullOrWhiteSpace(host))
-            {
-                throw new ArgumentException("Host cannot be empty or whitespace.", nameof(host));
-            }
-
+            ValidateHost(host);
             return _circuitBreakers.GetOrAdd(host, _ => new CircuitBreaker(failureThreshold, timeout));
         }
 
@@ -121,6 +103,19 @@ namespace AdbcDrivers.Databricks.Telemetry
         internal void Reset()
         {
             _circuitBreakers.Clear();
+        }
+
+        private static void ValidateHost(string host)
+        {
+            if (host == null)
+            {
+                throw new ArgumentNullException(nameof(host));
+            }
+
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                throw new ArgumentException("Host cannot be empty or whitespace.", nameof(host));
+            }
         }
     }
 }

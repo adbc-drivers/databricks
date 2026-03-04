@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry;
@@ -308,7 +309,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         #region Null/Empty Logs Tests
 
         [Fact]
-        public async Task NullLogs_DelegatesToInnerExporter_ReturnsTrue()
+        public async Task NullLogs_ReturnsTrueWithoutCallingInnerExporter()
         {
             // Arrange
             MockTelemetryExporter innerExporter = new MockTelemetryExporter { ReturnValue = true };
@@ -318,13 +319,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Act
             bool result = await exporter.ExportAsync(null!, CancellationToken.None);
 
-            // Assert
-            Assert.True(result, "ExportAsync should return true for null logs (delegates to inner)");
-            Assert.Equal(1, innerExporter.ExportCallCount);
+            // Assert - returns true immediately, no delegation to inner exporter
+            Assert.True(result, "ExportAsync should return true for null logs");
+            Assert.Equal(0, innerExporter.ExportCallCount);
         }
 
         [Fact]
-        public async Task EmptyLogs_DelegatesToInnerExporter_ReturnsTrue()
+        public async Task EmptyLogs_ReturnsTrueWithoutCallingInnerExporter()
         {
             // Arrange
             MockTelemetryExporter innerExporter = new MockTelemetryExporter { ReturnValue = true };
@@ -335,9 +336,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Act
             bool result = await exporter.ExportAsync(emptyLogs);
 
-            // Assert
-            Assert.True(result, "ExportAsync should return true for empty logs (delegates to inner)");
-            Assert.Equal(1, innerExporter.ExportCallCount);
+            // Assert - returns true immediately, no delegation to inner exporter
+            Assert.True(result, "ExportAsync should return true for empty logs");
+            Assert.Equal(0, innerExporter.ExportCallCount);
         }
 
         [Fact]
@@ -360,17 +361,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             CircuitBreaker circuitBreaker = CircuitBreakerManager.GetInstance().GetCircuitBreaker(host);
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 
-            // Now set inner exporter to succeed for null/empty
-            innerExporter.ThrowException = null;
-            innerExporter.ReturnValue = true;
             innerExporter.ExportCallCount = 0;
 
-            // Act - null logs should bypass the circuit breaker
+            // Act - null logs should return true even when circuit is open
             bool result = await exporter.ExportAsync(null!, CancellationToken.None);
 
             // Assert
-            Assert.True(result, "Null logs should bypass circuit breaker and delegate to inner exporter");
-            Assert.Equal(1, innerExporter.ExportCallCount);
+            Assert.True(result, "Null logs should return true regardless of circuit state");
+            Assert.Equal(0, innerExporter.ExportCallCount);
         }
 
         #endregion
@@ -493,8 +491,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             CircuitBreaker circuitBreaker = CircuitBreakerManager.GetInstance().GetCircuitBreaker(host);
             Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 
-            // Wait for timeout to transition to HalfOpen
-            await Task.Delay(600);
+            // Poll for the circuit to transition out of Open state
+            Stopwatch sw = Stopwatch.StartNew();
+            while (circuitBreaker.State == CircuitBreakerState.Open && sw.ElapsedMilliseconds < 5000)
+            {
+                await Task.Delay(100);
+            }
 
             // Act - Should succeed now
             bool result = await exporter.ExportAsync(CreateTestLogs(1));
