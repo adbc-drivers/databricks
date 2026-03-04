@@ -394,6 +394,12 @@ namespace AdbcDrivers.Databricks
         public const int DefaultOperationStatusRequestTimeoutSeconds = 30;
 
         /// <summary>
+        /// Default batch size for Databricks statements (2M rows).
+        /// Databricks CloudFetch supports much larger batch sizes than standard Arrow batches.
+        /// </summary>
+        public const long DefaultBatchSize = 2000000;
+
+        /// <summary>
         /// Default async execution poll interval in milliseconds.
         /// </summary>
         public const int DefaultAsyncExecPollIntervalMs = 100;

@@ -22,8 +22,10 @@
 */
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -77,6 +79,9 @@ namespace AdbcDrivers.Databricks.Reader
 
         private async Task PollOperationStatus(CancellationToken cancellationToken)
         {
+            int pollCount = 0;
+            Stopwatch pollStopwatch = Stopwatch.StartNew();
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 TOperationHandle? operationHandle = _response.OperationHandle;
@@ -86,6 +91,7 @@ namespace AdbcDrivers.Databricks.Reader
 
                 var request = new TGetOperationStatusReq(operationHandle);
                 var response = await _statement.Client.GetOperationStatus(request, GetOperationStatusTimeoutToken);
+                pollCount++;
                 await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
 
                 // end the heartbeat if the command has terminated
@@ -98,6 +104,12 @@ namespace AdbcDrivers.Databricks.Reader
                     break;
                 }
             }
+
+            pollStopwatch.Stop();
+
+            // Emit heartbeat poll telemetry tags on the current activity
+            Activity.Current?.SetTag(StatementExecutionEvent.PollCount, pollCount);
+            Activity.Current?.SetTag(StatementExecutionEvent.PollLatencyMs, pollStopwatch.ElapsedMilliseconds);
         }
 
         public void Stop()

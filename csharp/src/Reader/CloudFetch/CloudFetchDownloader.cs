@@ -30,6 +30,8 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Microsoft.IO;
@@ -262,10 +264,26 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 await Task.Yield();
 
+                // Propagate statement.id and session.id from parent activity to CloudFetch activities
+                // so that the MetricsAggregator can associate these downloads with the correct statement
+                string? parentStatementId = Activity.Current?.Parent?.GetTagItem(StatementExecutionEvent.StatementId) as string;
+                string? parentSessionId = Activity.Current?.Parent?.GetTagItem(StatementExecutionEvent.SessionId) as string;
+                if (!string.IsNullOrEmpty(parentStatementId))
+                {
+                    activity?.SetTag(StatementExecutionEvent.StatementId, parentStatementId);
+                }
+                if (!string.IsNullOrEmpty(parentSessionId))
+                {
+                    activity?.SetTag(StatementExecutionEvent.SessionId, parentSessionId);
+                }
+
                 int totalFiles = 0;
                 int successfulDownloads = 0;
                 int failedDownloads = 0;
                 long totalBytes = 0;
+                long initialChunkLatencyMs = -1;
+                long slowestChunkLatencyMs = 0;
+                ConcurrentDictionary<long, long> chunkLatencies = new ConcurrentDictionary<long, long>();
                 var overallStopwatch = Stopwatch.StartNew();
 
                 try
@@ -357,10 +375,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             new("chunk_index", downloadResult.ChunkIndex)
                         ]);
 
-                        // Start the download task
+                        // Start the download task and track per-chunk latency
+                        Stopwatch chunkStopwatch = Stopwatch.StartNew();
+                        long chunkIndex = downloadResult.ChunkIndex;
                         Task downloadTask = DownloadFileAsync(downloadResult, cancellationToken)
                             .ContinueWith(t =>
                             {
+                                chunkStopwatch.Stop();
+                                long chunkLatency = chunkStopwatch.ElapsedMilliseconds;
+
                                 // Release the download slot
                                 _downloadSemaphore.Release();
 
@@ -392,6 +415,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 {
                                     successfulDownloads++;
                                     totalBytes += downloadResult.Size;
+
+                                    // Track per-chunk latency for telemetry
+                                    chunkLatencies[chunkIndex] = chunkLatency;
                                 }
                             }, cancellationToken);
 
@@ -427,14 +453,42 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 {
                     overallStopwatch.Stop();
 
-                    activity?.AddEvent("cloudfetch.download_summary", [
-                        new("total_files", totalFiles),
-                        new("successful_downloads", successfulDownloads),
+                    // Compute initial and slowest chunk latencies from tracked downloads
+                    if (chunkLatencies.Count > 0)
+                    {
+                        // Initial chunk is the one with the lowest chunk index (first file)
+                        long minChunkIndex = long.MaxValue;
+                        foreach (long idx in chunkLatencies.Keys)
+                        {
+                            if (idx < minChunkIndex)
+                            {
+                                minChunkIndex = idx;
+                            }
+                        }
+                        if (chunkLatencies.TryGetValue(minChunkIndex, out long firstChunkMs))
+                        {
+                            initialChunkLatencyMs = firstChunkMs;
+                        }
+
+                        foreach (long latency in chunkLatencies.Values)
+                        {
+                            if (latency > slowestChunkLatencyMs)
+                            {
+                                slowestChunkLatencyMs = latency;
+                            }
+                        }
+                    }
+
+                    activity?.AddEvent(CloudFetchEvent.DownloadSummaryEventName, [
+                        new(CloudFetchEvent.TotalFiles, totalFiles),
+                        new(CloudFetchEvent.SuccessfulDownloads, successfulDownloads),
                         new("failed_downloads", failedDownloads),
                         new("total_bytes", totalBytes),
                         new("total_mb", totalBytes / 1024.0 / 1024.0),
-                        new("total_time_ms", overallStopwatch.ElapsedMilliseconds),
-                        new("total_time_sec", overallStopwatch.ElapsedMilliseconds / 1000.0)
+                        new(CloudFetchEvent.TotalTimeMs, overallStopwatch.ElapsedMilliseconds),
+                        new("total_time_sec", overallStopwatch.ElapsedMilliseconds / 1000.0),
+                        new(CloudFetchEvent.InitialChunkLatencyMs, initialChunkLatencyMs),
+                        new(CloudFetchEvent.SlowestChunkLatencyMs, slowestChunkLatencyMs)
                     ]);
 
                     // If there's an error, add the error to the result queue

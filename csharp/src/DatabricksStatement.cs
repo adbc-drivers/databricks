@@ -28,6 +28,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Result;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -124,6 +125,22 @@ namespace AdbcDrivers.Databricks
         protected override void SetStatementProperties(TExecuteStatementReq statement)
         {
             Activity.Current?.AddEvent("statement.set_properties.start");
+
+            // Propagate session.id from connection to statement activities
+            DatabricksConnection? databricksConnection = Connection as DatabricksConnection;
+            if (databricksConnection != null && Connection.SessionHandle?.SessionId?.Guid != null && Connection.SessionHandle.SessionId.Guid.Length == 16)
+            {
+                string sessionId = new Guid(Connection.SessionHandle.SessionId.Guid).ToString("N");
+                Activity.Current?.SetTag(StatementExecutionEvent.SessionId, sessionId);
+            }
+
+            // Set statement.type tag - this is an ExecuteStatement call, so it's a "query" type
+            // Metadata commands are handled separately in ExecuteMetadataCommandQuery
+            Activity.Current?.SetTag(StatementExecutionEvent.StatementType, IsMetadataCommand ? "metadata" : "query");
+
+            // Set result format and compression tags
+            Activity.Current?.SetTag(StatementExecutionEvent.ResultFormat, useCloudFetch ? "cloudfetch" : "inline");
+            Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, canDecompressLz4);
 
             base.SetStatementProperties(statement);
 

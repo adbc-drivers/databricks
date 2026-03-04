@@ -28,6 +28,8 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
         /// </summary>
         public const string EventName = "Connection.Open";
 
+        #region Identifiers
+
         /// <summary>
         /// Databricks workspace ID.
         /// Exported to Databricks telemetry service.
@@ -49,6 +51,19 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
         public const string SessionId = "session.id";
 
         /// <summary>
+        /// Authentication type (e.g., "pat", "oauth-m2m").
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("auth.type",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Authentication type")]
+        public const string AuthType = "auth.type";
+
+        #endregion
+
+        #region Driver System Tags
+
+        /// <summary>
         /// ADBC driver version.
         /// Exported to all destinations.
         /// </summary>
@@ -56,6 +71,15 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
             ExportScope = TagExportScope.ExportAll,
             Description = "ADBC driver version")]
         public const string DriverVersion = "driver.version";
+
+        /// <summary>
+        /// ADBC driver name.
+        /// Exported to all destinations.
+        /// </summary>
+        [TelemetryTag("driver.name",
+            ExportScope = TagExportScope.ExportAll,
+            Description = "ADBC driver name")]
+        public const string DriverName = "driver.name";
 
         /// <summary>
         /// Operating system information.
@@ -76,6 +100,203 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
         public const string DriverRuntime = "driver.runtime";
 
         /// <summary>
+        /// Runtime name (e.g., ".NET" or "Mono").
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("runtime.name",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Runtime name")]
+        public const string RuntimeName = "runtime.name";
+
+        /// <summary>
+        /// Runtime version string.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("runtime.version",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Runtime version")]
+        public const string RuntimeVersion = "runtime.version";
+
+        /// <summary>
+        /// Runtime vendor.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("runtime.vendor",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Runtime vendor")]
+        public const string RuntimeVendor = "runtime.vendor";
+
+        /// <summary>
+        /// Operating system name.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("os.name",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "OS name")]
+        public const string OsName = "os.name";
+
+        /// <summary>
+        /// Operating system version.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("os.version",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "OS version")]
+        public const string OsVersion = "os.version";
+
+        /// <summary>
+        /// Operating system architecture.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("os.arch",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "OS architecture")]
+        public const string OsArch = "os.arch";
+
+        /// <summary>
+        /// Client application name.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("client.app_name",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Client application name")]
+        public const string ClientAppName = "client.app_name";
+
+        /// <summary>
+        /// System locale name.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("locale.name",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "System locale")]
+        public const string LocaleName = "locale.name";
+
+        /// <summary>
+        /// Character set encoding.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("char_set_encoding",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Character set encoding")]
+        public const string CharSetEncoding = "char_set_encoding";
+
+        /// <summary>
+        /// Process name.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("process.name",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Process name")]
+        public const string ProcessName = "process.name";
+
+        #endregion
+
+        #region Connection Parameter Tags
+
+        /// <summary>
+        /// Connection HTTP path.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.http_path",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Connection HTTP path")]
+        public const string ConnectionHttpPath = "connection.http_path";
+
+        /// <summary>
+        /// Connection host.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.host",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Connection host")]
+        public const string ConnectionHost = "connection.host";
+
+        /// <summary>
+        /// Connection port.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.port",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Connection port")]
+        public const string ConnectionPort = "connection.port";
+
+        /// <summary>
+        /// Connection mode (thrift or rest).
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.mode",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Connection mode (thrift/rest)")]
+        public const string ConnectionMode = "connection.mode";
+
+        /// <summary>
+        /// Authentication mechanism type.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.auth_mech",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Authentication mechanism")]
+        public const string ConnectionAuthMech = "connection.auth_mech";
+
+        /// <summary>
+        /// Authentication flow type.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.auth_flow",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Authentication flow")]
+        public const string ConnectionAuthFlow = "connection.auth_flow";
+
+        /// <summary>
+        /// Batch size for fetch operations.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.batch_size",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Batch size")]
+        public const string ConnectionBatchSize = "connection.batch_size";
+
+        /// <summary>
+        /// Poll interval in milliseconds.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.poll_interval_ms",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Poll interval in milliseconds")]
+        public const string ConnectionPollIntervalMs = "connection.poll_interval_ms";
+
+        /// <summary>
+        /// Whether proxy is used.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("connection.use_proxy",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Whether proxy is used")]
+        public const string ConnectionUseProxy = "connection.use_proxy";
+
+        #endregion
+
+        #region Feature Tags
+
+        /// <summary>
+        /// Whether Arrow format is enabled.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("feature.arrow",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Arrow format enabled")]
+        public const string FeatureArrow = "feature.arrow";
+
+        /// <summary>
+        /// Whether direct results are enabled.
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("feature.direct_results",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Direct results enabled")]
+        public const string FeatureDirectResults = "feature.direct_results";
+
+        /// <summary>
         /// Whether CloudFetch is enabled.
         /// Exported to Databricks telemetry service.
         /// </summary>
@@ -93,6 +314,10 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
             Description = "LZ4 compression enabled")]
         public const string FeatureLz4 = "feature.lz4";
 
+        #endregion
+
+        #region Local Diagnostics
+
         /// <summary>
         /// Workspace host address.
         /// Only exported to local diagnostics (contains potentially sensitive data).
@@ -101,6 +326,8 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
             ExportScope = TagExportScope.ExportLocal,
             Description = "Workspace host (local diagnostics only)")]
         public const string ServerAddress = "server.address";
+
+        #endregion
 
         /// <summary>
         /// Gets all tags that should be exported to Databricks telemetry service.
@@ -112,9 +339,32 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
             {
                 WorkspaceId,
                 SessionId,
+                AuthType,
                 DriverVersion,
+                DriverName,
                 DriverOS,
                 DriverRuntime,
+                RuntimeName,
+                RuntimeVersion,
+                RuntimeVendor,
+                OsName,
+                OsVersion,
+                OsArch,
+                ClientAppName,
+                LocaleName,
+                CharSetEncoding,
+                ProcessName,
+                ConnectionHttpPath,
+                ConnectionHost,
+                ConnectionPort,
+                ConnectionMode,
+                ConnectionAuthMech,
+                ConnectionAuthFlow,
+                ConnectionBatchSize,
+                ConnectionPollIntervalMs,
+                ConnectionUseProxy,
+                FeatureArrow,
+                FeatureDirectResults,
                 FeatureCloudFetch,
                 FeatureLz4
             };
