@@ -537,6 +537,24 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
+#### WI-5.5a: ITelemetryClient Interface
+**Description**: Interface defining the contract for batched telemetry event export. Extends `IAsyncDisposable` and provides three methods: `Enqueue(TelemetryFrontendLog log)` for non-blocking thread-safe event queuing, `FlushAsync()` for forcing immediate export of pending events, and `CloseAsync()` for graceful shutdown with a final flush.
+
+**Status**: ✅ **COMPLETED**
+
+**Location**: `csharp/src/Telemetry/ITelemetryClient.cs`
+
+**Test file**: `csharp/test/Unit/Telemetry/ITelemetryClientTests.cs`
+
+**Key Design Decisions**:
+1. **Public visibility**: Interface is `public` (not `internal`) to enable testability and allow external consumers to mock the telemetry client
+2. **IAsyncDisposable**: Extends `IAsyncDisposable` for proper async resource cleanup in consuming code
+3. **Void Enqueue**: `Enqueue` returns `void` (non-blocking, fire-and-forget) since callers should never be impacted by telemetry operations
+4. **CancellationToken on FlushAsync only**: `FlushAsync` accepts a `CancellationToken` for cancellation support; `CloseAsync` does not since it handles its own shutdown sequence with timeout
+5. **Exception swallowing contract**: Documentation mandates implementations never throw exceptions, following the telemetry design principle
+
+---
+
 #### WI-5.5: TelemetryClient
 **Description**: Main telemetry client that coordinates listener, aggregator, and exporter.
 
