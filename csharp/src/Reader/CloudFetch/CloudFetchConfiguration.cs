@@ -31,7 +31,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         // Default values
         internal const int DefaultParallelDownloads = 3;
         internal const int DefaultPrefetchCount = 2;
-        internal const int DefaultMemoryBufferSizeMB = 100;
+        internal const int DefaultMemoryBufferSizeMB = 200;
         internal const int DefaultTimeoutMinutes = 5;
         internal const int DefaultMaxRetries = 3;
         internal const int DefaultRetryDelayMs = 500;
