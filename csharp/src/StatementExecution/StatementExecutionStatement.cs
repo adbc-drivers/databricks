@@ -770,7 +770,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                var catalog = EffectiveCatalog;
+                activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("enable_multiple_catalog_support", _connection.EnableMultipleCatalogSupport);
 
@@ -780,27 +781,42 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return MetadataSchemaFactory.CreateEmptySchemasResult();
 
                 string sql = new ShowSchemasCommand(
-                    EffectiveCatalog,
+                    catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName)).Build();
                 activity?.SetTag("sql_query", sql);
                 var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+                // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog_name, databaseName
+                // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
+                bool showAllCatalogs = catalog == null;
 
                 var tableSchemaBuilder = new StringArray.Builder();
                 var tableCatalogBuilder = new StringArray.Builder();
                 int count = 0;
                 foreach (var batch in batches)
                 {
-                    var schemaArray = TryGetColumn<StringArray>(batch, "databaseName");
-                    var catalogArray = TryGetColumn<StringArray>(batch, "catalog_name");
+                    StringArray? catalogArray = null;
+                    StringArray? schemaArray = null;
+
+                    if (showAllCatalogs)
+                    {
+                        catalogArray = batch.Column(0) as StringArray;
+                        schemaArray = batch.Column(1) as StringArray;
+                    }
+                    else
+                    {
+                        schemaArray = batch.Column(0) as StringArray;
+                    }
+
                     if (schemaArray == null) continue;
                     for (int i = 0; i < batch.Length; i++)
                     {
                         if (schemaArray.IsNull(i)) continue;
                         tableSchemaBuilder.Append(schemaArray.GetString(i));
-                        string catalog = catalogArray != null && !catalogArray.IsNull(i)
+                        string catalogValue = catalogArray != null && !catalogArray.IsNull(i)
                             ? catalogArray.GetString(i)
-                            : EffectiveCatalog ?? "";
-                        tableCatalogBuilder.Append(catalog);
+                            : catalog ?? "";
+                        tableCatalogBuilder.Append(catalogValue);
                         count++;
                     }
                 }
@@ -818,7 +834,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                var catalog = EffectiveCatalog;
+                activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table_pattern", _metadataTableName ?? "(none)");
                 activity?.SetTag("enable_multiple_catalog_support", _connection.EnableMultipleCatalogSupport);
@@ -828,7 +845,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return MetadataSchemaFactory.CreateEmptyTablesResult();
 
                 string sql = new ShowTablesCommand(
-                    EffectiveCatalog,
+                    catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName),
                     EscapePatternWildcardsInName(_metadataTableName)).Build();
                 activity?.SetTag("sql_query", sql);
@@ -893,7 +910,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                var catalog = EffectiveCatalog;
+                activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table_pattern", _metadataTableName ?? "(none)");
                 activity?.SetTag("column_pattern", _metadataColumnName ?? "(none)");
@@ -905,7 +923,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         System.Array.Empty<(string, string, string, TableInfo)>());
 
                 string sql = new ShowColumnsCommand(
-                    EffectiveCatalog,
+                    catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName),
                     EscapePatternWildcardsInName(_metadataTableName),
                     EscapePatternWildcardsInName(_metadataColumnName)).Build();
@@ -961,12 +979,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                var catalog = EffectiveCatalog;
+                activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
 
                 string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
-                    EffectiveCatalog, _metadataSchemaName, _metadataTableName);
+                    catalog, _metadataSchemaName, _metadataTableName);
 
                 if (string.IsNullOrEmpty(fullTableName))
                     throw new ArgumentException("Catalog, schema, and table name are required for GetColumnsExtended");

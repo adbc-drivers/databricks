@@ -517,16 +517,28 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
             var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog_name, databaseName
+            // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
+            bool showAllCatalogs = catalogPattern == null;
+
             var result = new List<(string, string)>();
             foreach (var batch in batches)
             {
-                var schemaArray = TryGetColumn<StringArray>(batch, "databaseName");
+                StringArray? catalogArray = null;
+                StringArray? schemaArray = null;
+
+                if (showAllCatalogs)
+                {
+                    catalogArray = batch.Column(0) as StringArray;
+                    schemaArray = batch.Column(1) as StringArray;
+                }
+                else
+                {
+                    schemaArray = batch.Column(0) as StringArray;
+                }
+
                 if (schemaArray == null) continue;
-
-                // SHOW SCHEMAS IN ALL CATALOGS has catalog_name column;
-                // SHOW SCHEMAS IN `catalog` does not — use the catalogPattern as the catalog.
-                var catalogArray = TryGetColumn<StringArray>(batch, "catalog_name");
-
                 for (int i = 0; i < batch.Length; i++)
                 {
                     if (schemaArray.IsNull(i)) continue;
