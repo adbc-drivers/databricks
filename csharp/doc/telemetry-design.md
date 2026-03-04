@@ -615,8 +615,8 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// </summary>
     internal sealed class TelemetryClientManager
     {
-        private static readonly TelemetryClientManager Instance = new();
-        public static TelemetryClientManager GetInstance() => Instance;
+        private static TelemetryClientManager s_instance = new TelemetryClientManager();
+        public static TelemetryClientManager GetInstance() => s_instance;
 
         /// <summary>
         /// Gets or creates a telemetry client for the host.
@@ -624,7 +624,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         public ITelemetryClient GetOrCreateClient(
             string host,
-            HttpClient httpClient,
+            Func<ITelemetryExporter> exporterFactory,
             TelemetryConfiguration config);
 
         /// <summary>
@@ -632,6 +632,21 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Closes and removes client when ref count reaches zero.
         /// </summary>
         public Task ReleaseClientAsync(string host);
+
+        /// <summary>
+        /// Replaces singleton with test instance; returns IDisposable to restore.
+        /// </summary>
+        internal static IDisposable UseTestInstance(TelemetryClientManager testInstance);
+
+        /// <summary>
+        /// Resets the manager by closing and removing all clients.
+        /// </summary>
+        internal void Reset();
+
+        /// <summary>
+        /// Creates a new isolated instance for testing.
+        /// </summary>
+        internal static TelemetryClientManager CreateForTesting();
     }
 
     /// <summary>
@@ -640,10 +655,12 @@ namespace AdbcDrivers.Databricks.Telemetry
     internal sealed class TelemetryClientHolder
     {
         public ITelemetryClient Client { get; }
-        public int RefCount { get; set; }
+        internal int _refCount = 1;  // Managed via Interlocked
     }
 }
 ```
+
+> **Note**: The `GetOrCreateClient` signature uses `Func<ITelemetryExporter> exporterFactory` instead of `HttpClient` because `TelemetryClient` takes an `ITelemetryExporter`, not an `HttpClient`. The factory pattern defers exporter creation until a new client is actually needed.
 
 **JDBC Reference**: `TelemetryClientFactory.java:27` maintains `ConcurrentHashMap<String, TelemetryClientHolder>` with per-host clients and reference counting.
 
