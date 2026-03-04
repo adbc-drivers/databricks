@@ -726,15 +726,31 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ### Phase 6: Integration
 
-#### WI-6.1: DatabricksConnection Telemetry Integration
+#### WI-6.1: DatabricksConnection Telemetry Integration ✅ COMPLETED
 **Description**: Integrate telemetry components into connection lifecycle.
 
-**Location**: Modify `csharp/src/DatabricksConnection.cs`
+**Location**: Modified `csharp/src/DatabricksConnection.cs`
 
-**Changes**:
-- Initialize telemetry in `OpenAsync()` after feature flag check
-- Release telemetry resources in `Dispose()`
-- Add telemetry tags to existing activities
+**Changes Implemented**:
+- Added private fields: `ITelemetryClient? _telemetryClient`, `MetricsAggregator? _metricsAggregator`, `TelemetryConfiguration? _telemetryConfig`, `string? _telemetryHost`
+- Added `internal Func<ITelemetryExporter>? TestExporterFactory` property for test injection
+- `InitializeTelemetry(Activity?)` called at end of `HandleOpenSessionResponse`:
+  1. Parses `TelemetryConfiguration.FromProperties(Properties)` (includes feature flag via merged properties)
+  2. Checks `Enabled` flag; skips if disabled
+  3. Resolves host via `FeatureFlagCache.TryGetHost(Properties)`
+  4. Gets shared `ITelemetryClient` from `TelemetryClientManager.GetInstance().GetOrCreateClient(host, CreateTelemetryExporter, config)`
+  5. Creates per-connection `MetricsAggregator(telemetryClient, config)`
+  6. Calls `aggregator.SetSessionContext(sessionId, 0, null, null)` with session data
+  7. Registers aggregator with `DatabricksActivityListener.Instance.RegisterAggregator(sessionId, aggregator)`
+  8. Starts listener via `DatabricksActivityListener.Instance.Start()`
+- `CreateTelemetryExporter()`: Uses `TestExporterFactory` if set, else creates `CircuitBreakerTelemetryExporter(host, DatabricksTelemetryExporter(httpClient, host, true, config))`
+- `DisposeTelemetry()` called from `Dispose(bool)`:
+  1. Unregisters aggregator from listener via `UnregisterAggregatorAsync(sessionId)`
+  2. Flushes aggregator via `FlushAsync()`
+  3. Releases client from `TelemetryClientManager.GetInstance().ReleaseClientAsync(host)`
+- All telemetry code wrapped in try-catch with `Debug.WriteLine` at TRACE level
+- Telemetry initialization failure never prevents connection from opening
+- Note: FeatureFlagCache does not have `ReleaseContext` (uses cache-level TTL eviction, not reference counting)
 
 **Test Expectations**:
 

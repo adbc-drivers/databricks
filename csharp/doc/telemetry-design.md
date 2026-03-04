@@ -1887,8 +1887,8 @@ public sealed class DatabricksConnection : AdbcConnection
             // Step 2: Release telemetry client (decrements ref count, closes if last)
             await TelemetryClientManager.GetInstance().ReleaseClientAsync(_host);
 
-            // Step 3: Release feature flag context (decrements ref count)
-            FeatureFlagCache.GetInstance().ReleaseContext(_host);
+            // Note: FeatureFlagCache uses cache-level TTL eviction (IMemoryCache sliding expiration)
+            // rather than reference counting, so no ReleaseContext call is needed.
         }
         catch (Exception ex)
         {
@@ -1901,6 +1901,12 @@ public sealed class DatabricksConnection : AdbcConnection
     }
 }
 ```
+
+> **Implementation Note**: The actual implementation uses `Dispose(bool)` (synchronous) instead of
+> `DisposeAsyncCore` since the base class hierarchy (`HiveServer2Connection`) uses `IDisposable`, not
+> `IAsyncDisposable`. Async operations in dispose are handled via `.ConfigureAwait(false).GetAwaiter().GetResult()`.
+> Additionally, `FeatureFlagCache.ReleaseContext()` was not implemented as the cache uses IMemoryCache with
+> sliding expiration for automatic eviction rather than reference counting.
 
 ### 9.3 TelemetryClient Close Implementation
 
