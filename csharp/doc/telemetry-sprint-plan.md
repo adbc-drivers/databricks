@@ -545,32 +545,47 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ---
 
-#### WI-5.3: MetricsAggregator
-**Description**: Aggregates Activity data by statement_id, handles exception buffering.
+#### WI-5.3: MetricsAggregator ✅
+**Description**: Per-connection aggregator that collects Activity data by statement_id, builds proto messages, and enqueues them to the shared ITelemetryClient. Uses ConcurrentDictionary keyed by statement_id with StatementTelemetryContext values. Root activity detection triggers proto emission.
+
+**Status**: Implemented
 
 **Location**: `csharp/src/Telemetry/MetricsAggregator.cs`
 
 **Input**:
 - Activity instances from ActivityListener
-- ITelemetryExporter for flushing
+- ITelemetryClient for enqueuing completed TelemetryFrontendLog messages
+- TelemetryConfiguration for settings
 
 **Output**:
-- Aggregated TelemetryMetric per statement
-- Batched flush on threshold or interval
+- TelemetryFrontendLog per completed statement (emitted on root activity completion or FlushAsync)
+- Each log populated with: WorkspaceId, FrontendLogEventId (Guid), Context (client context + timestamp), Entry (OssSqlDriverTelemetryLog proto)
+
+**Implementation Decisions**:
+- Constructor takes `(ITelemetryClient, TelemetryConfiguration)` - delegates batching/export to TelemetryClient instead of direct exporter usage
+- `SetSessionContext(sessionId, workspaceId, systemConfig, connectionParams)` includes workspaceId since TelemetryFrontendLog requires it
+- Root activity detection: `parent == null || parent.Source.Name != "Databricks.Adbc.Driver"`
+- Activity completion: `status == Ok || status == Error`
+- Activities without `statement.id` tag are silently ignored
+- All exceptions swallowed with `Debug.WriteLine` at TRACE level
+- `FlushAsync()` emits all pending contexts (called on connection close)
 
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `MetricsAggregator_ProcessActivity_ConnectionOpen_EmitsImmediately` | Connection.Open activity | Metric queued for export |
-| Unit | `MetricsAggregator_ProcessActivity_Statement_AggregatesByStatementId` | Multiple activities with same statement_id | Single aggregated metric |
-| Unit | `MetricsAggregator_CompleteStatement_EmitsAggregatedMetric` | Call CompleteStatement() | Queues aggregated metric |
-| Unit | `MetricsAggregator_FlushAsync_BatchSizeReached_ExportsMetrics` | 100 metrics (batch size) | Calls exporter |
-| Unit | `MetricsAggregator_FlushAsync_TimeInterval_ExportsMetrics` | Wait 5 seconds | Calls exporter |
-| Unit | `MetricsAggregator_RecordException_Terminal_FlushesImmediately` | Terminal exception | Immediately exports error metric |
-| Unit | `MetricsAggregator_RecordException_Retryable_BuffersUntilComplete` | Retryable exception | Buffers, exports on CompleteStatement |
-| Unit | `MetricsAggregator_ProcessActivity_ExceptionSwallowed_NoThrow` | Activity processing throws | No exception propagated |
-| Unit | `MetricsAggregator_ProcessActivity_FiltersTags_UsingRegistry` | Activity with sensitive tags | Only safe tags in metric |
+| Unit | `ProcessActivity_WithStatementId_CreatesContext` | Activity with statement.id | Context created in dictionary |
+| Unit | `ProcessActivity_WithoutStatementId_Ignored` | Activity without statement.id | No context created |
+| Unit | `ProcessActivity_SameStatementId_MergesIntoSameContext` | Multiple activities same ID | Single merged context |
+| Unit | `ProcessActivity_RootActivityComplete_EmitsProtoAndRemovesContext` | Root activity completes | Enqueue called, context removed |
+| Unit | `ProcessActivity_ChildActivity_DoesNotEmit` | Child activity completes | No Enqueue call |
+| Unit | `ProcessActivity_RootWithError_EmitsWithErrorInfo` | Root with Error status | Proto includes error_info |
+| Unit | `FlushAsync_EmitsPendingContexts` | Pending contexts | All emitted via Enqueue |
+| Unit | `FlushAsync_ClearsDictionary` | After flush | Dictionary empty |
+| Unit | `ProcessActivity_ExceptionSwallowed` | Aggregator error | No exception propagated |
+| Unit | `SetSessionContext_PropagatedToNewContexts` | Session config set | New contexts inherit data |
+| Unit | `ProcessActivity_MultipleStatements_SeparateContexts` | Different statement.ids | Separate contexts |
+| Unit | `ProcessActivity_FullStatementLifecycle_CorrectProto` | Full lifecycle (poll+download+root) | Complete proto with all data |
 
 ---
 
