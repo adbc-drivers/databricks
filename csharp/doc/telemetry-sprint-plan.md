@@ -342,6 +342,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 #### WI-3.3: CircuitBreakerTelemetryExporter
 **Description**: Wrapper that protects telemetry exporter with circuit breaker.
 
+**Status**: ✅ **COMPLETED**
+
 **Location**: `csharp/src/Telemetry/CircuitBreakerTelemetryExporter.cs`
 
 **Input**:
@@ -359,6 +361,25 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Unit | `CircuitBreakerTelemetryExporter_CircuitClosed_ExportsMetrics` | Metrics list, circuit closed | Inner exporter called |
 | Unit | `CircuitBreakerTelemetryExporter_CircuitOpen_DropsMetrics` | Metrics list, circuit open | No export, no exception |
 | Unit | `CircuitBreakerTelemetryExporter_InnerExporterFails_CircuitBreakerTracksFailure` | Inner exporter throws | Circuit breaker failure count incremented |
+
+**Implementation Notes**:
+- Implements `ITelemetryExporter` interface with `ExportAsync` method
+- Constructor takes `(string host, ITelemetryExporter innerExporter)` with input validation
+- Gets `CircuitBreaker` from `CircuitBreakerManager.GetInstance().GetCircuitBreaker(host)` for per-host isolation
+- Uses `CircuitBreaker.ExecuteAsync<bool>` to wrap inner exporter calls so failures are tracked
+- When inner exporter returns `false` (swallowed failure), throws internal `TelemetryExportFailedException` so the circuit breaker can track it as a failure
+- Catches `BrokenCircuitException` when circuit is open and returns `false` gracefully with DEBUG-level logging
+- Catches `OperationCanceledException` and re-throws (cancellation is not swallowed)
+- All other exceptions are swallowed after the circuit breaker has tracked them, logged at TRACE level
+- Null/empty logs bypass the circuit breaker and delegate directly to the inner exporter
+- Comprehensive test coverage with 22 unit tests including constructor validation, circuit closed/open behavior, failure tracking, cancellation propagation, per-host isolation, and recovery
+- Test file location: `csharp/test/Unit/Telemetry/CircuitBreakerTelemetryExporterTests.cs`
+
+**Key Design Decisions**:
+1. **False-return tracking**: When the inner exporter returns `false` (indicating a swallowed failure), the wrapper throws a `TelemetryExportFailedException` inside `ExecuteAsync` so the circuit breaker can track the failure. This satisfies the requirement that "circuit breaker MUST see exceptions before they are swallowed."
+2. **Null/empty bypass**: Null or empty logs bypass the circuit breaker entirely and delegate to the inner exporter. This avoids unnecessary circuit breaker overhead for no-op calls.
+3. **Cancellation propagation**: `OperationCanceledException` is the only exception that propagates to the caller, matching the existing `DatabricksTelemetryExporter` behavior.
+4. **Per-host isolation**: Uses `CircuitBreakerManager` singleton to get per-host circuit breakers, ensuring failures on one host don't affect other hosts.
 
 ---
 
