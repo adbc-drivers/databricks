@@ -12,528 +12,239 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! StreamingCloudFetchProvider for orchestrating CloudFetch downloads.
+//! StreamingCloudFetchProvider — channel-based pipeline for CloudFetch downloads.
 //!
-//! This is the main component that coordinates:
-//! - On-demand link fetching from the link fetcher (which handles prefetching)
-//! - Parallel chunk downloads from cloud storage
-//! - Memory management via chunk limits
-//! - Consumer API via RecordBatchReader trait
+//! This module implements the consumer side of the CloudFetch pipeline. The
+//! provider holds the receiving end of a bounded `result_channel` and reads
+//! [`ChunkHandle`] values in chunk-index order. Each handle contains a oneshot
+//! receiver that resolves when the corresponding download worker finishes.
+//!
+//! ## Pipeline
+//!
+//! ```text
+//! ChunkLinkFetcher → Scheduler → download_channel → Workers → oneshot → result_channel → Consumer
+//! ```
+//!
+//! The scheduler and workers are spawned by the constructor. The consumer
+//! (`next_batch`) simply reads from `result_channel` and awaits the oneshot.
 
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
 use crate::reader::cloudfetch::link_fetcher::ChunkLinkFetcher;
-use crate::types::cloudfetch::{
-    ChunkEntry, ChunkState, CloudFetchConfig, DEFAULT_CHUNK_READY_TIMEOUT_SECS,
-};
+use crate::reader::cloudfetch::pipeline_types::ChunkHandle;
+use crate::reader::cloudfetch::scheduler::spawn_scheduler;
+use crate::reader::cloudfetch::workers::spawn_workers;
+use crate::types::cloudfetch::CloudFetchConfig;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
-use dashmap::DashMap;
 use driverbase::error::ErrorHelper;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tokio::sync::Notify;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 /// Orchestrates link fetching and chunk downloading for CloudFetch.
 ///
-/// This provider manages:
-/// - Background link prefetching to stay ahead of consumption
-/// - Parallel downloads with memory-bounded concurrency
-/// - Proper ordering of result batches
-/// - Error propagation and cancellation
+/// The struct holds only the consumer-side state. All scheduling and downloading
+/// happens in background tasks created during construction.
+///
+/// ## Fields
+///
+/// - `result_rx`: Bounded channel receiver for [`ChunkHandle`] values in order.
+/// - `schema`: Lazily populated from the first downloaded batch.
+/// - `batch_buffer`: Drains the current chunk's batches before advancing.
+/// - `cancel_token`: Signals all background tasks to stop.
 pub struct StreamingCloudFetchProvider {
-    // Dependencies (injected)
-    link_fetcher: Arc<dyn ChunkLinkFetcher>,
-    chunk_downloader: Arc<ChunkDownloader>,
-    config: CloudFetchConfig,
+    /// Pipeline output — consumer reads ChunkHandles in order.
+    /// Uses `tokio::sync::Mutex` because `recv()` must be `.await`ed.
+    result_rx: tokio::sync::Mutex<mpsc::Receiver<ChunkHandle>>,
 
-    // Schema - extracted from first Arrow batch
+    /// Schema (extracted from first batch).
     schema: OnceLock<SchemaRef>,
 
-    // Consumer state
-    current_chunk_index: AtomicI64,
-    current_batch_buffer: Mutex<VecDeque<RecordBatch>>,
+    /// Batch buffer (drains current ChunkHandle before advancing).
+    batch_buffer: Mutex<VecDeque<RecordBatch>>,
 
-    // Download scheduling state
-    next_download_index: AtomicI64,
-    end_of_stream: AtomicBool,
-
-    // Storage - unified chunks map with state and data
-    // Wrapped in Arc so spawned tasks share the same map
-    chunks: Arc<DashMap<i64, ChunkEntry>>,
-
-    // Memory control
-    chunks_in_memory: AtomicUsize,
-    max_chunks_in_memory: usize,
-
-    // Coordination signals
-    chunk_state_changed: Arc<Notify>,
-
-    // Cancellation
+    /// Cancellation token shared with scheduler and workers.
     cancel_token: CancellationToken,
-
-    // Tokio runtime handle for spawning tasks
-    runtime_handle: tokio::runtime::Handle,
 }
 
 impl std::fmt::Debug for StreamingCloudFetchProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamingCloudFetchProvider")
-            .field("current_chunk_index", &self.current_chunk_index)
-            .field("next_download_index", &self.next_download_index)
-            .field("end_of_stream", &self.end_of_stream)
-            .field("chunks_in_memory", &self.chunks_in_memory)
+            .field("schema", &self.schema.get().map(|s| s.fields().len()))
+            .field(
+                "batch_buffer_len",
+                &self.batch_buffer.lock().map(|b| b.len()).unwrap_or(0),
+            )
+            .field("cancelled", &self.cancel_token.is_cancelled())
             .finish()
     }
 }
 
 impl StreamingCloudFetchProvider {
-    /// Create a new provider.
+    /// Create a new provider, spawning the scheduler and download workers.
     ///
     /// # Arguments
     /// * `config` - CloudFetch configuration
-    /// * `link_fetcher` - Trait object for fetching chunk links (should be a SeaChunkLinkFetcherHandle
-    ///   that already has initial links cached and handles prefetching)
+    /// * `link_fetcher` - Trait object for fetching chunk links
     /// * `chunk_downloader` - For downloading chunks from cloud storage
-    /// * `runtime_handle` - Tokio runtime handle for spawning background tasks
+    /// * `_runtime_handle` - Tokio runtime handle (retained for API compatibility;
+    ///   background tasks are spawned via `tokio::spawn` on the current runtime)
     pub fn new(
         config: CloudFetchConfig,
         link_fetcher: Arc<dyn ChunkLinkFetcher>,
         chunk_downloader: Arc<ChunkDownloader>,
-        runtime_handle: tokio::runtime::Handle,
+        _runtime_handle: tokio::runtime::Handle,
     ) -> Arc<Self> {
-        let provider = Arc::new(Self {
-            link_fetcher,
+        let cancel_token = CancellationToken::new();
+
+        // Spawn scheduler — creates both channels
+        let channels = spawn_scheduler(
+            Arc::clone(&link_fetcher),
+            config.max_chunks_in_memory,
+            cancel_token.clone(),
+        );
+
+        // Spawn download workers — they share the download_rx
+        spawn_workers(
+            channels.download_rx,
             chunk_downloader,
-            config: config.clone(),
+            link_fetcher,
+            config,
+            cancel_token.clone(),
+        );
+
+        Arc::new(Self {
+            result_rx: tokio::sync::Mutex::new(channels.result_rx),
             schema: OnceLock::new(),
-            current_chunk_index: AtomicI64::new(0),
-            current_batch_buffer: Mutex::new(VecDeque::new()),
-            next_download_index: AtomicI64::new(0),
-            end_of_stream: AtomicBool::new(false),
-            chunks: Arc::new(DashMap::new()),
-            chunks_in_memory: AtomicUsize::new(0),
-            max_chunks_in_memory: config.max_chunks_in_memory,
-            chunk_state_changed: Arc::new(Notify::new()),
-            cancel_token: CancellationToken::new(),
-            runtime_handle,
-        });
-
-        // Start background initialization that fetches links and schedules downloads
-        let provider_clone = Arc::clone(&provider);
-        provider.runtime_handle.spawn(async move {
-            provider_clone.initialize().await;
-        });
-
-        provider
-    }
-
-    /// Initialize the provider by fetching initial links and starting downloads.
-    ///
-    /// This runs as a background task immediately after creation to:
-    /// 1. Fetch initial links from the link fetcher (which has them cached)
-    /// 2. Populate the chunks map
-    /// 3. Schedule downloads to start immediately
-    async fn initialize(self: &Arc<Self>) {
-        // Fetch initial batch of links (should be instant if cached by link fetcher)
-        debug!("Initializing provider: fetching initial links");
-
-        match self.link_fetcher.fetch_links(0, 0).await {
-            Ok(result) => {
-                // Store fetched links
-                for link in result.links {
-                    let chunk_index = link.chunk_index;
-                    self.chunks
-                        .entry(chunk_index)
-                        .or_insert_with(|| ChunkEntry::with_link(link));
-                }
-
-                if !result.has_more {
-                    self.end_of_stream.store(true, Ordering::Release);
-                }
-
-                debug!(
-                    "Provider initialized: {} links cached, end_of_stream={}",
-                    self.chunks.len(),
-                    !result.has_more
-                );
-
-                // Now schedule downloads - chunks map has links ready
-                self.schedule_downloads().await;
-            }
-            Err(e) => {
-                error!("Failed to fetch initial links: {}", e);
-                self.chunk_state_changed.notify_one();
-            }
-        }
+            batch_buffer: Mutex::new(VecDeque::new()),
+            cancel_token,
+        })
     }
 
     /// Get next record batch. Main consumer interface.
     ///
-    /// Blocks until the next batch is available or end of stream.
-    /// First drains current_batch_buffer, then fetches next chunk.
+    /// Returns `Ok(Some(batch))` for each batch, `Ok(None)` at end of stream.
+    ///
+    /// The consumer:
+    /// 1. Drains `batch_buffer` if non-empty.
+    /// 2. Otherwise, reads the next [`ChunkHandle`] from `result_channel`.
+    /// 3. Awaits the oneshot receiver in the handle.
+    /// 4. Buffers the resulting batches and returns the first one.
     pub async fn next_batch(&self) -> Result<Option<RecordBatch>> {
-        // Check for cancellation
+        // Check cancellation
         if self.cancel_token.is_cancelled() {
             return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
         }
 
         // Drain batch buffer first
-        if let Some(batch) = self.current_batch_buffer.lock().unwrap().pop_front() {
-            // Capture schema from first batch
-            let _ = self.schema.get_or_init(|| batch.schema());
-            return Ok(Some(batch));
-        }
-
-        // Buffer empty - need next chunk
-        let chunk_index = self.current_chunk_index.load(Ordering::Acquire);
-
-        // Check if we've reached end of stream
-        if self.end_of_stream.load(Ordering::Acquire) && !self.chunks.contains_key(&chunk_index) {
-            debug!("End of stream reached at chunk {}", chunk_index);
-            return Ok(None);
-        }
-
-        // Wait for the chunk to be downloaded
-        self.wait_for_chunk(chunk_index).await?;
-
-        // Get the chunk and move batches to buffer
-        if let Some((_, mut entry)) = self.chunks.remove(&chunk_index) {
-            if let Some(batches) = entry.batches.take() {
-                let mut buffer = self.current_batch_buffer.lock().unwrap();
-                for batch in batches {
-                    buffer.push_back(batch);
-                }
-            }
-
-            // Mark chunk as released and decrement counter
-            let new_count = self.chunks_in_memory.fetch_sub(1, Ordering::Release) - 1;
-
-            // Move to next chunk
-            let next_chunk = self.current_chunk_index.fetch_add(1, Ordering::Release) + 1;
-
-            debug!(
-                "Released chunk {}: chunks_in_memory={}/{}, consumer advancing to {}",
-                chunk_index, new_count, self.max_chunks_in_memory, next_chunk
-            );
-
-            // Schedule more downloads
-            self.schedule_downloads().await;
-
-            // Return first batch from buffer
-            if let Some(batch) = self.current_batch_buffer.lock().unwrap().pop_front() {
+        {
+            let mut buffer = self.batch_buffer.lock().unwrap();
+            if let Some(batch) = buffer.pop_front() {
                 let _ = self.schema.get_or_init(|| batch.schema());
                 return Ok(Some(batch));
             }
         }
 
-        // Check end of stream again
-        if self.end_of_stream.load(Ordering::Acquire) {
-            return Ok(None);
-        }
+        // Buffer empty — get next ChunkHandle from result_channel.
+        // Since next_batch is called sequentially by a single consumer
+        // (CloudFetchResultReader), there is no concurrent access to result_rx.
+        let handle = self.recv_next_handle().await;
 
-        Err(DatabricksErrorHelper::invalid_state()
-            .message(format!("Chunk {} not found after wait", chunk_index)))
+        let handle = match handle {
+            Some(h) => h,
+            None => {
+                debug!("Consumer: result_channel closed, end of stream");
+                return Ok(None);
+            }
+        };
+
+        debug!("Consumer: awaiting chunk {}", handle.chunk_index);
+
+        // Await the oneshot — this blocks until the worker finishes the download
+        let batches = tokio::select! {
+            _ = self.cancel_token.cancelled() => {
+                return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
+            }
+            result = handle.result_rx => {
+                match result {
+                    Ok(Ok(batches)) => batches,
+                    Ok(Err(e)) => {
+                        error!("Consumer: chunk {} download failed: {}", handle.chunk_index, e);
+                        return Err(e);
+                    }
+                    Err(_) => {
+                        // oneshot sender was dropped without sending — worker panicked or was cancelled
+                        return Err(DatabricksErrorHelper::io().message(format!(
+                            "Chunk {} download was cancelled (worker dropped)",
+                            handle.chunk_index
+                        )));
+                    }
+                }
+            }
+        };
+
+        debug!(
+            "Consumer: received chunk {} with {} batches",
+            handle.chunk_index,
+            batches.len()
+        );
+
+        // Buffer the batches and return the first one
+        let first_batch = {
+            let mut buffer = self.batch_buffer.lock().unwrap();
+            for batch in batches {
+                buffer.push_back(batch);
+            }
+            buffer.pop_front()
+        };
+
+        if let Some(batch) = first_batch {
+            let _ = self.schema.get_or_init(|| batch.schema());
+            Ok(Some(batch))
+        } else {
+            // Empty chunk — recurse to get next chunk
+            Box::pin(self.next_batch()).await
+        }
+    }
+
+    /// Receive the next [`ChunkHandle`] from the result channel.
+    ///
+    /// Uses `tokio::sync::Mutex` to protect the receiver across the `.await`
+    /// point. Since `next_batch` is the sole consumer, there is no contention.
+    async fn recv_next_handle(&self) -> Option<ChunkHandle> {
+        let mut rx = self.result_rx.lock().await;
+        rx.recv().await
     }
 
     /// Cancel all pending operations.
     pub fn cancel(&self) {
         debug!("Cancelling CloudFetch provider");
         self.cancel_token.cancel();
-        self.chunk_state_changed.notify_one();
-    }
-
-    // --- Internal methods ---
-
-    /// Fetch links from the link fetcher and store them in the chunks map.
-    ///
-    /// Returns whether the requested `start_index` is now available in the map.
-    async fn fetch_and_store_links(&self, start_index: i64) -> bool {
-        match self.link_fetcher.fetch_links(start_index, 0).await {
-            Ok(result) => {
-                for link in result.links {
-                    let chunk_index = link.chunk_index;
-                    self.chunks
-                        .entry(chunk_index)
-                        .or_insert_with(|| ChunkEntry::with_link(link));
-                }
-
-                if !result.has_more {
-                    self.end_of_stream.store(true, Ordering::Release);
-                }
-
-                self.chunks.contains_key(&start_index)
-            }
-            Err(e) => {
-                error!("Failed to fetch links for chunk {}: {}", start_index, e);
-                self.chunk_state_changed.notify_one();
-                false
-            }
-        }
-    }
-
-    /// Spawn download tasks for available links up to concurrency limit.
-    async fn schedule_downloads(&self) {
-        loop {
-            // Check if we have room for more downloads
-            let current_in_memory = self.chunks_in_memory.load(Ordering::Acquire);
-            if current_in_memory >= self.max_chunks_in_memory {
-                debug!(
-                    "Memory limit reached: {}/{} chunks in memory, pausing downloads",
-                    current_in_memory, self.max_chunks_in_memory
-                );
-                break;
-            }
-
-            // Get next chunk index to download
-            let next_index = self.next_download_index.load(Ordering::Acquire);
-
-            // Check if we have a link for this chunk
-            let should_download = {
-                if let Some(entry) = self.chunks.get(&next_index) {
-                    matches!(entry.state, ChunkState::UrlFetched)
-                } else {
-                    false
-                }
-            };
-
-            if !should_download {
-                // Link not in map yet — try to pull from the fetcher (cache or server)
-                if self.end_of_stream.load(Ordering::Acquire) {
-                    break;
-                }
-                if !self.fetch_and_store_links(next_index).await {
-                    break;
-                }
-                // Re-check after fetching
-                let ready = self
-                    .chunks
-                    .get(&next_index)
-                    .is_some_and(|e| matches!(e.state, ChunkState::UrlFetched));
-                if !ready {
-                    break;
-                }
-            }
-
-            // Try to claim this chunk for download
-            let claimed = {
-                if let Some(mut entry) = self.chunks.get_mut(&next_index) {
-                    if matches!(entry.state, ChunkState::UrlFetched) {
-                        entry.state = ChunkState::Downloading;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            };
-
-            if !claimed {
-                break;
-            }
-
-            // Increment counters
-            let new_count = self.chunks_in_memory.fetch_add(1, Ordering::Release) + 1;
-            self.next_download_index.fetch_add(1, Ordering::Release);
-
-            debug!(
-                "Scheduling download for chunk {}: chunks_in_memory={}/{}, consumer_at={}",
-                next_index,
-                new_count,
-                self.max_chunks_in_memory,
-                self.current_chunk_index.load(Ordering::Acquire)
-            );
-
-            // Spawn download task
-            let chunk_index = next_index;
-            let downloader = Arc::clone(&self.chunk_downloader);
-            let link_fetcher = Arc::clone(&self.link_fetcher);
-            let chunks = self.chunks.clone();
-            let chunk_state_changed = Arc::clone(&self.chunk_state_changed);
-            let cancel_token = self.cancel_token.clone();
-            let max_retries = self.config.max_retries;
-            let retry_delay = self.config.retry_delay;
-
-            self.runtime_handle.spawn(async move {
-                let result = Self::download_chunk_with_retry(
-                    chunk_index,
-                    &downloader,
-                    &link_fetcher,
-                    &chunks,
-                    max_retries,
-                    retry_delay,
-                    &cancel_token,
-                )
-                .await;
-
-                match result {
-                    Ok(batches) => {
-                        if let Some(mut entry) = chunks.get_mut(&chunk_index) {
-                            entry.batches = Some(batches);
-                            entry.state = ChunkState::Downloaded;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to download chunk {}: {}", chunk_index, e);
-                        if let Some(mut entry) = chunks.get_mut(&chunk_index) {
-                            entry.state = ChunkState::DownloadFailed(e.to_string());
-                        }
-                    }
-                }
-
-                chunk_state_changed.notify_one();
-            });
-        }
-    }
-
-    /// Download a single chunk with retry and link refresh on expiry.
-    async fn download_chunk_with_retry(
-        chunk_index: i64,
-        downloader: &ChunkDownloader,
-        link_fetcher: &Arc<dyn ChunkLinkFetcher>,
-        chunks: &Arc<DashMap<i64, ChunkEntry>>,
-        max_retries: u32,
-        retry_delay: std::time::Duration,
-        cancel_token: &CancellationToken,
-    ) -> Result<Vec<RecordBatch>> {
-        let mut attempts = 0;
-
-        loop {
-            if cancel_token.is_cancelled() {
-                return Err(DatabricksErrorHelper::invalid_state().message("Download cancelled"));
-            }
-
-            // Get link (may need to refetch if expired)
-            let link = {
-                let entry = chunks.get(&chunk_index);
-                let stored_link = entry.as_ref().and_then(|e| e.link.clone());
-
-                match stored_link {
-                    Some(link) if !link.is_expired() => link,
-                    _ => {
-                        // Link missing or expired - refetch it
-                        debug!("Refetching expired link for chunk {}", chunk_index);
-                        let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
-
-                        // Store the new link
-                        if let Some(mut entry) = chunks.get_mut(&chunk_index) {
-                            entry.link = Some(new_link.clone());
-                        }
-
-                        new_link
-                    }
-                }
-            };
-
-            // Attempt download
-            match downloader.download(&link).await {
-                Ok(batches) => return Ok(batches),
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= max_retries {
-                        return Err(e);
-                    }
-                    warn!(
-                        "Chunk {} download failed (attempt {}/{}): {}, retrying...",
-                        chunk_index, attempts, max_retries, e
-                    );
-
-                    // Update state to retry
-                    if let Some(mut entry) = chunks.get_mut(&chunk_index) {
-                        entry.state = ChunkState::DownloadRetry;
-                    }
-
-                    tokio::time::sleep(retry_delay).await;
-                }
-            }
-        }
-    }
-
-    /// Wait for a specific chunk to be ready (Downloaded state).
-    async fn wait_for_chunk(&self, chunk_index: i64) -> Result<()> {
-        loop {
-            // Check cancellation
-            if self.cancel_token.is_cancelled() {
-                return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
-            }
-
-            // Check if chunk is ready
-            if let Some(entry) = self.chunks.get(&chunk_index) {
-                match &entry.state {
-                    ChunkState::Downloaded => return Ok(()),
-                    ChunkState::DownloadFailed(e) => {
-                        return Err(DatabricksErrorHelper::io().message(e.clone()))
-                    }
-                    ChunkState::ProcessingFailed(e) => {
-                        return Err(DatabricksErrorHelper::io().message(e.clone()))
-                    }
-                    ChunkState::Cancelled => {
-                        return Err(
-                            DatabricksErrorHelper::invalid_state().message("Operation cancelled")
-                        )
-                    }
-                    _ => {} // Keep waiting
-                }
-            } else if self.end_of_stream.load(Ordering::Acquire) {
-                // Chunk doesn't exist and we're at end of stream
-                return Err(DatabricksErrorHelper::invalid_state()
-                    .message(format!("Chunk {} not available", chunk_index)));
-            }
-
-            // Wait for any chunk state change with timeout
-            let timeout =
-                self.config
-                    .chunk_ready_timeout
-                    .unwrap_or(std::time::Duration::from_secs(
-                        DEFAULT_CHUNK_READY_TIMEOUT_SECS,
-                    ));
-
-            tokio::select! {
-                _ = self.cancel_token.cancelled() => {
-                    return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
-                }
-                _ = self.chunk_state_changed.notified() => {
-                    // State changed, loop to check
-                }
-                _ = tokio::time::sleep(timeout) => {
-                    // Timeout - check state again and continue
-                    debug!("Timeout waiting for chunk {}, continuing...", chunk_index);
-                }
-            }
-        }
     }
 
     /// Get the schema, waiting if necessary.
+    ///
+    /// If the schema hasn't been extracted yet, this reads the first chunk
+    /// and buffers its batches (the caller will get them via `next_batch`).
     pub async fn get_schema(&self) -> Result<SchemaRef> {
         if let Some(schema) = self.schema.get() {
             return Ok(schema.clone());
         }
 
         // Need to peek the first batch to get schema
-        let chunk_index = 0i64;
-
-        // Ensure chunk 0 is being downloaded
-        self.schedule_downloads().await;
-
-        // Wait for chunk 0
-        self.wait_for_chunk(chunk_index).await?;
-
-        // Get schema from the first batch
-        if let Some(entry) = self.chunks.get(&chunk_index) {
-            if let Some(ref batches) = entry.batches {
-                if let Some(batch) = batches.first() {
-                    let schema = batch.schema();
-                    let _ = self.schema.get_or_init(|| schema.clone());
-                    return Ok(schema);
-                }
-            }
+        let first_batch = self.next_batch().await?;
+        if let Some(batch) = first_batch {
+            let schema = batch.schema();
+            let _ = self.schema.get_or_init(|| schema.clone());
+            // Put it back in the buffer so the caller gets it via next_batch
+            self.batch_buffer.lock().unwrap().push_front(batch);
+            Ok(schema)
+        } else {
+            Err(DatabricksErrorHelper::invalid_state().message("Unable to determine schema"))
         }
-
-        Err(DatabricksErrorHelper::invalid_state().message("Unable to determine schema"))
     }
 }
 
@@ -634,7 +345,4 @@ mod tests {
         assert!(!result.has_more);
         assert!(result.next_chunk_index.is_none());
     }
-
-    // Note: Full streaming provider tests require integration test setup
-    // with mock HTTP responses for the chunk downloader
 }
