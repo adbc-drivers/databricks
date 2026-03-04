@@ -444,6 +444,59 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 ### Phase 5: Core Telemetry Components
 
+#### WI-5.0: StatementTelemetryContext
+**Description**: Core data model that holds all aggregated telemetry data for a single statement execution. Merges data from MULTIPLE activities (root + children) into a single complete proto message (OssSqlDriverTelemetryLog).
+
+**Status**: ✅ **COMPLETED**
+
+**Location**: `csharp/src/Telemetry/StatementTelemetryContext.cs`
+
+**Input**:
+- Activity instances from different stages of statement execution (ExecuteQuery, DownloadFiles, PollOperationStatus)
+
+**Output**:
+- Aggregated `OssSqlDriverTelemetryLog` proto message via `BuildTelemetryLog()`
+
+**Test Expectations**:
+
+| Test Type | Test Name | Input | Expected Output |
+|-----------|-----------|-------|-----------------|
+| Unit | `MergeFrom_ExecuteQuery_CapturesLatencyAndStatementType` | Root activity with Duration | TotalLatencyMs set from Duration |
+| Unit | `MergeFrom_ExecuteQuery_CapturesSessionAndStatementId` | Activity with session.id, statement.id | Both captured |
+| Unit | `MergeFrom_DownloadFiles_CapturesChunkDetailsFromTags` | Activity with cloudfetch.total_chunks tag | TotalChunksPresent set |
+| Unit | `MergeFrom_DownloadFiles_CapturesChunkDetailsFromEvents` | Activity with cloudfetch.download_summary event | Chunk metrics extracted |
+| Unit | `MergeFrom_PollOperationStatus_CapturesPollMetrics` | Activity with poll.count and poll.latency_ms | PollCount and PollLatencyMs set |
+| Unit | `MergeFrom_ErrorActivity_CapturesErrorInfo` | Activity with Error status | HasError=true, ErrorName/ErrorMessage set |
+| Unit | `MergeFrom_MultipleActivities_AggregatesCorrectly` | Root + child activities | All fields populated |
+| Unit | `BuildTelemetryLog_CreatesCompleteProto` | Fully populated context | OssSqlDriverTelemetryLog with all fields |
+| Unit | `BuildTelemetryLog_WithError_IncludesDriverErrorInfo` | Error context | Proto has error_info |
+| Unit | `BuildTelemetryLog_WithChunkDetails_IncludesCloudFetchMetrics` | Chunk details | Proto has chunk_details in sql_operation |
+| Unit | `ParseExecutionResult_MapsCorrectly` | 'cloudfetch'→ExternalLinks, 'inline_arrow'→InlineArrow | Correct enum values |
+| Unit | `TruncateMessage_LongMessage_Truncated` | 300 char message | 200 chars |
+
+**Implementation Notes**:
+- `internal sealed class` with nullable fields for all telemetry dimensions
+- `MergeFrom(Activity)` routes by `activity.OperationName` using `Contains()` checks for ExecuteQuery, ExecuteUpdate, DownloadFiles, CloudFetch, PollOperationStatus, GetOperationStatus
+- Always captures SessionId and StatementId from any activity via `CaptureIdentifiers()`
+- Handles `cloudfetch.download_summary` ActivityEvent for chunk details (matching existing `CloudFetchDownloader` event format)
+- Tags from activity take precedence over event data (event only fills null values)
+- Error info extracted from `ActivityStatusCode.Error` with fallback to `StatusDescription`
+- `BuildTelemetryLog()` creates complete proto with conditional sub-message creation (only creates ChunkDetails, ResultLatency, OperationDetail when data present)
+- Static parser methods for all proto enums: ParseExecutionResult, ParseDriverMode, ParseAuthMech, ParseAuthFlow, ParseStatementType, ParseOperationType
+- `TruncateMessage()` utility with 200 char max for error messages
+- All tag values support both native types (int, long, bool) and string parsing
+- Comprehensive test coverage with 86 tests including Theory-based enum parsing tests
+- Test file location: `csharp/test/Unit/Telemetry/StatementTelemetryContextTests.cs`
+
+**Key Design Decisions**:
+1. **OperationName routing**: Uses `Contains()` to match operation names flexibly (e.g., "Statement.ExecuteQuery" and "ExecuteQuery" both match)
+2. **Tags > Events priority**: Activity tags take precedence over ActivityEvent data for chunk details, avoiding accidental overwrites
+3. **Nullable fields**: All aggregated fields are nullable to distinguish "not set" from "zero"
+4. **Proto field mapping**: Error message is mapped to `DriverErrorInfo.StackTrace` field (proto's `error_message` field 3 is pending LPP review)
+5. **String parsing fallback**: All numeric tag reads support both native types and string values for robustness
+
+---
+
 #### WI-5.1: TelemetryMetric Data Model
 **Description**: Data model for aggregated telemetry metrics.
 
