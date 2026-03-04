@@ -556,26 +556,68 @@ Implement the core telemetry infrastructure including feature flag management, p
 ---
 
 #### WI-5.5: TelemetryClient
-**Description**: Main telemetry client that coordinates listener, aggregator, and exporter.
+**Description**: Concrete implementation of ITelemetryClient that batches telemetry events using a ConcurrentQueue and exports them periodically or when batch size threshold is reached.
+
+**Status**: ✅ **COMPLETED**
 
 **Location**: `csharp/src/Telemetry/TelemetryClient.cs`
 
 **Input**:
-- Host string
-- HttpClient
-- TelemetryConfiguration
+- ITelemetryExporter (for exporting batched events)
+- TelemetryConfiguration (batch size, flush interval)
 
 **Output**:
-- Coordinated telemetry lifecycle (start, export, close)
+- Batched telemetry event export via ConcurrentQueue
+- Periodic flush via Timer
+- Graceful shutdown with final flush
 
 **Test Expectations**:
 
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
-| Unit | `TelemetryClient_Constructor_InitializesComponents` | Valid config | Listener, aggregator, exporter created |
-| Unit | `TelemetryClient_ExportAsync_DelegatesToExporter` | Metrics list | CircuitBreakerTelemetryExporter.ExportAsync called |
-| Unit | `TelemetryClient_CloseAsync_FlushesAndCancels` | N/A | Pending metrics flushed, background task cancelled |
-| Unit | `TelemetryClient_CloseAsync_ExceptionSwallowed` | Flush throws | No exception propagated |
+| Unit | `Constructor_ValidParameters_CreatesInstance` | Valid exporter + config | Instance created |
+| Unit | `Constructor_NullExporter_ThrowsArgumentNullException` | null exporter | ArgumentNullException |
+| Unit | `Constructor_NullConfig_ThrowsArgumentNullException` | null config | ArgumentNullException |
+| Unit | `Enqueue_AddsToQueue_NonBlocking` | Single log | Returns immediately, log queued |
+| Unit | `Enqueue_BatchSizeReached_TriggersFlush` | config.BatchSize events | ExportAsync called |
+| Unit | `Enqueue_MultipleBatches_ExportsAll` | > 2x batch size events | All events exported |
+| Unit | `FlushAsync_DrainsQueueAndExports` | 5 queued events | Exporter called with batch |
+| Unit | `FlushAsync_EmptyQueue_NoExport` | Empty queue | Exporter not called |
+| Unit | `FlushAsync_ConcurrentCalls_OnlyOneFlushAtATime` | Concurrent flushes | SemaphoreSlim prevents double flush |
+| Unit | `FlushAsync_LargeQueue_DrainsBatchByBatch` | 10 items, batch=3 | Multiple batches, each ≤3 items |
+| Unit | `CloseAsync_FlushesRemainingEvents` | Events in queue then close | All events exported |
+| Unit | `CloseAsync_DisposesResources` | Close then enqueue | Enqueue is no-op |
+| Unit | `CloseAsync_CalledMultipleTimes_NoException` | Close twice | No exception |
+| Unit | `DisposeAsync_DelegatesToCloseAsync` | DisposeAsync | Events flushed, enqueue becomes no-op |
+| Unit | `Exception_Swallowed_NoThrow_OnEnqueue` | Exporter throws | No exception from Enqueue |
+| Unit | `Exception_Swallowed_NoThrow_OnFlushAsync` | Exporter throws | No exception from FlushAsync |
+| Unit | `Exception_Swallowed_NoThrow_OnCloseAsync` | Exporter throws | No exception from CloseAsync |
+| Unit | `AfterDispose_EnqueueIsNoOp` | Enqueue after close | Silently ignored |
+| Unit | `AfterDispose_FlushAsyncIsNoOp` | FlushAsync after close | No-op, no exception |
+| Unit | `FlushTimer_Elapses_ExportsEvents` | Wait for timer | ExportAsync called |
+| Unit | `FlushTimer_NoEvents_DoesNotExport` | Timer with empty queue | Exporter not called |
+| Unit | `Enqueue_ConcurrentFromMultipleThreads_AllEventsProcessed` | 10 threads × 50 events | All 500 events exported |
+| Unit | `TelemetryClient_ImplementsITelemetryClient` | N/A | Type check passes |
+| Unit | `TelemetryClient_ImplementsIAsyncDisposable` | N/A | Type check passes |
+
+**Implementation Notes**:
+- Uses `ConcurrentQueue<TelemetryFrontendLog>` for thread-safe, lock-free event queuing
+- `SemaphoreSlim(1, 1)` prevents concurrent flushes; non-blocking `Wait(0)` means competing flush requests skip rather than block
+- `System.Threading.Timer` for periodic flush at `config.FlushIntervalMs` interval
+- `FlushCoreAsync` drains the queue in batches of `config.BatchSize`, looping until empty
+- `CloseAsync` stops timer, cancels CTS, does final flush with `CancellationToken.None`, then disposes timer/CTS/semaphore
+- `DisposeAsync` delegates to `CloseAsync`
+- `volatile bool _disposed` flag prevents operations after disposal
+- All exceptions are swallowed with `Debug.WriteLine` at TRACE level
+- Comprehensive test coverage with 24 unit tests in `TelemetryClientTests.cs`
+- Test file location: `csharp/test/Unit/Telemetry/TelemetryClientTests.cs`
+
+**Key Design Decisions**:
+1. **Non-blocking flush lock**: Uses `_flushLock.Wait(0)` (non-blocking) instead of `WaitAsync` to avoid blocking callers. If a flush is already in progress, the new request is simply skipped.
+2. **Fire-and-forget flush from Enqueue**: When batch size is reached, flush is triggered as fire-and-forget (`_ = FlushCoreAsync(...)`) since `Enqueue` must be non-blocking.
+3. **Final flush with CancellationToken.None**: During `CloseAsync`, the CTS is cancelled first, but the final flush uses `CancellationToken.None` to ensure remaining events are exported.
+4. **Loop drain in FlushCoreAsync**: The flush method loops until the queue is empty, draining batch-sized chunks each iteration, ensuring all queued events are processed during shutdown.
+5. **Internal visibility**: Class is `internal sealed` since it's created by `TelemetryClientManager` (not directly by consumers).
 
 ---
 
