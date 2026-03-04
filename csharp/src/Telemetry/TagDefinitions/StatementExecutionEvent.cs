@@ -49,6 +49,15 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
         public const string SessionId = "session.id";
 
         /// <summary>
+        /// Statement type (query, update, metadata).
+        /// Exported to Databricks telemetry service.
+        /// </summary>
+        [TelemetryTag("statement.type",
+            ExportScope = TagExportScope.ExportDatabricks,
+            Description = "Statement type: query, update, metadata")]
+        public const string StatementType = "statement.type";
+
+        /// <summary>
         /// Result format (inline or cloudfetch).
         /// Exported to Databricks telemetry service.
         /// </summary>
@@ -121,6 +130,7 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
             {
                 StatementId,
                 SessionId,
+                StatementType,
                 ResultFormat,
                 ResultChunkCount,
                 ResultBytesDownloaded,

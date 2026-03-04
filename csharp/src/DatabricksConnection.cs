@@ -24,15 +24,19 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
 using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -579,6 +583,9 @@ namespace AdbcDrivers.Databricks
                 await SetSchema(_defaultNamespace.SchemaName);
             }
 
+            // Set connection-level telemetry tags for MetricsAggregator extraction
+            SetConnectionTelemetryTags(activity);
+
             // Initialize telemetry pipeline after session is established
             InitializeTelemetry(activity);
         }
@@ -881,6 +888,128 @@ namespace AdbcDrivers.Databricks
                 return null;
             }
             return CatalogName;
+        }
+
+        /// <summary>
+        /// Sets connection-level telemetry tags on the activity so that the MetricsAggregator
+        /// can extract them. This includes session ID, auth type, driver/runtime/OS system info,
+        /// connection parameters, and feature flags.
+        /// </summary>
+        /// <param name="activity">The activity to set tags on.</param>
+        private void SetConnectionTelemetryTags(Activity? activity)
+        {
+            if (activity == null) return;
+
+            // Session ID
+            string? sessionId = GetSessionIdString();
+            if (sessionId != null)
+            {
+                activity.SetTag(ConnectionOpenEvent.SessionId, sessionId);
+            }
+
+            // Auth type
+            string authType = DetermineAuthType();
+            activity.SetTag(ConnectionOpenEvent.AuthType, authType);
+
+            // Driver system tags
+            activity.SetTag(ConnectionOpenEvent.DriverName, "Apache Arrow ADBC Databricks Driver");
+            activity.SetTag(ConnectionOpenEvent.DriverVersion, s_assemblyVersion);
+            activity.SetTag(ConnectionOpenEvent.DriverOS, RuntimeInformation.OSDescription);
+            activity.SetTag(ConnectionOpenEvent.DriverRuntime, RuntimeInformation.FrameworkDescription);
+
+            // Runtime info
+            activity.SetTag(ConnectionOpenEvent.RuntimeName, RuntimeInformation.FrameworkDescription);
+            activity.SetTag(ConnectionOpenEvent.RuntimeVersion, Environment.Version.ToString());
+            activity.SetTag(ConnectionOpenEvent.RuntimeVendor, "Microsoft");
+
+            // OS info
+            activity.SetTag(ConnectionOpenEvent.OsName, RuntimeInformation.OSDescription);
+            activity.SetTag(ConnectionOpenEvent.OsVersion, Environment.OSVersion.Version.ToString());
+            activity.SetTag(ConnectionOpenEvent.OsArch, RuntimeInformation.OSArchitecture.ToString());
+
+            // Client/locale/process info
+            string? entryAssemblyName = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name;
+            activity.SetTag(ConnectionOpenEvent.ClientAppName, entryAssemblyName ?? "unknown");
+            activity.SetTag(ConnectionOpenEvent.LocaleName, CultureInfo.CurrentCulture.Name);
+            activity.SetTag(ConnectionOpenEvent.CharSetEncoding, Encoding.Default.WebName);
+            activity.SetTag(ConnectionOpenEvent.ProcessName, Process.GetCurrentProcess().ProcessName);
+
+            // Connection parameter tags
+            Properties.TryGetValue(SparkParameters.Path, out string? httpPath);
+            activity.SetTag(ConnectionOpenEvent.ConnectionHttpPath, httpPath ?? string.Empty);
+
+            Properties.TryGetValue(SparkParameters.HostName, out string? host);
+            activity.SetTag(ConnectionOpenEvent.ConnectionHost, host ?? string.Empty);
+
+            Properties.TryGetValue(SparkParameters.Port, out string? port);
+            activity.SetTag(ConnectionOpenEvent.ConnectionPort, port ?? "443");
+
+            Properties.TryGetValue(DatabricksParameters.Protocol, out string? protocol);
+            activity.SetTag(ConnectionOpenEvent.ConnectionMode, protocol ?? "thrift");
+
+            Properties.TryGetValue(SparkParameters.AuthType, out string? authMech);
+            activity.SetTag(ConnectionOpenEvent.ConnectionAuthMech, authMech ?? string.Empty);
+
+            Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? authFlow);
+            activity.SetTag(ConnectionOpenEvent.ConnectionAuthFlow, authFlow ?? string.Empty);
+
+            // Use Databricks-specific defaults: DatabricksStatement uses 2M rows,
+            // and DatabricksConstants.DefaultAsyncExecPollIntervalMs is 100ms.
+            // These may be overridden by connection properties.
+            Properties.TryGetValue(ApacheParameters.BatchSize, out string? batchSizeStr);
+            long batchSizeValue = (batchSizeStr != null && long.TryParse(batchSizeStr, out long parsedBatchSize))
+                ? parsedBatchSize
+                : DatabricksConstants.DefaultBatchSize;
+            activity.SetTag(ConnectionOpenEvent.ConnectionBatchSize, batchSizeValue);
+
+            Properties.TryGetValue(ApacheParameters.PollTimeMilliseconds, out string? pollIntervalStr);
+            int pollIntervalValue = (pollIntervalStr != null && int.TryParse(pollIntervalStr, out int parsedPollInterval))
+                ? parsedPollInterval
+                : DatabricksConstants.DefaultAsyncExecPollIntervalMs;
+            activity.SetTag(ConnectionOpenEvent.ConnectionPollIntervalMs, pollIntervalValue);
+
+            Properties.TryGetValue(HttpProxyOptions.UseProxy, out string? useProxy);
+            activity.SetTag(ConnectionOpenEvent.ConnectionUseProxy, string.Equals(useProxy, "true", StringComparison.OrdinalIgnoreCase));
+
+            // Feature tags
+            activity.SetTag(ConnectionOpenEvent.FeatureArrow, true); // Always Arrow-based
+            activity.SetTag(ConnectionOpenEvent.FeatureDirectResults, _enableDirectResults);
+            activity.SetTag(ConnectionOpenEvent.FeatureCloudFetch, _useCloudFetch);
+            activity.SetTag(ConnectionOpenEvent.FeatureLz4, _canDecompressLz4);
+
+            // Local diagnostics (not exported to Databricks)
+            activity.SetTag(ConnectionOpenEvent.ServerAddress, host ?? string.Empty);
+        }
+
+        /// <summary>
+        /// Determines the authentication type string for telemetry.
+        /// </summary>
+        /// <returns>A string describing the auth type (e.g., "pat", "oauth-m2m", "oauth", "basic", "token").</returns>
+        private string DetermineAuthType()
+        {
+            Properties.TryGetValue(SparkParameters.AuthType, out string? authType);
+            Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
+
+            if (string.Equals(authType, SparkAuthTypeConstants.OAuth, StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.Equals(grantType, DatabricksConstants.OAuthGrantTypes.ClientCredentials, StringComparison.OrdinalIgnoreCase))
+                {
+                    return "oauth-m2m";
+                }
+                return "oauth";
+            }
+
+            if (string.Equals(authType, SparkAuthTypeConstants.Token, StringComparison.OrdinalIgnoreCase))
+            {
+                return "pat";
+            }
+
+            if (string.Equals(authType, SparkAuthTypeConstants.Basic, StringComparison.OrdinalIgnoreCase))
+            {
+                return "basic";
+            }
+
+            return authType ?? "unknown";
         }
 
         /// <summary>

@@ -175,8 +175,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.TagDefinitions
             // Act
             var tags = ConnectionOpenEvent.GetDatabricksExportTags();
 
-            // Assert - 7 tags should be exported (excludes server.address)
-            Assert.Equal(7, tags.Count);
+            // Assert - 30 tags should be exported (excludes server.address)
+            Assert.Equal(30, tags.Count);
         }
 
         #endregion
@@ -221,8 +221,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.TagDefinitions
             // Act
             var tags = StatementExecutionEvent.GetDatabricksExportTags();
 
-            // Assert - 8 tags should be exported (excludes db.statement)
-            Assert.Equal(8, tags.Count);
+            // Assert - 9 tags should be exported (excludes db.statement)
+            Assert.Equal(9, tags.Count);
         }
 
         #endregion
