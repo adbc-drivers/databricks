@@ -48,8 +48,11 @@ namespace AdbcDrivers.Databricks.Telemetry
     {
         /// <summary>
         /// The ActivitySource name used by the Databricks ADBC driver.
+        /// This must match the assembly name used by <see cref="DatabricksConnection"/>
+        /// as the ActivitySource name in <c>TracingConnection</c>.
         /// </summary>
-        internal const string DatabricksActivitySourceName = "Databricks.Adbc.Driver";
+        internal static readonly string DatabricksActivitySourceName =
+            typeof(DatabricksConnection).Assembly.GetName().Name!;
 
         private static readonly Lazy<DatabricksActivityListener> s_instance =
             new Lazy<DatabricksActivityListener>(() => new DatabricksActivityListener());

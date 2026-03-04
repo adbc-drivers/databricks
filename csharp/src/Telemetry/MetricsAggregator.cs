@@ -49,8 +49,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <summary>
         /// The ActivitySource name used by the Databricks ADBC driver.
         /// Used to determine if an activity is a root activity.
+        /// This must match the assembly name used by <see cref="DatabricksConnection"/>
+        /// as the ActivitySource name in <c>TracingConnection</c>.
         /// </summary>
-        internal const string DatabricksActivitySourceName = "Databricks.Adbc.Driver";
+        internal static readonly string DatabricksActivitySourceName =
+            DatabricksActivityListener.DatabricksActivitySourceName;
 
         private readonly ITelemetryClient _telemetryClient;
         private readonly TelemetryConfiguration _config;
