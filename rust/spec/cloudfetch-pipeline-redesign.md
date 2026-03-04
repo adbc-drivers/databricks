@@ -61,13 +61,21 @@ graph LR
 **Two channels replace the DashMap:**
 
 - **`download_channel`** — scheduler pushes `ChunkDownloadTask` items; download workers pull
-  from it. Unbounded (backpressure is applied via `result_channel`).
+  from it. Bounded to `max_chunks_in_memory` using `async-channel` (MPMC). The scheduler's
+  sequential loop means `download_channel` and `result_channel` are always filled in lockstep,
+  so the same bound caps both.
 - **`result_channel`** — scheduler pushes `ChunkHandle` items *in chunk-index order*, bounded
   to `max_chunks_in_memory`. The consumer reads from it in order and awaits each handle.
 
 Items are enqueued to `result_channel` by the scheduler before the download starts, preserving
 sequential ordering even when downloads complete out of order. This matches the C# pattern in
 `CloudFetchDownloader.cs` (result enqueued before download task is awaited).
+
+**Why `async-channel` for `download_channel`?** `tokio::sync::mpsc` is single-consumer —
+N workers cannot each call `.recv()` on the same receiver. `async-channel` is MPMC: each
+worker clones the receiver and blocks on `.recv()` independently. When a task arrives, exactly
+one worker wakes up. No mutex needed. Equivalent to C#'s `BlockingCollection` consumed via
+`GetConsumingEnumerable` with a `SemaphoreSlim` controlling parallelism.
 
 ---
 
@@ -125,9 +133,14 @@ sequenceDiagram
 ```
 
 - `fetch_links()` returns a **batch** of `CloudFetchLink` values (`Vec<CloudFetchLink>`), not a
-  single link. The scheduler iterates the batch and creates one oneshot pair per link.
-- `SeaChunkLinkFetcher` caches and prefetches links internally; the scheduler simply consumes
-  what `fetch_links()` returns, advancing `next_chunk_index` after each batch.
+  single link. The batch size is **server-determined** — one `fetch_links()` call maps to one
+  API call and returns however many links the server provides in that page.
+- Calling `fetch_links(next_chunk_index)` internally updates `SeaChunkLinkFetcher`'s
+  `current_consumer_index` and triggers a background prefetch task if the prefetch window
+  (`link_prefetch_window`, default 128 chunks) needs filling. The scheduler does not need to
+  signal prefetch explicitly — `fetch_links()` handles it.
+- `SeaChunkLinkFetcher` returns from its `DashMap` cache immediately if links are available;
+  falls back to a synchronous server fetch only on a cache miss (prefetch hasn't caught up).
 - Creates a `oneshot` channel pair per chunk.
 - Sends `ChunkDownloadTask` to `download_channel` and `ChunkHandle` to `result_channel`.
 - The bounded `result_channel` provides backpressure automatically — no manual
@@ -171,8 +184,16 @@ sequenceDiagram
     end
 ```
 
-The worker owns `ChunkDownloadTask` outright. URL refresh mutates a local `link` variable —
-no map lookup, no lock, no guard. Mirrors C#'s `DownloadFileAsync` directly.
+The worker owns `ChunkDownloadTask` outright. When `refetch_link()` returns a fresh
+`CloudFetchLink`, it is assigned to the worker's local `link` variable — no shared state is
+mutated, no lock needed, no map lookup. This is the key improvement over the DashMap approach
+where calling `refetch_link().await` while holding a `get_mut()` guard was impossible.
+Mirrors C#'s `DownloadFileAsync` directly.
+
+**Why retry logic lives in the worker, not a shared HTTP client layer:** the 401/403 path
+requires calling `refetch_link()` on `ChunkLinkFetcher`, which is CloudFetch-specific state
+unavailable to a generic HTTP client. A future shared HTTP client could own 5xx/network
+retries, but URL refresh must remain in the worker to access `ChunkLinkFetcher`.
 
 **Proactive expiry check** (C# parity — `IsExpiredOrExpiringSoon`): before the first HTTP
 request for each chunk, the worker checks `link.is_expired()` using the
@@ -232,6 +253,9 @@ pub struct StreamingCloudFetchProvider {
 
     // Cancellation
     cancel_token: CancellationToken,
+
+    // Worker task handles — awaited on drop for clean shutdown
+    worker_handles: JoinSet<()>,
 }
 ```
 
@@ -259,10 +283,16 @@ Both types are no longer needed and can be deleted. The equivalent state lives o
 | Component | Concurrency primitive | Reason |
 |---|---|---|
 | Scheduler | Single `tokio::spawn` task | Sequential chunk ordering required |
-| Download workers | N `tokio::spawn` tasks sharing `download_channel` | Parallel downloads |
+| Download workers | N `tokio::spawn` tasks, each holding a cloned `async_channel::Receiver` | All N workers block on `.recv()` simultaneously; exactly one wakes per task |
 | Consumer | Caller's task (no spawn) | Sequential result consumption |
-| `result_channel` | Bounded `mpsc` (capacity = `max_chunks_in_memory`) | Backpressure without manual counter |
+| `download_channel` | `async_channel::bounded(max_chunks_in_memory)` | MPMC required; bounded to match `result_channel` capacity |
+| `result_channel` | `tokio::sync::mpsc` bounded (capacity = `max_chunks_in_memory`) | Single consumer; backpressure without manual counter |
 | URL refresh in worker | Local variable mutation | No shared state — no lock needed |
+
+**Worker lifecycle:** `StreamingCloudFetchProvider` holds a `tokio::task::JoinSet<()>`
+containing the N worker task handles. On shutdown: `cancel_token.cancel()` → workers exit
+their recv loop → scheduler drops the `download_channel` sender → `JoinSet` is awaited on
+`StreamingCloudFetchProvider` drop to ensure clean teardown.
 
 **Thread safety:** No shared mutable state between components. Each `ChunkDownloadTask` is
 owned by exactly one worker at a time. Each `ChunkHandle` is owned by the consumer.
@@ -309,7 +339,7 @@ field is **removed**, and two defaults are **corrected** to match C#.
 
 | Field | Old use | New use | Default change? |
 |---|---|---|---|
-| `max_chunks_in_memory` | Manual `AtomicUsize` counter | `mpsc::channel(max_chunks_in_memory)` capacity bound | No |
+| `max_chunks_in_memory` | Manual `AtomicUsize` counter | `async_channel::bounded` + `mpsc::channel` capacity for both channels | **Yes: → 10** (C# equivalent: 200 MB ÷ 20 MB max chunk size) |
 | `max_retries` | Per-download retry limit | Unchanged | **Yes: 5 → 3** (align with C# `MaxRetries = 3`) |
 | `retry_delay` | Constant sleep | Linear backoff: `retry_delay * (attempt + 1)` — matches C# `RetryDelayMs * (retry + 1)` | **Yes: 1500ms → 500ms** (align with C# `RetryDelayMs = 500`) |
 | `link_prefetch_window` | Background prefetch ahead of consumer | Unchanged — owned by `SeaChunkLinkFetcher` | No |
