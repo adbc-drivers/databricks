@@ -75,4 +75,4 @@ ffi = ["adbc_ffi"]
 
 [lib]
 name = "databricks_adbc"
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib", "cdylib", "staticlib"]
