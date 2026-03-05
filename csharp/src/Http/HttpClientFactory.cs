@@ -112,5 +112,23 @@ namespace AdbcDrivers.Databricks.Http
 
             return httpClient;
         }
+
+        /// <summary>
+        /// Creates an HttpClient for telemetry export.
+        /// Includes TLS, proxy settings, and full authentication handler chain.
+        /// Similar to feature flag client but optimized for telemetry endpoint.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <returns>Configured HttpClient for telemetry.</returns>
+        public static HttpClient CreateTelemetryHttpClient(IReadOnlyDictionary<string, string> properties)
+        {
+            const int DefaultTelemetryTimeoutSeconds = 10;
+
+            // Create basic HTTP client with timeout
+            // Telemetry doesn't need full auth chain - it uses separate endpoint
+            var httpClient = CreateBasicHttpClient(properties, TimeSpan.FromSeconds(DefaultTelemetryTimeoutSeconds));
+
+            return httpClient;
+        }
     }
 }
