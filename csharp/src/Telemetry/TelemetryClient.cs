@@ -15,6 +15,7 @@
 */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
@@ -52,8 +53,11 @@ namespace AdbcDrivers.Databricks.Telemetry
 
         private readonly DatabricksTelemetryExporter _databricksExporter;
         private readonly CircuitBreakerTelemetryExporter _circuitBreakerExporter;
+        private readonly ITelemetryExporter _effectiveExporter;
         private readonly MetricsAggregator _metricsAggregator;
         private readonly DatabricksActivityListener _activityListener;
+        private readonly ConcurrentQueue<TelemetryFrontendLog> _pendingLogs;
+        private readonly int _batchSize;
         private readonly CancellationTokenSource _cts;
         private volatile bool _disposed;
 
@@ -88,6 +92,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
 
             _cts = new CancellationTokenSource();
+            _pendingLogs = new ConcurrentQueue<TelemetryFrontendLog>();
+            _batchSize = configuration.BatchSize;
 
             try
             {
@@ -97,6 +103,9 @@ namespace AdbcDrivers.Databricks.Telemetry
 
                 // 2. CircuitBreakerTelemetryExporter (wraps exporter with circuit breaker protection)
                 _circuitBreakerExporter = new CircuitBreakerTelemetryExporter(_databricksExporter, host);
+
+                // Store the effective exporter for direct Enqueue path
+                _effectiveExporter = _circuitBreakerExporter;
 
                 // 3. MetricsAggregator (aggregates activities and exports via circuit breaker)
                 _metricsAggregator = new MetricsAggregator(
@@ -165,16 +174,13 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             try
             {
-                // For the activity-based pipeline, this method is not typically used.
-                // Activities are automatically captured by the listener and processed by the aggregator.
-                // However, we provide this method for compatibility with ITelemetryClient interface
-                // in case manual enqueueing is needed.
+                _pendingLogs.Enqueue(log);
 
-                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.manual_enqueue",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "frontend_log_id", log.FrontendLogEventId ?? "(none)" }
-                    }));
+                // Trigger flush if batch size reached
+                if (_pendingLogs.Count >= _batchSize)
+                {
+                    _ = Task.Run(() => FlushAsync(CancellationToken.None));
+                }
             }
             catch (Exception ex)
             {
@@ -213,7 +219,19 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             try
             {
-                // Delegate to aggregator to flush all pending metrics
+                // Flush directly enqueued logs (V3 direct-object path)
+                List<TelemetryFrontendLog> logsToFlush = new List<TelemetryFrontendLog>();
+                while (_pendingLogs.TryDequeue(out TelemetryFrontendLog? log))
+                {
+                    logsToFlush.Add(log);
+                }
+
+                if (logsToFlush.Count > 0)
+                {
+                    await _effectiveExporter.ExportAsync(logsToFlush, ct).ConfigureAwait(false);
+                }
+
+                // Also delegate to aggregator to flush any Activity-based pending metrics
                 await _metricsAggregator.FlushAsync(ct).ConfigureAwait(false);
 
                 Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.flush_completed"));
