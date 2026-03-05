@@ -445,7 +445,22 @@ namespace AdbcDrivers.Databricks
             }
 
             HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
-            return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
+
+            // Extract telemetry IDs for propagation to reader activities
+            string? telemetrySessionId = null;
+            if (SessionHandle?.SessionId?.Guid != null && SessionHandle.SessionId.Guid.Length == 16)
+            {
+                telemetrySessionId = new Guid(SessionHandle.SessionId.Guid).ToString("N");
+            }
+            string? telemetryStatementId = null;
+            if (response.OperationHandle?.OperationId?.Guid != null && response.OperationHandle.OperationId.Guid.Length == 16)
+            {
+                telemetryStatementId = new Guid(response.OperationHandle.OperationId.Guid).ToString("N");
+            }
+
+            return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient,
+                telemetrySessionId: telemetrySessionId,
+                telemetryStatementId: telemetryStatementId);
         }
 
         internal override SchemaParser SchemaParser => new DatabricksSchemaParser();

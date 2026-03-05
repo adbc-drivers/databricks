@@ -221,9 +221,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         internal string GetEndpointUrl()
         {
-            var endpoint = _isAuthenticated ? AuthenticatedEndpoint : UnauthenticatedEndpoint;
-            var host = _host.TrimEnd('/');
-            return $"{host}{endpoint}";
+            return _isAuthenticated ? AuthenticatedEndpoint : UnauthenticatedEndpoint;
         }
 
         /// <summary>

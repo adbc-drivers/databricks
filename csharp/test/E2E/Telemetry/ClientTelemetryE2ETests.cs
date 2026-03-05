@@ -69,8 +69,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             // Verify endpoint URL
             var endpointUrl = exporter.GetEndpointUrl();
-            Assert.Equal($"{host}/telemetry-ext", endpointUrl);
-            OutputHelper?.WriteLine($"Endpoint URL: {endpointUrl}");
+            Assert.Equal("/telemetry-ext", endpointUrl);
+            OutputHelper?.WriteLine($"Endpoint URL: {host}{endpointUrl}");
 
             // Create a test telemetry log
             var logs = CreateTestTelemetryLogs(1);
@@ -95,8 +95,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             OutputHelper?.WriteLine($"Testing unauthenticated telemetry endpoint at {host}/telemetry-unauth");
 
-            // Create HttpClient without authentication
-            using var httpClient = new HttpClient();
+            // Create HttpClient without authentication but with BaseAddress
+            using var httpClient = new HttpClient
+            {
+                BaseAddress = new Uri(host)
+            };
 
             var config = new TelemetryConfiguration
             {
@@ -108,8 +111,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             // Verify endpoint URL
             var endpointUrl = exporter.GetEndpointUrl();
-            Assert.Equal($"{host}/telemetry-unauth", endpointUrl);
-            OutputHelper?.WriteLine($"Endpoint URL: {endpointUrl}");
+            Assert.Equal("/telemetry-unauth", endpointUrl);
+            OutputHelper?.WriteLine($"Endpoint URL: {host}{endpointUrl}");
 
             // Create a test telemetry log
             var logs = CreateTestTelemetryLogs(1);
@@ -434,7 +437,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         /// </summary>
         private HttpClient CreateAuthenticatedHttpClient()
         {
-            var httpClient = new HttpClient();
+            var host = GetDatabricksHost();
+            var httpClient = new HttpClient
+            {
+                BaseAddress = new Uri(host)
+            };
 
             // Use AccessToken if available, otherwise fall back to Token
             var token = !string.IsNullOrEmpty(TestConfiguration.AccessToken)

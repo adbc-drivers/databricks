@@ -124,8 +124,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Act
             var endpointUrl = exporter.GetEndpointUrl();
 
-            // Assert
-            Assert.Equal($"{TestHost}/telemetry-ext", endpointUrl);
+            // Assert - GetEndpointUrl returns just the path since HttpClient.BaseAddress has the host
+            Assert.Equal("/telemetry-ext", endpointUrl);
         }
 
         [Fact]
@@ -139,23 +139,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Act
             var endpointUrl = exporter.GetEndpointUrl();
 
-            // Assert
-            Assert.Equal($"{TestHost}/telemetry-unauth", endpointUrl);
-        }
-
-        [Fact]
-        public void DatabricksTelemetryExporter_GetEndpointUrl_HostWithTrailingSlash_HandlesCorrectly()
-        {
-            // Arrange
-            using var httpClient = new HttpClient();
-            var config = new TelemetryConfiguration();
-            var exporter = new DatabricksTelemetryExporter(httpClient, $"{TestHost}/", true, config);
-
-            // Act
-            var endpointUrl = exporter.GetEndpointUrl();
-
-            // Assert
-            Assert.Equal($"{TestHost}/telemetry-ext", endpointUrl);
+            // Assert - GetEndpointUrl returns just the path since HttpClient.BaseAddress has the host
+            Assert.Equal("/telemetry-unauth", endpointUrl);
         }
 
         #endregion
@@ -277,7 +262,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration { MaxRetries = 0 };
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -304,7 +289,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration();
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -327,7 +312,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration();
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -354,7 +339,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration { MaxRetries = 3, RetryDelayMs = 10 };
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -382,7 +367,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 throw new HttpRequestException("Simulated persistent failure");
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration { MaxRetries = 3, RetryDelayMs = 10 };
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -413,7 +398,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                     new UnauthorizedAccessException("Unauthorized"));
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration { MaxRetries = 3, RetryDelayMs = 10 };
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -440,7 +425,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration();
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -469,7 +454,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration();
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -496,7 +481,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration();
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, false, config);
 
@@ -523,7 +508,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 return new HttpResponseMessage(HttpStatusCode.OK);
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration();
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 
@@ -560,7 +545,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 throw new InvalidOperationException("Unexpected error");
             });
 
-            using var httpClient = new HttpClient(handler);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri(TestHost) };
             var config = new TelemetryConfiguration { MaxRetries = 0 };
             var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
 

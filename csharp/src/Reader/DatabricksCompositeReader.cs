@@ -58,6 +58,16 @@ namespace AdbcDrivers.Databricks.Reader
         private readonly HttpClient _httpClient;
 
         /// <summary>
+        /// Session ID for telemetry tag propagation to reader activities.
+        /// </summary>
+        private readonly string? _telemetrySessionId;
+
+        /// <summary>
+        /// Statement ID for telemetry tag propagation to reader activities.
+        /// </summary>
+        private readonly string? _telemetryStatementId;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="DatabricksCompositeReader"/> class.
         /// </summary>
         /// <param name="statement">The Databricks statement.</param>
@@ -70,7 +80,9 @@ namespace AdbcDrivers.Databricks.Reader
             IResponse response,
             bool isLz4Compressed,
             HttpClient httpClient,
-            IOperationStatusPoller? operationPoller = null)
+            IOperationStatusPoller? operationPoller = null,
+            string? telemetrySessionId = null,
+            string? telemetryStatementId = null)
             : base(statement)
         {
             _statement = statement ?? throw new ArgumentNullException(nameof(statement));
@@ -78,6 +90,8 @@ namespace AdbcDrivers.Databricks.Reader
             _response = response;
             _isLz4Compressed = isLz4Compressed;
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            _telemetrySessionId = telemetrySessionId;
+            _telemetryStatementId = telemetryStatementId;
 
             // use direct results if available
             if (_statement.TryGetDirectResults(_response, out TSparkDirectResults? directResults)
@@ -184,10 +198,23 @@ namespace AdbcDrivers.Databricks.Reader
             return new DatabricksReader(_statement, _schema, _response, initialResults, _isLz4Compressed);
         }
 
+        /// <summary>
+        /// Sets telemetry session.id and statement.id tags on the given activity
+        /// so the DatabricksActivityListener can route it to the correct MetricsAggregator.
+        /// </summary>
+        private void SetTelemetryTags(Activity? activity)
+        {
+            if (_telemetrySessionId != null)
+                activity?.SetTag("session.id", _telemetrySessionId);
+            if (_telemetryStatementId != null)
+                activity?.SetTag("statement.id", _telemetryStatementId);
+        }
+
         public override async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
         {
             return await this.TraceActivityAsync(async activity =>
             {
+                SetTelemetryTags(activity);
                 if (_activeReader != null)
                 {
                     activity?.SetTag("reader.active_reader_type", _activeReader.GetType().Name);
@@ -214,6 +241,7 @@ namespace AdbcDrivers.Databricks.Reader
         {
             this.TraceActivity(activity =>
             {
+                SetTelemetryTags(activity);
                 if (_activeReader != null)
                 {
                     activity?.SetTag("reader.active_reader_type", _activeReader.GetType().Name);

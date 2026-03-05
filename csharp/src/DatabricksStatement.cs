@@ -126,12 +126,14 @@ namespace AdbcDrivers.Databricks
         {
             Activity.Current?.AddEvent("statement.set_properties.start");
 
-            // Propagate session.id from connection to statement activities
+            // Propagate session.id from connection to statement activities and parent activity
             DatabricksConnection? databricksConnection = Connection as DatabricksConnection;
             if (databricksConnection != null && Connection.SessionHandle?.SessionId?.Guid != null && Connection.SessionHandle.SessionId.Guid.Length == 16)
             {
                 string sessionId = new Guid(Connection.SessionHandle.SessionId.Guid).ToString("N");
                 Activity.Current?.SetTag(StatementExecutionEvent.SessionId, sessionId);
+                // Also set on the parent ExecuteQueryAsyncInternal activity so it's not dropped by the telemetry listener
+                Activity.Current?.Parent?.SetTag(StatementExecutionEvent.SessionId, sessionId);
             }
 
             // Set statement.type tag - this is an ExecuteStatement call, so it's a "query" type
