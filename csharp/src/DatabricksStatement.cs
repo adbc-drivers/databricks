@@ -107,12 +107,18 @@ namespace AdbcDrivers.Databricks
             return ctx;
         }
 
-        private void RecordSuccess(StatementTelemetryContext ctx)
+        private void RecordSuccess(StatementTelemetryContext ctx, QueryResult? queryResult = null)
         {
             ctx.RecordFirstBatchReady();
             ctx.ResultFormat = useCloudFetch
                 ? ExecutionResultFormat.ExecutionResultExternalLinks
                 : ExecutionResultFormat.ExecutionResultInlineArrow;
+
+            // Extract statement ID from the reader's response
+            if (queryResult?.Stream is Reader.DatabricksCompositeReader reader)
+            {
+                ctx.StatementId = reader.StatementId;
+            }
         }
 
         private void RecordError(StatementTelemetryContext ctx, Exception ex)
@@ -130,7 +136,7 @@ namespace AdbcDrivers.Databricks
             try
             {
                 QueryResult result = base.ExecuteQuery();
-                RecordSuccess(ctx);
+                RecordSuccess(ctx, result);
                 return result;
             }
             catch (Exception ex) { RecordError(ctx, ex); throw; }
@@ -145,7 +151,7 @@ namespace AdbcDrivers.Databricks
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
-                RecordSuccess(ctx);
+                RecordSuccess(ctx, result);
                 return result;
             }
             catch (Exception ex) { RecordError(ctx, ex); throw; }

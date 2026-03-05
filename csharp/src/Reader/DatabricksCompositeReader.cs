@@ -54,6 +54,13 @@ namespace AdbcDrivers.Databricks.Reader
         private readonly IResponse _response;
         private readonly bool _isLz4Compressed;
 
+        /// <summary>
+        /// Gets the statement ID (operation ID) from the server response, if available.
+        /// </summary>
+        internal string? StatementId => _response?.OperationHandle?.OperationId?.Guid != null
+            ? new Guid(_response.OperationHandle.OperationId.Guid).ToString()
+            : null;
+
         private IOperationStatusPoller? operationStatusPoller;
         private bool _disposed;
         private readonly HttpClient _httpClient;
