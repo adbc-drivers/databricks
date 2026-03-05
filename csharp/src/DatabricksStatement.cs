@@ -95,82 +95,94 @@ namespace AdbcDrivers.Databricks
             }
         }
 
+        private StatementTelemetryContext? CreateTelemetryContext(Telemetry.Proto.StatementType statementType)
+        {
+            var session = ((DatabricksConnection)Connection).TelemetrySession;
+            if (session?.TelemetryClient == null) return null;
+
+            var ctx = new StatementTelemetryContext(session);
+            ctx.OperationType = OperationType.OperationExecuteStatement;
+            ctx.StatementType = statementType;
+            ctx.IsCompressed = canDecompressLz4;
+            return ctx;
+        }
+
+        private void RecordSuccess(StatementTelemetryContext ctx)
+        {
+            ctx.RecordFirstBatchReady();
+            ctx.ResultFormat = useCloudFetch
+                ? ExecutionResultFormat.ExecutionResultExternalLinks
+                : ExecutionResultFormat.ExecutionResultInlineArrow;
+        }
+
+        private void RecordError(StatementTelemetryContext ctx, Exception ex)
+        {
+            ctx.HasError = true;
+            ctx.ErrorName = ex.GetType().Name;
+            ctx.ErrorMessage = ex.Message;
+        }
+
         public override QueryResult ExecuteQuery()
         {
-            var databricksConnection = (DatabricksConnection)Connection;
-            var telemetrySession = databricksConnection.TelemetrySession;
-
-            // If telemetry is not enabled, just call base
-            if (telemetrySession?.TelemetryClient == null)
-            {
-                return base.ExecuteQuery();
-            }
-
-            var ctx = new StatementTelemetryContext(telemetrySession);
-            ctx.OperationType = OperationType.OperationExecuteStatement;
-            ctx.StatementType = Telemetry.Proto.StatementType.StatementQuery;
-            ctx.IsCompressed = canDecompressLz4;
+            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementQuery);
+            if (ctx == null) return base.ExecuteQuery();
 
             try
             {
                 QueryResult result = base.ExecuteQuery();
-                ctx.RecordFirstBatchReady();
-                ctx.ResultFormat = useCloudFetch
-                    ? ExecutionResultFormat.ExecutionResultExternalLinks
-                    : ExecutionResultFormat.ExecutionResultInlineArrow;
+                RecordSuccess(ctx);
                 return result;
             }
-            catch (Exception ex)
-            {
-                ctx.HasError = true;
-                ctx.ErrorName = ex.GetType().Name;
-                ctx.ErrorMessage = ex.Message;
-                throw;
-            }
-            finally
-            {
-                EmitTelemetry(ctx, telemetrySession);
-            }
+            catch (Exception ex) { RecordError(ctx, ex); throw; }
+            finally { EmitTelemetry(ctx); }
         }
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
-            var databricksConnection = (DatabricksConnection)Connection;
-            var telemetrySession = databricksConnection.TelemetrySession;
-
-            if (telemetrySession?.TelemetryClient == null)
-            {
-                return await base.ExecuteQueryAsync();
-            }
-
-            var ctx = new StatementTelemetryContext(telemetrySession);
-            ctx.OperationType = OperationType.OperationExecuteStatement;
-            ctx.StatementType = Telemetry.Proto.StatementType.StatementQuery;
-            ctx.IsCompressed = canDecompressLz4;
+            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementQuery);
+            if (ctx == null) return await base.ExecuteQueryAsync();
 
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
-                ctx.RecordFirstBatchReady();
-                ctx.ResultFormat = useCloudFetch
-                    ? ExecutionResultFormat.ExecutionResultExternalLinks
-                    : ExecutionResultFormat.ExecutionResultInlineArrow;
+                RecordSuccess(ctx);
                 return result;
             }
-            catch (Exception ex)
-            {
-                ctx.HasError = true;
-                ctx.ErrorName = ex.GetType().Name;
-                ctx.ErrorMessage = ex.Message;
-                throw;
-            }
-            finally
-            {
-                EmitTelemetry(ctx, telemetrySession);
-            }
+            catch (Exception ex) { RecordError(ctx, ex); throw; }
+            finally { EmitTelemetry(ctx); }
         }
 
-        private void EmitTelemetry(StatementTelemetryContext ctx, TelemetrySessionContext session)
+        public override UpdateResult ExecuteUpdate()
+        {
+            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementUpdate);
+            if (ctx == null) return base.ExecuteUpdate();
+
+            try
+            {
+                UpdateResult result = base.ExecuteUpdate();
+                RecordSuccess(ctx);
+                return result;
+            }
+            catch (Exception ex) { RecordError(ctx, ex); throw; }
+            finally { EmitTelemetry(ctx); }
+        }
+
+        public override async Task<UpdateResult> ExecuteUpdateAsync()
+        {
+            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementUpdate);
+            if (ctx == null) return await base.ExecuteUpdateAsync();
+
+            try
+            {
+                UpdateResult result = await base.ExecuteUpdateAsync();
+                RecordSuccess(ctx);
+                return result;
+            }
+            catch (Exception ex) { RecordError(ctx, ex); throw; }
+            finally { EmitTelemetry(ctx); }
+        }
+
+        private void EmitTelemetry(StatementTelemetryContext ctx)
         {
             try
             {
@@ -191,7 +203,8 @@ namespace AdbcDrivers.Databricks
                     }
                 };
 
-                session.TelemetryClient!.Enqueue(frontendLog);
+                var session = ((DatabricksConnection)Connection).TelemetrySession;
+                session?.TelemetryClient?.Enqueue(frontendLog);
             }
             catch
             {
