@@ -35,7 +35,7 @@ use driverbase::error::ErrorHelper;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::span::EnteredSpan;
-use tracing::{debug, info_span};
+use tracing::{debug, info_span, Span};
 
 /// Configuration passed from Database to Connection.
 pub struct ConnectionConfig {
@@ -84,6 +84,16 @@ impl Connection {
         config: ConnectionConfig,
         runtime: tokio::runtime::Runtime,
     ) -> crate::error::Result<Self> {
+        // Enter the ADBC span before any work so all log lines are tagged.
+        // session_id is recorded once the session is created.
+        let span = info_span!("ADBC", session_id = tracing::field::Empty);
+        let entered = span.entered();
+
+        debug!(
+            "Creating connection to {} with warehouse {}",
+            config.host, config.warehouse_id
+        );
+
         // Create session using the client provided by Database
         let session_info = runtime.block_on(config.client.create_session(
             config.catalog.as_deref(),
@@ -91,8 +101,7 @@ impl Connection {
             HashMap::new(),
         ))?;
 
-        let span = info_span!("ADBC", session_id = %session_info.session_id);
-        let entered = span.entered();
+        Span::current().record("session_id", session_info.session_id.as_str());
 
         Ok(Self {
             host: config.host,
