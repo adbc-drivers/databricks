@@ -27,6 +27,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
@@ -113,6 +114,15 @@ namespace AdbcDrivers.Databricks.Reader
                 new("has_result_links", initialResults.__isset.results && initialResults.Results.__isset.resultLinks),
                 new("result_links_count", initialResults.Results?.ResultLinks?.Count ?? 0)
             ]);
+
+            // Add telemetry tag for result format
+            activity?.SetTag(StatementExecutionEvent.ResultFormat, useCloudFetch ? "cloudfetch" : "inline");
+
+            // Add telemetry tag for chunk count if using CloudFetch
+            if (useCloudFetch && initialResults.Results?.ResultLinks != null)
+            {
+                activity?.SetTag(StatementExecutionEvent.ResultChunkCount, initialResults.Results.ResultLinks.Count);
+            }
 
             if (useCloudFetch)
             {
