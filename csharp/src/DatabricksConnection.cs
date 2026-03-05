@@ -650,26 +650,8 @@ namespace AdbcDrivers.Databricks
                         : null,
                     AuthType = isAuthenticated ? "token" : "none",
                     TelemetryClient = _telemetryClient,
-                    SystemConfiguration = new Telemetry.Proto.DriverSystemConfiguration
-                    {
-                        DriverVersion = s_assemblyVersion,
-                        DriverName = "Databricks ADBC Driver",
-                        OsName = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
-                        OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
-                        RuntimeName = ".NET",
-                        RuntimeVersion = System.Environment.Version.ToString(),
-                        LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name
-                    },
-                    DriverConnectionParams = new Telemetry.Proto.DriverConnectionParameters
-                    {
-                        HttpPath = Properties.TryGetValue("adbc.spark.http_path", out string? httpPath) ? httpPath ?? "" : "",
-                        Mode = Telemetry.Proto.DriverModeType.DriverModeThrift,
-                        HostInfo = new Telemetry.Proto.HostDetails
-                        {
-                            HostUrl = _host ?? "",
-                            Port = 443
-                        }
-                    }
+                    SystemConfiguration = BuildSystemConfiguration(),
+                    DriverConnectionParams = BuildDriverConnectionParams(isAuthenticated)
                 };
 
                 activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
@@ -714,6 +696,61 @@ namespace AdbcDrivers.Databricks
             return !string.IsNullOrWhiteSpace(token) ||
                    !string.IsNullOrWhiteSpace(accessToken) ||
                    !string.IsNullOrWhiteSpace(username);
+        }
+
+        private Telemetry.Proto.DriverSystemConfiguration BuildSystemConfiguration()
+        {
+            var osVersion = System.Environment.OSVersion;
+            return new Telemetry.Proto.DriverSystemConfiguration
+            {
+                DriverVersion = s_assemblyVersion,
+                DriverName = "Databricks ADBC Driver",
+                OsName = osVersion.Platform.ToString(),
+                OsVersion = osVersion.Version.ToString(),
+                OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
+                RuntimeName = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+                RuntimeVersion = System.Environment.Version.ToString(),
+                LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
+                CharSetEncoding = System.Text.Encoding.Default.WebName,
+                ProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName
+            };
+        }
+
+        private Telemetry.Proto.DriverConnectionParameters BuildDriverConnectionParams(bool isAuthenticated)
+        {
+            Properties.TryGetValue("adbc.spark.http_path", out string? httpPath);
+
+            // Determine auth mechanism
+            var authMech = Telemetry.Proto.DriverAuthMechType.Unspecified;
+            var authFlow = Telemetry.Proto.DriverAuthFlowType.Unspecified;
+
+            Properties.TryGetValue(SparkParameters.AuthType, out string? authType);
+            Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
+
+            if (!string.IsNullOrEmpty(grantType) &&
+                grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
+            {
+                authMech = Telemetry.Proto.DriverAuthMechType.DriverAuthMechOauth;
+                authFlow = Telemetry.Proto.DriverAuthFlowType.DriverAuthFlowClientCredentials;
+            }
+            else if (isAuthenticated)
+            {
+                authMech = Telemetry.Proto.DriverAuthMechType.DriverAuthMechPat;
+                authFlow = Telemetry.Proto.DriverAuthFlowType.DriverAuthFlowTokenPassthrough;
+            }
+
+            return new Telemetry.Proto.DriverConnectionParameters
+            {
+                HttpPath = httpPath ?? "",
+                Mode = Telemetry.Proto.DriverModeType.DriverModeThrift,
+                HostInfo = new Telemetry.Proto.HostDetails
+                {
+                    HostUrl = $"https://{_host}:443",
+                    Port = 0
+                },
+                AuthMech = authMech,
+                AuthFlow = authFlow,
+            };
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
