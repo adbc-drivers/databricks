@@ -33,6 +33,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -102,6 +103,10 @@ namespace AdbcDrivers.Databricks
 
         // Default namespace
         private TNamespace? _defaultNamespace;
+
+        // Telemetry fields
+        private ITelemetryClient? _telemetryClient;
+        private string? _host;
 
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
@@ -575,10 +580,113 @@ namespace AdbcDrivers.Databricks
                 ]);
                 await SetSchema(_defaultNamespace.SchemaName);
             }
+
+            // Initialize telemetry after successful session creation
+            await InitializeTelemetryAsync(activity).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Initializes telemetry client based on feature flag.
+        /// All exceptions are swallowed to ensure telemetry failures don't impact connection.
+        /// </summary>
+        /// <param name="activity">Optional activity for tracing telemetry initialization.</param>
+        private async Task InitializeTelemetryAsync(Activity? activity = null)
+        {
+            try
+            {
+                // Extract host for telemetry
+                _host = GetHost();
+
+                // Check feature flag via FeatureFlagCache
+                // This merges feature flags from server with local properties
+                // Priority: User properties > Feature flags > Defaults
+                IReadOnlyDictionary<string, string> mergedProperties = await FeatureFlagCache.GetInstance()
+                    .MergePropertiesWithFeatureFlagsAsync(Properties, s_assemblyVersion)
+                    .ConfigureAwait(false);
+
+                // Parse telemetry configuration from merged properties
+                TelemetryConfiguration telemetryConfig = TelemetryConfiguration.FromProperties(mergedProperties);
+
+                // Only initialize telemetry if enabled
+                if (!telemetryConfig.Enabled)
+                {
+                    activity?.AddEvent(new ActivityEvent("telemetry.initialization.skipped",
+                        tags: new ActivityTagsCollection { { "reason", "feature_flag_disabled" } }));
+                    return;
+                }
+
+                // Validate configuration
+                IReadOnlyList<string> validationErrors = telemetryConfig.Validate();
+                if (validationErrors.Count > 0)
+                {
+                    activity?.AddEvent(new ActivityEvent("telemetry.initialization.failed",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "reason", "invalid_configuration" },
+                            { "errors", string.Join("; ", validationErrors) }
+                        }));
+                    return;
+                }
+
+                // Determine if connection is authenticated
+                bool isAuthenticated = IsAuthenticated();
+
+                // Create HTTP client for telemetry export
+                HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties);
+
+                // Get or create telemetry client from manager (per-host singleton)
+                _telemetryClient = TelemetryClientManager.GetInstance().GetOrCreateClient(
+                    _host,
+                    telemetryHttpClient,
+                    isAuthenticated,
+                    telemetryConfig);
+
+                activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", _host },
+                        { "batch_size", telemetryConfig.BatchSize },
+                        { "flush_interval_ms", telemetryConfig.FlushIntervalMs }
+                    }));
+            }
+            catch (Exception ex)
+            {
+                // Swallow all telemetry initialization exceptions per design requirement
+                // Telemetry failures must not impact connection behavior
+                activity?.AddEvent(new ActivityEvent("telemetry.initialization.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+            }
+        }
+
+        /// <summary>
+        /// Determines if the connection is authenticated.
+        /// Returns true if authentication is configured (Token, OAuth, Basic, etc.).
+        /// </summary>
+        private bool IsAuthenticated()
+        {
+            Properties.TryGetValue(SparkParameters.AuthType, out string? authType);
+
+            if (SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue))
+            {
+                return authTypeValue != SparkAuthType.None;
+            }
+
+            // If auth type is not parseable, check for auth credentials
+            Properties.TryGetValue(SparkParameters.Token, out string? token);
+            Properties.TryGetValue(SparkParameters.AccessToken, out string? accessToken);
+            Properties.TryGetValue(AdbcOptions.Username, out string? username);
+
+            return !string.IsNullOrWhiteSpace(token) ||
+                   !string.IsNullOrWhiteSpace(accessToken) ||
+                   !string.IsNullOrWhiteSpace(username);
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
-        // in case the server version is too low.
+        // in case the server version is too old.
         private async Task SetSchema(string schemaName)
         {
             using var statement = new DatabricksStatement(this);
@@ -879,7 +987,82 @@ namespace AdbcDrivers.Databricks
 
         protected override void Dispose(bool disposing)
         {
+            if (disposing)
+            {
+                // Clean up telemetry client
+                // This is synchronous because Dispose() cannot be async
+                // We use GetAwaiter().GetResult() to block, which is acceptable in Dispose
+                DisposeTelemetryAsync().GetAwaiter().GetResult();
+            }
+
             base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Disposes telemetry client asynchronously.
+        /// Follows the graceful shutdown sequence: flush → release client → release feature flags.
+        /// All exceptions are swallowed per telemetry design requirement.
+        /// </summary>
+        private async Task DisposeTelemetryAsync()
+        {
+            try
+            {
+                if (_telemetryClient != null && !string.IsNullOrEmpty(_host))
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.started",
+                        tags: new ActivityTagsCollection { { "host", _host } }));
+
+                    // Step 1: Flush pending metrics
+                    try
+                    {
+                        await _telemetryClient.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.flushed"));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Swallow flush exceptions
+                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.flush_error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
+
+                    // Step 2: Release telemetry client from manager
+                    try
+                    {
+                        await TelemetryClientManager.GetInstance()
+                            .ReleaseClientAsync(_host)
+                            .ConfigureAwait(false);
+                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.client_released"));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Swallow release exceptions
+                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.release_error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
+
+                    _telemetryClient = null;
+
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.completed"));
+                }
+            }
+            catch (Exception ex)
+            {
+                // Swallow all telemetry disposal exceptions
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+            }
         }
 
         /// <summary>
