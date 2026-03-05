@@ -109,6 +109,7 @@ namespace AdbcDrivers.Databricks
             var ctx = new StatementTelemetryContext(telemetrySession);
             ctx.OperationType = OperationType.OperationExecuteStatement;
             ctx.StatementType = Telemetry.Proto.StatementType.StatementQuery;
+            ctx.IsCompressed = canDecompressLz4;
 
             try
             {
