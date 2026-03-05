@@ -1077,15 +1077,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"  DriverVersion: {sysConfig.DriverVersion}");
                 OutputHelper?.WriteLine($"  DriverName: {sysConfig.DriverName}");
                 OutputHelper?.WriteLine($"  OsName: {sysConfig.OsName}");
+                OutputHelper?.WriteLine($"  OsVersion: {sysConfig.OsVersion}");
                 OutputHelper?.WriteLine($"  OsArch: {sysConfig.OsArch}");
                 OutputHelper?.WriteLine($"  RuntimeName: {sysConfig.RuntimeName}");
                 OutputHelper?.WriteLine($"  RuntimeVersion: {sysConfig.RuntimeVersion}");
                 OutputHelper?.WriteLine($"  LocaleName: {sysConfig.LocaleName}");
+                OutputHelper?.WriteLine($"  CharSetEncoding: {sysConfig.CharSetEncoding}");
+                OutputHelper?.WriteLine($"  ProcessName: {sysConfig.ProcessName}");
                 Assert.False(string.IsNullOrEmpty(sysConfig.DriverVersion), "DriverVersion should be populated");
                 Assert.False(string.IsNullOrEmpty(sysConfig.DriverName), "DriverName should be populated");
                 Assert.False(string.IsNullOrEmpty(sysConfig.OsName), "OsName should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.OsVersion), "OsVersion should be populated");
                 Assert.False(string.IsNullOrEmpty(sysConfig.RuntimeName), "RuntimeName should be populated");
                 Assert.False(string.IsNullOrEmpty(sysConfig.RuntimeVersion), "RuntimeVersion should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.CharSetEncoding), "CharSetEncoding should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.ProcessName), "ProcessName should be populated");
 
                 // Verify DriverConnectionParams (from TelemetrySessionContext)
                 Assert.NotNull(sqlLog.DriverConnectionParams);
@@ -1093,9 +1099,14 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"  Mode: {connParams.Mode}");
                 OutputHelper?.WriteLine($"  HostUrl: {connParams.HostInfo?.HostUrl}");
                 OutputHelper?.WriteLine($"  Port: {connParams.HostInfo?.Port}");
+                OutputHelper?.WriteLine($"  AuthMech: {connParams.AuthMech}");
+                OutputHelper?.WriteLine($"  AuthFlow: {connParams.AuthFlow}");
                 Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverModeType.Unspecified, connParams.Mode);
                 Assert.NotNull(connParams.HostInfo);
                 Assert.False(string.IsNullOrEmpty(connParams.HostInfo.HostUrl), "HostUrl should be populated");
+                Assert.Contains("https://", connParams.HostInfo.HostUrl);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthMechType.Unspecified, connParams.AuthMech);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthFlowType.Unspecified, connParams.AuthFlow);
 
                 // Log IsCompressed
                 OutputHelper?.WriteLine($"  IsCompressed: {sqlOp.IsCompressed}");
