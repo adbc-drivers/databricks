@@ -994,6 +994,188 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
+        /// Tests that a query execution captures all expected telemetry fields:
+        /// sessionId, statementId, operationLatencyMs, resultFormat, and operationType.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_QueryExecution_CapturesAllFields()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for telemetry field validation test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    using (AdbcStatement statement = connection.CreateStatement())
+                    {
+                        statement.SqlQuery = "SELECT 42 as answer, 'hello' as greeting";
+                        QueryResult result = statement.ExecuteQuery();
+                        Assert.NotNull(result);
+                    }
+                }
+
+                database.Dispose();
+
+                Assert.True(capturingExporter.ExportedLogs.Count > 0, "Expected at least one telemetry log");
+
+                // Find the statement telemetry log (has SqlDriverLog with SqlOperation)
+                TelemetryFrontendLog? statementLog = null;
+                foreach (var log in capturingExporter.ExportedLogs)
+                {
+                    if (log.Entry?.SqlDriverLog?.SqlOperation != null)
+                    {
+                        statementLog = log;
+                        break;
+                    }
+                }
+
+                Assert.NotNull(statementLog);
+                OutputHelper?.WriteLine($"Found statement telemetry log: event_id={statementLog!.FrontendLogEventId}");
+
+                // Verify FrontendLog envelope
+                Assert.False(string.IsNullOrEmpty(statementLog.FrontendLogEventId), "FrontendLogEventId should be set");
+                Assert.NotNull(statementLog.Context);
+                Assert.True(statementLog.Context!.TimestampMillis > 0, "TimestampMillis should be set");
+
+                // Verify OssSqlDriverTelemetryLog fields
+                var sqlLog = statementLog.Entry!.SqlDriverLog!;
+                OutputHelper?.WriteLine($"  SessionId: {sqlLog.SessionId}");
+                OutputHelper?.WriteLine($"  SqlStatementId: {sqlLog.SqlStatementId}");
+                OutputHelper?.WriteLine($"  AuthType: {sqlLog.AuthType}");
+                OutputHelper?.WriteLine($"  OperationLatencyMs: {sqlLog.OperationLatencyMs}");
+
+                Assert.False(string.IsNullOrEmpty(sqlLog.SessionId), "SessionId should be populated from connection");
+                Assert.True(sqlLog.OperationLatencyMs > 0, "OperationLatencyMs should be > 0");
+
+                // Verify SqlExecutionEvent
+                var sqlOp = sqlLog.SqlOperation;
+                Assert.NotNull(sqlOp);
+                OutputHelper?.WriteLine($"  StatementType: {sqlOp.StatementType}");
+                OutputHelper?.WriteLine($"  ExecutionResult: {sqlOp.ExecutionResult}");
+
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.StatementType.Unspecified, sqlOp.StatementType);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResultFormat.Unspecified, sqlOp.ExecutionResult);
+
+                // Verify OperationDetail
+                Assert.NotNull(sqlOp.OperationDetail);
+                OutputHelper?.WriteLine($"  OperationType: {sqlOp.OperationDetail.OperationType}");
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.OperationType.Unspecified, sqlOp.OperationDetail.OperationType);
+
+                // Verify SystemConfiguration (from TelemetrySessionContext)
+                Assert.NotNull(sqlLog.SystemConfiguration);
+                var sysConfig = sqlLog.SystemConfiguration;
+                OutputHelper?.WriteLine($"  DriverVersion: {sysConfig.DriverVersion}");
+                OutputHelper?.WriteLine($"  DriverName: {sysConfig.DriverName}");
+                OutputHelper?.WriteLine($"  OsName: {sysConfig.OsName}");
+                OutputHelper?.WriteLine($"  OsArch: {sysConfig.OsArch}");
+                OutputHelper?.WriteLine($"  RuntimeName: {sysConfig.RuntimeName}");
+                OutputHelper?.WriteLine($"  RuntimeVersion: {sysConfig.RuntimeVersion}");
+                OutputHelper?.WriteLine($"  LocaleName: {sysConfig.LocaleName}");
+                Assert.False(string.IsNullOrEmpty(sysConfig.DriverVersion), "DriverVersion should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.DriverName), "DriverName should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.OsName), "OsName should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.RuntimeName), "RuntimeName should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.RuntimeVersion), "RuntimeVersion should be populated");
+
+                // Verify DriverConnectionParams (from TelemetrySessionContext)
+                Assert.NotNull(sqlLog.DriverConnectionParams);
+                var connParams = sqlLog.DriverConnectionParams;
+                OutputHelper?.WriteLine($"  Mode: {connParams.Mode}");
+                OutputHelper?.WriteLine($"  HostUrl: {connParams.HostInfo?.HostUrl}");
+                OutputHelper?.WriteLine($"  Port: {connParams.HostInfo?.Port}");
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverModeType.Unspecified, connParams.Mode);
+                Assert.NotNull(connParams.HostInfo);
+                Assert.False(string.IsNullOrEmpty(connParams.HostInfo.HostUrl), "HostUrl should be populated");
+
+                // Log IsCompressed
+                OutputHelper?.WriteLine($"  IsCompressed: {sqlOp.IsCompressed}");
+
+                OutputHelper?.WriteLine("All telemetry fields validated successfully");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that an error query captures error info in telemetry.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_ErrorQuery_CapturesErrorInfo()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for error telemetry field validation test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    try
+                    {
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = "SELECT * FROM nonexistent_table_xyz_12345";
+                            statement.ExecuteQuery();
+                            Assert.Fail("Expected query to fail");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        OutputHelper?.WriteLine($"Expected error: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+
+                database.Dispose();
+
+                Assert.True(capturingExporter.ExportedLogs.Count > 0, "Expected at least one telemetry log for error query");
+
+                // Find the log with error info
+                TelemetryFrontendLog? errorLog = null;
+                foreach (var log in capturingExporter.ExportedLogs)
+                {
+                    if (log.Entry?.SqlDriverLog?.ErrorInfo != null)
+                    {
+                        errorLog = log;
+                        break;
+                    }
+                }
+
+                Assert.NotNull(errorLog);
+                var errorInfo = errorLog!.Entry!.SqlDriverLog!.ErrorInfo!;
+                OutputHelper?.WriteLine($"  ErrorName: {errorInfo.ErrorName}");
+
+                Assert.False(string.IsNullOrEmpty(errorInfo.ErrorName), "ErrorName should be populated");
+                Assert.True(errorLog.Entry!.SqlDriverLog!.OperationLatencyMs > 0, "OperationLatencyMs should be > 0 even for errors");
+
+                OutputHelper?.WriteLine("Error telemetry fields validated successfully");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
         /// Tests that telemetry never propagates exceptions to driver operations.
         /// </summary>
         [SkippableFact]
