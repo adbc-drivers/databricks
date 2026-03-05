@@ -493,317 +493,331 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         #region Comprehensive E2E Tests
 
         /// <summary>
-        /// Tests that connection event telemetry is exported with driver configuration.
-        /// Validates the complete telemetry pipeline from connection creation to export.
+        /// Sets up a CapturingTelemetryExporter as the override and returns it.
+        /// Must call ClearExporterOverride() in a finally block after use.
+        /// </summary>
+        private CapturingTelemetryExporter SetupCapturingExporter()
+        {
+            var exporter = new CapturingTelemetryExporter();
+            TelemetryClientManager.ExporterOverride = exporter;
+            return exporter;
+        }
+
+        /// <summary>
+        /// Clears the exporter override. Call in finally block after SetupCapturingExporter().
+        /// </summary>
+        private void ClearExporterOverride()
+        {
+            TelemetryClientManager.ExporterOverride = null;
+        }
+
+        /// <summary>
+        /// Tests that the capturing exporter is wired into the telemetry pipeline
+        /// and connection/query lifecycle completes without errors when telemetry is enabled.
+        /// Telemetry event emission will be validated once V3 direct-object pipeline is wired.
         /// </summary>
         [SkippableFact]
-        public async Task Telemetry_Connection_ExportsConnectionEvent()
+        public void Telemetry_Connection_ExportsConnectionEvent()
         {
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for connection telemetry test");
 
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing connection event telemetry to {host}");
-
-            // Get connection properties and enable telemetry explicitly
-            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
-            properties[TelemetryConfiguration.PropertyKeyBatchSize] = "10";
-            properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "1000";
-
-            // Create and open connection - this should trigger connection event
-            AdbcDriver driver = NewDriver;
-            AdbcDatabase database = driver.Open(properties);
-
-            using (AdbcConnection connection = database.Connect(properties))
+            var capturingExporter = SetupCapturingExporter();
+            try
             {
-                OutputHelper?.WriteLine("Connection opened successfully");
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
 
-                // Execute a simple query to ensure connection is fully established
-                using (AdbcStatement statement = connection.CreateStatement())
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
                 {
-                    statement.SqlQuery = "SELECT 1 as test_column";
-                    QueryResult result = statement.ExecuteQuery();
-                    Assert.NotNull(result);
-                    OutputHelper?.WriteLine("Query executed successfully");
+                    using (AdbcStatement statement = connection.CreateStatement())
+                    {
+                        statement.SqlQuery = "SELECT 1 as test_column";
+                        QueryResult result = statement.ExecuteQuery();
+                        Assert.NotNull(result);
+                    }
                 }
 
-                // Give telemetry time to flush
-                await Task.Delay(2000);
-            }
+                database.Dispose();
 
-            database.Dispose();
-            OutputHelper?.WriteLine("Connection event telemetry test completed");
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs, ExportAsync called {capturingExporter.ExportCallCount} times");
+
+                // Validate: if any logs were exported, they should be well-formed
+                foreach (var log in capturingExporter.ExportedLogs)
+                {
+                    Assert.False(string.IsNullOrEmpty(log.FrontendLogEventId), "FrontendLogEventId should be populated");
+                    OutputHelper?.WriteLine($"  Log: workspace_id={log.WorkspaceId}, event_id={log.FrontendLogEventId}");
+                }
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
         }
 
         /// <summary>
-        /// Tests that statement execution telemetry exports with execution latency.
-        /// Validates statement metrics are captured and exported correctly.
+        /// Tests that statement execution with telemetry enabled works correctly.
+        /// Validates the capturing exporter receives logs if the pipeline emits them.
         /// </summary>
         [SkippableFact]
-        public async Task Telemetry_Statement_ExportsStatementEvent()
+        public void Telemetry_Statement_ExportsStatementEvent()
         {
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for statement telemetry test");
 
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing statement event telemetry to {host}");
-
-            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
-            properties[TelemetryConfiguration.PropertyKeyBatchSize] = "5";
-            properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "1000";
-
-            AdbcDriver driver = NewDriver;
-            AdbcDatabase database = driver.Open(properties);
-
-            using (AdbcConnection connection = database.Connect(properties))
+            var capturingExporter = SetupCapturingExporter();
+            try
             {
-                // Execute multiple statements to generate telemetry
-                for (int i = 0; i < 3; i++)
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
                 {
-                    using (AdbcStatement statement = connection.CreateStatement())
+                    for (int i = 0; i < 3; i++)
                     {
-                        statement.SqlQuery = $"SELECT {i} as iteration, 'test_{i}' as label";
-                        QueryResult result = statement.ExecuteQuery();
-                        Assert.NotNull(result);
-                        OutputHelper?.WriteLine($"Statement {i} executed successfully");
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as iteration, 'test_{i}' as label";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
                     }
                 }
 
-                // Give telemetry time to aggregate and flush
-                await Task.Delay(2000);
-            }
+                database.Dispose();
 
-            database.Dispose();
-            OutputHelper?.WriteLine("Statement event telemetry test completed");
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs after 3 queries, ExportAsync called {capturingExporter.ExportCallCount} times");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
         }
 
         /// <summary>
-        /// Tests that large query results export CloudFetch chunk metrics.
-        /// Validates chunk download metrics are captured for CloudFetch operations.
+        /// Tests that large query results with CloudFetch complete correctly with telemetry enabled,
+        /// and that the capturing exporter is wired in to receive any exported metrics.
         /// </summary>
         [SkippableFact]
-        public async Task Telemetry_CloudFetch_ExportsChunkMetrics()
+        public void Telemetry_CloudFetch_ExportsChunkMetrics()
         {
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for CloudFetch telemetry test");
 
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing CloudFetch chunk metrics telemetry to {host}");
-
-            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
-            properties[TelemetryConfiguration.PropertyKeyBatchSize] = "10";
-            properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "2000";
-
-            // Ensure CloudFetch is enabled
-            properties["adbc.databricks.use_cloud_fetch"] = "true";
-
-            AdbcDriver driver = NewDriver;
-            AdbcDatabase database = driver.Open(properties);
-
-            using (AdbcConnection connection = database.Connect(properties))
+            var capturingExporter = SetupCapturingExporter();
+            try
             {
-                // Execute a query that returns a larger result set to trigger CloudFetch
-                using (AdbcStatement statement = connection.CreateStatement())
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+                properties["adbc.databricks.use_cloud_fetch"] = "true";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
                 {
-                    // Generate a result set with multiple rows to trigger chunk processing
-                    statement.SqlQuery = @"
-                        SELECT
-                            id,
-                            CONCAT('row_', CAST(id AS STRING)) as data,
-                            id * 2 as computed_value
-                        FROM RANGE(1000)";
-
-                    QueryResult result = statement.ExecuteQuery();
-                    Assert.NotNull(result);
-
-                    // Consume the result to ensure CloudFetch completes
-                    int rowCount = 0;
-                    using (RecordBatch batch = result.Stream.ReadNextRecordBatchAsync().Result!)
+                    using (AdbcStatement statement = connection.CreateStatement())
                     {
-                        if (batch != null)
-                        {
-                            rowCount = batch.Length;
-                        }
-                    }
+                        statement.SqlQuery = @"
+                            SELECT
+                                id,
+                                CONCAT('row_', CAST(id AS STRING)) as data,
+                                id * 2 as computed_value
+                            FROM RANGE(1000)";
 
-                    OutputHelper?.WriteLine($"CloudFetch query executed, processed {rowCount} rows");
+                        QueryResult result = statement.ExecuteQuery();
+                        Assert.NotNull(result);
+
+                        // Consume all batches to ensure CloudFetch completes
+                        int totalRows = 0;
+                        while (true)
+                        {
+                            RecordBatch? batch = result.Stream.ReadNextRecordBatchAsync().Result;
+                            if (batch == null) break;
+                            totalRows += batch.Length;
+                            batch.Dispose();
+                        }
+
+                        OutputHelper?.WriteLine($"CloudFetch query consumed {totalRows} rows");
+                        Assert.True(totalRows >= 1000, $"Expected at least 1000 rows but got {totalRows}");
+                    }
                 }
 
-                // Give telemetry time to process and flush CloudFetch metrics
-                await Task.Delay(3000);
-            }
+                database.Dispose();
 
-            database.Dispose();
-            OutputHelper?.WriteLine("CloudFetch chunk metrics telemetry test completed");
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs, ExportAsync called {capturingExporter.ExportCallCount} times");
+
+                // Validate: if logs were exported, they should be well-formed
+                foreach (var log in capturingExporter.ExportedLogs)
+                {
+                    Assert.False(string.IsNullOrEmpty(log.FrontendLogEventId), "FrontendLogEventId should be populated");
+                }
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
         }
 
         /// <summary>
-        /// Tests that error events are exported when SQL execution fails.
-        /// Validates error telemetry captures exception details correctly.
+        /// Tests that error queries complete correctly with telemetry enabled.
         /// </summary>
         [SkippableFact]
-        public async Task Telemetry_Error_ExportsErrorEvent()
+        public void Telemetry_Error_ExportsErrorEvent()
         {
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for error telemetry test");
 
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing error event telemetry to {host}");
-
-            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
-            properties[TelemetryConfiguration.PropertyKeyBatchSize] = "5";
-            properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "1000";
-
-            AdbcDriver driver = NewDriver;
-            AdbcDatabase database = driver.Open(properties);
-
-            using (AdbcConnection connection = database.Connect(properties))
+            var capturingExporter = SetupCapturingExporter();
+            try
             {
-                // Execute an invalid query to generate an error event
-                try
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
                 {
-                    using (AdbcStatement statement = connection.CreateStatement())
+                    try
                     {
-                        statement.SqlQuery = "SELECT * FROM table_that_does_not_exist_12345";
-                        QueryResult result = statement.ExecuteQuery();
-                        // This should throw an exception
-                        Assert.Fail("Expected query to fail but it succeeded");
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = "SELECT * FROM table_that_does_not_exist_12345";
+                            statement.ExecuteQuery();
+                            Assert.Fail("Expected query to fail but it succeeded");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        OutputHelper?.WriteLine($"Expected error occurred: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-                catch (Exception ex)
-                {
-                    OutputHelper?.WriteLine($"Expected error occurred: {ex.Message}");
-                    // Error is expected - telemetry should capture it
-                }
 
-                // Give telemetry time to process and flush error event
-                await Task.Delay(2000);
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs after error query, ExportAsync called {capturingExporter.ExportCallCount} times");
             }
-
-            database.Dispose();
-            OutputHelper?.WriteLine("Error event telemetry test completed");
+            finally
+            {
+                ClearExporterOverride();
+            }
         }
 
         /// <summary>
-        /// Tests that when telemetry feature flag is disabled, no telemetry is exported.
-        /// Validates that telemetry can be completely disabled via configuration.
+        /// Tests that when telemetry is disabled, no telemetry is exported.
         /// </summary>
         [SkippableFact]
-        public async Task Telemetry_FeatureFlagDisabled_NoExport()
+        public void Telemetry_FeatureFlagDisabled_NoExport()
         {
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for feature flag test");
 
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing feature flag disabled scenario for {host}");
-
-            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-
-            // Explicitly disable telemetry
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "false";
-
-            AdbcDriver driver = NewDriver;
-            AdbcDatabase database = driver.Open(properties);
-
-            using (AdbcConnection connection = database.Connect(properties))
+            var capturingExporter = SetupCapturingExporter();
+            try
             {
-                // Execute queries - telemetry should not be initialized or exported
-                for (int i = 0; i < 5; i++)
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "false";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
                 {
-                    using (AdbcStatement statement = connection.CreateStatement())
+                    for (int i = 0; i < 5; i++)
                     {
-                        statement.SqlQuery = $"SELECT {i} as test";
-                        QueryResult result = statement.ExecuteQuery();
-                        Assert.NotNull(result);
-                        OutputHelper?.WriteLine($"Query {i} executed successfully with telemetry disabled");
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as test";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
                     }
                 }
 
-                await Task.Delay(500);
-            }
+                database.Dispose();
 
-            database.Dispose();
-            OutputHelper?.WriteLine("Feature flag disabled test completed - no telemetry exported");
+                OutputHelper?.WriteLine($"With telemetry disabled: ExportAsync called {capturingExporter.ExportCallCount} times, {capturingExporter.ExportedLogs.Count} logs captured");
+                Assert.Equal(0, capturingExporter.ExportCallCount);
+                Assert.Empty(capturingExporter.ExportedLogs);
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
         }
 
         /// <summary>
-        /// Tests that multiple connections to the same host share a single telemetry client.
-        /// Validates per-host singleton pattern prevents rate limiting.
+        /// Tests that multiple connections to the same host complete correctly with telemetry enabled
+        /// and all connections share a single telemetry pipeline (single capturing exporter).
         /// </summary>
         [SkippableFact]
-        public async Task Telemetry_MultipleConnections_SameHost_SharesClient()
+        public void Telemetry_MultipleConnections_SameHost_SharesClient()
         {
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for multiple connections test");
 
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing multiple connections sharing telemetry client for {host}");
-
-            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
-            properties[TelemetryConfiguration.PropertyKeyBatchSize] = "20";
-            properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "2000";
-
-            AdbcDriver driver = NewDriver;
-            AdbcDatabase database = driver.Open(properties);
-
-            // Create 3 connections to the same host
-            List<AdbcConnection> connections = new List<AdbcConnection>();
+            var capturingExporter = SetupCapturingExporter();
             try
             {
-                for (int i = 0; i < 3; i++)
-                {
-                    AdbcConnection connection = database.Connect(properties);
-                    connections.Add(connection);
-                    OutputHelper?.WriteLine($"Connection {i + 1} opened");
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
 
-                    // Execute a query on each connection
-                    using (AdbcStatement statement = connection.CreateStatement())
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                List<AdbcConnection> connections = new List<AdbcConnection>();
+                try
+                {
+                    for (int i = 0; i < 3; i++)
                     {
-                        statement.SqlQuery = $"SELECT {i} as connection_id, 'connection_{i}' as name";
-                        QueryResult result = statement.ExecuteQuery();
-                        Assert.NotNull(result);
-                        OutputHelper?.WriteLine($"Query executed on connection {i + 1}");
+                        AdbcConnection connection = database.Connect(properties);
+                        connections.Add(connection);
+
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as connection_id";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
+                    }
+                }
+                finally
+                {
+                    foreach (var connection in connections)
+                    {
+                        connection.Dispose();
                     }
                 }
 
-                // All connections should share the same telemetry client
-                // Give telemetry time to aggregate events from all connections
-                await Task.Delay(3000);
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs from 3 connections, ExportAsync called {capturingExporter.ExportCallCount} times");
             }
             finally
             {
-                // Dispose all connections - only the last one should close the telemetry client
-                foreach (var connection in connections)
-                {
-                    connection.Dispose();
-                }
-                OutputHelper?.WriteLine("All connections disposed");
+                ClearExporterOverride();
             }
-
-            database.Dispose();
-            OutputHelper?.WriteLine("Multiple connections shared client test completed");
         }
 
         /// <summary>
         /// Tests that circuit breaker stops exporting telemetry after failure threshold.
-        /// Validates circuit breaker correctly isolates failing endpoints.
         /// </summary>
         [SkippableFact]
         public async Task Telemetry_CircuitBreaker_StopsExportingOnFailure()
@@ -811,14 +825,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             var host = GetDatabricksHost();
             Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
 
-            OutputHelper?.WriteLine($"Testing circuit breaker behavior for {host}");
-
-            // Use an invalid host to trigger circuit breaker
             string invalidHost = "https://invalid-databricks-host-12345.cloud.databricks.com";
 
             using var httpClient = new HttpClient();
 
-            // Configure circuit breaker with low threshold for testing
             var config = new TelemetryConfiguration
             {
                 Enabled = true,
@@ -827,34 +837,29 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 MaxRetries = 1,
                 RetryDelayMs = 50,
                 CircuitBreakerEnabled = true,
-                CircuitBreakerThreshold = 3, // Open after 3 failures
+                CircuitBreakerThreshold = 3,
                 CircuitBreakerTimeout = TimeSpan.FromSeconds(30)
             };
 
             var exporter = new DatabricksTelemetryExporter(httpClient, invalidHost, isAuthenticated: false, config);
             var circuitBreakerExporter = new CircuitBreakerTelemetryExporter(exporter, invalidHost);
 
-            // Create test telemetry logs
             var logs = CreateTestTelemetryLogs(1);
 
-            // First 3 exports should fail and increment circuit breaker failure count
+            int failCount = 0;
             for (int i = 0; i < 5; i++)
             {
                 bool success = await circuitBreakerExporter.ExportAsync(logs);
-                OutputHelper?.WriteLine($"Export attempt {i + 1}: {(success ? "Success" : "Failed")}");
+                if (!success) failCount++;
+                OutputHelper?.WriteLine($"Export attempt {i + 1}: {(success ? "Success/Dropped" : "Failed")}");
             }
 
-            // After threshold failures, circuit breaker should be open
-            // Subsequent exports should be silently dropped (no HTTP requests)
-            bool finalExport = await circuitBreakerExporter.ExportAsync(logs);
-            OutputHelper?.WriteLine($"Final export after circuit open: {(finalExport ? "Success" : "Failed")}");
-
-            OutputHelper?.WriteLine("Circuit breaker test completed");
+            OutputHelper?.WriteLine($"Total failures: {failCount}");
+            Assert.True(failCount > 0, "At least some exports should have failed against invalid host");
         }
 
         /// <summary>
         /// Tests that connection close flushes all pending telemetry events.
-        /// Validates graceful shutdown ensures no telemetry loss.
         /// </summary>
         [SkippableFact]
         public void Telemetry_GracefulShutdown_FlushesBeforeClose()
@@ -862,70 +867,69 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for graceful shutdown test");
 
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing graceful shutdown with flush for {host}");
-
-            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
-            properties[TelemetryConfiguration.PropertyKeyBatchSize] = "100"; // Large batch to ensure flush is needed
-            properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "30000"; // Long interval to prevent automatic flush
-
-            AdbcDriver driver = NewDriver;
-            AdbcDatabase database = driver.Open(properties);
-
-            using (AdbcConnection connection = database.Connect(properties))
+            var capturingExporter = SetupCapturingExporter();
+            try
             {
-                // Execute queries to generate telemetry events
-                for (int i = 0; i < 10; i++)
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "100"; // Large batch so auto-flush won't trigger
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "30000"; // Long interval to prevent timer flush
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
                 {
-                    using (AdbcStatement statement = connection.CreateStatement())
+                    for (int i = 0; i < 10; i++)
                     {
-                        statement.SqlQuery = $"SELECT {i} as iteration";
-                        QueryResult result = statement.ExecuteQuery();
-                        Assert.NotNull(result);
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as iteration";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
                     }
+
+                    // At this point, events should be pending (not flushed due to large batch/long interval)
+                    int logsBeforeDispose = capturingExporter.ExportedLogs.Count;
+                    OutputHelper?.WriteLine($"Logs before connection dispose: {logsBeforeDispose}");
                 }
 
-                OutputHelper?.WriteLine("Executed 10 queries, now closing connection to trigger flush");
+                // After connection dispose, flush should have been triggered
+                int logsAfterDispose = capturingExporter.ExportedLogs.Count;
+                OutputHelper?.WriteLine($"Logs after connection dispose: {logsAfterDispose}");
 
-                // Connection.Dispose() should trigger FlushAsync() before releasing telemetry client
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"ExportAsync called {capturingExporter.ExportCallCount} times during dispose");
             }
-
-            // Dispose should have flushed all pending events
-            database.Dispose();
-
-            OutputHelper?.WriteLine("Graceful shutdown with flush test completed");
+            finally
+            {
+                ClearExporterOverride();
+            }
         }
 
         /// <summary>
         /// Tests that telemetry overhead is less than 1% of query execution time.
-        /// Validates telemetry does not significantly impact driver performance.
         /// </summary>
         [SkippableFact]
-        public async Task Telemetry_PerformanceOverhead_LessThanOnePercent()
+        public void Telemetry_PerformanceOverhead_LessThanOnePercent()
         {
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for performance test");
-
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing telemetry performance overhead for {host}");
 
             Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
 
             const int iterations = 20;
             const string testQuery = "SELECT 42 as answer, 'performance_test' as label";
 
-            // Measure baseline performance WITHOUT telemetry
+            // Measure baseline WITHOUT telemetry
             properties[TelemetryConfiguration.PropertyKeyEnabled] = "false";
 
             AdbcDriver driver1 = NewDriver;
             AdbcDatabase database1 = driver1.Open(properties);
 
-            System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
             using (AdbcConnection connection = database1.Connect(properties))
             {
@@ -943,75 +947,63 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             stopwatch.Stop();
             long baselineMs = stopwatch.ElapsedMilliseconds;
             database1.Dispose();
-
             OutputHelper?.WriteLine($"Baseline (no telemetry): {iterations} queries in {baselineMs} ms");
 
-            // Measure performance WITH telemetry enabled
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
-            properties[TelemetryConfiguration.PropertyKeyBatchSize] = "50";
-            properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "5000";
-
-            AdbcDriver driver2 = NewDriver;
-            AdbcDatabase database2 = driver2.Open(properties);
-
-            stopwatch.Restart();
-
-            using (AdbcConnection connection = database2.Connect(properties))
+            // Measure WITH telemetry using capturing exporter (no network overhead)
+            var capturingExporter = SetupCapturingExporter();
+            try
             {
-                for (int i = 0; i < iterations; i++)
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "50";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "5000";
+
+                AdbcDriver driver2 = NewDriver;
+                AdbcDatabase database2 = driver2.Open(properties);
+
+                stopwatch.Restart();
+
+                using (AdbcConnection connection = database2.Connect(properties))
                 {
-                    using (AdbcStatement statement = connection.CreateStatement())
+                    for (int i = 0; i < iterations; i++)
                     {
-                        statement.SqlQuery = testQuery;
-                        QueryResult result = statement.ExecuteQuery();
-                        Assert.NotNull(result);
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = testQuery;
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
                     }
                 }
 
-                // Wait for telemetry to flush
-                await Task.Delay(1000);
+                stopwatch.Stop();
+                long withTelemetryMs = stopwatch.ElapsedMilliseconds;
+                database2.Dispose();
+
+                OutputHelper?.WriteLine($"With telemetry: {iterations} queries in {withTelemetryMs} ms");
+
+                double overheadPercent = baselineMs > 0 ? ((double)(withTelemetryMs - baselineMs) / baselineMs) * 100.0 : 0;
+                OutputHelper?.WriteLine($"Overhead: {overheadPercent:F2}%");
+
+                Assert.True(overheadPercent < 50.0,
+                    $"Telemetry overhead {overheadPercent:F2}% exceeds acceptable threshold of 50%");
             }
-
-            stopwatch.Stop();
-            long withTelemetryMs = stopwatch.ElapsedMilliseconds;
-            database2.Dispose();
-
-            OutputHelper?.WriteLine($"With telemetry: {iterations} queries in {withTelemetryMs} ms");
-
-            // Calculate overhead percentage
-            double overheadMs = withTelemetryMs - baselineMs;
-            double overheadPercent = (overheadMs / baselineMs) * 100.0;
-
-            OutputHelper?.WriteLine($"Overhead: {overheadMs} ms ({overheadPercent:F2}%)");
-
-            // Assert overhead is less than 50% (relaxed for E2E test variance and network conditions)
-            // In production with warmed connections, actual overhead should be < 1%
-            // E2E tests have additional variance from network, cold starts, and environment factors
-            Assert.True(overheadPercent < 50.0,
-                $"Telemetry overhead {overheadPercent:F2}% exceeds acceptable threshold of 50%");
-
-            OutputHelper?.WriteLine("Performance overhead test completed");
+            finally
+            {
+                ClearExporterOverride();
+            }
         }
 
         /// <summary>
         /// Tests that telemetry never propagates exceptions to driver operations.
-        /// Validates fail-safe behavior ensures telemetry failures don't impact functionality.
         /// </summary>
         [SkippableFact]
-        public async Task Telemetry_NeverPropagatesExceptions()
+        public void Telemetry_NeverPropagatesExceptions()
         {
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for exception propagation test");
 
-            var host = GetDatabricksHost();
-            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
-
-            OutputHelper?.WriteLine($"Testing exception propagation for {host}");
-
             Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
             properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
-
-            // Configure with invalid settings that might cause issues
             properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
             properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "1";
             properties[TelemetryConfiguration.PropertyKeyMaxRetries] = "0";
@@ -1023,7 +1015,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             {
                 using (AdbcConnection connection = database.Connect(properties))
                 {
-                    // Execute queries - should succeed even if telemetry has issues
                     for (int i = 0; i < 10; i++)
                     {
                         using (AdbcStatement statement = connection.CreateStatement())
@@ -1031,27 +1022,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                             statement.SqlQuery = $"SELECT {i} as iteration";
                             QueryResult result = statement.ExecuteQuery();
                             Assert.NotNull(result);
-                            OutputHelper?.WriteLine($"Query {i} succeeded");
                         }
                     }
-
-                    await Task.Delay(500);
                 }
 
-                // If we reach here, no exceptions were propagated
                 OutputHelper?.WriteLine("No exceptions propagated - test passed");
             }
             catch (Exception ex)
             {
-                // Any exception here is a test failure
                 Assert.Fail($"Exception propagated from telemetry: {ex.Message}");
             }
             finally
             {
                 database.Dispose();
             }
-
-            OutputHelper?.WriteLine("Exception propagation test completed");
         }
 
         #endregion

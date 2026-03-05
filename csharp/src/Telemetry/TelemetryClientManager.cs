@@ -47,6 +47,13 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly object _lock = new object();
 
         /// <summary>
+        /// Optional exporter override for testing. When set, newly created TelemetryClients
+        /// use this exporter instead of the default DatabricksTelemetryExporter pipeline.
+        /// Must be set before connections are opened and cleared after tests complete.
+        /// </summary>
+        internal static ITelemetryExporter? ExporterOverride { get; set; }
+
+        /// <summary>
         /// Internal constructor. Public API uses GetInstance() for the singleton.
         /// Internal visibility allows creating non-singleton instances for testing.
         /// </summary>
@@ -113,7 +120,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     return existing.Client;
                 }
 
-                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config));
+                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config, ExporterOverride));
                 _clients[host] = holder;
                 return holder.Client;
             }
