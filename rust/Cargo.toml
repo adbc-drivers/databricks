@@ -64,6 +64,9 @@ async-trait = "0.1"
 # Error handling
 thiserror = "2"
 
+# Arrow C Data Interface for metadata FFI
+arrow = { version = "57", optional = true, default-features = false, features = ["ffi"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"
@@ -72,6 +75,7 @@ adbc_driver_manager = "0.22"
 [features]
 default = []
 ffi = ["adbc_ffi"]
+metadata-ffi = ["ffi", "dep:arrow"]
 
 [lib]
 name = "databricks_adbc"
