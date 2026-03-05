@@ -76,6 +76,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             }
         }
 
+        private static Dictionary<string, TelemetryClientHolder> GetClients(TelemetryClientManager manager)
+        {
+            System.Reflection.FieldInfo? clientsField = typeof(TelemetryClientManager)
+                .GetField("_clients", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.NotNull(clientsField);
+            Dictionary<string, TelemetryClientHolder>? clients =
+                clientsField.GetValue(manager) as Dictionary<string, TelemetryClientHolder>;
+            Assert.NotNull(clients);
+            return clients;
+        }
+
         [Fact]
         public void GetInstance_ReturnsSingleton()
         {
@@ -90,21 +101,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void GetOrCreateClient_NewHost_CreatesClient()
+        public async Task GetOrCreateClient_NewHost_CreatesClient()
         {
-            // Arrange
-            TelemetryClientManager manager = TelemetryClientManager.GetInstance();
-            string host = $"test-host-{Guid.NewGuid()}.databricks.com";
+            // Arrange - use test instance to avoid singleton pollution
+            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            string host = "test-host.databricks.com";
             TelemetryConfiguration config = new TelemetryConfiguration();
-            MockTelemetryClient mockClient = new MockTelemetryClient();
-
-            // Use reflection to access private _clients field for verification
-            System.Reflection.FieldInfo? clientsField = typeof(TelemetryClientManager)
-                .GetField("_clients", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(clientsField);
-            System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>? clients =
-                clientsField.GetValue(manager) as System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>;
-            Assert.NotNull(clients);
+            Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act
             ITelemetryClient client = manager.GetOrCreateClient(
@@ -112,29 +115,29 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 () => new MockTelemetryExporter(),
                 config);
 
-            // Assert
-            Assert.NotNull(client);
-            Assert.True(clients.ContainsKey(host));
-            Assert.True(clients.TryGetValue(host, out TelemetryClientHolder? holder));
-            Assert.NotNull(holder);
-            Assert.Equal(1, holder._refCount);
+            try
+            {
+                // Assert
+                Assert.NotNull(client);
+                Assert.True(clients.ContainsKey(host));
+                Assert.True(clients.TryGetValue(host, out TelemetryClientHolder? holder));
+                Assert.NotNull(holder);
+                Assert.Equal(1, holder._refCount);
+            }
+            finally
+            {
+                await manager.ReleaseClientAsync(host);
+            }
         }
 
         [Fact]
-        public void GetOrCreateClient_ExistingHost_ReturnsSameClient()
+        public async Task GetOrCreateClient_ExistingHost_ReturnsSameClient()
         {
             // Arrange
-            TelemetryClientManager manager = TelemetryClientManager.GetInstance();
-            string host = $"test-host-{Guid.NewGuid()}.databricks.com";
+            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            string host = "test-host.databricks.com";
             TelemetryConfiguration config = new TelemetryConfiguration();
-
-            // Use reflection to access private _clients field
-            System.Reflection.FieldInfo? clientsField = typeof(TelemetryClientManager)
-                .GetField("_clients", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(clientsField);
-            System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>? clients =
-                clientsField.GetValue(manager) as System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>;
-            Assert.NotNull(clients);
+            Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act
             ITelemetryClient client1 = manager.GetOrCreateClient(
@@ -146,31 +149,31 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 () => new MockTelemetryExporter(),
                 config);
 
-            // Assert
-            Assert.NotNull(client1);
-            Assert.NotNull(client2);
-            Assert.Same(client1, client2);
-            Assert.True(clients.TryGetValue(host, out TelemetryClientHolder? holder));
-            Assert.NotNull(holder);
-            Assert.Equal(2, holder._refCount);
+            try
+            {
+                // Assert
+                Assert.NotNull(client1);
+                Assert.NotNull(client2);
+                Assert.Same(client1, client2);
+                Assert.True(clients.TryGetValue(host, out TelemetryClientHolder? holder));
+                Assert.NotNull(holder);
+                Assert.Equal(2, holder._refCount);
+            }
+            finally
+            {
+                await manager.ReleaseClientAsync(host);
+                await manager.ReleaseClientAsync(host);
+            }
         }
 
         [Fact]
         public async Task ReleaseClientAsync_LastReference_ClosesClient()
         {
             // Arrange
-            TelemetryClientManager manager = TelemetryClientManager.GetInstance();
-            string host = $"test-host-{Guid.NewGuid()}.databricks.com";
-            TelemetryConfiguration config = new TelemetryConfiguration();
+            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            string host = "test-host.databricks.com";
             MockTelemetryClient mockClient = new MockTelemetryClient();
-
-            // Use reflection to inject a mock client
-            System.Reflection.FieldInfo? clientsField = typeof(TelemetryClientManager)
-                .GetField("_clients", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(clientsField);
-            System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>? clients =
-                clientsField.GetValue(manager) as System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>;
-            Assert.NotNull(clients);
+            Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Add mock client directly to dictionary
             TelemetryClientHolder holder = new TelemetryClientHolder(mockClient);
@@ -190,18 +193,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task ReleaseClientAsync_MultipleReferences_KeepsClient()
         {
             // Arrange
-            TelemetryClientManager manager = TelemetryClientManager.GetInstance();
-            string host = $"test-host-{Guid.NewGuid()}.databricks.com";
-            TelemetryConfiguration config = new TelemetryConfiguration();
+            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            string host = "test-host.databricks.com";
             MockTelemetryClient mockClient = new MockTelemetryClient();
-
-            // Use reflection to inject a mock client with RefCount=2
-            System.Reflection.FieldInfo? clientsField = typeof(TelemetryClientManager)
-                .GetField("_clients", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(clientsField);
-            System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>? clients =
-                clientsField.GetValue(manager) as System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>;
-            Assert.NotNull(clients);
+            Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Add mock client with RefCount=2
             TelemetryClientHolder holder = new TelemetryClientHolder(mockClient);
@@ -216,26 +211,22 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.True(clients.ContainsKey(host));
             Assert.Equal(0, mockClient.CloseCount);
             Assert.False(mockClient.IsDisposed);
+
+            // Cleanup
+            await manager.ReleaseClientAsync(host);
         }
 
         [Fact]
         public async Task GetOrCreateClient_ThreadSafe_NoDuplicates()
         {
             // Arrange
-            TelemetryClientManager manager = TelemetryClientManager.GetInstance();
-            string host = $"test-host-{Guid.NewGuid()}.databricks.com";
+            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            string host = "test-host.databricks.com";
             TelemetryConfiguration config = new TelemetryConfiguration();
             int threadCount = 10;
-            List<ITelemetryClient> clients = new List<ITelemetryClient>();
+            List<ITelemetryClient> clientsList = new List<ITelemetryClient>();
             object lockObj = new object();
-
-            // Use reflection to access private _clients field
-            System.Reflection.FieldInfo? clientsField = typeof(TelemetryClientManager)
-                .GetField("_clients", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(clientsField);
-            System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>? clientsDict =
-                clientsField.GetValue(manager) as System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>;
-            Assert.NotNull(clientsDict);
+            Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act - create clients concurrently from multiple threads
             Task[] tasks = Enumerable.Range(0, threadCount).Select(_ => Task.Run(() =>
@@ -246,32 +237,43 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                     config);
                 lock (lockObj)
                 {
-                    clients.Add(client);
+                    clientsList.Add(client);
                 }
             })).ToArray();
 
             await Task.WhenAll(tasks);
 
-            // Assert - all clients should be the same instance
-            Assert.Equal(threadCount, clients.Count);
-            ITelemetryClient firstClient = clients[0];
-            foreach (ITelemetryClient client in clients)
+            try
             {
-                Assert.Same(firstClient, client);
-            }
+                // Assert - all clients should be the same instance
+                Assert.Equal(threadCount, clientsList.Count);
+                ITelemetryClient firstClient = clientsList[0];
+                foreach (ITelemetryClient client in clientsList)
+                {
+                    Assert.Same(firstClient, client);
+                }
 
-            // Assert - ref count should be incremented correctly
-            Assert.True(clientsDict.TryGetValue(host, out TelemetryClientHolder? holder));
-            Assert.NotNull(holder);
-            Assert.Equal(threadCount, holder._refCount);
+                // Assert - ref count should be incremented correctly
+                Assert.True(clients.TryGetValue(host, out TelemetryClientHolder? holder));
+                Assert.NotNull(holder);
+                Assert.Equal(threadCount, holder._refCount);
+            }
+            finally
+            {
+                // Cleanup - release all references
+                for (int i = 0; i < threadCount; i++)
+                {
+                    await manager.ReleaseClientAsync(host);
+                }
+            }
         }
 
         [Fact]
         public async Task ReleaseClientAsync_NonExistentHost_NoError()
         {
             // Arrange
-            TelemetryClientManager manager = TelemetryClientManager.GetInstance();
-            string host = $"non-existent-host-{Guid.NewGuid()}.databricks.com";
+            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            string host = "non-existent-host.databricks.com";
 
             // Act & Assert - should not throw
             await manager.ReleaseClientAsync(host);
@@ -281,18 +283,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task GetOrCreateClient_ThenRelease_MultipleHosts()
         {
             // Arrange
-            TelemetryClientManager manager = TelemetryClientManager.GetInstance();
-            string host1 = $"test-host1-{Guid.NewGuid()}.databricks.com";
-            string host2 = $"test-host2-{Guid.NewGuid()}.databricks.com";
+            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            string host1 = "test-host1.databricks.com";
+            string host2 = "test-host2.databricks.com";
             TelemetryConfiguration config = new TelemetryConfiguration();
-
-            // Use reflection to access private _clients field
-            System.Reflection.FieldInfo? clientsField = typeof(TelemetryClientManager)
-                .GetField("_clients", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(clientsField);
-            System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>? clients =
-                clientsField.GetValue(manager) as System.Collections.Concurrent.ConcurrentDictionary<string, TelemetryClientHolder>;
-            Assert.NotNull(clients);
+            Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act - create clients for two different hosts
             ITelemetryClient client1 = manager.GetOrCreateClient(
