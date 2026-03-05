@@ -117,54 +117,54 @@ namespace AdbcDrivers.Databricks.Telemetry
     }
 
     /// <summary>
-    /// Immutable per-connection session-level telemetry context.
-    /// Created once at connection open and shared (read-only) with all statements on that connection.
+    /// Per-connection session-level telemetry context.
+    /// Created once at connection open and shared with all statements on that connection.
     /// </summary>
     /// <remarks>
-    /// This class holds frozen session-level data that does not change for the lifetime of a connection.
-    /// All properties have private setters to ensure immutability after construction.
-    /// Use the constructor or object initializer to set values.
+    /// This class holds session-level data that is populated during connection initialization.
+    /// Properties use internal setters so that only the driver assembly can set values after
+    /// construction. Once initialized, the context should be treated as read-only by consumers.
     /// </remarks>
     internal sealed class TelemetrySessionContext
     {
         /// <summary>
         /// Gets the session ID from the server.
         /// </summary>
-        public string? SessionId { get; set; }
+        public string? SessionId { get; internal set; }
 
         /// <summary>
         /// Gets the authentication type used for the connection (e.g., "PAT", "OAuth-M2M").
         /// </summary>
-        public string? AuthType { get; set; }
+        public string? AuthType { get; internal set; }
 
         /// <summary>
         /// Gets the Databricks workspace ID.
         /// </summary>
-        public long WorkspaceId { get; set; }
+        public long WorkspaceId { get; internal set; }
 
         /// <summary>
         /// Gets the driver system configuration (OS, runtime, driver version, etc.).
         /// </summary>
-        public DriverSystemConfiguration? SystemConfiguration { get; set; }
+        public DriverSystemConfiguration? SystemConfiguration { get; internal set; }
 
         /// <summary>
         /// Gets the driver connection parameters (HTTP path, protocol mode, host details, etc.).
         /// </summary>
-        public DriverConnectionParameters? DriverConnectionParams { get; set; }
+        public DriverConnectionParameters? DriverConnectionParams { get; internal set; }
 
         /// <summary>
         /// Gets the default result format configured for this connection.
         /// </summary>
-        public ExecutionResultFormat DefaultResultFormat { get; set; }
+        public ExecutionResultFormat DefaultResultFormat { get; internal set; }
 
         /// <summary>
         /// Gets whether compression is enabled by default for this connection.
         /// </summary>
-        public bool DefaultCompressionEnabled { get; set; }
+        public bool DefaultCompressionEnabled { get; internal set; }
 
         /// <summary>
         /// Gets the telemetry client for exporting telemetry events.
         /// </summary>
-        public ITelemetryClient? TelemetryClient { get; set; }
+        public ITelemetryClient? TelemetryClient { get; internal set; }
     }
 }

@@ -15,8 +15,7 @@
 */
 
 using System;
-using System.Collections.Concurrent;
-using System.Threading;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace AdbcDrivers.Databricks.Telemetry
@@ -45,12 +44,20 @@ namespace AdbcDrivers.Databricks.Telemetry
     {
         private static readonly TelemetryClientManager s_instance = new TelemetryClientManager();
 
-        private readonly ConcurrentDictionary<string, TelemetryClientHolder> _clients = new ConcurrentDictionary<string, TelemetryClientHolder>();
+        private readonly Dictionary<string, TelemetryClientHolder> _clients = new Dictionary<string, TelemetryClientHolder>();
+        private readonly object _lock = new object();
 
         /// <summary>
         /// Private constructor to enforce singleton pattern.
         /// </summary>
         private TelemetryClientManager()
+        {
+        }
+
+        /// <summary>
+        /// Internal constructor for testing. Allows creating non-singleton instances.
+        /// </summary>
+        internal TelemetryClientManager(bool forTesting)
         {
         }
 
@@ -70,14 +77,13 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <returns>The telemetry client for the specified host.</returns>
         /// <remarks>
         /// <para>
-        /// Thread Safety: This method is thread-safe. If multiple connections call this method
-        /// concurrently for the same host, only one client will be created and the reference
-        /// count will be incremented appropriately.
+        /// Thread Safety: This method is thread-safe. Uses a lock to ensure atomicity of
+        /// the lookup-or-create and reference count increment operations, preventing race
+        /// conditions with concurrent ReleaseClientAsync calls.
         /// </para>
         /// <para>
         /// Reference Counting: The first call creates a client with RefCount=1. Subsequent calls
-        /// for the same host return the existing client and increment the reference count using
-        /// Interlocked.Increment for thread safety.
+        /// for the same host return the existing client and increment the reference count.
         /// </para>
         /// <para>
         /// The exporterFactory is only invoked when creating a new client, not when returning
@@ -89,16 +95,18 @@ namespace AdbcDrivers.Databricks.Telemetry
             Func<ITelemetryExporter> exporterFactory,
             TelemetryConfiguration config)
         {
-            TelemetryClientHolder holder = _clients.AddOrUpdate(
-                host,
-                _ => new TelemetryClientHolder(new TelemetryClient(exporterFactory(), config)),
-                (_, existing) =>
+            lock (_lock)
+            {
+                if (_clients.TryGetValue(host, out TelemetryClientHolder? existing))
                 {
-                    Interlocked.Increment(ref existing._refCount);
-                    return existing;
-                });
+                    existing._refCount++;
+                    return existing.Client;
+                }
 
-            return holder.Client;
+                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(exporterFactory(), config));
+                _clients[host] = holder;
+                return holder.Client;
+            }
         }
 
         /// <summary>
@@ -109,19 +117,14 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <returns>A task that completes when the operation finishes.</returns>
         /// <remarks>
         /// <para>
-        /// Thread Safety: This method is thread-safe. Multiple connections can call this method
-        /// concurrently for the same host. The reference count is decremented atomically using
-        /// Interlocked.Decrement.
+        /// Thread Safety: This method is thread-safe. Uses a lock to ensure atomicity of
+        /// the decrement and conditional removal, preventing race conditions with concurrent
+        /// GetOrCreateClient calls.
         /// </para>
         /// <para>
         /// Cleanup: When the reference count reaches zero (last connection closes), the client
-        /// is removed from the dictionary and CloseAsync() is called to flush any pending
-        /// telemetry events and dispose resources.
-        /// </para>
-        /// <para>
-        /// The client's FlushAsync() is called via CloseAsync() to ensure no events are lost.
-        /// This operation never throws exceptions - telemetry failures are swallowed to prevent
-        /// impacting driver functionality.
+        /// is removed from the dictionary and CloseAsync() is called outside the lock to flush
+        /// any pending telemetry events and dispose resources.
         /// </para>
         /// <para>
         /// If the host is not found in the dictionary (e.g., already removed by another thread),
@@ -130,16 +133,23 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public async Task ReleaseClientAsync(string host)
         {
-            if (_clients.TryGetValue(host, out TelemetryClientHolder? holder))
+            TelemetryClientHolder? toClose = null;
+            lock (_lock)
             {
-                int newCount = Interlocked.Decrement(ref holder._refCount);
-                if (newCount == 0)
+                if (_clients.TryGetValue(host, out TelemetryClientHolder? holder))
                 {
-                    if (_clients.TryRemove(host, out TelemetryClientHolder? removed))
+                    holder._refCount--;
+                    if (holder._refCount == 0)
                     {
-                        await removed.Client.CloseAsync().ConfigureAwait(false);
+                        _clients.Remove(host);
+                        toClose = holder;
                     }
                 }
+            }
+
+            if (toClose != null)
+            {
+                await toClose.Client.CloseAsync().ConfigureAwait(false);
             }
         }
     }

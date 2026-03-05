@@ -47,6 +47,8 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly Timer _flushTimer;
         private readonly SemaphoreSlim _flushLock = new SemaphoreSlim(1, 1);
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+        private int _queueCount;
+        private volatile bool _closing;
         private volatile bool _disposed;
 
         /// <summary>
@@ -81,6 +83,8 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </para>
         /// <para>
         /// If the client is closed or disposing, the event is silently dropped.
+        /// The batch-size trigger is best-effort; the periodic timer ensures all events
+        /// are eventually flushed.
         /// </para>
         /// </remarks>
         public void Enqueue(TelemetryFrontendLog log)
@@ -88,9 +92,10 @@ namespace AdbcDrivers.Databricks.Telemetry
             if (_disposed) return;
 
             _queue.Enqueue(log);
+            int count = Interlocked.Increment(ref _queueCount);
 
-            // Trigger flush if batch size reached
-            if (_queue.Count >= _config.BatchSize)
+            // Trigger flush if batch size reached (best-effort)
+            if (count >= _config.BatchSize)
             {
                 _ = FlushAsync(); // Fire-and-forget, errors swallowed
             }
@@ -103,12 +108,13 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <returns>A task that completes when all pending events have been flushed.</returns>
         /// <remarks>
         /// <para>
-        /// This method blocks until all queued events are exported to the backend service.
+        /// This method exports all queued events in batches to the backend service.
         /// It is called when a connection closes to ensure no events are lost.
         /// </para>
         /// <para>
-        /// If a flush is already in progress, this method waits for it to complete rather
-        /// than starting a new flush operation.
+        /// If a flush is already in progress, this method returns immediately rather
+        /// than starting a concurrent flush operation (except during close, where it
+        /// waits for the in-progress flush to complete).
         /// </para>
         /// <para>
         /// This method never throws exceptions related to telemetry failures. Export errors
@@ -120,30 +126,40 @@ namespace AdbcDrivers.Databricks.Telemetry
         {
             if (_disposed) return;
 
-            // Prevent concurrent flushes
-            if (!await _flushLock.WaitAsync(0, ct).ConfigureAwait(false))
+            // During close, wait for any in-progress flush to complete;
+            // otherwise, skip if a flush is already running.
+            if (_closing)
+            {
+                await _flushLock.WaitAsync(ct).ConfigureAwait(false);
+            }
+            else if (!await _flushLock.WaitAsync(0, ct).ConfigureAwait(false))
+            {
                 return;
+            }
 
             try
             {
-                List<TelemetryFrontendLog> batch = new List<TelemetryFrontendLog>();
-
-                // Drain queue up to batch size
-                while (batch.Count < _config.BatchSize && _queue.TryDequeue(out TelemetryFrontendLog? log))
+                // Drain all queued events in batches
+                while (!_queue.IsEmpty)
                 {
-                    batch.Add(log);
-                }
+                    List<TelemetryFrontendLog> batch = new List<TelemetryFrontendLog>();
 
-                if (batch.Count > 0)
-                {
-                    // Export via circuit breaker → exporter → HTTP
-                    await _exporter.ExportAsync(batch, ct).ConfigureAwait(false);
+                    while (batch.Count < _config.BatchSize && _queue.TryDequeue(out TelemetryFrontendLog? log))
+                    {
+                        batch.Add(log);
+                        Interlocked.Decrement(ref _queueCount);
+                    }
+
+                    if (batch.Count > 0)
+                    {
+                        await _exporter.ExportAsync(batch, ct).ConfigureAwait(false);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                // Swallow all exceptions per telemetry requirement
-                Debug.WriteLine($"[TRACE] TelemetryClient flush error: {ex.Message}");
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.flush.error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
             }
             finally
             {
@@ -177,26 +193,28 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public async Task CloseAsync()
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (_closing) return;
+            _closing = true;
 
             try
             {
-                // Stop timer
+                // Stop timer first to prevent new timer-triggered flushes
                 _flushTimer.Dispose();
 
-                // Cancel any pending operations
+                // Cancel any pending timer-triggered operations
                 _cts.Cancel();
 
-                // Final flush of remaining events
+                // Final flush of all remaining events (uses blocking wait on _flushLock)
                 await FlushAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[TRACE] TelemetryClient close error: {ex.Message}");
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.close.error",
+                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
             }
             finally
             {
+                _disposed = true;
                 _cts.Dispose();
                 _flushLock.Dispose();
             }
@@ -214,7 +232,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <param name="state">Unused state object.</param>
         private void OnFlushTimer(object? state)
         {
-            if (_disposed) return;
+            if (_disposed || _closing) return;
             _ = FlushAsync(_cts.Token);
         }
     }
