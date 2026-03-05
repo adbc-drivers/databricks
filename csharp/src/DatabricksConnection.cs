@@ -633,7 +633,7 @@ namespace AdbcDrivers.Databricks
                 bool isAuthenticated = IsAuthenticated();
 
                 // Create HTTP client for telemetry export
-                HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties);
+                HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties, _host, s_assemblyVersion);
 
                 // Get or create telemetry client from manager (per-host singleton)
                 _telemetryClient = TelemetryClientManager.GetInstance().GetOrCreateClient(
