@@ -182,12 +182,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             Assert.True(request.UploadTime > 0, "UploadTime should be a positive timestamp");
             Assert.Equal(2, request.ProtoLogs.Count);
 
-            // Verify each log is serialized as JSON
+            // Verify each log is serialized as JSON with snake_case field names
             foreach (var protoLog in request.ProtoLogs)
             {
                 Assert.NotEmpty(protoLog);
                 Assert.Contains("workspace_id", protoLog);
                 Assert.Contains("frontend_log_event_id", protoLog);
+
+                // Verify proto fields use snake_case (not camelCase)
+                Assert.Contains("session_id", protoLog);
+                Assert.Contains("sql_statement_id", protoLog);
+                Assert.Contains("operation_latency_ms", protoLog);
+                Assert.DoesNotContain("\"sessionId\"", protoLog);
+                Assert.DoesNotContain("\"sqlStatementId\"", protoLog);
+                Assert.DoesNotContain("\"operationLatencyMs\"", protoLog);
+
                 OutputHelper?.WriteLine($"Serialized log: {protoLog}");
             }
 
