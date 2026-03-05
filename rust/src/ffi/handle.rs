@@ -21,9 +21,10 @@
 //! Internally, the handle wraps a `ConnectionMetadataService` which holds
 //! the client, session ID, and runtime handle needed to execute metadata queries.
 
-use crate::ffi::error::set_last_error;
+use crate::ffi::error::{clear_last_error, set_last_error};
 use crate::metadata::service::ConnectionMetadataService;
 use std::ffi::c_void;
+use std::panic::AssertUnwindSafe;
 
 /// Opaque handle representing a Databricks connection for metadata FFI.
 pub type FfiConnectionHandle = *mut c_void;
@@ -39,19 +40,30 @@ pub type FfiConnectionHandle = *mut c_void;
 /// must outlive this handle. Free the handle with `metadata_connection_free()`.
 #[no_mangle]
 pub unsafe extern "C" fn metadata_connection_from_ref(conn: *const c_void) -> FfiConnectionHandle {
-    if conn.is_null() {
-        set_last_error("Null connection pointer", "HY009", -1);
-        return std::ptr::null_mut();
-    }
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        if conn.is_null() {
+            set_last_error("Null connection pointer", "HY009", -1);
+            return std::ptr::null_mut();
+        }
 
-    let connection = &*(conn as *const crate::Connection);
-    let service = ConnectionMetadataService::new(
-        connection.client().clone(),
-        connection.session_id().to_string(),
-        connection.runtime_handle().clone(),
-    );
+        let connection = unsafe { &*(conn as *const crate::Connection) };
+        let service = ConnectionMetadataService::new(
+            connection.client().clone(),
+            connection.session_id().to_string(),
+            connection.runtime_handle().clone(),
+        );
 
-    Box::into_raw(Box::new(service)) as FfiConnectionHandle
+        Box::into_raw(Box::new(service)) as FfiConnectionHandle
+    }))
+    .unwrap_or_else(|_| {
+        set_last_error(
+            "Internal panic in metadata_connection_from_ref",
+            "HY000",
+            -1,
+        );
+        std::ptr::null_mut()
+    })
 }
 
 /// Free a metadata handle created by `metadata_connection_from_ref()`.
@@ -62,12 +74,15 @@ pub unsafe extern "C" fn metadata_connection_from_ref(conn: *const c_void) -> Ff
 /// or null (which is a no-op).
 #[no_mangle]
 pub unsafe extern "C" fn metadata_connection_free(handle: FfiConnectionHandle) {
-    if !handle.is_null() {
-        drop(Box::from_raw(handle as *mut ConnectionMetadataService));
-    }
+    // No clear_last_error here — free is not expected to produce errors
+    let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        if !handle.is_null() {
+            drop(unsafe { Box::from_raw(handle as *mut ConnectionMetadataService) });
+        }
+    }));
 }
 
-/// Recover the MetadataService from an opaque handle.
+/// Recover the ConnectionMetadataService from an opaque handle.
 ///
 /// Returns `None` if the handle is null.
 ///
@@ -83,5 +98,28 @@ pub(crate) unsafe fn handle_to_service<'a>(
         None
     } else {
         Some(&*(handle as *const ConnectionMetadataService))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_null_connection_returns_null_handle() {
+        let handle = unsafe { metadata_connection_from_ref(std::ptr::null()) };
+        assert!(handle.is_null());
+    }
+
+    #[test]
+    fn test_free_null_handle_is_noop() {
+        // Should not panic or crash
+        unsafe { metadata_connection_free(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn test_handle_to_service_null() {
+        let result = unsafe { handle_to_service(std::ptr::null_mut()) };
+        assert!(result.is_none());
     }
 }

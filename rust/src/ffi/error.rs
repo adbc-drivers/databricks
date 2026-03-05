@@ -33,7 +33,7 @@ pub enum FfiStatus {
 
 /// C-compatible error details buffer.
 ///
-/// Callers retrieve this via `odbc_get_last_error()` after a failed operation.
+/// Callers retrieve this via `metadata_get_last_error()` after a failed operation.
 #[repr(C)]
 pub struct FfiError {
     pub message: [c_char; 1024],
@@ -54,6 +54,19 @@ impl Default for FfiError {
 // Thread-local storage for the last error.
 thread_local! {
     static LAST_ERROR: RefCell<FfiError> = RefCell::new(FfiError::default());
+}
+
+/// Clear the thread-local error buffer.
+///
+/// Called at the start of each FFI function so that callers do not see
+/// stale errors from a previous call after a successful operation.
+pub(crate) fn clear_last_error() {
+    LAST_ERROR.with(|cell| {
+        let mut err = cell.borrow_mut();
+        err.message[0] = 0;
+        err.sql_state[0] = 0;
+        err.native_error = 0;
+    });
 }
 
 /// Set the thread-local error details.
@@ -89,19 +102,110 @@ pub(crate) fn set_error_from_result(err: &crate::error::Error) -> FfiStatus {
 
 /// Retrieve the last error into the provided buffer.
 ///
+/// Unlike other FFI functions, this does **not** clear the error buffer
+/// (callers may need to read it multiple times).
+///
 /// # Safety
 ///
 /// `error_out` must point to a valid, writable `FfiError` struct.
 #[no_mangle]
 pub unsafe extern "C" fn metadata_get_last_error(error_out: *mut FfiError) -> FfiStatus {
-    if error_out.is_null() {
-        return FfiStatus::InvalidHandle;
+    // No clear_last_error here — reading must not destroy the error.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if error_out.is_null() {
+            return FfiStatus::InvalidHandle;
+        }
+
+        LAST_ERROR.with(|cell| {
+            let err = cell.borrow();
+            unsafe {
+                std::ptr::copy_nonoverlapping(&*err as *const FfiError, error_out, 1);
+            }
+        });
+
+        FfiStatus::Success
+    }))
+    .unwrap_or(FfiStatus::Error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to read the message from an FfiError as a Rust string.
+    fn error_message(err: &FfiError) -> String {
+        let bytes: Vec<u8> = err
+            .message
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8)
+            .collect();
+        String::from_utf8(bytes).unwrap()
     }
 
-    LAST_ERROR.with(|cell| {
-        let err = cell.borrow();
-        std::ptr::copy_nonoverlapping(&*err as *const FfiError, error_out, 1);
-    });
+    /// Helper to read the sql_state from an FfiError as a Rust string.
+    fn error_sql_state(err: &FfiError) -> String {
+        let bytes: Vec<u8> = err
+            .sql_state
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8)
+            .collect();
+        String::from_utf8(bytes).unwrap()
+    }
 
-    FfiStatus::Success
+    #[test]
+    fn test_set_and_get_last_error() {
+        set_last_error("something went wrong", "HY001", -42);
+
+        let mut err = FfiError::default();
+        let status = unsafe { metadata_get_last_error(&mut err) };
+        assert_eq!(status, FfiStatus::Success);
+        assert_eq!(error_message(&err), "something went wrong");
+        assert_eq!(error_sql_state(&err), "HY001");
+        assert_eq!(err.native_error, -42);
+    }
+
+    #[test]
+    fn test_clear_last_error() {
+        set_last_error("old error", "HY000", -1);
+        clear_last_error();
+
+        let mut err = FfiError::default();
+        let status = unsafe { metadata_get_last_error(&mut err) };
+        assert_eq!(status, FfiStatus::Success);
+        assert_eq!(error_message(&err), "");
+        assert_eq!(error_sql_state(&err), "");
+        assert_eq!(err.native_error, 0);
+    }
+
+    #[test]
+    fn test_get_last_error_null_pointer() {
+        let status = unsafe { metadata_get_last_error(std::ptr::null_mut()) };
+        assert_eq!(status, FfiStatus::InvalidHandle);
+    }
+
+    #[test]
+    fn test_set_last_error_truncates_long_message() {
+        let long_msg = "x".repeat(2000);
+        set_last_error(&long_msg, "HY000", -1);
+
+        let mut err = FfiError::default();
+        unsafe { metadata_get_last_error(&mut err) };
+        let msg = error_message(&err);
+        // Should be truncated to 1023 chars (buffer is 1024 with null terminator)
+        assert_eq!(msg.len(), 1023);
+    }
+
+    #[test]
+    fn test_successful_call_clears_stale_error() {
+        // Simulate: first call fails, second succeeds
+        set_last_error("first error", "HY000", -1);
+        // clear_last_error simulates the start of a successful FFI call
+        clear_last_error();
+
+        let mut err = FfiError::default();
+        unsafe { metadata_get_last_error(&mut err) };
+        assert_eq!(error_message(&err), "");
+    }
 }
