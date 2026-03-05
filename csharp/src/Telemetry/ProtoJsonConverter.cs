@@ -24,11 +24,14 @@ namespace AdbcDrivers.Databricks.Telemetry
 {
     /// <summary>
     /// JSON converter for protobuf-generated OssSqlDriverTelemetryLog messages.
-    /// Uses Google.Protobuf's JsonFormatter.Default which produces camelCase field names
-    /// as per proto3 JSON mapping specification.
+    /// Uses Google.Protobuf's JsonFormatter with PreserveProtoFieldNames to produce
+    /// snake_case field names matching the JDBC driver and proto schema.
     /// </summary>
     internal sealed class OssSqlDriverTelemetryLogJsonConverter : JsonConverter<OssSqlDriverTelemetryLog>
     {
+        private static readonly JsonFormatter s_snakeCaseFormatter =
+            new JsonFormatter(JsonFormatter.Settings.Default.WithPreserveProtoFieldNames(true));
+
         public override OssSqlDriverTelemetryLog? Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
@@ -57,8 +60,8 @@ namespace AdbcDrivers.Databricks.Telemetry
                 return;
             }
 
-            // Use protobuf's default JSON formatter
-            var json = JsonFormatter.Default.Format(value);
+            // Use snake_case formatter to match JDBC driver and proto schema
+            var json = s_snakeCaseFormatter.Format(value);
 
             // Write raw JSON value
             using var doc = JsonDocument.Parse(json);
