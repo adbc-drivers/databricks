@@ -65,7 +65,8 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Increments the reference count if the client already exists.
         /// </summary>
         /// <param name="host">The host identifier (e.g., "databricks-workspace.cloud.databricks.com").</param>
-        /// <param name="exporterFactory">Factory function to create an ITelemetryExporter. Called only if a new client needs to be created.</param>
+        /// <param name="httpClient">HTTP client to use for telemetry export. Called only if a new client needs to be created.</param>
+        /// <param name="isAuthenticated">Whether the connection is authenticated (determines telemetry endpoint).</param>
         /// <param name="config">Telemetry configuration for the client.</param>
         /// <returns>The telemetry client for the specified host.</returns>
         /// <remarks>
@@ -80,18 +81,19 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Interlocked.Increment for thread safety.
         /// </para>
         /// <para>
-        /// The exporterFactory is only invoked when creating a new client, not when returning
+        /// The httpClient is only used when creating a new client, not when returning
         /// an existing client. This avoids unnecessary object creation.
         /// </para>
         /// </remarks>
         public ITelemetryClient GetOrCreateClient(
             string host,
-            Func<ITelemetryExporter> exporterFactory,
+            System.Net.Http.HttpClient httpClient,
+            bool isAuthenticated,
             TelemetryConfiguration config)
         {
             TelemetryClientHolder holder = _clients.AddOrUpdate(
                 host,
-                _ => new TelemetryClientHolder(new TelemetryClient(exporterFactory(), config)),
+                _ => new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config)),
                 (_, existing) =>
                 {
                     Interlocked.Increment(ref existing._refCount);
