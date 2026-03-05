@@ -133,6 +133,43 @@ namespace AdbcDrivers.Databricks
             }
         }
 
+        public override async ValueTask<QueryResult> ExecuteQueryAsync()
+        {
+            var databricksConnection = (DatabricksConnection)Connection;
+            var telemetrySession = databricksConnection.TelemetrySession;
+
+            if (telemetrySession?.TelemetryClient == null)
+            {
+                return await base.ExecuteQueryAsync();
+            }
+
+            var ctx = new StatementTelemetryContext(telemetrySession);
+            ctx.OperationType = OperationType.OperationExecuteStatement;
+            ctx.StatementType = Telemetry.Proto.StatementType.StatementQuery;
+            ctx.IsCompressed = canDecompressLz4;
+
+            try
+            {
+                QueryResult result = await base.ExecuteQueryAsync();
+                ctx.RecordFirstBatchReady();
+                ctx.ResultFormat = useCloudFetch
+                    ? ExecutionResultFormat.ExecutionResultExternalLinks
+                    : ExecutionResultFormat.ExecutionResultInlineArrow;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                ctx.HasError = true;
+                ctx.ErrorName = ex.GetType().Name;
+                ctx.ErrorMessage = ex.Message;
+                throw;
+            }
+            finally
+            {
+                EmitTelemetry(ctx, telemetrySession);
+            }
+        }
+
         private void EmitTelemetry(StatementTelemetryContext ctx, TelemetrySessionContext session)
         {
             try
