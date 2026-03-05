@@ -411,6 +411,133 @@ impl Iterator for ResultReaderAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::StringArray;
+
+    /// A simple mock reader that returns predefined batches.
+    struct MockReader {
+        batches: Vec<RecordBatch>,
+        index: usize,
+        schema: SchemaRef,
+    }
+
+    impl MockReader {
+        fn new(batches: Vec<RecordBatch>) -> Self {
+            let schema = if batches.is_empty() {
+                Arc::new(Schema::empty())
+            } else {
+                batches[0].schema()
+            };
+            Self {
+                batches,
+                index: 0,
+                schema,
+            }
+        }
+    }
+
+    impl ResultReader for MockReader {
+        fn schema(&self) -> Result<SchemaRef> {
+            Ok(self.schema.clone())
+        }
+
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            if self.index >= self.batches.len() {
+                Ok(None)
+            } else {
+                let batch = self.batches[self.index].clone();
+                self.index += 1;
+                Ok(Some(batch))
+            }
+        }
+    }
+
+    /// A reader that returns an error on next_batch.
+    struct ErrorReader {
+        schema: SchemaRef,
+    }
+
+    impl ResultReader for ErrorReader {
+        fn schema(&self) -> Result<SchemaRef> {
+            Ok(self.schema.clone())
+        }
+
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            Err(DatabricksErrorHelper::io().message("simulated read error"))
+        }
+    }
+
+    /// A reader that returns an error on schema().
+    struct SchemaErrorReader;
+
+    impl ResultReader for SchemaErrorReader {
+        fn schema(&self) -> Result<SchemaRef> {
+            Err(DatabricksErrorHelper::io().message("schema unavailable"))
+        }
+
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            Ok(None)
+        }
+    }
+
+    fn make_test_batch(values: Vec<&str>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)]));
+        RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(values))]).unwrap()
+    }
+
+    // --- ResultReaderAdapter tests ---
+
+    #[test]
+    fn test_adapter_schema() {
+        let batch = make_test_batch(vec!["a"]);
+        let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch]));
+        let adapter = ResultReaderAdapter::new(reader).unwrap();
+        let schema = arrow_array::RecordBatchReader::schema(&adapter);
+        assert_eq!(schema.fields().len(), 1);
+        assert_eq!(schema.field(0).name(), "name");
+    }
+
+    #[test]
+    fn test_adapter_iterates_batches() {
+        let batch1 = make_test_batch(vec!["a", "b"]);
+        let batch2 = make_test_batch(vec!["c"]);
+        let reader: Box<dyn ResultReader + Send> =
+            Box::new(MockReader::new(vec![batch1, batch2]));
+        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+
+        let first = adapter.next().unwrap().unwrap();
+        assert_eq!(first.num_rows(), 2);
+
+        let second = adapter.next().unwrap().unwrap();
+        assert_eq!(second.num_rows(), 1);
+
+        assert!(adapter.next().is_none());
+    }
+
+    #[test]
+    fn test_adapter_empty_reader() {
+        let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![]));
+        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+        assert!(adapter.next().is_none());
+    }
+
+    #[test]
+    fn test_adapter_propagates_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8, false)]));
+        let reader: Box<dyn ResultReader + Send> = Box::new(ErrorReader { schema });
+        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+
+        let result = adapter.next().unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_adapter_schema_error() {
+        let reader: Box<dyn ResultReader + Send> = Box::new(SchemaErrorReader);
+        let result = ResultReaderAdapter::new(reader);
+        assert!(result.is_err());
+    }
+
+    // --- EmptyReader tests ---
 
     #[test]
     fn test_empty_reader_with_schema() {

@@ -393,6 +393,19 @@ mod tests {
         }
     }
 
+    /// A reader that fails on schema().
+    struct SchemaErrorReader;
+
+    impl ResultReader for SchemaErrorReader {
+        fn schema(&self) -> crate::error::Result<SchemaRef> {
+            Err(crate::error::DatabricksErrorHelper::io().message("schema unavailable"))
+        }
+
+        fn next_batch(&mut self) -> crate::error::Result<Option<RecordBatch>> {
+            Ok(None)
+        }
+    }
+
     #[test]
     fn test_export_reader_null_output() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
@@ -414,6 +427,91 @@ mod tests {
         let mut stream = FFI_ArrowArrayStream::empty();
         let status = export_reader(reader, &mut stream);
         assert_eq!(status, FfiStatus::Success);
+    }
+
+    #[test]
+    fn test_export_reader_empty() {
+        let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![]));
+        let mut stream = FFI_ArrowArrayStream::empty();
+        let status = export_reader(reader, &mut stream);
+        assert_eq!(status, FfiStatus::Success);
+    }
+
+    #[test]
+    fn test_export_reader_multiple_batches() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let batch1 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(StringArray::from(vec!["a"]))])
+                .unwrap();
+        let batch2 =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["b", "c"]))])
+                .unwrap();
+
+        let reader: Box<dyn ResultReader + Send> =
+            Box::new(MockReader::new(vec![batch1, batch2]));
+        let mut stream = FFI_ArrowArrayStream::empty();
+        let status = export_reader(reader, &mut stream);
+        assert_eq!(status, FfiStatus::Success);
+    }
+
+    #[test]
+    fn test_export_reader_schema_error() {
+        let reader: Box<dyn ResultReader + Send> = Box::new(SchemaErrorReader);
+        let mut stream = FFI_ArrowArrayStream::empty();
+        let status = export_reader(reader, &mut stream);
+        assert_eq!(status, FfiStatus::Error);
+    }
+
+    #[test]
+    fn test_handle_panic_with_str() {
+        let panic = Box::new("something broke") as Box<dyn std::any::Any + Send>;
+        let status = handle_panic(panic);
+        assert_eq!(status, FfiStatus::Error);
+
+        let mut err = FfiError::default();
+        unsafe { crate::ffi::error::metadata_get_last_error(&mut err) };
+        let msg: String = err
+            .message
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8 as char)
+            .collect();
+        assert!(msg.contains("something broke"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_handle_panic_with_string() {
+        let panic =
+            Box::new("owned panic message".to_string()) as Box<dyn std::any::Any + Send>;
+        let status = handle_panic(panic);
+        assert_eq!(status, FfiStatus::Error);
+
+        let mut err = FfiError::default();
+        unsafe { crate::ffi::error::metadata_get_last_error(&mut err) };
+        let msg: String = err
+            .message
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8 as char)
+            .collect();
+        assert!(msg.contains("owned panic message"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_handle_panic_with_unknown_type() {
+        let panic = Box::new(42i32) as Box<dyn std::any::Any + Send>;
+        let status = handle_panic(panic);
+        assert_eq!(status, FfiStatus::Error);
+
+        let mut err = FfiError::default();
+        unsafe { crate::ffi::error::metadata_get_last_error(&mut err) };
+        let msg: String = err
+            .message
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8 as char)
+            .collect();
+        assert!(msg.contains("unknown cause"), "got: {}", msg);
     }
 
     #[test]

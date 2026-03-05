@@ -104,11 +104,39 @@ pub(crate) unsafe fn handle_to_service<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ffi::error::{FfiError, FfiStatus};
+
+    /// Helper to read the message from an FfiError as a Rust string.
+    fn error_message(err: &FfiError) -> String {
+        let bytes: Vec<u8> = err
+            .message
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8)
+            .collect();
+        String::from_utf8(bytes).unwrap()
+    }
 
     #[test]
     fn test_null_connection_returns_null_handle() {
         let handle = unsafe { metadata_connection_from_ref(std::ptr::null()) };
         assert!(handle.is_null());
+    }
+
+    #[test]
+    fn test_null_connection_sets_error() {
+        let handle = unsafe { metadata_connection_from_ref(std::ptr::null()) };
+        assert!(handle.is_null());
+
+        let mut err = FfiError::default();
+        let status = unsafe { crate::ffi::error::metadata_get_last_error(&mut err) };
+        assert_eq!(status, FfiStatus::Success);
+        let msg = error_message(&err);
+        assert!(
+            msg.contains("Null connection pointer"),
+            "Expected null pointer error, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -122,4 +150,5 @@ mod tests {
         let result = unsafe { handle_to_service(std::ptr::null_mut()) };
         assert!(result.is_none());
     }
+
 }
