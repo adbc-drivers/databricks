@@ -175,6 +175,7 @@ namespace AdbcDrivers.Databricks.Tests
             var protocolName = protocol == "rest" ? "REST API" : "Thrift";
 
             await ExecuteAndValidateQuery(connection, query, rowCount, protocolName);
+	    connection.Dispose();
         }
 
         /// <summary>
