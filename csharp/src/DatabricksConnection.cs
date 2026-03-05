@@ -108,6 +108,7 @@ namespace AdbcDrivers.Databricks
         // Telemetry fields
         private ITelemetryClient? _telemetryClient;
         private string? _host;
+        internal TelemetrySessionContext? TelemetrySession { get; private set; }
 
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
@@ -641,6 +642,16 @@ namespace AdbcDrivers.Databricks
                     telemetryHttpClient,
                     isAuthenticated,
                     telemetryConfig);
+
+                // Create session-level telemetry context for V3 direct-object pipeline
+                TelemetrySession = new TelemetrySessionContext
+                {
+                    SessionId = SessionHandle?.SessionId?.Guid != null
+                        ? new Guid(SessionHandle.SessionId.Guid).ToString()
+                        : null,
+                    AuthType = isAuthenticated ? "token" : "none",
+                    TelemetryClient = _telemetryClient
+                };
 
                 activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
                     tags: new ActivityTagsCollection
