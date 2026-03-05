@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry;
@@ -112,7 +113,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Act
             ITelemetryClient client = manager.GetOrCreateClient(
                 host,
-                () => new MockTelemetryExporter(),
+                new HttpClient(),
+                true,
                 config);
 
             try
@@ -140,13 +142,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act
+            HttpClient httpClient = new HttpClient();
             ITelemetryClient client1 = manager.GetOrCreateClient(
                 host,
-                () => new MockTelemetryExporter(),
+                httpClient,
+                true,
                 config);
             ITelemetryClient client2 = manager.GetOrCreateClient(
                 host,
-                () => new MockTelemetryExporter(),
+                httpClient,
+                true,
                 config);
 
             try
@@ -229,11 +234,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act - create clients concurrently from multiple threads
+            HttpClient httpClient = new HttpClient();
             Task[] tasks = Enumerable.Range(0, threadCount).Select(_ => Task.Run(() =>
             {
                 ITelemetryClient client = manager.GetOrCreateClient(
                     host,
-                    () => new MockTelemetryExporter(),
+                    httpClient,
+                    true,
                     config);
                 lock (lockObj)
                 {
@@ -290,13 +297,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act - create clients for two different hosts
+            HttpClient httpClient1 = new HttpClient();
+            HttpClient httpClient2 = new HttpClient();
             ITelemetryClient client1 = manager.GetOrCreateClient(
                 host1,
-                () => new MockTelemetryExporter(),
+                httpClient1,
+                true,
                 config);
             ITelemetryClient client2 = manager.GetOrCreateClient(
                 host2,
-                () => new MockTelemetryExporter(),
+                httpClient2,
+                true,
                 config);
 
             // Assert - should have separate clients
