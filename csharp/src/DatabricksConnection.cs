@@ -649,7 +649,27 @@ namespace AdbcDrivers.Databricks
                         ? new Guid(SessionHandle.SessionId.Guid).ToString()
                         : null,
                     AuthType = isAuthenticated ? "token" : "none",
-                    TelemetryClient = _telemetryClient
+                    TelemetryClient = _telemetryClient,
+                    SystemConfiguration = new Telemetry.Proto.DriverSystemConfiguration
+                    {
+                        DriverVersion = s_assemblyVersion,
+                        DriverName = "Databricks ADBC Driver",
+                        OsName = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+                        OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
+                        RuntimeName = ".NET",
+                        RuntimeVersion = System.Environment.Version.ToString(),
+                        LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name
+                    },
+                    DriverConnectionParams = new Telemetry.Proto.DriverConnectionParameters
+                    {
+                        HttpPath = Properties.TryGetValue("adbc.spark.http_path", out string? httpPath) ? httpPath ?? "" : "",
+                        Mode = Telemetry.Proto.DriverModeType.DriverModeThrift,
+                        HostInfo = new Telemetry.Proto.HostDetails
+                        {
+                            HostUrl = _host ?? "",
+                            Port = 443
+                        }
+                    }
                 };
 
                 activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
