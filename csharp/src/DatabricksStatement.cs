@@ -61,6 +61,7 @@ namespace AdbcDrivers.Databricks
         private bool enablePKFK;
         private bool runAsyncInThrift;
         private Dictionary<string, string>? confOverlay;
+        internal string? LastStatementId { get; set; }
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -107,18 +108,13 @@ namespace AdbcDrivers.Databricks
             return ctx;
         }
 
-        private void RecordSuccess(StatementTelemetryContext ctx, QueryResult? queryResult = null)
+        private void RecordSuccess(StatementTelemetryContext ctx)
         {
             ctx.RecordFirstBatchReady();
             ctx.ResultFormat = useCloudFetch
                 ? ExecutionResultFormat.ExecutionResultExternalLinks
                 : ExecutionResultFormat.ExecutionResultInlineArrow;
-
-            // Extract statement ID from the reader's response
-            if (queryResult?.Stream is Reader.DatabricksCompositeReader reader)
-            {
-                ctx.StatementId = reader.StatementId;
-            }
+            ctx.StatementId = LastStatementId;
         }
 
         private void RecordError(StatementTelemetryContext ctx, Exception ex)
@@ -136,7 +132,7 @@ namespace AdbcDrivers.Databricks
             try
             {
                 QueryResult result = base.ExecuteQuery();
-                RecordSuccess(ctx, result);
+                RecordSuccess(ctx);
                 return result;
             }
             catch (Exception ex) { RecordError(ctx, ex); throw; }
@@ -151,7 +147,7 @@ namespace AdbcDrivers.Databricks
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
-                RecordSuccess(ctx, result);
+                RecordSuccess(ctx);
                 return result;
             }
             catch (Exception ex) { RecordError(ctx, ex); throw; }

@@ -434,6 +434,12 @@ namespace AdbcDrivers.Databricks
                 isLz4Compressed = metadataResp.Lz4Compressed;
             }
 
+            // Capture statement ID from server response for telemetry
+            if (response.OperationHandle?.OperationId?.Guid != null)
+            {
+                databricksStatement.LastStatementId = new Guid(response.OperationHandle.OperationId.Guid).ToString();
+            }
+
             HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
             return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
         }
