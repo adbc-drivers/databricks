@@ -1117,6 +1117,19 @@ namespace AdbcDrivers.Databricks
                 return "basic";
             }
 
+            // Infer auth type from presence of token/credentials when AuthType not explicitly set
+            if (string.IsNullOrEmpty(authType))
+            {
+                if (Properties.ContainsKey(SparkParameters.Token))
+                {
+                    return "pat";
+                }
+                if (Properties.ContainsKey(SparkParameters.AccessToken))
+                {
+                    return "oauth";
+                }
+            }
+
             return authType ?? "unknown";
         }
 

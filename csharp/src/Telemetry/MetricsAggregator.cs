@@ -18,6 +18,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.Databricks.Telemetry.Proto;
@@ -133,8 +134,13 @@ namespace AdbcDrivers.Databricks.Telemetry
                 string? statementId = activity.GetTagItem("statement.id") as string;
                 if (string.IsNullOrEmpty(statementId))
                 {
+                    Debug.WriteLine($"[TELEMETRY] ProcessActivity SKIPPED (no statement.id): op={activity.OperationName}, status={activity.Status}");
                     return;
                 }
+
+                bool isRoot = IsRootActivity(activity);
+                bool isComplete = IsActivityComplete(activity);
+                Debug.WriteLine($"[TELEMETRY] ProcessActivity: op={activity.OperationName}, statementId={statementId}, isRoot={isRoot}, isComplete={isComplete}, duration={activity.Duration.TotalMilliseconds}ms, tags=[{string.Join(", ", activity.Tags.Select(t => t.Key + "=" + t.Value))}]");
 
                 // Get or create the context for this statement
                 StatementTelemetryContext context = _contexts.GetOrAdd(statementId!, CreateNewContext);
@@ -143,8 +149,9 @@ namespace AdbcDrivers.Databricks.Telemetry
                 context.MergeFrom(activity);
 
                 // Check if this is a completed root activity - if so, emit the proto
-                if (IsRootActivity(activity) && IsActivityComplete(activity))
+                if (isRoot && isComplete)
                 {
+                    Debug.WriteLine($"[TELEMETRY] Emitting context for statementId={statementId}");
                     EmitAndRemoveContext(statementId!);
                 }
             }
@@ -165,6 +172,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             {
                 // Snapshot the keys to avoid modification during iteration
                 List<string> keys = new List<string>(_contexts.Keys);
+                Debug.WriteLine($"[TELEMETRY] FlushAsync: {keys.Count} pending contexts");
 
                 foreach (string statementId in keys)
                 {
