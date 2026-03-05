@@ -64,6 +64,8 @@ namespace AdbcDrivers.Databricks.Telemetry
         // Session-level configuration injected into each new StatementTelemetryContext
         private string? _sessionId;
         private string? _authType;
+        private bool _useCloudFetch;
+        private bool _canDecompressLz4;
         private long _workspaceId;
         private DriverSystemConfiguration? _systemConfiguration;
         private DriverConnectionParameters? _connectionParams;
@@ -102,13 +104,17 @@ namespace AdbcDrivers.Databricks.Telemetry
             long workspaceId,
             DriverSystemConfiguration? systemConfig,
             DriverConnectionParameters? connectionParams,
-            string? authType = null)
+            string? authType = null,
+            bool useCloudFetch = false,
+            bool canDecompressLz4 = false)
         {
             _sessionId = sessionId;
             _workspaceId = workspaceId;
             _systemConfiguration = systemConfig;
             _connectionParams = connectionParams;
             _authType = authType;
+            _useCloudFetch = useCloudFetch;
+            _canDecompressLz4 = canDecompressLz4;
         }
 
         /// <summary>
@@ -249,7 +255,12 @@ namespace AdbcDrivers.Databricks.Telemetry
                 SessionId = _sessionId,
                 AuthType = _authType,
                 SystemConfiguration = _systemConfiguration,
-                DriverConnectionParams = _connectionParams
+                DriverConnectionParams = _connectionParams,
+                // Set default execution result format from connection-level CloudFetch setting
+                ResultFormat = _useCloudFetch
+                    ? Proto.ExecutionResultFormat.ExecutionResultExternalLinks
+                    : Proto.ExecutionResultFormat.ExecutionResultInlineArrow,
+                CompressionEnabled = _canDecompressLz4
             };
 
             return context;
