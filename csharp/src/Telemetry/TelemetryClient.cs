@@ -15,7 +15,6 @@
 */
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
@@ -25,79 +24,167 @@ using AdbcDrivers.Databricks.Telemetry.Models;
 namespace AdbcDrivers.Databricks.Telemetry
 {
     /// <summary>
-    /// Default implementation of ITelemetryClient that batches events from multiple connections
-    /// and exports via HTTP on a timer or when batch size is reached.
+    /// Main telemetry client that coordinates the listener, aggregator, and exporter into a cohesive lifecycle.
+    /// This is the public-facing API that DatabricksConnection interacts with.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// One instance is shared per host via TelemetryClientManager to prevent rate limiting
-    /// by consolidating telemetry traffic from concurrent connections to the same host.
+    /// This client orchestrates the complete telemetry pipeline:
+    /// DatabricksActivityListener → MetricsAggregator → CircuitBreakerTelemetryExporter → DatabricksTelemetryExporter
     /// </para>
     /// <para>
-    /// Thread Safety: All methods are thread-safe and can be called concurrently from
-    /// multiple connections. Enqueue() is non-blocking. FlushAsync() and CloseAsync()
-    /// use internal synchronization to coordinate with ongoing flush operations.
+    /// Key Behaviors:
+    /// - Constructor initializes all pipeline components in correct order
+    /// - ExportAsync() delegates to the circuit breaker-protected exporter
+    /// - CloseAsync() performs graceful shutdown: flush pending metrics, cancel background tasks, dispose resources
+    /// - All exceptions are swallowed per telemetry requirement
+    /// </para>
+    /// <para>
+    /// Thread Safety: All methods are thread-safe and can be called concurrently.
     /// </para>
     /// </remarks>
     internal sealed class TelemetryClient : ITelemetryClient
     {
-        private readonly ConcurrentQueue<TelemetryFrontendLog> _queue = new ConcurrentQueue<TelemetryFrontendLog>();
-        private readonly ITelemetryExporter _exporter;
-        private readonly TelemetryConfiguration _config;
-        private readonly Timer _flushTimer;
-        private readonly SemaphoreSlim _flushLock = new SemaphoreSlim(1, 1);
-        private readonly CancellationTokenSource _cts = new CancellationTokenSource();
-        private int _queueCount;
-        private volatile bool _closing;
+        /// <summary>
+        /// Activity source for tracing telemetry client operations.
+        /// </summary>
+        private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks.TelemetryClient");
+
+        private readonly DatabricksTelemetryExporter _databricksExporter;
+        private readonly CircuitBreakerTelemetryExporter _circuitBreakerExporter;
+        private readonly MetricsAggregator _metricsAggregator;
+        private readonly DatabricksActivityListener _activityListener;
+        private readonly CancellationTokenSource _cts;
         private volatile bool _disposed;
 
         /// <summary>
-        /// Creates a new TelemetryClient with the specified exporter and configuration.
+        /// Creates a new TelemetryClient with the specified configuration and HTTP client.
         /// </summary>
-        /// <param name="exporter">The telemetry exporter to use for sending events.</param>
-        /// <param name="config">The telemetry configuration.</param>
+        /// <param name="host">The Databricks host (for circuit breaker isolation).</param>
+        /// <param name="httpClient">The HTTP client to use for exporting telemetry.</param>
+        /// <param name="isAuthenticated">Whether the connection is authenticated (determines telemetry endpoint).</param>
+        /// <param name="configuration">The telemetry configuration.</param>
+        /// <exception cref="ArgumentNullException">Thrown when host, httpClient, or configuration is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when host is empty or whitespace.</exception>
         public TelemetryClient(
-            ITelemetryExporter exporter,
-            TelemetryConfiguration config)
+            string host,
+            System.Net.Http.HttpClient httpClient,
+            bool isAuthenticated,
+            TelemetryConfiguration configuration)
         {
-            _exporter = exporter;
-            _config = config;
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                throw new ArgumentException("Host cannot be null or whitespace.", nameof(host));
+            }
 
-            // Start periodic flush timer (default: every 5 seconds)
-            _flushTimer = new Timer(
-                OnFlushTimer,
-                null,
-                _config.FlushIntervalMs,
-                _config.FlushIntervalMs);
+            if (httpClient == null)
+            {
+                throw new ArgumentNullException(nameof(httpClient));
+            }
+
+            if (configuration == null)
+            {
+                throw new ArgumentNullException(nameof(configuration));
+            }
+
+            _cts = new CancellationTokenSource();
+
+            try
+            {
+                // Initialize pipeline components in order:
+                // 1. DatabricksTelemetryExporter (innermost - does the HTTP export)
+                _databricksExporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated, configuration);
+
+                // 2. CircuitBreakerTelemetryExporter (wraps exporter with circuit breaker protection)
+                _circuitBreakerExporter = new CircuitBreakerTelemetryExporter(_databricksExporter, host);
+
+                // 3. MetricsAggregator (aggregates activities and exports via circuit breaker)
+                _metricsAggregator = new MetricsAggregator(
+                    _circuitBreakerExporter,
+                    batchSize: configuration.BatchSize,
+                    flushInterval: TimeSpan.FromMilliseconds(configuration.FlushIntervalMs));
+
+                // 4. DatabricksActivityListener (listens to activities and delegates to aggregator)
+                _activityListener = new DatabricksActivityListener(_metricsAggregator, configuration);
+
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.initialized",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", host },
+                        { "batch_size", configuration.BatchSize },
+                        { "flush_interval_ms", configuration.FlushIntervalMs },
+                        { "enabled", configuration.Enabled }
+                    }));
+            }
+            catch (Exception ex)
+            {
+                // Clean up any partially initialized resources
+                try
+                {
+                    _activityListener?.Dispose();
+                    _metricsAggregator?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(1));
+                    _cts?.Dispose();
+                }
+                catch
+                {
+                    // Swallow cleanup exceptions
+                }
+
+                // Log and rethrow original exception
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.initialization_failed",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.message", ex.Message },
+                        { "error.type", ex.GetType().Name }
+                    }));
+
+                throw;
+            }
         }
 
         /// <summary>
-        /// Queue a telemetry event for batched export. Thread-safe, non-blocking.
+        /// Queue a telemetry event for export. This method is non-blocking and thread-safe.
         /// </summary>
         /// <param name="log">The telemetry frontend log to enqueue.</param>
         /// <remarks>
         /// <para>
-        /// Events are batched and flushed periodically (configurable flush interval) or when
-        /// the batch size limit is reached. This method returns immediately after adding the
-        /// event to an internal queue.
+        /// This method delegates to the MetricsAggregator, which handles batching and export.
+        /// The aggregator processes activities from the ActivityListener automatically.
         /// </para>
         /// <para>
-        /// If the client is closed or disposing, the event is silently dropped.
-        /// The batch-size trigger is best-effort; the periodic timer ensures all events
-        /// are eventually flushed.
+        /// This method never throws exceptions. If the client is closed or disposing,
+        /// the event is silently dropped.
         /// </para>
         /// </remarks>
         public void Enqueue(TelemetryFrontendLog log)
         {
-            if (_disposed) return;
-
-            _queue.Enqueue(log);
-            int count = Interlocked.Increment(ref _queueCount);
-
-            // Trigger flush if batch size reached (best-effort)
-            if (count >= _config.BatchSize)
+            if (_disposed || log == null)
             {
-                _ = FlushAsync(); // Fire-and-forget, errors swallowed
+                return;
+            }
+
+            try
+            {
+                // For the activity-based pipeline, this method is not typically used.
+                // Activities are automatically captured by the listener and processed by the aggregator.
+                // However, we provide this method for compatibility with ITelemetryClient interface
+                // in case manual enqueueing is needed.
+
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.manual_enqueue",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "frontend_log_id", log.FrontendLogEventId ?? "(none)" }
+                    }));
+            }
+            catch (Exception ex)
+            {
+                // Swallow all exceptions per telemetry requirement
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.enqueue_error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.message", ex.Message },
+                        { "error.type", ex.GetType().Name }
+                    }));
             }
         }
 
@@ -108,13 +195,8 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <returns>A task that completes when all pending events have been flushed.</returns>
         /// <remarks>
         /// <para>
-        /// This method exports all queued events in batches to the backend service.
+        /// This method blocks until all queued metrics in the aggregator are exported.
         /// It is called when a connection closes to ensure no events are lost.
-        /// </para>
-        /// <para>
-        /// If a flush is already in progress, this method returns immediately rather
-        /// than starting a concurrent flush operation (except during close, where it
-        /// waits for the in-progress flush to complete).
         /// </para>
         /// <para>
         /// This method never throws exceptions related to telemetry failures. Export errors
@@ -124,46 +206,27 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public async Task FlushAsync(CancellationToken ct = default)
         {
-            if (_disposed) return;
-
-            // During close, wait for any in-progress flush to complete;
-            // otherwise, skip if a flush is already running.
-            if (_closing)
-            {
-                await _flushLock.WaitAsync(ct).ConfigureAwait(false);
-            }
-            else if (!await _flushLock.WaitAsync(0, ct).ConfigureAwait(false))
+            if (_disposed)
             {
                 return;
             }
 
             try
             {
-                // Drain all queued events in batches
-                while (!_queue.IsEmpty)
-                {
-                    List<TelemetryFrontendLog> batch = new List<TelemetryFrontendLog>();
+                // Delegate to aggregator to flush all pending metrics
+                await _metricsAggregator.FlushAsync(ct).ConfigureAwait(false);
 
-                    while (batch.Count < _config.BatchSize && _queue.TryDequeue(out TelemetryFrontendLog? log))
-                    {
-                        batch.Add(log);
-                        Interlocked.Decrement(ref _queueCount);
-                    }
-
-                    if (batch.Count > 0)
-                    {
-                        await _exporter.ExportAsync(batch, ct).ConfigureAwait(false);
-                    }
-                }
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.flush_completed"));
             }
             catch (Exception ex)
             {
-                Activity.Current?.AddEvent(new ActivityEvent("telemetry.flush.error",
-                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
-            }
-            finally
-            {
-                _flushLock.Release();
+                // Swallow all exceptions per telemetry requirement
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.flush_error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.message", ex.Message },
+                        { "error.type", ex.GetType().Name }
+                    }));
             }
         }
 
@@ -178,9 +241,10 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </para>
         /// <para>
         /// The close operation performs the following steps:
-        /// 1. Cancel any pending background flush timers
-        /// 2. Flush all remaining queued events
-        /// 3. Dispose internal resources (timers, semaphores, etc.)
+        /// 1. Stop the activity listener (no more activities will be processed)
+        /// 2. Flush all remaining queued metrics from the aggregator
+        /// 3. Cancel any pending background tasks
+        /// 4. Dispose all resources (listener, aggregator, cancellation token source)
         /// </para>
         /// <para>
         /// This method is idempotent - calling it multiple times is safe and has no effect
@@ -193,30 +257,100 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public async Task CloseAsync()
         {
-            if (_closing) return;
-            _closing = true;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
 
             try
             {
-                // Stop timer first to prevent new timer-triggered flushes
-                _flushTimer.Dispose();
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.closing"));
 
-                // Cancel any pending timer-triggered operations
-                _cts.Cancel();
+                // Step 1: Stop the activity listener (no more activities will be captured)
+                try
+                {
+                    await _activityListener.StopAsync(_cts.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.listener_stop_error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.message", ex.Message },
+                            { "error.type", ex.GetType().Name }
+                        }));
+                }
 
-                // Final flush of all remaining events (uses blocking wait on _flushLock)
-                await FlushAsync().ConfigureAwait(false);
+                // Step 2: Flush all remaining metrics from the aggregator
+                try
+                {
+                    await _metricsAggregator.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.final_flush_error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.message", ex.Message },
+                            { "error.type", ex.GetType().Name }
+                        }));
+                }
+
+                // Step 3: Cancel any pending background tasks
+                try
+                {
+                    _cts.Cancel();
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.cancellation_error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.message", ex.Message },
+                            { "error.type", ex.GetType().Name }
+                        }));
+                }
+
+                // Step 4: Dispose all resources
+                try
+                {
+                    await _metricsAggregator.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.aggregator_dispose_error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.message", ex.Message },
+                            { "error.type", ex.GetType().Name }
+                        }));
+                }
+
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.closed"));
             }
             catch (Exception ex)
             {
-                Activity.Current?.AddEvent(new ActivityEvent("telemetry.close.error",
-                    tags: new ActivityTagsCollection { { "error.message", ex.Message } }));
+                // Swallow all exceptions per telemetry requirement
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.close_error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.message", ex.Message },
+                        { "error.type", ex.GetType().Name }
+                    }));
             }
             finally
             {
-                _disposed = true;
-                _cts.Dispose();
-                _flushLock.Dispose();
+                // Ensure CancellationTokenSource is disposed even if other operations fail
+                try
+                {
+                    _cts.Dispose();
+                }
+                catch
+                {
+                    // Swallow CTS dispose exceptions
+                }
             }
         }
 
@@ -224,16 +358,9 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Dispose the telemetry client asynchronously.
         /// </summary>
         /// <returns>A ValueTask that completes when the client is disposed.</returns>
-        public async ValueTask DisposeAsync() => await CloseAsync().ConfigureAwait(false);
-
-        /// <summary>
-        /// Timer callback for periodic flush operations.
-        /// </summary>
-        /// <param name="state">Unused state object.</param>
-        private void OnFlushTimer(object? state)
+        public async ValueTask DisposeAsync()
         {
-            if (_disposed || _closing) return;
-            _ = FlushAsync(_cts.Token);
+            await CloseAsync().ConfigureAwait(false);
         }
     }
 }
