@@ -1064,6 +1064,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"  OperationLatencyMs: {sqlLog.OperationLatencyMs}");
 
                 Assert.False(string.IsNullOrEmpty(sqlLog.SessionId), "SessionId should be populated from connection");
+                Assert.False(string.IsNullOrEmpty(sqlLog.SqlStatementId), "SqlStatementId should be populated from server response");
                 Assert.True(sqlLog.OperationLatencyMs > 0, "OperationLatencyMs should be > 0");
 
                 // Verify SqlExecutionEvent
