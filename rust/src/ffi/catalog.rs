@@ -15,18 +15,22 @@
 //! `extern "C"` catalog metadata functions.
 //!
 //! Each function follows this pattern:
-//! 1. Validate handle (null check)
-//! 2. Recover `ConnectionMetadataService` from handle
-//! 3. Convert C strings to Rust &str
-//! 4. Call service method
-//! 5. Export result via Arrow C Data Interface (`FFI_ArrowArrayStream`)
-//! 6. Return status code; on error, set thread-local error buffer
+//! 1. Clear thread-local error buffer
+//! 2. Wrap body in `catch_unwind` (panics must not cross FFI boundary)
+//! 3. Validate handle (null check)
+//! 4. Recover `ConnectionMetadataService` from handle
+//! 5. Convert C strings to Rust &str
+//! 6. Call service method
+//! 7. Export result via Arrow C Data Interface (`FFI_ArrowArrayStream`)
+//! 8. Return status code; on error, set thread-local error buffer
 
-use crate::ffi::error::{set_error_from_result, set_last_error, FfiStatus};
+use crate::ffi::error::{clear_last_error, set_error_from_result, set_last_error, FfiStatus};
 use crate::ffi::handle::{handle_to_service, FfiConnectionHandle};
+use crate::reader::{ResultReader, ResultReaderAdapter};
 use arrow::ffi_stream::FFI_ArrowArrayStream;
-use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+use arrow_array::RecordBatchReader;
 use std::ffi::{c_char, CStr};
+use std::panic::AssertUnwindSafe;
 
 /// Convert a nullable C string pointer to an `Option<&str>`.
 ///
@@ -76,22 +80,25 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> std::result::Result<&'a str, (
     }
 }
 
-/// Export a RecordBatch as an FFI_ArrowArrayStream.
+/// Export a ResultReader as an FFI_ArrowArrayStream via ResultReaderAdapter.
 ///
 /// The caller is responsible for releasing the stream.
-fn export_batch(batch: RecordBatch, out: *mut FFI_ArrowArrayStream) -> FfiStatus {
+fn export_reader(
+    reader: Box<dyn ResultReader + Send>,
+    out: *mut FFI_ArrowArrayStream,
+) -> FfiStatus {
     if out.is_null() {
         set_last_error("Output stream pointer is null", "HY009", -1);
         return FfiStatus::InvalidHandle;
     }
 
-    let schema = batch.schema();
-    let reader: Box<dyn RecordBatchReader + Send> = Box::new(RecordBatchIterator::new(
-        vec![Ok(batch)].into_iter(),
-        schema,
-    ));
+    let adapter = match ResultReaderAdapter::new(reader) {
+        Ok(a) => a,
+        Err(e) => return set_error_from_result(&e),
+    };
 
-    let stream = FFI_ArrowArrayStream::new(reader);
+    let boxed: Box<dyn RecordBatchReader + Send> = Box::new(adapter);
+    let stream = FFI_ArrowArrayStream::new(boxed);
     unsafe {
         std::ptr::write(out, stream);
     }
@@ -111,6 +118,19 @@ macro_rules! get_service {
     };
 }
 
+/// Handle a panic from `catch_unwind` by setting the error buffer and returning Error.
+fn handle_panic(panic: Box<dyn std::any::Any + Send>) -> FfiStatus {
+    let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+        format!("Internal panic: {}", s)
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        format!("Internal panic: {}", s)
+    } else {
+        "Internal panic (unknown cause)".to_string()
+    };
+    set_last_error(&msg, "HY000", -1);
+    FfiStatus::Error
+}
+
 // ─── Exported FFI Functions ───────────────────────────────────────────────────
 
 /// List catalogs.
@@ -124,12 +144,15 @@ pub unsafe extern "C" fn metadata_get_catalogs(
     conn: FfiConnectionHandle,
     out: *mut FFI_ArrowArrayStream,
 ) -> FfiStatus {
-    let svc = get_service!(conn);
-
-    match svc.get_catalogs() {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let svc = get_service!(conn);
+        match svc.get_catalogs() {
+            Ok(reader) => export_reader(reader, out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
 }
 
 /// List schemas.
@@ -146,18 +169,22 @@ pub unsafe extern "C" fn metadata_get_schemas(
     schema_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
 ) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_option(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return FfiStatus::Error;
-    };
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let svc = get_service!(conn);
+        let Ok(catalog) = (unsafe { c_str_to_option(catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(schema_pattern) = (unsafe { c_str_to_option(schema_pattern) }) else {
+            return FfiStatus::Error;
+        };
 
-    match svc.get_schemas(catalog, schema_pattern) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
+        match svc.get_schemas(catalog, schema_pattern) {
+            Ok(reader) => export_reader(reader, out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
 }
 
 /// List tables matching the given filter criteria.
@@ -180,28 +207,32 @@ pub unsafe extern "C" fn metadata_get_tables(
     table_types: *const c_char,
     out: *mut FFI_ArrowArrayStream,
 ) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_option(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table_pattern) = c_str_to_option(table_pattern) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table_types_str) = c_str_to_option(table_types) else {
-        return FfiStatus::Error;
-    };
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let svc = get_service!(conn);
+        let Ok(catalog) = (unsafe { c_str_to_option(catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(schema_pattern) = (unsafe { c_str_to_option(schema_pattern) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(table_pattern) = (unsafe { c_str_to_option(table_pattern) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(table_types_str) = (unsafe { c_str_to_option(table_types) }) else {
+            return FfiStatus::Error;
+        };
 
-    // Parse comma-separated table types
-    let types_vec: Option<Vec<&str>> =
-        table_types_str.map(|s| s.split(',').map(|t| t.trim()).collect());
+        // Parse comma-separated table types
+        let types_vec: Option<Vec<&str>> =
+            table_types_str.map(|s| s.split(',').map(|t| t.trim()).collect());
 
-    match svc.get_tables(catalog, schema_pattern, table_pattern, types_vec.as_deref()) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
+        match svc.get_tables(catalog, schema_pattern, table_pattern, types_vec.as_deref()) {
+            Ok(reader) => export_reader(reader, out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
 }
 
 /// List columns matching the given filter criteria.
@@ -220,24 +251,28 @@ pub unsafe extern "C" fn metadata_get_columns(
     column_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
 ) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_option(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema_pattern) = c_str_to_option(schema_pattern) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table_pattern) = c_str_to_option(table_pattern) else {
-        return FfiStatus::Error;
-    };
-    let Ok(column_pattern) = c_str_to_option(column_pattern) else {
-        return FfiStatus::Error;
-    };
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let svc = get_service!(conn);
+        let Ok(catalog) = (unsafe { c_str_to_option(catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(schema_pattern) = (unsafe { c_str_to_option(schema_pattern) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(table_pattern) = (unsafe { c_str_to_option(table_pattern) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(column_pattern) = (unsafe { c_str_to_option(column_pattern) }) else {
+            return FfiStatus::Error;
+        };
 
-    match svc.get_columns(catalog, schema_pattern, table_pattern, column_pattern) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
+        match svc.get_columns(catalog, schema_pattern, table_pattern, column_pattern) {
+            Ok(reader) => export_reader(reader, out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
 }
 
 /// List primary key columns for a table.
@@ -255,21 +290,25 @@ pub unsafe extern "C" fn metadata_get_primary_keys(
     table: *const c_char,
     out: *mut FFI_ArrowArrayStream,
 ) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_str(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema) = c_str_to_str(schema) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table) = c_str_to_str(table) else {
-        return FfiStatus::Error;
-    };
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let svc = get_service!(conn);
+        let Ok(catalog) = (unsafe { c_str_to_str(catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(schema) = (unsafe { c_str_to_str(schema) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(table) = (unsafe { c_str_to_str(table) }) else {
+            return FfiStatus::Error;
+        };
 
-    match svc.get_primary_keys(catalog, schema, table) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
-    }
+        match svc.get_primary_keys(catalog, schema, table) {
+            Ok(reader) => export_reader(reader, out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
 }
 
 /// List foreign key columns for a table.
@@ -287,19 +326,156 @@ pub unsafe extern "C" fn metadata_get_foreign_keys(
     table: *const c_char,
     out: *mut FFI_ArrowArrayStream,
 ) -> FfiStatus {
-    let svc = get_service!(conn);
-    let Ok(catalog) = c_str_to_str(catalog) else {
-        return FfiStatus::Error;
-    };
-    let Ok(schema) = c_str_to_str(schema) else {
-        return FfiStatus::Error;
-    };
-    let Ok(table) = c_str_to_str(table) else {
-        return FfiStatus::Error;
-    };
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let svc = get_service!(conn);
+        let Ok(catalog) = (unsafe { c_str_to_str(catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(schema) = (unsafe { c_str_to_str(schema) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(table) = (unsafe { c_str_to_str(table) }) else {
+            return FfiStatus::Error;
+        };
 
-    match svc.get_foreign_keys(catalog, schema, table) {
-        Ok(batch) => export_batch(batch, out),
-        Err(e) => set_error_from_result(&e),
+        match svc.get_foreign_keys(catalog, schema, table) {
+            Ok(reader) => export_reader(reader, out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ffi::error::FfiError;
+    use arrow_array::{RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use std::sync::Arc;
+
+    /// A simple mock reader that returns predefined batches.
+    struct MockReader {
+        batches: Vec<RecordBatch>,
+        index: usize,
+        schema: SchemaRef,
+    }
+
+    impl MockReader {
+        fn new(batches: Vec<RecordBatch>) -> Self {
+            let schema = if batches.is_empty() {
+                Arc::new(Schema::empty())
+            } else {
+                batches[0].schema()
+            };
+            Self {
+                batches,
+                index: 0,
+                schema,
+            }
+        }
+    }
+
+    impl ResultReader for MockReader {
+        fn schema(&self) -> crate::error::Result<SchemaRef> {
+            Ok(self.schema.clone())
+        }
+
+        fn next_batch(&mut self) -> crate::error::Result<Option<RecordBatch>> {
+            if self.index >= self.batches.len() {
+                Ok(None)
+            } else {
+                let batch = self.batches[self.index].clone();
+                self.index += 1;
+                Ok(Some(batch))
+            }
+        }
+    }
+
+    #[test]
+    fn test_export_reader_null_output() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["hello"]))]).unwrap();
+
+        let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch]));
+        let status = export_reader(reader, std::ptr::null_mut());
+        assert_eq!(status, FfiStatus::InvalidHandle);
+    }
+
+    #[test]
+    fn test_export_reader_success() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["hello"]))]).unwrap();
+
+        let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch]));
+        let mut stream = FFI_ArrowArrayStream::empty();
+        let status = export_reader(reader, &mut stream);
+        assert_eq!(status, FfiStatus::Success);
+    }
+
+    #[test]
+    fn test_null_handle_returns_invalid_handle() {
+        let mut stream = FFI_ArrowArrayStream::empty();
+        let status = unsafe { metadata_get_catalogs(std::ptr::null_mut(), &mut stream) };
+        assert_eq!(status, FfiStatus::InvalidHandle);
+
+        // Error should be set
+        let mut err = FfiError::default();
+        unsafe { crate::ffi::error::metadata_get_last_error(&mut err) };
+        assert_ne!(err.message[0], 0); // non-empty message
+    }
+
+    #[test]
+    fn test_c_str_to_option_null() {
+        let result = unsafe { c_str_to_option(std::ptr::null()) };
+        assert_eq!(result, Ok(None));
+    }
+
+    #[test]
+    fn test_c_str_to_option_valid() {
+        let s = std::ffi::CString::new("hello").unwrap();
+        let result = unsafe { c_str_to_option(s.as_ptr()) };
+        assert_eq!(result, Ok(Some("hello")));
+    }
+
+    #[test]
+    fn test_c_str_to_str_null() {
+        let result = unsafe { c_str_to_str(std::ptr::null()) };
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_c_str_to_str_valid() {
+        let s = std::ffi::CString::new("world").unwrap();
+        let result = unsafe { c_str_to_str(s.as_ptr()) };
+        assert_eq!(result, Ok("world"));
+    }
+
+    #[test]
+    fn test_clear_error_on_entry() {
+        // Set an error, then call a function that clears it at entry
+        crate::ffi::error::set_last_error("stale error", "HY000", -1);
+
+        // Call with null handle — this clears the error first, then sets a new one
+        let mut stream = FFI_ArrowArrayStream::empty();
+        let _status = unsafe { metadata_get_catalogs(std::ptr::null_mut(), &mut stream) };
+
+        let mut err = FfiError::default();
+        unsafe { crate::ffi::error::metadata_get_last_error(&mut err) };
+        // The error should be about invalid handle, not "stale error"
+        let msg: String = err
+            .message
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8 as char)
+            .collect();
+        assert!(
+            msg.contains("Invalid connection handle"),
+            "Expected handle error, got: {}",
+            msg
+        );
     }
 }

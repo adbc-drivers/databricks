@@ -559,17 +559,17 @@ impl DatabricksClient for SeaClient {
     async fn list_columns(
         &self,
         session_id: &str,
-        catalog: &str,
+        catalog: Option<&str>,
         schema_pattern: Option<&str>,
         table_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> Result<ExecuteResult> {
         let sql = SqlCommandBuilder::new()
-            .with_catalog(Some(catalog))
+            .with_catalog(catalog)
             .with_schema_pattern(schema_pattern)
             .with_table_pattern(table_pattern)
             .with_column_pattern(column_pattern)
-            .build_show_columns()?;
+            .build_show_columns();
         debug!("list_columns: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await

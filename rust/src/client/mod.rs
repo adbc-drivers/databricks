@@ -202,12 +202,12 @@ pub trait DatabricksClient: Send + Sync + std::fmt::Debug {
         table_types: Option<&[&str]>,
     ) -> Result<ExecuteResult>;
 
-    /// List columns for a specific catalog, optionally filtered by patterns.
-    /// Catalog is required — `SHOW COLUMNS IN ALL CATALOGS` is not yet available server-side.
+    /// List columns, optionally filtered by catalog and patterns.
+    /// When catalog is None or wildcard, uses "SHOW COLUMNS IN ALL CATALOGS".
     async fn list_columns(
         &self,
         session_id: &str,
-        catalog: &str,
+        catalog: Option<&str>,
         schema_pattern: Option<&str>,
         table_pattern: Option<&str>,
         column_pattern: Option<&str>,

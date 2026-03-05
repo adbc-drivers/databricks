@@ -73,14 +73,14 @@ The `metadata-ffi` feature implies `ffi` (both are always present for the ODBC b
                        |
 +----------------------v------------------------------------+
 |  src/metadata/service.rs  (ConnectionMetadataService)     |
-|  - get_catalogs()      -> raw Arrow RecordBatch           |
-|  - get_schemas()       -> raw Arrow RecordBatch           |
-|  - get_tables()        -> raw Arrow RecordBatch           |
-|  - get_columns()       -> raw Arrow RecordBatch           |
-|  - get_primary_keys()  -> raw Arrow RecordBatch           |
-|  - get_foreign_keys()  -> raw Arrow RecordBatch           |
+|  - get_catalogs()      -> Box<dyn ResultReader>           |
+|  - get_schemas()       -> Box<dyn ResultReader>           |
+|  - get_tables()        -> Box<dyn ResultReader>           |
+|  - get_columns()       -> Box<dyn ResultReader>           |
+|  - get_primary_keys()  -> Box<dyn ResultReader>           |
+|  - get_foreign_keys()  -> Box<dyn ResultReader>           |
 |                                                           |
-|  collect_batches(): drains reader, concat_batches         |
+|  Thin pass-through: returns reader from client directly   |
 +----------------------+------------------------------------+
                        | reuses
 +----------------------v------------------------------------+
@@ -94,16 +94,22 @@ The `metadata-ffi` feature implies `ffi` (both are always present for the ODBC b
 +-----------------------------------------------------------+
 ```
 
-## Key Design: Raw Arrow Pass-Through
+## Key Design: Streaming Arrow Pass-Through
 
-The metadata FFI layer passes raw Arrow data from Databricks directly to the caller.
-There is **no** intermediate Arrow -> Rust structs -> Arrow conversion in this path:
+The metadata FFI layer streams raw Arrow data from Databricks directly to the caller.
+There is **no** intermediate buffering, collecting, or Arrow -> Rust structs -> Arrow
+conversion in this path:
 
 1. `ConnectionMetadataService` calls `DatabricksClient` methods (e.g. `list_tables()`)
-2. The client executes SQL (`SHOW TABLES`, etc.) and returns an `ExecuteResult` with a reader
-3. `collect_batches()` drains the reader and concatenates into a single `RecordBatch`
-4. The raw `RecordBatch` is exported via Arrow C Data Interface to the C caller
-5. The caller (ODBC wrapper) handles column renaming, type mapping, and reshaping
+2. The client executes SQL (`SHOW TABLES`, etc.) and returns an `ExecuteResult` with a `ResultReader`
+3. The service returns the `ResultReader` directly (no `collect_batches` or concatenation)
+4. The FFI layer wraps the reader in a `ResultReaderAdapter` (bridges `ResultReader` → `RecordBatchReader`)
+5. The `RecordBatchReader` is exported via Arrow C Data Interface (`FFI_ArrowArrayStream`) to the C caller
+6. The caller (ODBC wrapper) consumes batches incrementally, handling column renaming, type mapping, and reshaping
+
+This streaming approach avoids materializing the entire result set in memory. The
+`ResultReaderAdapter` (from `reader/mod.rs`) lazily pulls batches from the underlying
+network reader on each `next()` call.
 
 The ADBC `get_objects` path (`connection.rs` -> `builder.rs`) still uses parsed structs
 for hierarchical grouping -- that path is unchanged.
@@ -141,7 +147,16 @@ for hierarchical grouping -- that path is unchanged.
 ### Error Retrieval
 | Function | Signature |
 |----------|-----------|
-| `metadata_get_last_error` | `(message: *mut *const c_char, sqlstate: *mut *const c_char, code: *mut c_int) -> FfiStatus` |
+| `metadata_get_last_error` | `(error_out: *mut FfiError) -> FfiStatus` |
+
+`FfiError` is a `#[repr(C)]` struct with fixed-size buffers:
+```c
+struct FfiError {
+    char message[1024];   // null-terminated error message
+    char sql_state[6];    // null-terminated SQLSTATE code
+    int32_t native_error; // native error code
+};
+```
 
 ### Catalog Functions
 | Function | Signature |
@@ -167,15 +182,16 @@ pub struct ConnectionMetadataService {
 
 | Method | Implementation |
 |--------|---------------|
-| `get_catalogs` | `client.list_catalogs()` -> `collect_batches()` |
-| `get_schemas` | `client.list_schemas()` -> `collect_batches()` |
-| `get_tables` | `client.list_tables()` -> `collect_batches()` |
-| `get_columns` | Per-catalog `client.list_columns()` -> `concat_batches()` |
-| `get_primary_keys` | `execute_statement(SHOW KEYS)` -> `collect_batches()` |
-| `get_foreign_keys` | `execute_statement(SHOW FOREIGN KEYS)` -> `collect_batches()` |
+| `get_catalogs` | `client.list_catalogs()` → return reader |
+| `get_schemas` | `client.list_schemas()` → return reader |
+| `get_tables` | `client.list_tables()` → return reader |
+| `get_columns` | `client.list_columns()` → return reader |
+| `get_primary_keys` | `execute_statement(SHOW KEYS)` → return reader |
+| `get_foreign_keys` | `execute_statement(SHOW FOREIGN KEYS)` → return reader |
 
-`get_columns` has special handling: when catalog is `None`, empty, or wildcard (`%`/`*`),
-it discovers all catalogs first, queries each individually, and concatenates the results.
+All methods follow the same thin pass-through pattern: execute via client, return the
+streaming reader. `get_columns` uses server-side `SHOW COLUMNS IN ALL CATALOGS` when
+catalog is `None` or wildcard — no client-side multi-catalog orchestration needed.
 
 ## Cargo.toml
 
@@ -200,9 +216,15 @@ arrow-select = "57"  # for concat_batches
    The trait was unnecessary indirection since there's only one implementation and it's not
    mocked in tests.
 4. **Arrow C Data Interface for results**: Zero-copy transport of Arrow data to C callers.
-5. **Thread-local error buffer**: Simple, matches ODBC error retrieval pattern.
-6. **`collect_batches()` helper**: Drains the reader and uses `arrow_select::concat::concat_batches`
-   to merge multiple batches into one, handling empty results gracefully.
-7. **Minimal FFI surface**: Only 6 catalog functions that correspond to real SQL queries.
+5. **Thread-local error buffer**: Simple, matches ODBC error retrieval pattern. The error
+   buffer is cleared at the start of each FFI function (except `metadata_get_last_error`
+   itself) so callers never see stale errors from a previous call.
+6. **`catch_unwind` on all FFI entry points**: Panics must not unwind across the FFI
+   boundary (undefined behavior in Rust). All `extern "C"` functions wrap their body in
+   `std::panic::catch_unwind` and convert panics to error status codes.
+7. **Streaming via `ResultReaderAdapter`**: Instead of collecting all batches into a single
+   `RecordBatch`, the reader is streamed through the FFI layer using `ResultReaderAdapter`
+   which bridges `ResultReader` → `RecordBatchReader` for zero-copy FFI export.
+8. **Minimal FFI surface**: Only 6 catalog functions that correspond to real SQL queries.
    Operations like `get_table_types`, `get_statistics`, `get_type_info`, etc. are handled
    by the ODBC wrapper directly (they're either static data or empty stubs).

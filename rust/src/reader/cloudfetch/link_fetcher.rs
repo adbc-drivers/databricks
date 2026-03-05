@@ -656,7 +656,7 @@ mod tests {
         async fn list_columns(
             &self,
             _session_id: &str,
-            _catalog: &str,
+            _catalog: Option<&str>,
             _schema_pattern: Option<&str>,
             _table_pattern: Option<&str>,
             _column_pattern: Option<&str>,

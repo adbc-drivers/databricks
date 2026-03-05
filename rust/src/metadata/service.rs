@@ -12,48 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Metadata service returning raw Arrow result sets from Databricks.
+//! Metadata service returning streaming Arrow result readers from Databricks.
 //!
 //! Each method executes a SQL metadata query via the Databricks client and
-//! returns the raw Arrow `RecordBatch` without reshaping. The caller (e.g.
-//! the ODBC wrapper) is responsible for column renaming, type mapping, and
-//! any other transformations.
+//! returns a streaming `ResultReader`. The caller (e.g. the ODBC wrapper) is
+//! responsible for column renaming, type mapping, and any other transformations.
 
-use crate::client::{DatabricksClient, ExecuteResult};
-use crate::error::{DatabricksErrorHelper, Result};
-use crate::metadata::parse::parse_catalogs;
+use crate::client::DatabricksClient;
+use crate::error::Result;
 use crate::metadata::sql::SqlCommandBuilder;
+use crate::reader::ResultReader;
 use crate::types::sea::ExecuteParams;
-use arrow_array::RecordBatch;
-use arrow_select::concat::concat_batches;
-use driverbase::error::ErrorHelper;
 use std::sync::Arc;
-
-/// Collect all batches from an `ExecuteResult` into a single `RecordBatch`.
-fn collect_batches(result: ExecuteResult) -> Result<RecordBatch> {
-    let mut reader = result.reader;
-    let schema = reader.schema()?;
-    let mut batches = Vec::new();
-
-    while let Some(batch) = reader.next_batch()? {
-        if batch.num_rows() > 0 {
-            batches.push(batch);
-        }
-    }
-
-    if batches.is_empty() {
-        Ok(RecordBatch::new_empty(schema))
-    } else {
-        concat_batches(&schema, &batches).map_err(|e| {
-            DatabricksErrorHelper::io().message(format!("Failed to concat metadata batches: {}", e))
-        })
-    }
-}
 
 /// Metadata service backed by a Databricks connection.
 ///
-/// Executes metadata SQL queries and returns raw Arrow `RecordBatch` results
-/// directly from the server, without intermediate parsing or schema reshaping.
+/// Executes metadata SQL queries and returns streaming `ResultReader` instances
+/// directly from the server, without intermediate buffering or schema reshaping.
 pub struct ConnectionMetadataService {
     client: Arc<dyn DatabricksClient>,
     session_id: String,
@@ -74,36 +49,36 @@ impl ConnectionMetadataService {
         }
     }
 
-    /// List catalogs. Returns raw Arrow data from `SHOW CATALOGS`.
-    pub fn get_catalogs(&self) -> Result<RecordBatch> {
+    /// List catalogs. Returns a streaming reader over `SHOW CATALOGS` results.
+    pub fn get_catalogs(&self) -> Result<Box<dyn ResultReader + Send>> {
         let result = self
             .runtime
             .block_on(self.client.list_catalogs(&self.session_id))?;
-        collect_batches(result)
+        Ok(result.reader)
     }
 
-    /// List schemas. Returns raw Arrow data from `SHOW SCHEMAS`.
+    /// List schemas. Returns a streaming reader over `SHOW SCHEMAS` results.
     pub fn get_schemas(
         &self,
         catalog: Option<&str>,
         schema_pattern: Option<&str>,
-    ) -> Result<RecordBatch> {
+    ) -> Result<Box<dyn ResultReader + Send>> {
         let result = self.runtime.block_on(self.client.list_schemas(
             &self.session_id,
             catalog,
             schema_pattern,
         ))?;
-        collect_batches(result)
+        Ok(result.reader)
     }
 
-    /// List tables. Returns raw Arrow data from `SHOW TABLES`.
+    /// List tables. Returns a streaming reader over `SHOW TABLES` results.
     pub fn get_tables(
         &self,
         catalog: Option<&str>,
         schema_pattern: Option<&str>,
         table_pattern: Option<&str>,
         table_types: Option<&[&str]>,
-    ) -> Result<RecordBatch> {
+    ) -> Result<Box<dyn ResultReader + Send>> {
         let result = self.runtime.block_on(self.client.list_tables(
             &self.session_id,
             catalog,
@@ -111,92 +86,56 @@ impl ConnectionMetadataService {
             table_pattern,
             table_types,
         ))?;
-        collect_batches(result)
+        Ok(result.reader)
     }
 
-    /// List columns. Returns raw Arrow data from `SHOW COLUMNS`.
-    ///
-    /// `SHOW COLUMNS` requires a catalog. When catalog is `None`, empty, or a
-    /// wildcard (`%` / `*`), all catalogs are discovered first and each is
-    /// queried individually; the results are concatenated.
+    /// List columns. Returns a streaming reader over `SHOW COLUMNS` results.
     pub fn get_columns(
         &self,
         catalog: Option<&str>,
         schema_pattern: Option<&str>,
         table_pattern: Option<&str>,
         column_pattern: Option<&str>,
-    ) -> Result<RecordBatch> {
-        let catalogs_to_query: Vec<String> =
-            if let Some(cat) = catalog.filter(|c| !c.is_empty() && *c != "%" && *c != "*") {
-                vec![cat.to_string()]
-            } else {
-                let result = self
-                    .runtime
-                    .block_on(self.client.list_catalogs(&self.session_id))?;
-                let cats = parse_catalogs(result)?;
-                cats.into_iter().map(|c| c.catalog_name).collect()
-            };
-
-        let mut all_batches = Vec::new();
-        let mut schema = None;
-
-        for cat in &catalogs_to_query {
-            let result = self.runtime.block_on(self.client.list_columns(
-                &self.session_id,
-                cat,
-                schema_pattern,
-                table_pattern,
-                column_pattern,
-            ))?;
-            let batch = collect_batches(result)?;
-            if schema.is_none() {
-                schema = Some(batch.schema());
-            }
-            if batch.num_rows() > 0 {
-                all_batches.push(batch);
-            }
-        }
-
-        match schema {
-            Some(s) if all_batches.is_empty() => Ok(RecordBatch::new_empty(s)),
-            Some(s) => concat_batches(&s, &all_batches).map_err(|e| {
-                DatabricksErrorHelper::io()
-                    .message(format!("Failed to concat column batches: {}", e))
-            }),
-            None => Err(DatabricksErrorHelper::invalid_state()
-                .message("No catalogs found for column listing")),
-        }
+    ) -> Result<Box<dyn ResultReader + Send>> {
+        let result = self.runtime.block_on(self.client.list_columns(
+            &self.session_id,
+            catalog,
+            schema_pattern,
+            table_pattern,
+            column_pattern,
+        ))?;
+        Ok(result.reader)
     }
 
-    /// List primary keys. Returns raw Arrow data from `SHOW KEYS`.
+    /// List primary keys. Returns a streaming reader over `SHOW KEYS` results.
     pub fn get_primary_keys(
         &self,
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<RecordBatch> {
+    ) -> Result<Box<dyn ResultReader + Send>> {
         let sql = SqlCommandBuilder::build_show_primary_keys(catalog, schema, table);
         let result = self.runtime.block_on(self.client.execute_statement(
             &self.session_id,
             &sql,
             &ExecuteParams::default(),
         ))?;
-        collect_batches(result)
+        Ok(result.reader)
     }
 
-    /// List foreign keys. Returns raw Arrow data from `SHOW FOREIGN KEYS`.
+    /// List foreign keys. Returns a streaming reader over `SHOW FOREIGN KEYS` results.
     pub fn get_foreign_keys(
         &self,
         catalog: &str,
         schema: &str,
         table: &str,
-    ) -> Result<RecordBatch> {
+    ) -> Result<Box<dyn ResultReader + Send>> {
         let sql = SqlCommandBuilder::build_show_foreign_keys(catalog, schema, table);
         let result = self.runtime.block_on(self.client.execute_statement(
             &self.session_id,
             &sql,
             &ExecuteParams::default(),
         ))?;
-        collect_batches(result)
+        Ok(result.reader)
     }
 }
