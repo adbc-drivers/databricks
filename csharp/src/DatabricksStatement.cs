@@ -28,6 +28,9 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Result;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -89,6 +92,72 @@ namespace AdbcDrivers.Databricks
             if (!connection.Properties.ContainsKey(ApacheParameters.PollTimeMilliseconds))
             {
                 SetOption(ApacheParameters.PollTimeMilliseconds, DatabricksConstants.DefaultAsyncExecPollIntervalMs.ToString());
+            }
+        }
+
+        public override QueryResult ExecuteQuery()
+        {
+            var databricksConnection = (DatabricksConnection)Connection;
+            var telemetrySession = databricksConnection.TelemetrySession;
+
+            // If telemetry is not enabled, just call base
+            if (telemetrySession?.TelemetryClient == null)
+            {
+                return base.ExecuteQuery();
+            }
+
+            var ctx = new StatementTelemetryContext(telemetrySession);
+            ctx.OperationType = OperationType.OperationExecuteStatement;
+            ctx.StatementType = Telemetry.Proto.StatementType.StatementQuery;
+
+            try
+            {
+                QueryResult result = base.ExecuteQuery();
+                ctx.RecordFirstBatchReady();
+                ctx.ResultFormat = useCloudFetch
+                    ? ExecutionResultFormat.ExecutionResultExternalLinks
+                    : ExecutionResultFormat.ExecutionResultInlineArrow;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                ctx.HasError = true;
+                ctx.ErrorName = ex.GetType().Name;
+                ctx.ErrorMessage = ex.Message;
+                throw;
+            }
+            finally
+            {
+                EmitTelemetry(ctx, telemetrySession);
+            }
+        }
+
+        private void EmitTelemetry(StatementTelemetryContext ctx, TelemetrySessionContext session)
+        {
+            try
+            {
+                ctx.RecordResultsConsumed();
+                OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
+
+                var frontendLog = new TelemetryFrontendLog
+                {
+                    WorkspaceId = ctx.WorkspaceId,
+                    FrontendLogEventId = Guid.NewGuid().ToString(),
+                    Context = new FrontendLogContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    },
+                    Entry = new FrontendLogEntry
+                    {
+                        SqlDriverLog = telemetryLog
+                    }
+                };
+
+                session.TelemetryClient!.Enqueue(frontendLog);
+            }
+            catch
+            {
+                // Telemetry must never impact driver operations
             }
         }
 
