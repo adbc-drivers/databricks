@@ -337,11 +337,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     // Double-check after acquiring lock
                     if (_sessionId == null)
                     {
+                        var sessionConfigs = ExtractServerSideProperties(_properties);
                         var request = new CreateSessionRequest
                         {
                             WarehouseId = _warehouseId,
                             Catalog = _catalog,
-                            Schema = _schema
+                            Schema = _schema,
+                            SessionConfigs = sessionConfigs.Count > 0 ? sessionConfigs : null
                         };
 
                         var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
@@ -403,6 +405,28 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             // TODO (PECO-2792): Implement metadata operations via SQL queries
             throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+        }
+
+        /// <summary>
+        /// Extracts server-side properties from connection properties.
+        /// Filters properties with the "adbc.databricks.ssp_" prefix, strips the prefix,
+        /// and validates names contain only letters, digits, dots, and underscores.
+        /// </summary>
+        private static Dictionary<string, string> ExtractServerSideProperties(
+            IReadOnlyDictionary<string, string> properties)
+        {
+            var result = new Dictionary<string, string>();
+            foreach (var kvp in properties)
+            {
+                if (kvp.Key.StartsWith(DatabricksParameters.ServerSidePropertyPrefix,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    string name = kvp.Key.Substring(DatabricksParameters.ServerSidePropertyPrefix.Length);
+                    if (System.Text.RegularExpressions.Regex.IsMatch(name, @"^[a-zA-Z0-9_.]+$"))
+                        result[name] = kvp.Value;
+                }
+            }
+            return result;
         }
 
         /// <summary>
