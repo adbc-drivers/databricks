@@ -861,6 +861,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var typeNameBuilder = new StringArray.Builder();
                 var selfRefColBuilder = new StringArray.Builder();
                 var refGenBuilder = new StringArray.Builder();
+                var tableTypeFilter = !string.IsNullOrEmpty(_metadataTableTypes)
+                    ? new HashSet<string>(
+                        _metadataTableTypes!.Split(',').Select(t => t.Trim()),
+                        StringComparer.OrdinalIgnoreCase)
+                    : null;
+
                 int count = 0;
                 foreach (var batch in batches)
                 {
@@ -870,10 +876,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var tableTypeArray = TryGetColumn<StringArray>(batch, "tableType");
                     var remarksArray = TryGetColumn<StringArray>(batch, "remarks");
                     if (catalogArray == null || schemaArray == null || tableArray == null) continue;
-
-                    var tableTypeFilter = !string.IsNullOrEmpty(_metadataTableTypes)
-                        ? new HashSet<string>(_metadataTableTypes!.Split(','), StringComparer.OrdinalIgnoreCase)
-                        : null;
 
                     for (int i = 0; i < batch.Length; i++)
                     {
@@ -984,11 +986,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
 
+                if (string.IsNullOrEmpty(catalog) || string.IsNullOrEmpty(_metadataSchemaName) ||
+                    string.IsNullOrEmpty(_metadataTableName))
+                    throw new ArgumentException("Catalog, schema, and table name are required for GetColumnsExtended");
+
                 string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
                     catalog, _metadataSchemaName, _metadataTableName);
-
-                if (string.IsNullOrEmpty(fullTableName))
-                    throw new ArgumentException("Catalog, schema, and table name are required for GetColumnsExtended");
 
                 string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
                 activity?.SetTag("sql_query", query);

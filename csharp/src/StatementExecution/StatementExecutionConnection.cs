@@ -518,7 +518,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
             var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
-            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog_name, databaseName
+            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog, databaseName
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
             bool showAllCatalogs = catalogPattern == null;
 
