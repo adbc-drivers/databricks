@@ -223,6 +223,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         {
             var endpoint = _isAuthenticated ? AuthenticatedEndpoint : UnauthenticatedEndpoint;
             var host = _host.TrimEnd('/');
+            if (!host.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+                !host.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                host = $"https://{host}";
+            }
             return $"{host}{endpoint}";
         }
 

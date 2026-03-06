@@ -28,6 +28,9 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Result;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -58,6 +61,7 @@ namespace AdbcDrivers.Databricks
         private bool enablePKFK;
         private bool runAsyncInThrift;
         private Dictionary<string, string>? confOverlay;
+        internal string? LastStatementId { get; set; }
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -89,6 +93,124 @@ namespace AdbcDrivers.Databricks
             if (!connection.Properties.ContainsKey(ApacheParameters.PollTimeMilliseconds))
             {
                 SetOption(ApacheParameters.PollTimeMilliseconds, DatabricksConstants.DefaultAsyncExecPollIntervalMs.ToString());
+            }
+        }
+
+        private StatementTelemetryContext? CreateTelemetryContext(Telemetry.Proto.StatementType statementType)
+        {
+            var session = ((DatabricksConnection)Connection).TelemetrySession;
+            if (session?.TelemetryClient == null) return null;
+
+            var ctx = new StatementTelemetryContext(session);
+            ctx.OperationType = OperationType.OperationExecuteStatement;
+            ctx.StatementType = statementType;
+            ctx.IsCompressed = canDecompressLz4;
+            return ctx;
+        }
+
+        private void RecordSuccess(StatementTelemetryContext ctx)
+        {
+            ctx.RecordFirstBatchReady();
+            ctx.ResultFormat = useCloudFetch
+                ? ExecutionResultFormat.ExecutionResultExternalLinks
+                : ExecutionResultFormat.ExecutionResultInlineArrow;
+            ctx.StatementId = LastStatementId;
+        }
+
+        private void RecordError(StatementTelemetryContext ctx, Exception ex)
+        {
+            ctx.HasError = true;
+            ctx.ErrorName = ex.GetType().Name;
+            ctx.ErrorMessage = ex.Message;
+        }
+
+        public override QueryResult ExecuteQuery()
+        {
+            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementQuery);
+            if (ctx == null) return base.ExecuteQuery();
+
+            try
+            {
+                QueryResult result = base.ExecuteQuery();
+                RecordSuccess(ctx);
+                return result;
+            }
+            catch (Exception ex) { RecordError(ctx, ex); throw; }
+            finally { EmitTelemetry(ctx); }
+        }
+
+        public override async ValueTask<QueryResult> ExecuteQueryAsync()
+        {
+            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementQuery);
+            if (ctx == null) return await base.ExecuteQueryAsync();
+
+            try
+            {
+                QueryResult result = await base.ExecuteQueryAsync();
+                RecordSuccess(ctx);
+                return result;
+            }
+            catch (Exception ex) { RecordError(ctx, ex); throw; }
+            finally { EmitTelemetry(ctx); }
+        }
+
+        public override UpdateResult ExecuteUpdate()
+        {
+            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementUpdate);
+            if (ctx == null) return base.ExecuteUpdate();
+
+            try
+            {
+                UpdateResult result = base.ExecuteUpdate();
+                RecordSuccess(ctx);
+                return result;
+            }
+            catch (Exception ex) { RecordError(ctx, ex); throw; }
+            finally { EmitTelemetry(ctx); }
+        }
+
+        public override async Task<UpdateResult> ExecuteUpdateAsync()
+        {
+            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementUpdate);
+            if (ctx == null) return await base.ExecuteUpdateAsync();
+
+            try
+            {
+                UpdateResult result = await base.ExecuteUpdateAsync();
+                RecordSuccess(ctx);
+                return result;
+            }
+            catch (Exception ex) { RecordError(ctx, ex); throw; }
+            finally { EmitTelemetry(ctx); }
+        }
+
+        private void EmitTelemetry(StatementTelemetryContext ctx)
+        {
+            try
+            {
+                ctx.RecordResultsConsumed();
+                OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
+
+                var frontendLog = new TelemetryFrontendLog
+                {
+                    WorkspaceId = ctx.WorkspaceId,
+                    FrontendLogEventId = Guid.NewGuid().ToString(),
+                    Context = new FrontendLogContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    },
+                    Entry = new FrontendLogEntry
+                    {
+                        SqlDriverLog = telemetryLog
+                    }
+                };
+
+                var session = ((DatabricksConnection)Connection).TelemetrySession;
+                session?.TelemetryClient?.Enqueue(frontendLog);
+            }
+            catch
+            {
+                // Telemetry must never impact driver operations
             }
         }
 
