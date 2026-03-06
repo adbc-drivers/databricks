@@ -48,7 +48,6 @@ namespace AdbcDrivers.Databricks.Reader
 
         // Telemetry tracking
         private int _pollCount = 0;
-        private long _totalLatencyMs = 0;
 
         public DatabricksOperationStatusPoller(
             IHiveServer2Statement statement,
@@ -83,9 +82,6 @@ namespace AdbcDrivers.Databricks.Reader
 
         private async Task PollOperationStatus(CancellationToken cancellationToken)
         {
-            Stopwatch stopwatch = Stopwatch.StartNew();
-            long firstPollCompleted = 0;
-
             while (!cancellationToken.IsCancellationRequested)
             {
                 TOperationHandle? operationHandle = _response.OperationHandle;
@@ -93,21 +89,11 @@ namespace AdbcDrivers.Databricks.Reader
 
                 CancellationToken GetOperationStatusTimeoutToken = ApacheUtility.GetCancellationToken(_requestTimeoutSeconds, ApacheUtility.TimeUnit.Seconds);
 
-                long pollStartMs = stopwatch.ElapsedMilliseconds;
                 var request = new TGetOperationStatusReq(operationHandle);
                 var response = await _statement.Client.GetOperationStatus(request, GetOperationStatusTimeoutToken);
-                long pollEndMs = stopwatch.ElapsedMilliseconds;
 
-                // Track telemetry
+                // Track poll count for telemetry
                 _pollCount++;
-                long pollLatency = pollEndMs - pollStartMs;
-                _totalLatencyMs += pollLatency;
-
-                // Track time to first byte (first successful poll)
-                if (firstPollCompleted == 0)
-                {
-                    firstPollCompleted = pollEndMs;
-                }
 
                 await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
 
@@ -124,7 +110,6 @@ namespace AdbcDrivers.Databricks.Reader
 
             // Add telemetry tags to current activity when polling completes
             Activity.Current?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
-            Activity.Current?.SetTag(StatementExecutionEvent.PollLatencyMs, _totalLatencyMs);
         }
 
         public void Stop()

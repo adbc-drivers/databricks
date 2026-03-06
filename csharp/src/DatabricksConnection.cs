@@ -437,7 +437,7 @@ namespace AdbcDrivers.Databricks
             // Capture statement ID from server response for telemetry
             if (response.OperationHandle?.OperationId?.Guid != null)
             {
-                databricksStatement.LastStatementId = new Guid(response.OperationHandle.OperationId.Guid).ToString();
+                databricksStatement.StatementId = new Guid(response.OperationHandle.OperationId.Guid).ToString();
             }
 
             HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
@@ -589,7 +589,7 @@ namespace AdbcDrivers.Databricks
             }
 
             // Initialize telemetry after successful session creation
-            await InitializeTelemetryAsync(activity).ConfigureAwait(false);
+            InitializeTelemetry(activity);
         }
 
         /// <summary>
@@ -597,22 +597,16 @@ namespace AdbcDrivers.Databricks
         /// All exceptions are swallowed to ensure telemetry failures don't impact connection.
         /// </summary>
         /// <param name="activity">Optional activity for tracing telemetry initialization.</param>
-        private async Task InitializeTelemetryAsync(Activity? activity = null)
+        private void InitializeTelemetry(Activity? activity = null)
         {
             try
             {
                 // Extract host for telemetry
                 _host = GetHost();
 
-                // Check feature flag via FeatureFlagCache
-                // This merges feature flags from server with local properties
-                // Priority: User properties > Feature flags > Defaults
-                IReadOnlyDictionary<string, string> mergedProperties = await FeatureFlagCache.GetInstance()
-                    .MergePropertiesWithFeatureFlagsAsync(Properties, s_assemblyVersion)
-                    .ConfigureAwait(false);
-
-                // Parse telemetry configuration from merged properties
-                TelemetryConfiguration telemetryConfig = TelemetryConfiguration.FromProperties(mergedProperties);
+                // Parse telemetry configuration from connection properties
+                // Properties already contains merged feature flags from connection construction
+                TelemetryConfiguration telemetryConfig = TelemetryConfiguration.FromProperties(Properties);
 
                 // Only initialize telemetry if enabled
                 if (!telemetryConfig.Enabled)
@@ -635,8 +629,9 @@ namespace AdbcDrivers.Databricks
                     return;
                 }
 
-                // Determine if connection is authenticated
-                bool isAuthenticated = IsAuthenticated();
+                // Always use authenticated telemetry endpoint since a valid connection
+                // implies successful authentication. If it fails, we just log the error.
+                bool isAuthenticated = true;
 
                 // Create HTTP client for telemetry export
                 HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties, _host, s_assemblyVersion);
@@ -654,6 +649,7 @@ namespace AdbcDrivers.Databricks
                     SessionId = SessionHandle?.SessionId?.Guid != null
                         ? new Guid(SessionHandle.SessionId.Guid).ToString()
                         : null,
+                    // TODO: Update AuthType to reflect actual auth mechanism (PAT, OAuth, etc.)
                     AuthType = isAuthenticated ? "token" : "none",
                     TelemetryClient = _telemetryClient,
                     SystemConfiguration = BuildSystemConfiguration(),
@@ -679,29 +675,6 @@ namespace AdbcDrivers.Databricks
                         { "error.message", ex.Message }
                     }));
             }
-        }
-
-        /// <summary>
-        /// Determines if the connection is authenticated.
-        /// Returns true if authentication is configured (Token, OAuth, Basic, etc.).
-        /// </summary>
-        private bool IsAuthenticated()
-        {
-            Properties.TryGetValue(SparkParameters.AuthType, out string? authType);
-
-            if (SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue))
-            {
-                return authTypeValue != SparkAuthType.None;
-            }
-
-            // If auth type is not parseable, check for auth credentials
-            Properties.TryGetValue(SparkParameters.Token, out string? token);
-            Properties.TryGetValue(SparkParameters.AccessToken, out string? accessToken);
-            Properties.TryGetValue(AdbcOptions.Username, out string? username);
-
-            return !string.IsNullOrWhiteSpace(token) ||
-                   !string.IsNullOrWhiteSpace(accessToken) ||
-                   !string.IsNullOrWhiteSpace(username);
         }
 
         private Telemetry.Proto.DriverSystemConfiguration BuildSystemConfiguration()

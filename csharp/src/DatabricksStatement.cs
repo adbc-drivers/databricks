@@ -61,7 +61,7 @@ namespace AdbcDrivers.Databricks
         private bool enablePKFK;
         private bool runAsyncInThrift;
         private Dictionary<string, string>? confOverlay;
-        internal string? LastStatementId { get; set; }
+        internal string? StatementId { get; set; }
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -114,7 +114,7 @@ namespace AdbcDrivers.Databricks
             ctx.ResultFormat = useCloudFetch
                 ? ExecutionResultFormat.ExecutionResultExternalLinks
                 : ExecutionResultFormat.ExecutionResultInlineArrow;
-            ctx.StatementId = LastStatementId;
+            ctx.StatementId = StatementId;
         }
 
         private void RecordError(StatementTelemetryContext ctx, Exception ex)
