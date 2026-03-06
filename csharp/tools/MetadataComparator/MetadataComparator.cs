@@ -105,13 +105,14 @@ namespace AdbcDrivers.Databricks.Examples
 
             using var thriftDb = driver.Open(CreateThriftParams(config));
             using var thriftConn = thriftDb.Connect(new Dictionary<string, string>());
-            var thriftData = await GetMetadataData(thriftConn, "GetCatalogs", null, null, null);
+            var thriftResult = await GetMetadataDataWithSchema(thriftConn, "GetCatalogs", null, null, null);
 
             using var seaDb = driver.Open(CreateSeaParams(config));
             using var seaConn = seaDb.Connect(new Dictionary<string, string>());
-            var seaData = await GetMetadataData(seaConn, "GetCatalogs", null, null, null);
+            var seaResult = await GetMetadataDataWithSchema(seaConn, "GetCatalogs", null, null, null);
 
-            CompareResults(thriftData, seaData);
+            CompareSchemaTypes("GetCatalogs", thriftResult.SchemaTypes, seaResult.SchemaTypes);
+            CompareResults(thriftResult.Rows, seaResult.Rows);
         }
 
         static async Task CompareGetSchemas(Dictionary<string, string> config)
@@ -121,13 +122,14 @@ namespace AdbcDrivers.Databricks.Examples
 
             using var thriftDb = driver.Open(CreateThriftParams(config));
             using var thriftConn = thriftDb.Connect(new Dictionary<string, string>());
-            var thriftData = await GetMetadataData(thriftConn, "GetSchemas", null, null, null);
+            var thriftResult = await GetMetadataDataWithSchema(thriftConn, "GetSchemas", null, null, null);
 
             using var seaDb = driver.Open(CreateSeaParams(config));
             using var seaConn = seaDb.Connect(new Dictionary<string, string>());
-            var seaData = await GetMetadataData(seaConn, "GetSchemas", null, null, null);
+            var seaResult = await GetMetadataDataWithSchema(seaConn, "GetSchemas", null, null, null);
 
-            CompareResults(thriftData, seaData);
+            CompareSchemaTypes("GetSchemas", thriftResult.SchemaTypes, seaResult.SchemaTypes);
+            CompareResults(thriftResult.Rows, seaResult.Rows);
         }
 
         static async Task CompareGetTables(Dictionary<string, string> config)
@@ -137,13 +139,14 @@ namespace AdbcDrivers.Databricks.Examples
 
             using var thriftDb = driver.Open(CreateThriftParams(config));
             using var thriftConn = thriftDb.Connect(new Dictionary<string, string>());
-            var thriftData = await GetMetadataData(thriftConn, "GetTables", "main", "adbc_testing", null);
+            var thriftResult = await GetMetadataDataWithSchema(thriftConn, "GetTables", "main", "adbc_testing", null);
 
             using var seaDb = driver.Open(CreateSeaParams(config));
             using var seaConn = seaDb.Connect(new Dictionary<string, string>());
-            var seaData = await GetMetadataData(seaConn, "GetTables", "main", "adbc_testing", null);
+            var seaResult = await GetMetadataDataWithSchema(seaConn, "GetTables", "main", "adbc_testing", null);
 
-            CompareResults(thriftData, seaData);
+            CompareSchemaTypes("GetTables", thriftResult.SchemaTypes, seaResult.SchemaTypes);
+            CompareResults(thriftResult.Rows, seaResult.Rows);
         }
 
         static async Task CompareGetColumns(Dictionary<string, string> config)
@@ -153,13 +156,14 @@ namespace AdbcDrivers.Databricks.Examples
 
             using var thriftDb = driver.Open(CreateThriftParams(config));
             using var thriftConn = thriftDb.Connect(new Dictionary<string, string>());
-            var thriftData = await GetMetadataData(thriftConn, "GetColumns", "main", "adbc_testing", "all_column_types");
+            var thriftResult = await GetMetadataDataWithSchema(thriftConn, "GetColumns", "main", "adbc_testing", "all_column_types");
 
             using var seaDb = driver.Open(CreateSeaParams(config));
             using var seaConn = seaDb.Connect(new Dictionary<string, string>());
-            var seaData = await GetMetadataData(seaConn, "GetColumns", "main", "adbc_testing", "all_column_types");
+            var seaResult = await GetMetadataDataWithSchema(seaConn, "GetColumns", "main", "adbc_testing", "all_column_types");
 
-            CompareResults(thriftData, seaData);
+            CompareSchemaTypes("GetColumns", thriftResult.SchemaTypes, seaResult.SchemaTypes);
+            CompareResults(thriftResult.Rows, seaResult.Rows);
         }
 
         static async Task CompareGetColumnsExtended(Dictionary<string, string> config)
@@ -169,13 +173,14 @@ namespace AdbcDrivers.Databricks.Examples
 
             using var thriftDb = driver.Open(CreateThriftParams(config));
             using var thriftConn = thriftDb.Connect(new Dictionary<string, string>());
-            var thriftData = await GetMetadataData(thriftConn, "GetColumnsExtended", "main", "adbc_testing", "all_column_types");
+            var thriftResult = await GetMetadataDataWithSchema(thriftConn, "GetColumnsExtended", "main", "adbc_testing", "all_column_types");
 
             using var seaDb = driver.Open(CreateSeaParams(config));
             using var seaConn = seaDb.Connect(new Dictionary<string, string>());
-            var seaData = await GetMetadataData(seaConn, "GetColumnsExtended", "main", "adbc_testing", "all_column_types");
+            var seaResult = await GetMetadataDataWithSchema(seaConn, "GetColumnsExtended", "main", "adbc_testing", "all_column_types");
 
-            CompareResults(thriftData, seaData);
+            CompareSchemaTypes("GetColumnsExtended", thriftResult.SchemaTypes, seaResult.SchemaTypes);
+            CompareResults(thriftResult.Rows, seaResult.Rows);
         }
 
         static async Task CompareGetPrimaryKeys(Dictionary<string, string> config)
@@ -185,13 +190,14 @@ namespace AdbcDrivers.Databricks.Examples
 
             using var thriftDb = driver.Open(CreateThriftParams(config));
             using var thriftConn = thriftDb.Connect(new Dictionary<string, string>());
-            var thriftData = await GetPrimaryKeysData(thriftConn, "main", "adbc_testing", "cross_ref_customers");
+            var thriftResult = await GetMetadataDataWithSchema(thriftConn, "GetPrimaryKeys", "main", "adbc_testing", "cross_ref_customers");
 
             using var seaDb = driver.Open(CreateSeaParams(config));
             using var seaConn = seaDb.Connect(new Dictionary<string, string>());
-            var seaData = await GetPrimaryKeysData(seaConn, "main", "adbc_testing", "cross_ref_customers");
+            var seaResult = await GetMetadataDataWithSchema(seaConn, "GetPrimaryKeys", "main", "adbc_testing", "cross_ref_customers");
 
-            CompareResults(thriftData, seaData);
+            CompareSchemaTypes("GetPrimaryKeys", thriftResult.SchemaTypes, seaResult.SchemaTypes);
+            CompareResults(thriftResult.Rows, seaResult.Rows);
         }
 
         static async Task CompareGetCrossReference(Dictionary<string, string> config)
@@ -201,13 +207,14 @@ namespace AdbcDrivers.Databricks.Examples
 
             using var thriftDb = driver.Open(CreateThriftParams(config));
             using var thriftConn = thriftDb.Connect(new Dictionary<string, string>());
-            var thriftData = await GetCrossReferenceData(thriftConn, "main", "adbc_testing", "cross_ref_customers", "main", "adbc_testing", "cross_ref_orders");
+            var thriftResult = await GetMetadataDataWithSchema(thriftConn, "GetCrossReference", "main", "adbc_testing", "cross_ref_customers", "main", "adbc_testing", "cross_ref_orders");
 
             using var seaDb = driver.Open(CreateSeaParams(config));
             using var seaConn = seaDb.Connect(new Dictionary<string, string>());
-            var seaData = await GetCrossReferenceData(seaConn, "main", "adbc_testing", "cross_ref_customers", "main", "adbc_testing", "cross_ref_orders");
+            var seaResult = await GetMetadataDataWithSchema(seaConn, "GetCrossReference", "main", "adbc_testing", "cross_ref_customers", "main", "adbc_testing", "cross_ref_orders");
 
-            CompareResults(thriftData, seaData);
+            CompareSchemaTypes("GetCrossReference", thriftResult.SchemaTypes, seaResult.SchemaTypes);
+            CompareResults(thriftResult.Rows, seaResult.Rows);
         }
 
         static Task CompareGetTableSchema(Dictionary<string, string> config)
@@ -334,9 +341,18 @@ namespace AdbcDrivers.Databricks.Examples
             return results;
         }
 
-        static async Task<List<Dictionary<string, string>>> GetMetadataData(AdbcConnection connection, string command, string? catalog, string? schema, string? table)
+        /// <summary>
+        /// Return type that carries both row data and the Arrow schema field types.
+        /// </summary>
+        class MetadataResult
         {
-            var results = new List<Dictionary<string, string>>();
+            public List<Dictionary<string, string>> Rows { get; set; } = new();
+            public Dictionary<string, string> SchemaTypes { get; set; } = new();
+        }
+
+        static async Task<MetadataResult> GetMetadataDataWithSchema(AdbcConnection connection, string command, string? catalog, string? schema, string? table)
+        {
+            var result = new MetadataResult();
 
             using var statement = connection.CreateStatement();
             statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
@@ -349,6 +365,13 @@ namespace AdbcDrivers.Databricks.Examples
             statement.SqlQuery = command;
             var queryResult = statement.ExecuteQuery();
             using var reader = queryResult.Stream;
+
+            // Capture schema types
+            if (reader.Schema != null)
+            {
+                foreach (var field in reader.Schema.FieldsList)
+                    result.SchemaTypes[field.Name] = field.DataType.GetType().Name;
+            }
 
             while (true)
             {
@@ -364,11 +387,63 @@ namespace AdbcDrivers.Databricks.Examples
                         var value = GetValue(batch.Column(j), i)?.ToString() ?? "null";
                         row[name] = value;
                     }
-                    results.Add(row);
+                    result.Rows.Add(row);
                 }
             }
 
-            return results;
+            return result;
+        }
+
+        static async Task<MetadataResult> GetMetadataDataWithSchema(AdbcConnection connection, string command,
+            string? catalog, string? schema, string? table,
+            string? foreignCatalog, string? foreignSchema, string? foreignTable)
+        {
+            var result = new MetadataResult();
+
+            using var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            if (catalog != null) statement.SetOption(ApacheParameters.CatalogName, catalog);
+            if (schema != null) statement.SetOption(ApacheParameters.SchemaName, schema);
+            if (table != null) statement.SetOption(ApacheParameters.TableName, table);
+            if (foreignCatalog != null) statement.SetOption(ApacheParameters.ForeignCatalogName, foreignCatalog);
+            if (foreignSchema != null) statement.SetOption(ApacheParameters.ForeignSchemaName, foreignSchema);
+            if (foreignTable != null) statement.SetOption(ApacheParameters.ForeignTableName, foreignTable);
+
+            statement.SqlQuery = command;
+            var queryResult = statement.ExecuteQuery();
+            using var reader = queryResult.Stream;
+
+            if (reader.Schema != null)
+            {
+                foreach (var field in reader.Schema.FieldsList)
+                    result.SchemaTypes[field.Name] = field.DataType.GetType().Name;
+            }
+
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    var row = new Dictionary<string, string>();
+                    for (int j = 0; j < batch.ColumnCount; j++)
+                    {
+                        var name = reader.Schema?.GetFieldByIndex(j).Name ?? $"col_{j}";
+                        var value = GetValue(batch.Column(j), i)?.ToString() ?? "null";
+                        row[name] = value;
+                    }
+                    result.Rows.Add(row);
+                }
+            }
+
+            return result;
+        }
+
+        static async Task<List<Dictionary<string, string>>> GetMetadataData(AdbcConnection connection, string command, string? catalog, string? schema, string? table)
+        {
+            var result = await GetMetadataDataWithSchema(connection, command, catalog, schema, table);
+            return result.Rows;
         }
 
         static async Task<List<Dictionary<string, string>>> GetPrimaryKeysData(AdbcConnection connection, string catalog, string schema, string table)
@@ -727,6 +802,52 @@ namespace AdbcDrivers.Databricks.Examples
             else
                 WriteLine("STATUS: ❌ FAIL - Major differences");
             WriteLine("════════════════════════════════════════════════════════════════════════════════");
+        }
+
+        static void CompareSchemaTypes(string testName, Dictionary<string, string> thriftSchema, Dictionary<string, string> seaSchema)
+        {
+            var allColumns = new HashSet<string>(thriftSchema.Keys);
+            allColumns.UnionWith(seaSchema.Keys);
+
+            int matches = 0;
+            int mismatches = 0;
+            var mismatchDetails = new List<string>();
+
+            int colWidth = Math.Max(30, allColumns.Any() ? allColumns.Max(c => c.Length) + 2 : 30);
+            int typeWidth = 25;
+
+            WriteLine($"ARROW SCHEMA TYPE COMPARISON ({testName}):");
+            var top = "┌" + new string('─', colWidth) + "┬" + new string('─', typeWidth) + "┬" + new string('─', typeWidth) + "┬───────┐";
+            WriteLine(top);
+            WriteLine($"│ {"Column".PadRight(colWidth - 2)} │ {"Thrift Type".PadRight(typeWidth - 2)} │ {"SEA Type".PadRight(typeWidth - 2)} │ Match │");
+            var mid = "├" + new string('─', colWidth) + "┼" + new string('─', typeWidth) + "┼" + new string('─', typeWidth) + "┼───────┤";
+            WriteLine(mid);
+
+            foreach (var col in allColumns.OrderBy(c => c))
+            {
+                var thriftType = thriftSchema.ContainsKey(col) ? thriftSchema[col] : "N/A";
+                var seaType = seaSchema.ContainsKey(col) ? seaSchema[col] : "N/A";
+                bool match = thriftType == seaType && thriftType != "N/A";
+
+                if (match) matches++; else { mismatches++; mismatchDetails.Add($"{col}: Thrift={thriftType}, SEA={seaType}"); }
+
+                string icon = match ? "  ✅  " : "  ❌  ";
+                WriteLine($"│ {col.PadRight(colWidth - 2)} │ {thriftType.PadRight(typeWidth - 2)} │ {seaType.PadRight(typeWidth - 2)} │ {icon} │");
+            }
+
+            var bot = "└" + new string('─', colWidth) + "┴" + new string('─', typeWidth) + "┴" + new string('─', typeWidth) + "┴───────┘";
+            WriteLine(bot);
+
+            int total = matches + mismatches;
+            double pct = total > 0 ? matches * 100.0 / total : 100.0;
+            WriteLine($"Schema types: {matches}/{total} match ({pct:F1}%)");
+            if (mismatchDetails.Any())
+            {
+                WriteLine("Type mismatches:");
+                foreach (var d in mismatchDetails)
+                    WriteLine($"  ❌ {d}");
+            }
+            WriteLine();
         }
 
         static object? GetValue(IArrowArray array, int index)
