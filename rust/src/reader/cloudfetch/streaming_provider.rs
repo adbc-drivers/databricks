@@ -19,13 +19,14 @@
 //! - Parallel chunk downloads from cloud storage
 //! - Memory management via chunk limits
 //! - Consumer API via RecordBatchReader trait
+//!
+//! NOTE: This module uses a legacy DashMap-based architecture with local ChunkEntry/ChunkState
+//! types. It will be replaced by a channel-based pipeline in a future task.
 
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
 use crate::reader::cloudfetch::link_fetcher::ChunkLinkFetcher;
-use crate::types::cloudfetch::{
-    ChunkEntry, ChunkState, CloudFetchConfig, DEFAULT_CHUNK_READY_TIMEOUT_SECS,
-};
+use crate::types::cloudfetch::{CloudFetchConfig, CloudFetchLink};
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use dashmap::DashMap;
@@ -36,6 +37,54 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
+
+/// Default timeout (in seconds) for waiting for a chunk state change notification.
+const DEFAULT_CHUNK_WAIT_TIMEOUT_SECS: u64 = 30;
+
+// --- Legacy types used only within this module ---
+// These will be removed when the provider is rewritten to use the channel-based pipeline.
+
+/// State of a chunk in the download pipeline (legacy, module-local).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum ChunkState {
+    /// Link available, not yet downloading.
+    UrlFetched,
+    /// Download in progress.
+    Downloading,
+    /// Downloaded successfully.
+    Downloaded,
+    /// Download failed (will retry).
+    DownloadFailed(String),
+    /// Retrying after failure.
+    DownloadRetry,
+    /// Arrow parse failed (terminal).
+    ProcessingFailed(String),
+    /// Cancelled by user (terminal).
+    Cancelled,
+}
+
+/// Entry for a chunk in the chunks map (legacy, module-local).
+#[derive(Clone)]
+struct ChunkEntry {
+    /// Link for this chunk.
+    link: Option<CloudFetchLink>,
+    /// Current state of this chunk.
+    state: ChunkState,
+    /// Parsed record batches (populated when state is Downloaded).
+    batches: Option<Vec<RecordBatch>>,
+}
+
+impl ChunkEntry {
+    /// Create a new entry with a fetched link.
+    fn with_link(link: CloudFetchLink) -> Self {
+        Self {
+            link: Some(link),
+            state: ChunkState::UrlFetched,
+            batches: None,
+        }
+    }
+}
 
 /// Orchestrates link fetching and chunk downloading for CloudFetch.
 ///
@@ -357,6 +406,7 @@ impl StreamingCloudFetchProvider {
             let cancel_token = self.cancel_token.clone();
             let max_retries = self.config.max_retries;
             let retry_delay = self.config.retry_delay;
+            let url_expiration_buffer_secs = self.config.url_expiration_buffer_secs;
 
             self.runtime_handle.spawn(async move {
                 let result = Self::download_chunk_with_retry(
@@ -366,6 +416,7 @@ impl StreamingCloudFetchProvider {
                     &chunks,
                     max_retries,
                     retry_delay,
+                    url_expiration_buffer_secs,
                     &cancel_token,
                 )
                 .await;
@@ -391,6 +442,7 @@ impl StreamingCloudFetchProvider {
     }
 
     /// Download a single chunk with retry and link refresh on expiry.
+    #[allow(clippy::too_many_arguments)]
     async fn download_chunk_with_retry(
         chunk_index: i64,
         downloader: &ChunkDownloader,
@@ -398,6 +450,7 @@ impl StreamingCloudFetchProvider {
         chunks: &Arc<DashMap<i64, ChunkEntry>>,
         max_retries: u32,
         retry_delay: std::time::Duration,
+        url_expiration_buffer_secs: u32,
         cancel_token: &CancellationToken,
     ) -> Result<Vec<RecordBatch>> {
         let mut attempts = 0;
@@ -413,7 +466,7 @@ impl StreamingCloudFetchProvider {
                 let stored_link = entry.as_ref().and_then(|e| e.link.clone());
 
                 match stored_link {
-                    Some(link) if !link.is_expired() => link,
+                    Some(link) if !link.is_expired(url_expiration_buffer_secs) => link,
                     _ => {
                         // Link missing or expired - refetch it
                         debug!("Refetching expired link for chunk {}", chunk_index);
@@ -485,12 +538,7 @@ impl StreamingCloudFetchProvider {
             }
 
             // Wait for any chunk state change with timeout
-            let timeout =
-                self.config
-                    .chunk_ready_timeout
-                    .unwrap_or(std::time::Duration::from_secs(
-                        DEFAULT_CHUNK_READY_TIMEOUT_SECS,
-                    ));
+            let timeout = std::time::Duration::from_secs(DEFAULT_CHUNK_WAIT_TIMEOUT_SECS);
 
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {

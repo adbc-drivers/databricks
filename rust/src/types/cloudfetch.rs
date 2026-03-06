@@ -19,22 +19,14 @@
 
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::types::sea::ExternalLink;
-use arrow_array::RecordBatch;
 use chrono::{DateTime, Utc};
 use driverbase::error::ErrorHelper;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Safety buffer (in seconds) before link expiration.
-/// Links are considered expired this many seconds before their actual expiration time
-/// to avoid race conditions during download.
-pub const LINK_EXPIRY_BUFFER_SECS: i64 = 30;
-
-/// Default timeout (in seconds) for waiting for a chunk to be ready.
-/// Used as a fallback when `chunk_ready_timeout` is not configured.
-pub const DEFAULT_CHUNK_READY_TIMEOUT_SECS: u64 = 30;
-
 /// Configuration for CloudFetch streaming.
+///
+/// Defaults are aligned with the C# reference driver implementation.
 #[derive(Debug, Clone)]
 pub struct CloudFetchConfig {
     /// Number of chunk links to prefetch ahead of consumption.
@@ -43,10 +35,16 @@ pub struct CloudFetchConfig {
     pub max_chunks_in_memory: usize,
     /// Maximum number of retry attempts for failed downloads.
     pub max_retries: u32,
-    /// Delay between retry attempts.
+    /// Delay between retry attempts (used with linear backoff: retry_delay * (attempt + 1)).
     pub retry_delay: Duration,
-    /// Timeout for waiting for a chunk to be ready.
-    pub chunk_ready_timeout: Option<Duration>,
+    /// Maximum number of retry attempts for refreshing expired links.
+    pub max_refresh_retries: u32,
+    /// Number of concurrent download worker tasks.
+    pub num_download_workers: usize,
+    /// Safety buffer (in seconds) before link expiration.
+    /// Links are considered expired this many seconds before their actual expiration time
+    /// to avoid race conditions during download.
+    pub url_expiration_buffer_secs: u32,
     /// Log warning if download speed falls below this threshold (MB/s).
     pub speed_threshold_mbps: f64,
     /// Whether CloudFetch is enabled.
@@ -60,9 +58,16 @@ impl Default for CloudFetchConfig {
             link_prefetch_window: 128,
             // Match JDBC default: cloudFetchThreadPoolSize = 16
             max_chunks_in_memory: 16,
-            max_retries: 5,
-            retry_delay: Duration::from_millis(1500),
-            chunk_ready_timeout: Some(Duration::from_secs(30)),
+            // Match C# default: 3 retries
+            max_retries: 3,
+            // Match C# default: 500ms base delay (linear backoff)
+            retry_delay: Duration::from_millis(500),
+            // Match C# default: 3 refresh retries for expired links
+            max_refresh_retries: 3,
+            // Match C# default: 3 concurrent download workers
+            num_download_workers: 3,
+            // Default 60s buffer before link expiration
+            url_expiration_buffer_secs: 60,
             speed_threshold_mbps: 0.1,
             enabled: true,
         }
@@ -97,10 +102,11 @@ pub struct CloudFetchLink {
 impl CloudFetchLink {
     /// Check if link is expired (with safety buffer).
     ///
-    /// Uses `LINK_EXPIRY_BUFFER_SECS` as a safety margin to avoid race conditions
-    /// where a link expires during download.
-    pub fn is_expired(&self) -> bool {
-        Utc::now() + chrono::Duration::seconds(LINK_EXPIRY_BUFFER_SECS) >= self.expiration
+    /// The `buffer_secs` parameter specifies how many seconds before the actual
+    /// expiration time the link should be considered expired. This safety margin
+    /// avoids race conditions where a link expires during download.
+    pub fn is_expired(&self, buffer_secs: u32) -> bool {
+        Utc::now() + chrono::Duration::seconds(buffer_secs as i64) >= self.expiration
     }
 
     /// Convert from SEA API response type.
@@ -125,73 +131,6 @@ impl CloudFetchLink {
     }
 }
 
-/// State of a chunk in the download pipeline.
-///
-/// State transitions:
-/// ```text
-///   Pending -> UrlFetched (link available)
-///   UrlFetched -> Downloading (download started)
-///   Downloading -> Downloaded (success)
-///   Downloading -> DownloadFailed (error)
-///   DownloadFailed -> DownloadRetry (retrying)
-///   DownloadRetry -> Downloading (retry started)
-///   Downloaded -> ProcessingFailed (Arrow parse error)
-///   Downloaded -> Released (consumed by client)
-///   * -> Cancelled (user cancellation)
-/// ```
-#[derive(Debug, Clone)]
-pub enum ChunkState {
-    /// Initial state, no link yet.
-    Pending,
-    /// Link available, not yet downloading.
-    UrlFetched,
-    /// Download in progress.
-    Downloading,
-    /// Downloaded successfully.
-    Downloaded,
-    /// Download failed (will retry).
-    DownloadFailed(String),
-    /// Retrying after failure.
-    DownloadRetry,
-    /// Arrow parse failed (terminal).
-    ProcessingFailed(String),
-    /// Cancelled by user (terminal).
-    Cancelled,
-    /// Memory released (terminal).
-    Released,
-}
-
-/// Entry for a chunk in the chunks map.
-#[derive(Clone)]
-pub struct ChunkEntry {
-    /// Link for this chunk (set when state is UrlFetched or later).
-    pub link: Option<CloudFetchLink>,
-    /// Current state of this chunk.
-    pub state: ChunkState,
-    /// Parsed record batches (populated when state is Downloaded).
-    pub batches: Option<Vec<RecordBatch>>,
-}
-
-impl ChunkEntry {
-    /// Create a new pending entry with no link.
-    pub fn pending() -> Self {
-        Self {
-            link: None,
-            state: ChunkState::Pending,
-            batches: None,
-        }
-    }
-
-    /// Create a new entry with a fetched link.
-    pub fn with_link(link: CloudFetchLink) -> Self {
-        Self {
-            link: Some(link),
-            state: ChunkState::UrlFetched,
-            batches: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,9 +138,13 @@ mod tests {
     #[test]
     fn test_cloudfetch_config_default() {
         let config = CloudFetchConfig::default();
-        assert_eq!(config.link_prefetch_window, 128); // Matches JDBC default
-        assert_eq!(config.max_chunks_in_memory, 16); // Matches JDBC cloudFetchThreadPoolSize
-        assert_eq!(config.max_retries, 5);
+        assert_eq!(config.link_prefetch_window, 128);
+        assert_eq!(config.max_chunks_in_memory, 16);
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.retry_delay, Duration::from_millis(500));
+        assert_eq!(config.max_refresh_retries, 3);
+        assert_eq!(config.num_download_workers, 3);
+        assert_eq!(config.url_expiration_buffer_secs, 60);
         assert!(config.enabled);
     }
 
@@ -261,7 +204,7 @@ mod tests {
         };
 
         let link = CloudFetchLink::from_external_link(&external).unwrap();
-        assert!(link.is_expired());
+        assert!(link.is_expired(60)); // expired even with 60s buffer
     }
 
     #[test]
@@ -278,22 +221,14 @@ mod tests {
         };
 
         let link = CloudFetchLink::from_external_link(&external).unwrap();
-        assert!(!link.is_expired());
+        assert!(!link.is_expired(60)); // not expired even with 60s buffer
     }
 
     #[test]
-    fn test_chunk_entry_pending() {
-        let entry = ChunkEntry::pending();
-        assert!(entry.link.is_none());
-        assert!(entry.batches.is_none());
-        assert!(matches!(entry.state, ChunkState::Pending));
-    }
-
-    #[test]
-    fn test_chunk_entry_with_link() {
+    fn test_cloudfetch_link_is_expired_with_zero_buffer() {
         let external = ExternalLink {
             external_link: "https://storage.example.com/chunk0".to_string(),
-            expiration: "2099-01-01T12:00:00Z".to_string(),
+            expiration: "2000-01-01T12:00:00Z".to_string(), // Way in the past
             chunk_index: 0,
             row_offset: 0,
             row_count: 1000,
@@ -301,11 +236,8 @@ mod tests {
             http_headers: None,
             next_chunk_index: None,
         };
-        let link = CloudFetchLink::from_external_link(&external).unwrap();
-        let entry = ChunkEntry::with_link(link);
 
-        assert!(entry.link.is_some());
-        assert!(entry.batches.is_none());
-        assert!(matches!(entry.state, ChunkState::UrlFetched));
+        let link = CloudFetchLink::from_external_link(&external).unwrap();
+        assert!(link.is_expired(0)); // expired even with 0s buffer
     }
 }
