@@ -37,7 +37,7 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// Key Behaviors:
     /// - Constructor initializes all pipeline components in correct order
     /// - ExportAsync() delegates to the circuit breaker-protected exporter
-    /// - CloseAsync() performs graceful shutdown: flush pending metrics, cancel background tasks, dispose resources
+    /// - CloseAsync() performs graceful shutdown: flush pending metrics, wait for exports, dispose resources
     /// - All exceptions are swallowed per telemetry requirement
     /// </para>
     /// <para>
@@ -46,18 +46,15 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// </remarks>
     internal sealed class TelemetryClient : ITelemetryClient
     {
-        /// <summary>
-        /// Activity source for tracing telemetry client operations.
-        /// </summary>
-        private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks.TelemetryClient");
-
-        private readonly DatabricksTelemetryExporter _databricksExporter;
-        private readonly CircuitBreakerTelemetryExporter _circuitBreakerExporter;
         private readonly ITelemetryExporter _effectiveExporter;
         private readonly ConcurrentQueue<TelemetryFrontendLog> _pendingLogs;
         private readonly int _batchSize;
+        private readonly bool _enabled;
         private readonly CancellationTokenSource _cts;
-        private volatile bool _disposed;
+        private readonly SemaphoreSlim _flushSemaphore = new SemaphoreSlim(1, 1);
+        private readonly Timer? _flushTimer;
+        private int _disposed;
+        private int _queueCount;
 
         /// <summary>
         /// Creates a new TelemetryClient with the specified configuration and HTTP client.
@@ -94,18 +91,29 @@ namespace AdbcDrivers.Databricks.Telemetry
             _cts = new CancellationTokenSource();
             _pendingLogs = new ConcurrentQueue<TelemetryFrontendLog>();
             _batchSize = configuration.BatchSize;
+            _enabled = configuration.Enabled;
 
             try
             {
                 // Initialize pipeline components in order:
                 // 1. DatabricksTelemetryExporter (innermost - does the HTTP export)
-                _databricksExporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated, configuration);
+                var databricksExporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated, configuration);
 
                 // 2. CircuitBreakerTelemetryExporter (wraps exporter with circuit breaker protection)
-                _circuitBreakerExporter = new CircuitBreakerTelemetryExporter(_databricksExporter, host);
+                var circuitBreakerExporter = new CircuitBreakerTelemetryExporter(databricksExporter, host);
 
                 // Use override exporter if provided (for testing), otherwise use circuit breaker exporter
-                _effectiveExporter = exporterOverride ?? (ITelemetryExporter)_circuitBreakerExporter;
+                _effectiveExporter = exporterOverride ?? (ITelemetryExporter)circuitBreakerExporter;
+
+                // Start periodic flush timer if interval is configured
+                if (configuration.FlushIntervalMs > 0)
+                {
+                    _flushTimer = new Timer(
+                        _ => { _ = FlushAsync(_cts.Token); },
+                        null,
+                        configuration.FlushIntervalMs,
+                        configuration.FlushIntervalMs);
+                }
 
                 Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.initialized",
                     tags: new ActivityTagsCollection
@@ -122,6 +130,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 try
                 {
                     _cts?.Dispose();
+                    _flushTimer?.Dispose();
                 }
                 catch
                 {
@@ -152,7 +161,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public void Enqueue(TelemetryFrontendLog log)
         {
-            if (_disposed || log == null)
+            if (_disposed != 0 || !_enabled || log == null)
             {
                 return;
             }
@@ -160,11 +169,12 @@ namespace AdbcDrivers.Databricks.Telemetry
             try
             {
                 _pendingLogs.Enqueue(log);
+                int count = Interlocked.Increment(ref _queueCount);
 
-                // Trigger flush if batch size reached
-                if (_pendingLogs.Count >= _batchSize)
+                // Trigger flush if batch size reached (single flush at a time via semaphore)
+                if (count >= _batchSize)
                 {
-                    _ = Task.Run(() => FlushAsync(CancellationToken.None));
+                    _ = FlushAsync(_cts.Token);
                 }
             }
             catch (Exception ex)
@@ -197,23 +207,33 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public async Task FlushAsync(CancellationToken ct = default)
         {
-            if (_disposed)
+            if (_disposed != 0)
+            {
+                return;
+            }
+
+            // Ensure only one flush runs at a time
+            if (!await _flushSemaphore.WaitAsync(0, ct).ConfigureAwait(false))
             {
                 return;
             }
 
             try
             {
+                // Use linked token so both caller cancellation and client shutdown are respected
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
+
                 // Flush directly enqueued logs (V3 direct-object path)
                 List<TelemetryFrontendLog> logsToFlush = new List<TelemetryFrontendLog>();
-                while (_pendingLogs.TryDequeue(out TelemetryFrontendLog? log))
+                while (_pendingLogs.TryDequeue(out TelemetryFrontendLog log))
                 {
                     logsToFlush.Add(log);
                 }
+                Interlocked.Add(ref _queueCount, -logsToFlush.Count);
 
                 if (logsToFlush.Count > 0)
                 {
-                    await _effectiveExporter.ExportAsync(logsToFlush, ct).ConfigureAwait(false);
+                    await _effectiveExporter.ExportAsync(logsToFlush, linkedCts.Token).ConfigureAwait(false);
                 }
 
                 Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.flush_completed"));
@@ -228,6 +248,10 @@ namespace AdbcDrivers.Databricks.Telemetry
                         { "error.type", ex.GetType().Name }
                     }));
             }
+            finally
+            {
+                _flushSemaphore.Release();
+            }
         }
 
         /// <summary>
@@ -241,32 +265,60 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </para>
         /// <para>
         /// The close operation performs the following steps:
-        /// 1. Cancel any pending background tasks
-        /// 2. Dispose all resources (cancellation token source)
+        /// 1. Flush all remaining queued events
+        /// 2. Stop the periodic flush timer
+        /// 3. Dispose all resources (cancellation token source, semaphore, timer)
         /// </para>
         /// <para>
         /// This method is idempotent - calling it multiple times is safe and has no effect
-        /// after the first call completes.
+        /// after the first call completes. Uses Interlocked.Exchange for atomic check-then-set.
         /// </para>
         /// <para>
         /// This method never throws exceptions. All errors during close are caught and
         /// logged internally.
         /// </para>
         /// </remarks>
-        public Task CloseAsync()
+        public async Task CloseAsync()
         {
-            if (_disposed)
+            if (Interlocked.Exchange(ref _disposed, 1) == 1)
             {
-                return Task.CompletedTask;
+                return;
             }
-
-            _disposed = true;
 
             try
             {
                 Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.closing"));
 
-                // Cancel any pending background tasks
+                // Stop the periodic flush timer first
+                try
+                {
+                    _flushTimer?.Dispose();
+                }
+                catch
+                {
+                    // Swallow timer dispose exceptions
+                }
+
+                // Flush remaining queued events before shutdown
+                try
+                {
+                    // Temporarily reset _disposed to allow FlushAsync to proceed
+                    Interlocked.Exchange(ref _disposed, 0);
+                    await FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                    Interlocked.Exchange(ref _disposed, 1);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Exchange(ref _disposed, 1);
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.final_flush_error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.message", ex.Message },
+                            { "error.type", ex.GetType().Name }
+                        }));
+                }
+
+                // Cancel the token to signal any in-flight operations
                 try
                 {
                     _cts.Cancel();
@@ -295,7 +347,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
             finally
             {
-                // Ensure CancellationTokenSource is disposed even if other operations fail
+                // Ensure resources are disposed even if other operations fail
                 try
                 {
                     _cts.Dispose();
@@ -304,9 +356,16 @@ namespace AdbcDrivers.Databricks.Telemetry
                 {
                     // Swallow CTS dispose exceptions
                 }
-            }
 
-            return Task.CompletedTask;
+                try
+                {
+                    _flushSemaphore.Dispose();
+                }
+                catch
+                {
+                    // Swallow semaphore dispose exceptions
+                }
+            }
         }
 
         /// <summary>

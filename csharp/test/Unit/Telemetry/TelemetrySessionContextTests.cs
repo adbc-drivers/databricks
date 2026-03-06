@@ -80,7 +80,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void TelemetrySessionContext_Immutability_InitOnlySetters()
+        public void TelemetrySessionContext_Immutability_InternalSetters()
         {
             // Arrange & Act
             TelemetrySessionContext context = new TelemetrySessionContext
@@ -93,10 +93,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal("initial-session-id", context.SessionId);
             Assert.Equal(123L, context.WorkspaceId);
 
-            // Note: Cannot reassign init-only properties after construction
-            // The following would cause a compiler error:
-            // context.SessionId = "new-session-id";
-            // context.WorkspaceId = 456L;
+            // Note: Properties use internal set, so they are immutable outside the driver assembly.
+            // External consumers cannot reassign these properties after construction.
         }
 
         [Fact]

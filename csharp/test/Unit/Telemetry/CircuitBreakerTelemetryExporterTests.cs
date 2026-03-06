@@ -377,7 +377,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         #region Exception Handling Tests
 
         [Fact]
-        public async Task ExportAsync_CancellationToken_PropagatesCancellation()
+        public async Task ExportAsync_CancellationToken_SwallowsCancellation()
         {
             // Arrange
             var innerExporter = new MockTelemetryExporter();
@@ -388,9 +388,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             using var cts = new CancellationTokenSource();
             cts.Cancel();
 
-            // Act & Assert - Should propagate cancellation
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => exporter.ExportAsync(logs, cts.Token));
+            // Act - Cancellation is swallowed per telemetry contract (must not impact driver)
+            bool result = await exporter.ExportAsync(logs, cts.Token);
+
+            // Assert - returns true (non-fatal)
+            Assert.True(result);
         }
 
         [Fact]

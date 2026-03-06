@@ -14,6 +14,8 @@
 * limitations under the License.
 */
 
+using System.Threading;
+
 namespace AdbcDrivers.Databricks.Telemetry
 {
     /// <summary>
@@ -21,16 +23,21 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// Used by TelemetryClientManager to track how many connections are using a client.
     /// </summary>
     /// <remarks>
-    /// Thread Safety: The _refCount field is accessed via Interlocked operations to ensure
-    /// thread-safe increment and decrement operations from concurrent connections.
+    /// Thread Safety: Access to the _refCount field is coordinated via Interlocked operations
+    /// (AddRef/Release) for thread-safe increment and decrement from concurrent connections.
     /// </remarks>
     internal sealed class TelemetryClientHolder
     {
         /// <summary>
         /// Reference count tracking the number of connections using this client.
-        /// Must be accessed via Interlocked operations for thread safety.
+        /// Access to this field must be done via AddRef/Release methods for thread safety.
         /// </summary>
-        internal int _refCount = 1;
+        private int _refCount = 1;
+
+        /// <summary>
+        /// Gets the current reference count.
+        /// </summary>
+        public int RefCount => Volatile.Read(ref _refCount);
 
         /// <summary>
         /// Gets the telemetry client instance.
@@ -44,6 +51,24 @@ namespace AdbcDrivers.Databricks.Telemetry
         public TelemetryClientHolder(ITelemetryClient client)
         {
             Client = client;
+        }
+
+        /// <summary>
+        /// Atomically increments the reference count.
+        /// </summary>
+        /// <returns>The new reference count after incrementing.</returns>
+        public int AddRef()
+        {
+            return Interlocked.Increment(ref _refCount);
+        }
+
+        /// <summary>
+        /// Atomically decrements the reference count.
+        /// </summary>
+        /// <returns>The new reference count after decrementing.</returns>
+        public int Release()
+        {
+            return Interlocked.Decrement(ref _refCount);
         }
     }
 }

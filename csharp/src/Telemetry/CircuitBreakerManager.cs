@@ -85,5 +85,15 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             return _circuitBreakers.GetOrAdd(host, _ => new CircuitBreaker());
         }
+
+        /// <summary>
+        /// Removes the circuit breaker for the specified host.
+        /// Called when the last client for a host is released to prevent memory leaks.
+        /// </summary>
+        /// <param name="host">The host identifier.</param>
+        public void RemoveCircuitBreaker(string host)
+        {
+            _circuitBreakers.TryRemove(host, out _);
+        }
     }
 }
