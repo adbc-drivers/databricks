@@ -1,0 +1,161 @@
+# Complex Type Column Behavior by Protocol
+#
+# Documents the expected Arrow schema type and .NET representation for
+# ARRAY, MAP, and STRUCT columns depending on the active protocol.
+#
+# Related ticket: PECO-2938
+# Tests: csharp/test/E2E/ComplexTypesValueTests.cs (COMPLEX-001 through COMPLEX-014)
+
+protocols:
+  thrift:
+    description: >
+      Thrift (HiveServer2) protocol with ComplexTypesAsArrow=false (hardcoded in DatabricksStatement.cs).
+      All complex types are serialized to JSON strings before transmission.
+    complex_types:
+      ARRAY:
+        arrow_type: StringType
+        dotnet_type: string
+        example_sql: "SELECT ARRAY(CAST(1 AS INT), 2, 3)"
+        example_value: "[1,2,3]"
+        notes: JSON array serialization; elements separated by commas, no spaces.
+      MAP:
+        arrow_type: StringType
+        dotnet_type: string
+        example_sql: "SELECT MAP('a', 1, 'b', 2)"
+        example_value: '{"a":1,"b":2}'
+        notes: >
+          JSON object serialization. String keys: quoted. Numeric keys: unquoted.
+          Map entries may be sorted differently than insertion order.
+      STRUCT:
+        arrow_type: StringType
+        dotnet_type: string
+        example_sql: "SELECT STRUCT(1 AS id, 'Alice' AS name)"
+        example_value: '{"id":1,"name":"Alice"}'
+        notes: JSON object with field names as keys; preserves field declaration order.
+
+  sea:
+    description: >
+      Statement Execution API (REST/SEA) with format=ARROW_STREAM.
+      Complex types are returned as native Arrow types embedded in the IPC schema.
+      The ComplexTypesAsArrow setting does not apply.
+    complex_types:
+      ARRAY:
+        arrow_type: ListType
+        dotnet_type: ListArray
+        example_sql: "SELECT ARRAY(CAST(1 AS INT), 2, 3)"
+        notes: >
+          ListType with element type matching the SQL array element type.
+          Nested arrays produce ListType<ListType>.
+      MAP:
+        arrow_type: MapType (or ListType<StructType<{key, value}>>)
+        dotnet_type: MapArray (or ListArray)
+        example_sql: "SELECT MAP('a', 1, 'b', 2)"
+        notes: >
+          May be returned as MapType or as ListType<StructType> depending on Arrow version
+          and server behavior. Tests accept either representation.
+      STRUCT:
+        arrow_type: StructType
+        dotnet_type: StructArray
+        example_sql: "SELECT STRUCT(1 AS id, 'Alice' AS name)"
+        notes: >
+          StructType with named fields matching the SQL struct field names.
+          Nested structs produce StructType<StructType>.
+
+null_behavior:
+  description: >
+    A NULL complex-type value (e.g., CAST(NULL AS ARRAY<INT>)) is represented as:
+    - Thrift: StringType column with null value (Arrow null bitmap set)
+    - SEA:    Native type column (ListType/MapType/StructType) with null value
+
+test_coverage:
+  - id: COMPLEX-001
+    name: QueryReturningArray
+    sql: "SELECT ARRAY(CAST(1 AS INT), 2, 3)"
+    thrift_expected: "[1,2,3]"
+    sea_expected_type: ListType
+
+  - id: COMPLEX-002
+    name: QueryReturningMap
+    sql: "SELECT MAP(CAST('a' AS STRING), CAST(1 AS INT), CAST('b' AS STRING), CAST(2 AS INT))"
+    thrift_expected: '{"a":1,"b":2}'
+    sea_expected_type: MapType or ListType
+
+  - id: COMPLEX-003
+    name: QueryReturningStruct
+    sql: "SELECT STRUCT(CAST(1 AS INT) AS id, CAST('Alice' AS STRING) AS name)"
+    thrift_expected: '{"id":1,"name":"Alice"}'
+    sea_expected_type: StructType
+
+  - id: COMPLEX-004
+    name: NestedStruct
+    sql: "SELECT STRUCT(CAST('outer' AS STRING) AS label, STRUCT(CAST(42 AS INT) AS value) AS inner)"
+    thrift_expected: '{"label":"outer","inner":{"value":42}}'
+    sea_expected_type: StructType
+
+  - id: COMPLEX-005
+    name: ArrayOfStruct
+    sql: "SELECT ARRAY(STRUCT(CAST(1 AS INT) AS id, CAST('a' AS STRING) AS val), ...)"
+    thrift_expected: '[{"id":1,"val":"a"},{"id":2,"val":"b"}]'
+    sea_expected_type: ListType<StructType>
+
+  - id: COMPLEX-006
+    name: StructWithArray
+    sql: "SELECT STRUCT(CAST('items' AS STRING) AS label, ARRAY(CAST(10 AS INT), 20, 30) AS nums)"
+    thrift_expected: '{"label":"items","nums":[10,20,30]}'
+    sea_expected_type: StructType
+
+  - id: COMPLEX-007
+    name: NestedArray
+    sql: "SELECT ARRAY(ARRAY(CAST(1 AS INT), 2), ARRAY(CAST(3 AS INT), 4))"
+    thrift_expected: "[[1,2],[3,4]]"
+    sea_expected_type: ListType<ListType>
+
+  - id: COMPLEX-008
+    name: EmptyArray
+    sql: "SELECT CAST(ARRAY() AS ARRAY<INT>)"
+    thrift_expected: "[]"
+    sea_expected_type: ListType
+
+  - id: COMPLEX-009
+    name: ArrayWithNullElements
+    sql: "SELECT ARRAY(CAST(NULL AS INT), CAST(1 AS INT), CAST(NULL AS INT))"
+    thrift_expected: "[null,1,null]"
+    sea_expected_type: ListType
+
+  - id: COMPLEX-010
+    name: NullInStruct
+    sql: "SELECT STRUCT(CAST(NULL AS STRING) AS name, CAST(1 AS INT) AS age)"
+    thrift_expected: '{"name":null,"age":1}'
+    sea_expected_type: StructType
+
+  - id: COMPLEX-011
+    name: FullyNullStruct
+    sql: "SELECT STRUCT(CAST(NULL AS STRING) AS name, CAST(NULL AS INT) AS age)"
+    thrift_expected: '{"name":null,"age":null}'
+    sea_expected_type: StructType
+
+  - id: COMPLEX-012
+    name: MapWithNullValue
+    sql: "SELECT MAP(CAST('key' AS STRING), CAST(NULL AS INT))"
+    thrift_expected: '{"key":null}'
+    sea_expected_type: MapType or ListType
+
+  - id: COMPLEX-013
+    name: StructWithMap
+    sql: "SELECT STRUCT(CAST('meta' AS STRING) AS label, MAP(CAST('x' AS STRING), CAST(99 AS INT)) AS attrs)"
+    thrift_expected: '{"label":"meta","attrs":{"x":99}}'
+    sea_expected_type: StructType
+
+  - id: COMPLEX-014
+    name: NullComplexColumn
+    sql: "SELECT CAST(NULL AS ARRAY<INT>)"
+    thrift_expected: null
+    sea_expected_type: ListType
+    notes: Entire column value is NULL (not an array containing nulls).
+
+future_work:
+  - description: >
+      When Thrift is updated to support ComplexTypesAsArrow=true, the IsSeaMode branches
+      in ComplexTypesValueTests can be consolidated. Both protocols would then return
+      native Arrow types, and the JSON string assertions would be removed.
+    tracking: PECO-2938 acceptance criteria (deferred)
