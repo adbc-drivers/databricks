@@ -18,8 +18,10 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net.Http;
 using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
@@ -108,6 +110,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             // Start the download manager
             downloadManager.StartAsync().Wait();
+
+            // Add telemetry tag for compression
+            Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);
 
             // For Thrift, use chunk-level row count limiting (pass 0 for totalExpectedRows)
             // because we don't know the total upfront - the fetcher accumulates as it goes
@@ -200,6 +205,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             // Start the download manager
             downloadManager.StartAsync().Wait();
+
+            // Add telemetry tag for compression
+            Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);
 
             // For REST API (SEA), use global row count limiting from manifest.TotalRowCount.
             // The manifest contains the adjusted total row count that respects LIMIT queries.

@@ -27,11 +27,13 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -449,6 +451,11 @@ namespace AdbcDrivers.Databricks
                     new("driver.assembly", s_assemblyName)
                 ]);
 
+                // Add telemetry tags for driver version and environment
+                activity?.SetTag(ConnectionOpenEvent.DriverVersion, s_assemblyVersion);
+                activity?.SetTag(ConnectionOpenEvent.DriverOS, GetOperatingSystemInfo());
+                activity?.SetTag(ConnectionOpenEvent.DriverRuntime, GetRuntimeInfo());
+
                 // Log connection properties (sanitize sensitive values)
                 LogConnectionProperties(activity);
 
@@ -544,6 +551,10 @@ namespace AdbcDrivers.Databricks
             activity?.SetTag("connection.feature.use_cloud_fetch", _useCloudFetch);
             activity?.SetTag("connection.feature.use_desc_table_extended", _useDescTableExtended);
             activity?.SetTag("connection.feature.enable_run_async_in_thrift_op", _runAsyncInThrift);
+
+            // Add telemetry tags for feature flags
+            activity?.SetTag(ConnectionOpenEvent.FeatureCloudFetch, _useCloudFetch);
+            activity?.SetTag(ConnectionOpenEvent.FeatureLz4, _canDecompressLz4);
 
             // Handle default namespace
             if (session.__isset.initialNamespace)
@@ -869,6 +880,24 @@ namespace AdbcDrivers.Databricks
         protected override void Dispose(bool disposing)
         {
             base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Gets operating system information.
+        /// </summary>
+        /// <returns>Operating system description.</returns>
+        private static string GetOperatingSystemInfo()
+        {
+            return RuntimeInformation.OSDescription;
+        }
+
+        /// <summary>
+        /// Gets .NET runtime information.
+        /// </summary>
+        /// <returns>.NET runtime description.</returns>
+        private static string GetRuntimeInfo()
+        {
+            return RuntimeInformation.FrameworkDescription;
         }
     }
 }
