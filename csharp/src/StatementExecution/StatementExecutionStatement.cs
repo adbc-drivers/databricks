@@ -22,6 +22,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.HiveServer2;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
@@ -49,6 +50,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string? _resultCompression;
         private readonly int _waitTimeoutSeconds;
         private readonly int _pollingIntervalMs;
+        private readonly int _queryTimeoutSeconds; // 0 = no timeout
 
         // Connection properties for CloudFetch configuration
         private readonly IReadOnlyDictionary<string, string> _properties;
@@ -93,6 +95,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _waitTimeoutSeconds = waitTimeoutSeconds;
             _pollingIntervalMs = pollingIntervalMs;
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
+            _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
+                properties, ApacheParameters.QueryTimeoutSeconds, 0);
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -156,7 +160,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var state = response.Status?.State;
             if (state == "PENDING" || state == "RUNNING")
             {
-                response = await PollUntilCompleteAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
                 state = response.Status?.State;
             }
 
@@ -195,6 +199,41 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Return query result - use -1 if row count is not available
             long rowCount = response.Manifest?.TotalRowCount ?? -1;
             return new QueryResult(rowCount, reader);
+        }
+
+        /// <summary>
+        /// Wraps PollUntilCompleteAsync with query timeout enforcement.
+        /// If _queryTimeoutSeconds > 0, cancels the server-side statement and throws on timeout.
+        /// </summary>
+        private async Task<ExecuteStatementResponse> PollWithTimeoutAsync(string statementId, CancellationToken cancellationToken)
+        {
+            if (_queryTimeoutSeconds <= 0)
+            {
+                return await PollUntilCompleteAsync(statementId, cancellationToken).ConfigureAwait(false);
+            }
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_queryTimeoutSeconds));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+            try
+            {
+                return await PollUntilCompleteAsync(statementId, linkedCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                // Timeout fired (not caller cancellation) — cancel statement on server, best-effort
+                try
+                {
+                    await _client.CancelStatementAsync(statementId, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort; ignore cancel errors
+                }
+                throw new AdbcException(
+                    $"Query timed out after {_queryTimeoutSeconds} seconds (statement {statementId}). " +
+                    $"Increase timeout via '{ApacheParameters.QueryTimeoutSeconds}' or set to 0 for no timeout.");
+            }
         }
 
         /// <summary>
@@ -427,7 +466,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var state = response.Status?.State;
             if (state == "PENDING" || state == "RUNNING")
             {
-                response = await PollUntilCompleteAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
                 state = response.Status?.State;
             }
 
