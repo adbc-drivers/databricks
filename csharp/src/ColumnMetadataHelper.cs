@@ -134,6 +134,7 @@ namespace AdbcDrivers.Databricks
                 case "NCHAR":
                     return GetParsedColumnSize(typeName) ?? 255;
                 case "BINARY":
+                    return int.MaxValue;
                 case "VARBINARY":
                 case "LONGVARBINARY":
                     return 0;

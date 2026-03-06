@@ -278,7 +278,7 @@
         "COLUMN_NAME": "c_binary",
         "DATA_TYPE": -2,
         "TYPE_NAME": "BINARY",
-        "COLUMN_SIZE": 0,
+        "COLUMN_SIZE": 2147483647,
         "BUFFER_LENGTH": null,
         "DECIMAL_DIGITS": 0,
         "NUM_PREC_RADIX": null,

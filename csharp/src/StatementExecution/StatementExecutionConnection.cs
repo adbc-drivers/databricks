@@ -59,6 +59,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string? _resultCompression;
         private readonly int _waitTimeoutSeconds;
         private readonly int _pollingIntervalMs;
+        private readonly bool _enablePKFK;
+        private readonly bool _enableMultipleCatalogSupport;
 
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
@@ -195,6 +197,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
+            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
+            _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
@@ -422,7 +426,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 var values = new Dictionary<AdbcInfoCode, object>
                 {
-                    { AdbcInfoCode.DriverName, "ADBC Databricks Driver" },
+                    { AdbcInfoCode.DriverName, DatabricksConnection.DatabricksDriverName },
                     { AdbcInfoCode.DriverVersion, AssemblyVersion },
                     { AdbcInfoCode.DriverArrowVersion, "1.0.0" },
                     { AdbcInfoCode.VendorName, "Databricks" },
@@ -513,16 +517,28 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
             var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog, databaseName
+            // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
+            bool showAllCatalogs = catalogPattern == null;
+
             var result = new List<(string, string)>();
             foreach (var batch in batches)
             {
-                var schemaArray = TryGetColumn<StringArray>(batch, "databaseName");
+                StringArray? catalogArray = null;
+                StringArray? schemaArray = null;
+
+                if (showAllCatalogs)
+                {
+                    catalogArray = batch.Column(0) as StringArray;
+                    schemaArray = batch.Column(1) as StringArray;
+                }
+                else
+                {
+                    schemaArray = batch.Column(0) as StringArray;
+                }
+
                 if (schemaArray == null) continue;
-
-                // SHOW SCHEMAS IN ALL CATALOGS has catalog_name column;
-                // SHOW SCHEMAS IN `catalog` does not — use the catalogPattern as the catalog.
-                var catalogArray = TryGetColumn<StringArray>(batch, "catalog_name");
-
                 for (int i = 0; i < batch.Length; i++)
                 {
                     if (schemaArray.IsNull(i)) continue;
@@ -623,7 +639,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             tableInfo, colName, colType, position, nullable);
 
                         // Match Thrift GetObjects behavior: SparkConnection.SetPrecisionScaleAndTypeName
-                        // sets Precision/Scale to null for non-DECIMAL/CHAR types in the nested path.
+                        // only sets Precision/Scale for DECIMAL, NUMERIC, CHAR, NCHAR, VARCHAR,
+                        // NVARCHAR, LONGVARCHAR, LONGNVARCHAR. All other types get null.
                         int lastIdx = tableInfo.Precision.Count - 1;
                         short typeCode = tableInfo.ColType[lastIdx];
                         if (typeCode != (short)HiveServer2Connection.ColumnTypeId.DECIMAL
@@ -677,6 +694,50 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal List<RecordBatch> ExecuteMetadataSql(string sql, CancellationToken cancellationToken = default)
         {
             return ExecuteMetadataSqlAsync(sql, cancellationToken).GetAwaiter().GetResult();
+        }
+
+        internal bool EnablePKFK => _enablePKFK;
+
+        internal bool EnableMultipleCatalogSupport => _enableMultipleCatalogSupport;
+
+        /// <summary>
+        /// Resolves the effective catalog for metadata queries.
+        /// When EnableMultipleCatalogSupport is true: uses the provided catalog,
+        ///   falling back to the connection default catalog if null.
+        /// When EnableMultipleCatalogSupport is false: queries the server with
+        ///   SELECT CURRENT_CATALOG() since SEA requires an explicit catalog
+        ///   (unlike Thrift which treats null as default).
+        /// </summary>
+        internal string? ResolveEffectiveCatalog(string? requestedCatalog)
+        {
+            string? normalized = MetadataUtilities.NormalizeSparkCatalog(requestedCatalog);
+
+            if (_enableMultipleCatalogSupport)
+            {
+                return normalized ?? _catalog;
+            }
+
+            // flag=false: if user specified an explicit non-null catalog, it won't
+            // match the default — the statement layer should return empty.
+            // If null/SPARK, resolve via server query.
+            return normalized ?? GetCurrentCatalog();
+        }
+
+        /// <summary>
+        /// Queries the server for the current catalog via SELECT CURRENT_CATALOG().
+        /// </summary>
+        private string? GetCurrentCatalog()
+        {
+            var batches = ExecuteMetadataSql("SELECT CURRENT_CATALOG()");
+            foreach (var batch in batches)
+            {
+                if (batch.Length > 0 && batch.Column(0) is StringArray col && !col.IsNull(0))
+                {
+                    return col.GetString(0);
+                }
+            }
+
+            return _catalog;
         }
 
         internal CancellationTokenSource CreateMetadataTimeoutCts()

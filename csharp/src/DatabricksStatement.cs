@@ -557,6 +557,8 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal bool ShouldReturnEmptyPkFkResult()
         {
+            // Handle special catalog cases
+            // Only when both catalog and foreignCatalog is invalid, we return empty results
             return MetadataUtilities.ShouldReturnEmptyPKFKResult(CatalogName, ForeignCatalogName, enablePKFK);
         }
 
