@@ -47,11 +47,6 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// </remarks>
     internal sealed class CircuitBreakerTelemetryExporter : ITelemetryExporter
     {
-        /// <summary>
-        /// Activity source for circuit breaker telemetry tracing.
-        /// </summary>
-        private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks.CircuitBreakerTelemetryExporter");
-
         private readonly ITelemetryExporter _innerExporter;
         private readonly CircuitBreaker _circuitBreaker;
         private readonly string _host;
@@ -116,26 +111,11 @@ namespace AdbcDrivers.Databricks.Telemetry
                 return true;
             }
 
-            // Check circuit state before attempting export
-            if (_circuitBreaker.State == CircuitBreakerState.Open)
-            {
-                // Circuit is open - silently drop events (log at DEBUG level)
-                Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.circuit_open",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "host", _host },
-                        { "log_count", logs.Count },
-                        { "action", "dropped" }
-                    }));
-
-                // Return true because dropping is not a failure - it's expected behavior
-                return true;
-            }
-
             try
             {
                 // Execute through circuit breaker
                 // The circuit breaker will track failures and open if threshold is reached
+                // Polly handles the open-circuit case internally by throwing BrokenCircuitException
                 bool result = await _circuitBreaker.ExecuteAsync(async () =>
                 {
                     bool success = await _innerExporter.ExportAsync(logs, ct).ConfigureAwait(false);
@@ -154,8 +134,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
             catch (BrokenCircuitException)
             {
-                // Circuit just opened - log and silently drop
-                Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.circuit_opened",
+                // Circuit is open - silently drop events
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.circuit_open",
                     tags: new ActivityTagsCollection
                     {
                         { "host", _host },
@@ -163,13 +143,21 @@ namespace AdbcDrivers.Databricks.Telemetry
                         { "action", "dropped" }
                     }));
 
-                // Return true because dropping is expected behavior when circuit opens
+                // Return true because dropping is expected behavior when circuit is open
                 return true;
             }
             catch (OperationCanceledException)
             {
-                // Don't swallow cancellation - let it propagate
-                throw;
+                // Cancellation should not impact driver behavior; treat as a no-op.
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.export.canceled",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", _host },
+                        { "log_count", logs.Count },
+                        { "action", "canceled" }
+                    }));
+
+                return true;
             }
             catch (Exception ex)
             {

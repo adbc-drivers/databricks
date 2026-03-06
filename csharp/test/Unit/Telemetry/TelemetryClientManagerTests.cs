@@ -62,7 +62,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public ValueTask DisposeAsync()
             {
                 IsDisposed = true;
-                return ValueTask.CompletedTask;
+                return default;
             }
         }
 
@@ -105,15 +105,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task GetOrCreateClient_NewHost_CreatesClient()
         {
             // Arrange - use test instance to avoid singleton pollution
-            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            TelemetryClientManager manager = new TelemetryClientManager();
             string host = "test-host.databricks.com";
             TelemetryConfiguration config = new TelemetryConfiguration();
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act
+            using HttpClient httpClient = new HttpClient();
             ITelemetryClient client = manager.GetOrCreateClient(
                 host,
-                new HttpClient(),
+                httpClient,
                 true,
                 config);
 
@@ -124,7 +125,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 Assert.True(clients.ContainsKey(host));
                 Assert.True(clients.TryGetValue(host, out TelemetryClientHolder? holder));
                 Assert.NotNull(holder);
-                Assert.Equal(1, holder._refCount);
+                Assert.Equal(1, holder.RefCount);
             }
             finally
             {
@@ -136,13 +137,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task GetOrCreateClient_ExistingHost_ReturnsSameClient()
         {
             // Arrange
-            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            TelemetryClientManager manager = new TelemetryClientManager();
             string host = "test-host.databricks.com";
             TelemetryConfiguration config = new TelemetryConfiguration();
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act
-            HttpClient httpClient = new HttpClient();
+            using HttpClient httpClient = new HttpClient();
             ITelemetryClient client1 = manager.GetOrCreateClient(
                 host,
                 httpClient,
@@ -162,7 +163,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 Assert.Same(client1, client2);
                 Assert.True(clients.TryGetValue(host, out TelemetryClientHolder? holder));
                 Assert.NotNull(holder);
-                Assert.Equal(2, holder._refCount);
+                Assert.Equal(2, holder.RefCount);
             }
             finally
             {
@@ -175,7 +176,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task ReleaseClientAsync_LastReference_ClosesClient()
         {
             // Arrange
-            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            TelemetryClientManager manager = new TelemetryClientManager();
             string host = "test-host.databricks.com";
             MockTelemetryClient mockClient = new MockTelemetryClient();
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
@@ -188,7 +189,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             await manager.ReleaseClientAsync(host);
 
             // Assert
-            Assert.Equal(0, holder._refCount);
+            Assert.Equal(0, holder.RefCount);
             Assert.False(clients.ContainsKey(host));
             Assert.Equal(1, mockClient.CloseCount);
             Assert.True(mockClient.IsDisposed);
@@ -198,21 +199,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task ReleaseClientAsync_MultipleReferences_KeepsClient()
         {
             // Arrange
-            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            TelemetryClientManager manager = new TelemetryClientManager();
             string host = "test-host.databricks.com";
             MockTelemetryClient mockClient = new MockTelemetryClient();
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Add mock client with RefCount=2
             TelemetryClientHolder holder = new TelemetryClientHolder(mockClient);
-            holder._refCount = 2;
+            holder.AddRef(); // RefCount: 1 -> 2
             clients[host] = holder;
 
             // Act - release first reference
             await manager.ReleaseClientAsync(host);
 
             // Assert - client still exists
-            Assert.Equal(1, holder._refCount);
+            Assert.Equal(1, holder.RefCount);
             Assert.True(clients.ContainsKey(host));
             Assert.Equal(0, mockClient.CloseCount);
             Assert.False(mockClient.IsDisposed);
@@ -225,7 +226,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task GetOrCreateClient_ThreadSafe_NoDuplicates()
         {
             // Arrange
-            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            TelemetryClientManager manager = new TelemetryClientManager();
             string host = "test-host.databricks.com";
             TelemetryConfiguration config = new TelemetryConfiguration();
             int threadCount = 10;
@@ -234,7 +235,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act - create clients concurrently from multiple threads
-            HttpClient httpClient = new HttpClient();
+            using HttpClient httpClient = new HttpClient();
             Task[] tasks = Enumerable.Range(0, threadCount).Select(_ => Task.Run(() =>
             {
                 ITelemetryClient client = manager.GetOrCreateClient(
@@ -263,7 +264,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 // Assert - ref count should be incremented correctly
                 Assert.True(clients.TryGetValue(host, out TelemetryClientHolder? holder));
                 Assert.NotNull(holder);
-                Assert.Equal(threadCount, holder._refCount);
+                Assert.Equal(threadCount, holder.RefCount);
             }
             finally
             {
@@ -279,7 +280,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task ReleaseClientAsync_NonExistentHost_NoError()
         {
             // Arrange
-            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            TelemetryClientManager manager = new TelemetryClientManager();
             string host = "non-existent-host.databricks.com";
 
             // Act & Assert - should not throw
@@ -290,15 +291,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public async Task GetOrCreateClient_ThenRelease_MultipleHosts()
         {
             // Arrange
-            TelemetryClientManager manager = new TelemetryClientManager(forTesting: true);
+            TelemetryClientManager manager = new TelemetryClientManager();
             string host1 = "test-host1.databricks.com";
             string host2 = "test-host2.databricks.com";
             TelemetryConfiguration config = new TelemetryConfiguration();
             Dictionary<string, TelemetryClientHolder> clients = GetClients(manager);
 
             // Act - create clients for two different hosts
-            HttpClient httpClient1 = new HttpClient();
-            HttpClient httpClient2 = new HttpClient();
+            using HttpClient httpClient1 = new HttpClient();
+            using HttpClient httpClient2 = new HttpClient();
             ITelemetryClient client1 = manager.GetOrCreateClient(
                 host1,
                 httpClient1,

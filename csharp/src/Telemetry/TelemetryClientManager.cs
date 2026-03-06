@@ -14,7 +14,6 @@
 * limitations under the License.
 */
 
-using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -48,16 +47,10 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly object _lock = new object();
 
         /// <summary>
-        /// Private constructor to enforce singleton pattern.
+        /// Internal constructor. Public API uses GetInstance() for the singleton.
+        /// Internal visibility allows creating non-singleton instances for testing.
         /// </summary>
-        private TelemetryClientManager()
-        {
-        }
-
-        /// <summary>
-        /// Internal constructor for testing. Allows creating non-singleton instances.
-        /// </summary>
-        internal TelemetryClientManager(bool forTesting)
+        internal TelemetryClientManager()
         {
         }
 
@@ -97,11 +90,26 @@ namespace AdbcDrivers.Databricks.Telemetry
             bool isAuthenticated,
             TelemetryConfiguration config)
         {
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                throw new System.ArgumentException("Host cannot be null or whitespace.", nameof(host));
+            }
+
+            if (httpClient == null)
+            {
+                throw new System.ArgumentNullException(nameof(httpClient));
+            }
+
+            if (config == null)
+            {
+                throw new System.ArgumentNullException(nameof(config));
+            }
+
             lock (_lock)
             {
                 if (_clients.TryGetValue(host, out TelemetryClientHolder? existing))
                 {
-                    existing._refCount++;
+                    existing.AddRef();
                     return existing.Client;
                 }
 
@@ -140,8 +148,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             {
                 if (_clients.TryGetValue(host, out TelemetryClientHolder? holder))
                 {
-                    holder._refCount--;
-                    if (holder._refCount == 0)
+                    int newCount = holder.Release();
+                    if (newCount <= 0)
                     {
                         _clients.Remove(host);
                         toClose = holder;
@@ -152,6 +160,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             if (toClose != null)
             {
                 await toClose.Client.CloseAsync().ConfigureAwait(false);
+                CircuitBreakerManager.GetInstance().RemoveCircuitBreaker(host);
             }
         }
     }
