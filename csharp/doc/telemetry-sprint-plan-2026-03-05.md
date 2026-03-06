@@ -32,6 +32,7 @@ Complete the telemetry pipeline end-to-end: implement the remaining orchestratio
 | WI-2.1 | FeatureFlagCache | `csharp/src/FeatureFlagCache.cs`, `FeatureFlagContext.cs` |
 | WI-3.1 | CircuitBreaker | `csharp/src/Telemetry/CircuitBreaker.cs` |
 | WI-4.1 | ExceptionClassifier | `csharp/src/Telemetry/ExceptionClassifier.cs` |
+| WI-5.1 | TelemetryMetric Data Model | `csharp/src/Telemetry/TelemetryMetric.cs` |
 | WI-5.2 | DatabricksTelemetryExporter | `csharp/src/Telemetry/DatabricksTelemetryExporter.cs` |
 
 ### Remaining Work Items (this sprint)
@@ -41,7 +42,6 @@ Complete the telemetry pipeline end-to-end: implement the remaining orchestratio
 | WI-2.2 | TelemetryClientManager | WI-1.1 |
 | WI-3.2 | CircuitBreakerManager | WI-3.1 |
 | WI-3.3 | CircuitBreakerTelemetryExporter | WI-3.2, WI-5.2 |
-| WI-5.1 | TelemetryMetric Data Model | — |
 | WI-5.3 | MetricsAggregator | WI-1.2, WI-1.3, WI-4.1, WI-5.1 |
 | WI-5.4 | DatabricksActivityListener | WI-5.3 |
 | WI-5.5 | TelemetryClient | WI-5.4 |
@@ -79,10 +79,27 @@ Complete the telemetry pipeline end-to-end: implement the remaining orchestratio
 | `TelemetryMetric_Serialization_OmitsNullFields` | Metric with null optional fields | JSON without null fields |
 
 **Acceptance Criteria**:
-- [ ] All fields defined per design doc
-- [ ] JSON serialization uses snake_case property names
-- [ ] Null fields omitted from serialization
-- [ ] Unit tests pass
+- [x] All fields defined per design doc
+- [x] JSON serialization uses snake_case property names
+- [x] Null fields omitted from serialization
+- [x] Unit tests pass
+
+**Status**: ✅ COMPLETED (2026-03-05)
+
+**Implementation Notes**:
+- Created `TelemetryMetric.cs` with all required fields
+- Implemented `DriverConfiguration` nested class with comprehensive configuration snapshot fields
+- Added JSON serialization attributes with snake_case naming using `JsonPropertyName`
+- Configured null field omission using `JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)`
+- Created comprehensive test suite with 11 unit tests covering:
+  - Full serialization with all fields populated
+  - Null field omission
+  - Property naming (snake_case verification)
+  - Deserialization
+  - Partial data scenarios
+  - MetricType enum serialization
+  - DriverConfiguration serialization
+- All 477 unit tests pass (including 11 new TelemetryMetric tests)
 
 ---
 
