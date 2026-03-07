@@ -1060,7 +1060,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 var sqlLog = statementLog.Entry!.SqlDriverLog!;
                 OutputHelper?.WriteLine($"  SessionId: {sqlLog.SessionId}");
                 OutputHelper?.WriteLine($"  SqlStatementId: {sqlLog.SqlStatementId}");
-                OutputHelper?.WriteLine($"  AuthType: {sqlLog.AuthType}");
                 OutputHelper?.WriteLine($"  OperationLatencyMs: {sqlLog.OperationLatencyMs}");
 
                 Assert.False(string.IsNullOrEmpty(sqlLog.SessionId), "SessionId should be populated from connection");

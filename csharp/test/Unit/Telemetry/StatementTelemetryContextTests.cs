@@ -36,7 +36,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             return new TelemetrySessionContext
             {
                 SessionId = "test-session-123",
-                AuthType = "PAT",
                 WorkspaceId = 12345678901234L,
                 SystemConfiguration = new DriverSystemConfiguration
                 {
@@ -89,7 +88,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert
             Assert.Equal("test-session-123", context.SessionId);
-            Assert.Equal("PAT", context.AuthType);
             Assert.Equal(12345678901234L, context.WorkspaceId);
             Assert.Same(sessionContext.SystemConfiguration, context.SystemConfiguration);
             Assert.Same(sessionContext.DriverConnectionParams, context.DriverConnectionParams);
@@ -213,7 +211,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Assert - verify session-level fields
             Assert.Equal("test-session-123", log.SessionId);
             Assert.Equal("stmt-123", log.SqlStatementId);
-            Assert.Equal("PAT", log.AuthType);
             Assert.Same(sessionContext.SystemConfiguration, log.SystemConfiguration);
             Assert.Same(sessionContext.DriverConnectionParams, log.DriverConnectionParams);
 
