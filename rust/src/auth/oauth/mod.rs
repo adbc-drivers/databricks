@@ -24,6 +24,7 @@
 pub mod cache;
 pub mod oidc;
 pub mod token;
+pub(crate) mod token_store;
 
 // Re-export the main types
 pub use oidc::OidcEndpoints;

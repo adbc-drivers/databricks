@@ -181,7 +181,10 @@ mod tests {
             endpoints.authorization_endpoint,
             "https://example.com/oidc/v1/authorize"
         );
-        assert_eq!(endpoints.token_endpoint, "https://example.com/oidc/v1/token");
+        assert_eq!(
+            endpoints.token_endpoint,
+            "https://example.com/oidc/v1/token"
+        );
     }
 
     #[tokio::test]
@@ -241,10 +244,7 @@ mod tests {
         // Discovery should fail with deserialization error
         let result = OidcEndpoints::discover(&mock_server.uri(), &http_client).await;
 
-        assert!(
-            result.is_err(),
-            "Discovery should fail with missing fields"
-        );
+        assert!(result.is_err(), "Discovery should fail with missing fields");
         let error_msg = format!("{:?}", result.unwrap_err());
         assert!(
             error_msg.contains("Failed to parse OIDC discovery response"),
@@ -261,9 +261,7 @@ mod tests {
         // Mock with 404 response
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(404).set_body_string("Endpoint not found"),
-            )
+            .respond_with(ResponseTemplate::new(404).set_body_string("Endpoint not found"))
             .mount(&mock_server)
             .await;
 
@@ -293,9 +291,7 @@ mod tests {
         // Mock with 500 response
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(500).set_body_string("Internal server error"),
-            )
+            .respond_with(ResponseTemplate::new(500).set_body_string("Internal server error"))
             .mount(&mock_server)
             .await;
 
@@ -356,6 +352,9 @@ mod tests {
             endpoints.authorization_endpoint,
             "https://example.com/oidc/v1/authorize"
         );
-        assert_eq!(endpoints.token_endpoint, "https://example.com/oidc/v1/token");
+        assert_eq!(
+            endpoints.token_endpoint,
+            "https://example.com/oidc/v1/token"
+        );
     }
 }

@@ -27,6 +27,7 @@ use std::path::PathBuf;
 
 /// Cache key used for generating the cache filename.
 /// This struct is serialized to JSON and then hashed with SHA-256 to produce a unique filename.
+#[allow(dead_code)] // Used in Phase 3 (U2M)
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheKey {
     host: String,
@@ -34,6 +35,7 @@ struct CacheKey {
     scopes: Vec<String>,
 }
 
+#[allow(dead_code)] // Used in Phase 3 (U2M)
 impl CacheKey {
     /// Creates a new cache key from the given parameters.
     fn new(host: &str, client_id: &str, scopes: &[String]) -> Self {
@@ -67,8 +69,10 @@ impl CacheKey {
 /// set to `0o600` (owner read/write only) for security.
 ///
 /// Cache I/O errors are logged as warnings and never block authentication.
+#[allow(dead_code)] // Used in Phase 3 (U2M)
 pub(crate) struct TokenCache;
 
+#[allow(dead_code)] // Used in Phase 3 (U2M)
 impl TokenCache {
     /// Returns the cache directory path.
     /// Location: `~/.config/databricks-adbc/oauth/`
@@ -127,11 +131,7 @@ impl TokenCache {
                     Some(token)
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Token cache corrupted at {:?}, ignoring: {}",
-                        cache_path,
-                        e
-                    );
+                    tracing::warn!("Token cache corrupted at {:?}, ignoring: {}", cache_path, e);
                     None
                 }
             },
@@ -342,7 +342,10 @@ mod tests {
             &["all-apis".to_string()],
         );
 
-        assert!(result.is_none(), "Load should return None for missing cache");
+        assert!(
+            result.is_none(),
+            "Load should return None for missing cache"
+        );
     }
 
     #[test]
