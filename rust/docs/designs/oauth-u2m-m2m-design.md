@@ -355,35 +355,90 @@ impl TokenCache {
 
 ## Configuration Options
 
-| Option | Type | Default | Required | Description |
-|--------|------|---------|----------|-------------|
-| `databricks.auth_type` | String | `"access_token"` | No | Auth method: `"access_token"`, `"client_credentials"`, `"authorization_code"` |
-| `databricks.access_token` | String | -- | PAT only | Personal access token (existing) |
-| `databricks.oauth.client_id` | String | `"databricks-cli"` (U2M) | M2M: yes, U2M: no | OAuth client ID |
-| `databricks.oauth.client_secret` | String | -- | M2M: yes | OAuth client secret |
-| `databricks.oauth.scopes` | String | `"all-apis offline_access"` (U2M), `"all-apis"` (M2M) | No | Space-separated OAuth scopes |
-| `databricks.oauth.token_endpoint` | String | Auto-discovered via OIDC | No | Override OIDC-discovered token endpoint |
-| `databricks.oauth.redirect_port` | String | `"8020"` | No | Localhost port for U2M callback server |
+Following the Databricks ODBC driver's two-level authentication scheme, configuration uses `AuthMech` (mechanism) and `Auth_Flow` (OAuth flow type) as the primary selectors. Both are **required** -- no auto-detection.
 
-### Auth Type Selection Logic
+### Rust Enums
+
+```rust
+/// Authentication mechanism -- top-level selector.
+/// Config values match the ODBC driver's AuthMech numeric codes.
+#[derive(Debug, Clone, PartialEq)]
+#[repr(u8)]
+pub enum AuthMechanism {
+    /// Personal access token (no OAuth). Config value: 0
+    Pat = 0,
+    /// OAuth 2.0 -- requires AuthFlow to select the specific flow. Config value: 11
+    OAuth = 11,
+}
+
+/// OAuth authentication flow -- selects the specific OAuth grant type.
+/// Config values match the ODBC driver's Auth_Flow numeric codes.
+/// Only applicable when AuthMechanism is OAuth.
+#[derive(Debug, Clone, PartialEq)]
+#[repr(u8)]
+pub enum AuthFlow {
+    /// Use a pre-obtained OAuth access token directly. Config value: 0
+    TokenPassthrough = 0,
+    /// M2M: client credentials grant for service principals. Config value: 1
+    ClientCredentials = 1,
+    /// U2M: browser-based authorization code + PKCE. Config value: 2
+    Browser = 2,
+}
+```
+
+### Authentication Selection
+
+| Option | Type | Values | Required | Description |
+|--------|------|--------|----------|-------------|
+| `databricks.auth.mechanism` | Int/String | `0` (PAT), `11` (OAuth) | **Yes** | Authentication mechanism (matches ODBC `AuthMech`) |
+| `databricks.auth.flow` | Int/String | `0` (token passthrough), `1` (client credentials), `2` (browser) | **Yes** (when mechanism=`11`) | OAuth flow type (matches ODBC `Auth_Flow`) |
+
+**Values aligned with ODBC driver:**
+
+| `mechanism` | `flow` | ODBC `AuthMech` | ODBC `Auth_Flow` | Description |
+|-------------|--------|-----------------|-------------------|-------------|
+| `0` | -- | -- | -- | Personal access token |
+| `11` | `0` | 11 | 0 | Pre-obtained OAuth access token |
+| `11` | `1` | 11 | 1 | M2M: service principal |
+| `11` | `2` | 11 | 2 | U2M: browser-based auth code + PKCE |
+
+### Credential and OAuth Options
+
+| Option | Type | Default | Required For | Description |
+|--------|------|---------|-------------|-------------|
+| `databricks.access_token` | String | -- | mechanism=`0`, flow=`0` | Access token (PAT or OAuth) |
+| `databricks.auth.client_id` | String | `"databricks-cli"` (flow=`2`) | flow=`1` (required), flow=`2` (optional) | OAuth client ID |
+| `databricks.auth.client_secret` | String | -- | flow=`1` | OAuth client secret |
+| `databricks.auth.scopes` | String | `"all-apis offline_access"` (flow=`2`), `"all-apis"` (flow=`1`) | No | Space-separated OAuth scopes |
+| `databricks.auth.token_endpoint` | String | Auto-discovered via OIDC | No | Override OIDC-discovered token endpoint |
+| `databricks.auth.redirect_port` | String | `"8020"` | No | Localhost port for browser callback server |
+
+### Auth Selection Logic
 
 ```mermaid
 flowchart TD
-    A[Database::new_connection] --> B{auth_type set?}
-    B -->|No| C{access_token set?}
-    C -->|Yes| D[Use PAT]
-    C -->|No| E{client_id + client_secret set?}
-    E -->|Yes| F[Use M2M]
-    E -->|No| G[Error: no auth configured]
+    A[Database::new_connection] --> B{mechanism set?}
+    B -->|No| Z[Error: mechanism is required]
 
-    B -->|access_token| D
-    B -->|client_credentials| H{client_id + client_secret?}
-    H -->|Yes| F
-    H -->|No| I[Error: missing client_id/secret]
-    B -->|authorization_code| J[Use U2M]
+    B -->|0 Pat| C{access_token set?}
+    C -->|Yes| D[Use PAT]
+    C -->|No| E[Error: access_token required]
+
+    B -->|11 OAuth| F{flow set?}
+    F -->|No| Y[Error: flow is required for mechanism=11]
+
+    F -->|0 TokenPassthrough| G{access_token set?}
+    G -->|Yes| H[Use token passthrough]
+    G -->|No| I[Error: access_token required]
+
+    F -->|1 ClientCredentials| J{client_id + client_secret?}
+    J -->|Yes| K[Use M2M]
+    J -->|No| L[Error: client_id and client_secret required]
+
+    F -->|2 Browser| M[Use U2M]
 ```
 
-When `auth_type` is not explicitly set, the driver infers the auth method from which credentials are provided. This matches the Python SDK's auto-detection behavior.
+Both `mechanism` and `flow` are mandatory -- no auto-detection. This makes configuration explicit and predictable, matching the ODBC driver's approach where `AuthMech` and `Auth_Flow` are always specified.
 
 ---
 
@@ -410,16 +465,9 @@ The `AuthProvider::get_auth_header()` trait method is synchronous, but OAuth tok
 // 1. Create HTTP client (no auth yet)
 let http_client = Arc::new(DatabricksHttpClient::new(self.http_config.clone())?);
 
-// 2. Create auth provider (can reference http_client for token fetches)
-let auth_provider: Arc<dyn AuthProvider> = match self.resolved_auth_type() {
-    AuthType::AccessToken => Arc::new(PersonalAccessToken::new(token)),
-    AuthType::ClientCredentials => Arc::new(
-        ClientCredentialsProvider::new(host, client_id, client_secret, http_client.clone())?
-    ),
-    AuthType::AuthorizationCode => Arc::new(
-        AuthorizationCodeProvider::new(host, client_id, http_client.clone())?
-    ),
-};
+// 2. Create auth provider based on mechanism + flow enums
+//    (see database.rs section below for full match logic)
+let auth_provider: Arc<dyn AuthProvider> = /* match on AuthMechanism/AuthFlow */;
 
 // 3. Set auth on HTTP client
 http_client.set_auth_provider(auth_provider);
@@ -458,7 +506,11 @@ impl DatabricksHttpClient {
 
 | Scenario | Error Kind | Behavior |
 |----------|-----------|----------|
-| Missing `client_id` or `client_secret` for M2M | `invalid_argument()` | Fail at `new_connection()` |
+| Missing `databricks.auth.mechanism` | `invalid_argument()` | Fail at `new_connection()` |
+| Missing `databricks.auth.flow` when mechanism=`11` | `invalid_argument()` | Fail at `new_connection()` |
+| Invalid numeric value for mechanism or flow | `invalid_argument()` | Fail at `set_option()` |
+| Missing `client_id` or `client_secret` for flow=`1` | `invalid_argument()` | Fail at `new_connection()` |
+| Missing `access_token` for mechanism=`0` or flow=`0` | `invalid_argument()` | Fail at `new_connection()` |
 | OIDC discovery HTTP failure | `io()` | Fail at provider creation |
 | Token endpoint returns error | `io()` | Fail at `get_auth_header()` |
 | Browser callback timeout (120s) | `io()` | Fail at provider creation |
@@ -489,40 +541,61 @@ impl DatabricksHttpClient {
 
 **New fields on `Database`:**
 ```rust
-auth_type: Option<String>,
-oauth_client_id: Option<String>,
-oauth_client_secret: Option<String>,
-oauth_scopes: Option<String>,
-oauth_token_endpoint: Option<String>,
-oauth_redirect_port: Option<u16>,
+auth_mechanism: Option<AuthMechanism>,
+auth_flow: Option<AuthFlow>,
+auth_client_id: Option<String>,
+auth_client_secret: Option<String>,
+auth_scopes: Option<String>,
+auth_token_endpoint: Option<String>,
+auth_redirect_port: Option<u16>,
 ```
 
-**Modified `new_connection()`:** Two-phase initialization replacing the current hardcoded PAT flow:
+`set_option` parses numeric config values into the enums:
+```rust
+"databricks.auth.mechanism" => {
+    let v = Self::parse_int_option(&value)
+        .ok_or_else(|| /* error: expected integer */)?;
+    self.auth_mechanism = Some(AuthMechanism::try_from(v)?);  // 0 -> Pat, 11 -> OAuth
+}
+"databricks.auth.flow" => {
+    let v = Self::parse_int_option(&value)
+        .ok_or_else(|| /* error: expected integer */)?;
+    self.auth_flow = Some(AuthFlow::try_from(v)?);  // 0 -> TokenPassthrough, 1 -> ClientCredentials, 2 -> Browser
+}
+```
+
+**Modified `new_connection()`:** Two-phase initialization with enum matching:
 
 ```rust
-// Phase 1: Create HTTP client without auth
+// Phase 1: Create HTTP client (no auth yet)
 let http_client = Arc::new(DatabricksHttpClient::new(self.http_config.clone())?);
 
-// Phase 2: Create auth provider (OAuth providers receive http_client for token fetches)
-let auth_provider: Arc<dyn AuthProvider> = match self.resolved_auth_type() {
-    AuthType::AccessToken => {
+// Phase 2: Create auth provider based on mechanism + flow
+let mechanism = self.auth_mechanism.as_ref()
+    .ok_or_else(|| /* error: databricks.auth.mechanism is required */)?;
+
+let auth_provider: Arc<dyn AuthProvider> = match mechanism {
+    AuthMechanism::Pat => {
         let token = self.access_token.as_ref()
-            .ok_or_else(|| /* error */)?;
+            .ok_or_else(|| /* error: access_token required for mechanism=0 */)?;
         Arc::new(PersonalAccessToken::new(token))
     }
-    AuthType::ClientCredentials => {
-        let client_id = self.oauth_client_id.as_ref()
-            .ok_or_else(|| /* error */)?;
-        let client_secret = self.oauth_client_secret.as_ref()
-            .ok_or_else(|| /* error */)?;
-        Arc::new(ClientCredentialsProvider::new(
-            host, client_id, client_secret, http_client.clone(), /* ... */
-        )?)
-    }
-    AuthType::AuthorizationCode => {
-        Arc::new(AuthorizationCodeProvider::new(
-            host, client_id, http_client.clone(), /* ... */
-        )?)
+    AuthMechanism::OAuth => {
+        let flow = self.auth_flow.as_ref()
+            .ok_or_else(|| /* error: databricks.auth.flow required when mechanism=11 */)?;
+        match flow {
+            AuthFlow::TokenPassthrough => {
+                let token = self.access_token.as_ref()
+                    .ok_or_else(|| /* error: access_token required for flow=0 */)?;
+                Arc::new(PersonalAccessToken::new(token))
+            }
+            AuthFlow::ClientCredentials => Arc::new(
+                ClientCredentialsProvider::new(host, client_id, client_secret, http_client.clone())?
+            ),
+            AuthFlow::Browser => Arc::new(
+                AuthorizationCodeProvider::new(host, client_id, http_client.clone())?
+            ),
+        }
     }
 };
 
@@ -530,7 +603,7 @@ let auth_provider: Arc<dyn AuthProvider> = match self.resolved_auth_type() {
 http_client.set_auth_provider(auth_provider);
 ```
 
-**`access_token` becomes optional:** Only required when `auth_type` is `access_token`.
+**`access_token` becomes optional:** Only required when mechanism=`0` (Pat) or flow=`0` (TokenPassthrough).
 
 ### `Cargo.toml`
 
