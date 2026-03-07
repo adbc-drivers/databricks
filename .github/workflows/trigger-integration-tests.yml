@@ -176,12 +176,15 @@ jobs:
             const csharpChanged = names.some(f => f.startsWith('csharp/'));
             const rustChanged = names.some(f => f.startsWith('rust/'));
             const workflowChanged = names.some(f => f.startsWith('.github/workflows/'));
+            const seaChanged = names.some(f => f.startsWith('csharp/src/StatementExecution/'));
             // Workflow change triggers all targets; otherwise only changed driver folders
             const runCsharp = csharpChanged || workflowChanged;
             const runRust = rustChanged || workflowChanged;
             if (workflowChanged) console.log('✅ Workflow files changed - triggering all targets');
+            if (seaChanged) console.log('✅ SEA/REST files changed - will also trigger REST integration tests');
             core.setOutput('csharp', runCsharp.toString());
             core.setOutput('rust', runRust.toString());
+            core.setOutput('sea', seaChanged.toString());
 
       - name: Generate GitHub App Token (internal repo)
         id: app-token
@@ -216,6 +219,24 @@ jobs:
               "pr_url": "${{ github.event.pull_request.html_url }}",
               "pr_title": "${{ github.event.pull_request.title }}",
               "pr_author": "${{ github.event.pull_request.user.login }}"
+            }
+
+      - name: Dispatch C# REST tests to internal repo
+        if: steps.changed.outputs.sea == 'true'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: databricks/databricks-driver-test
+          event-type: adbc-csharp-pr-test
+          client-payload: |
+            {
+              "pr_number": "${{ github.event.pull_request.number }}",
+              "commit_sha": "${{ github.event.pull_request.head.sha }}",
+              "pr_repo": "${{ github.repository }}",
+              "pr_url": "${{ github.event.pull_request.html_url }}",
+              "pr_title": "${{ github.event.pull_request.title }}",
+              "pr_author": "${{ github.event.pull_request.user.login }}",
+              "databricks_protocol": "rest"
             }
 
       - name: Dispatch Rust tests to internal repo
@@ -307,6 +328,11 @@ jobs:
           else
             echo "changed=false" >> $GITHUB_OUTPUT && echo "⏭️ No C# files changed"
           fi
+          if echo "$CHANGED" | grep -q "^csharp/src/StatementExecution/"; then
+            echo "sea=true" >> $GITHUB_OUTPUT && echo "✅ SEA/REST files changed - will also trigger REST integration tests"
+          else
+            echo "sea=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Generate GitHub App Token (public repo)
         id: adbc-token
@@ -367,6 +393,24 @@ jobs:
               "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
               "pr_title": "Merge queue validation",
               "pr_author": "merge-queue"
+            }
+
+      - name: Dispatch C# REST tests
+        if: steps.changed.outputs.sea == 'true'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: databricks/databricks-driver-test
+          event-type: adbc-csharp-pr-test
+          client-payload: |
+            {
+              "pr_number": "${{ steps.extract-pr.outputs.pr_number }}",
+              "commit_sha": "${{ github.event.merge_group.head_sha }}",
+              "pr_repo": "${{ github.repository }}",
+              "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
+              "pr_title": "Merge queue validation",
+              "pr_author": "merge-queue",
+              "databricks_protocol": "rest"
             }
 
       - name: Fail check on dispatch error
