@@ -112,5 +112,36 @@ namespace AdbcDrivers.Databricks.Http
 
             return httpClient;
         }
+
+        /// <summary>
+        /// Creates an HttpClient for telemetry export.
+        /// Includes TLS, proxy settings, and full authentication handler chain.
+        /// Uses the same auth/proxy pipeline as feature flag client.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <param name="host">The Databricks host (without protocol).</param>
+        /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
+        /// <returns>Configured HttpClient for telemetry.</returns>
+        public static HttpClient CreateTelemetryHttpClient(
+            IReadOnlyDictionary<string, string> properties,
+            string host,
+            string assemblyVersion)
+        {
+            const int DefaultTelemetryTimeoutSeconds = 10;
+
+            // Use the same auth handler chain as feature flags (PAT, OAuth, WIF, proxy)
+            var handler = HttpHandlerFactory.CreateFeatureFlagHandler(properties, host, DefaultTelemetryTimeoutSeconds);
+
+            var httpClient = new HttpClient(handler)
+            {
+                BaseAddress = new Uri($"https://{host}"),
+                Timeout = TimeSpan.FromSeconds(DefaultTelemetryTimeoutSeconds)
+            };
+
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+                UserAgentHelper.GetUserAgent(assemblyVersion, properties));
+
+            return httpClient;
+        }
     }
 }

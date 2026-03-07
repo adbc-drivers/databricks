@@ -22,8 +22,10 @@
 */
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -43,6 +45,9 @@ namespace AdbcDrivers.Databricks.Reader
         // internal cancellation token source - won't affect the external token
         private CancellationTokenSource? _internalCts;
         private Task? _operationStatusPollingTask;
+
+        // Telemetry tracking
+        private int _pollCount = 0;
 
         public DatabricksOperationStatusPoller(
             IHiveServer2Statement statement,
@@ -86,6 +91,10 @@ namespace AdbcDrivers.Databricks.Reader
 
                 var request = new TGetOperationStatusReq(operationHandle);
                 var response = await _statement.Client.GetOperationStatus(request, GetOperationStatusTimeoutToken);
+
+                // Track poll count for telemetry
+                _pollCount++;
+
                 await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
 
                 // end the heartbeat if the command has terminated
@@ -98,6 +107,9 @@ namespace AdbcDrivers.Databricks.Reader
                     break;
                 }
             }
+
+            // Add telemetry tags to current activity when polling completes
+            Activity.Current?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
         }
 
         public void Stop()

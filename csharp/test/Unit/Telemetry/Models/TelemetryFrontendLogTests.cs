@@ -200,8 +200,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
             Assert.Contains("workspace_id", json);
             Assert.Contains("frontend_log_event_id", json);
             Assert.Contains("sql_driver_log", json);
-            Assert.Contains("sessionId", json);  // Proto uses camelCase
-            Assert.Contains("sqlStatementId", json);
+            Assert.Contains("session_id", json);  // Proto uses snake_case (PreserveProtoFieldNames)
+            Assert.Contains("sql_statement_id", json);
         }
 
         [Fact]
