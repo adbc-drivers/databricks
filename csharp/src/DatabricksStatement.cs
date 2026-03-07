@@ -57,6 +57,7 @@ namespace AdbcDrivers.Databricks
         private bool enableMultipleCatalogSupport;
         private bool enablePKFK;
         private bool runAsyncInThrift;
+        private bool enableComplexDatatypeSupport;
         private Dictionary<string, string>? confOverlay;
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
@@ -84,6 +85,7 @@ namespace AdbcDrivers.Databricks
             enablePKFK = connection.EnablePKFK;
 
             runAsyncInThrift = connection.RunAsyncInThrift;
+            enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
 
             // Override the Apache base default (500ms) with Databricks-specific poll interval (100ms)
             if (!connection.Properties.ContainsKey(ApacheParameters.PollTimeMilliseconds))
@@ -136,11 +138,7 @@ namespace AdbcDrivers.Databricks
             {
                 TimestampAsArrow = true,
                 DecimalAsArrow = true,
-
-                // set to false so they return as string
-                // otherwise, they return as ARRAY_TYPE but you can't determine
-                // the object type of the items in the array
-                ComplexTypesAsArrow = false,
+                ComplexTypesAsArrow = enableComplexDatatypeSupport,
                 IntervalTypesAsArrow = false,
             };
 

@@ -63,6 +63,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly bool _tracePropagationEnabled;
         private readonly string _traceParentHeaderName;
         private readonly bool _traceStateEnabled;
+        private readonly bool _enableComplexDatatypeSupport;
 
         // Authentication support
         private readonly string? _identityFederationClientId;
@@ -200,6 +201,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
             _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
             _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
+            _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableComplexDatatypeSupport, false);
 
             // Authentication configuration
             if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
@@ -474,6 +476,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         // TracingConnection provides IActivityTracer implementation
+        internal bool EnableComplexDatatypeSupport => _enableComplexDatatypeSupport;
+
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
         public override string AssemblyName => "AdbcDrivers.Databricks";
     }
