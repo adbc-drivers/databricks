@@ -44,7 +44,9 @@ graph TD
     TS --> TK[OAuthToken]
     TC --> TK
 
-    HC[DatabricksHttpClient] -->|calls| AP
+    HC[DatabricksHttpClient] -->|execute: calls| AP
+    M2M -->|execute_without_auth: token fetches| HC
+    U2M -->|execute_without_auth: token fetches| HC
 ```
 
 ### File Layout
@@ -99,7 +101,7 @@ pub struct OAuthToken {
 
 **Contract:**
 - `is_expired()`: Returns true when `expires_at - 40s < now` (40s buffer matches Python SDK; Azure rejects tokens within 30s of expiry)
-- `is_stale()`: Returns true when remaining TTL < `min(TTL * 0.5, 20 minutes)` (dynamic stale window matching Python SDK)
+- `is_stale()`: Returns true when remaining TTL < stale threshold, where stale threshold = `min(initial_TTL * 0.5, 20 minutes)`, computed once at token acquisition (matching Python SDK)
 - Serializable to/from JSON for disk caching
 
 ### OidcEndpoints
@@ -166,7 +168,7 @@ stateDiagram-v2
     Expired --> Error: blocking refresh fails
 ```
 
-**Stale threshold:** `min(remaining_TTL * 0.5, 20 minutes)` -- computed dynamically when token is acquired.
+**Stale threshold:** `min(initial_TTL * 0.5, 20 minutes)` -- computed once when the token is first acquired (using the full TTL at that moment, not the current remaining time). Stored alongside the token in `TokenStore`.
 
 ### TokenStore
 
@@ -252,10 +254,15 @@ impl CallbackServer {
 Both exchanges are handled by the `oauth2` crate, routed through `DatabricksHttpClient`:
 
 ```rust
-// Custom HTTP client function that routes through DatabricksHttpClient::execute_without_auth()
+// Adapter function: converts between oauth2 crate's HttpRequest/HttpResponse
+// and DatabricksHttpClient's reqwest types, routing through execute_without_auth()
 let http_fn = |request: oauth2::HttpRequest| {
     let http_client = http_client.clone();
-    async move { http_client.execute_without_auth(request.into()).await }
+    async move {
+        let reqwest_request = convert_to_reqwest(request);  // thin conversion layer
+        let response = http_client.execute_without_auth(reqwest_request).await?;
+        convert_to_oauth2_response(response)  // thin conversion layer
+    }
 };
 
 // Authorization code exchange (with PKCE verifier)
@@ -272,7 +279,7 @@ let token_response = client
     .await?;
 ```
 
-The `oauth2` crate constructs the correct `POST` request with `grant_type`, `code_verifier`, `redirect_uri`, `client_id`, and `refresh_token` parameters. We use `execute_without_auth()` since the `oauth2` crate adds its own auth (Basic or form-encoded) -- this avoids the circular `get_auth_header()` call.
+The `oauth2` crate constructs the correct `POST` request with `grant_type`, `code_verifier`, `redirect_uri`, `client_id`, and `refresh_token` parameters. A thin adapter converts between the `oauth2` crate's HTTP types and `reqwest` types. We use `execute_without_auth()` since the `oauth2` crate adds its own auth (Basic or form-encoded) -- this avoids the circular `get_auth_header()` call.
 
 ---
 
@@ -324,7 +331,7 @@ The `oauth2` crate sends `POST {token_endpoint}` with `grant_type=client_credent
 **Contract:**
 - M2M tokens have no `refresh_token`; re-authentication uses the same client credentials
 - No disk caching for M2M (credentials are always available; tokens are short-lived)
-- Token endpoint discovered via OIDC, or overridden with `databricks.oauth.token_endpoint`
+- Token endpoint discovered via OIDC, or overridden with `databricks.auth.token_endpoint`
 
 ---
 
@@ -390,8 +397,8 @@ pub enum AuthFlow {
 
 | Option | Type | Values | Required | Description |
 |--------|------|--------|----------|-------------|
-| `databricks.auth.mechanism` | Int/String | `0` (PAT), `11` (OAuth) | **Yes** | Authentication mechanism (matches ODBC `AuthMech`) |
-| `databricks.auth.flow` | Int/String | `0` (token passthrough), `1` (client credentials), `2` (browser) | **Yes** (when mechanism=`11`) | OAuth flow type (matches ODBC `Auth_Flow`) |
+| `databricks.auth.mechanism` | Int | `0` (PAT), `11` (OAuth) | **Yes** | Authentication mechanism (matches ODBC `AuthMech`) |
+| `databricks.auth.flow` | Int | `0` (token passthrough), `1` (client credentials), `2` (browser) | **Yes** (when mechanism=`11`) | OAuth flow type (matches ODBC `Auth_Flow`) |
 
 **Values aligned with ODBC driver:**
 
@@ -412,31 +419,6 @@ pub enum AuthFlow {
 | `databricks.auth.scopes` | String | `"all-apis offline_access"` (flow=`2`), `"all-apis"` (flow=`1`) | No | Space-separated OAuth scopes |
 | `databricks.auth.token_endpoint` | String | Auto-discovered via OIDC | No | Override OIDC-discovered token endpoint |
 | `databricks.auth.redirect_port` | String | `"8020"` | No | Localhost port for browser callback server |
-
-### Auth Selection Logic
-
-```mermaid
-flowchart TD
-    A[Database::new_connection] --> B{mechanism set?}
-    B -->|No| Z[Error: mechanism is required]
-
-    B -->|0 Pat| C{access_token set?}
-    C -->|Yes| D[Use PAT]
-    C -->|No| E[Error: access_token required]
-
-    B -->|11 OAuth| F{flow set?}
-    F -->|No| Y[Error: flow is required for mechanism=11]
-
-    F -->|0 TokenPassthrough| G{access_token set?}
-    G -->|Yes| H[Use token passthrough]
-    G -->|No| I[Error: access_token required]
-
-    F -->|1 ClientCredentials| J{client_id + client_secret?}
-    J -->|Yes| K[Use M2M]
-    J -->|No| L[Error: client_id and client_secret required]
-
-    F -->|2 Browser| M[Use U2M]
-```
 
 Both `mechanism` and `flow` are mandatory -- no auto-detection. This makes configuration explicit and predictable, matching the ODBC driver's approach where `AuthMech` and `Auth_Flow` are always specified.
 
@@ -525,12 +507,7 @@ impl DatabricksHttpClient {
 
 ### `src/client/http.rs`
 
-- Change `auth_provider` field from `Arc<dyn AuthProvider>` to `OnceLock<Arc<dyn AuthProvider>>`
-- Remove `auth_provider` from `new()` constructor
-- Add `set_auth_provider(&self, provider: Arc<dyn AuthProvider>)` method
-- `auth_header()` reads from `OnceLock`, returns error if not yet set
-- `execute()` unchanged (still calls `auth_header()`)
-- `execute_without_auth()` unchanged (still skips auth)
+Two-phase auth initialization via `OnceLock` (see [Concurrency Model](#concurrency-model) for details and struct definition).
 
 ### `src/auth/mod.rs`
 
@@ -585,6 +562,9 @@ let auth_provider: Arc<dyn AuthProvider> = match mechanism {
             .ok_or_else(|| /* error: databricks.auth.flow required when mechanism=11 */)?;
         match flow {
             AuthFlow::TokenPassthrough => {
+                // No auto-refresh -- token is used as-is until it expires.
+                // Matches ODBC behavior where expired tokens require the caller
+                // to provide a new token via SQLSetConnectAttr.
                 let token = self.access_token.as_ref()
                     .ok_or_else(|| /* error: access_token required for flow=0 */)?;
                 Arc::new(PersonalAccessToken::new(token))
@@ -690,7 +670,45 @@ dirs = "5"           # Cross-platform config directory (~/.config/)
 - `test_u2m_cache_hit` -- cached token skips browser flow
 - `test_u2m_cache_miss_with_expired_refresh` -- falls through to browser flow
 
-### Integration Tests
+### Wiremock Integration Tests (mocked HTTP, full flow)
+
+Tests in `tests/` using `wiremock` to simulate OIDC discovery and token endpoints. These test the complete wiring from `Database` config through `new_connection()` to `get_auth_header()`.
+
+**M2M full flow:**
+- `test_m2m_full_flow_discovery_and_token_exchange` -- wiremock serves OIDC discovery + token endpoint; verify `get_auth_header()` returns valid Bearer token
+- `test_m2m_token_refresh_on_expiry` -- first token expires after 1s; verify second `get_auth_header()` call triggers re-exchange and returns new token
+- `test_m2m_discovery_failure_propagates` -- wiremock returns 500 on discovery; verify `new_connection()` fails with descriptive error
+
+**U2M refresh flow (no browser -- only tests refresh path):**
+- `test_u2m_refresh_token_full_flow` -- pre-populate cache with token that has a refresh_token; wiremock serves token endpoint; verify `get_auth_header()` refreshes via grant_type=refresh_token
+
+### Database Config Validation Tests
+
+Tests in `database.rs` `#[cfg(test)]` verifying the new auth config options are parsed and validated correctly.
+
+**Parsing:**
+- `test_set_auth_mechanism_valid` -- setting mechanism to `0` and `11` succeeds, stored as correct enum variant
+- `test_set_auth_mechanism_invalid` -- setting mechanism to `99` or a non-integer returns `invalid_argument` error
+- `test_set_auth_flow_valid` -- setting flow to `0`, `1`, `2` succeeds
+- `test_set_auth_flow_invalid` -- setting flow to `5` or a string returns error
+
+**Validation at `new_connection()`:**
+- `test_new_connection_missing_mechanism` -- no mechanism set returns clear error
+- `test_new_connection_oauth_missing_flow` -- mechanism=`11` without flow returns error
+- `test_new_connection_client_credentials_missing_secret` -- mechanism=`11`, flow=`1` with client_id but no client_secret returns error
+- `test_new_connection_pat_missing_token` -- mechanism=`0` without access_token returns error
+- `test_new_connection_token_passthrough_missing_token` -- mechanism=`11`, flow=`0` without access_token returns error
+
+### HTTP Client Two-Phase Init Tests
+
+Tests in `client/http.rs` `#[cfg(test)]` verifying the `OnceLock`-based auth provider lifecycle.
+
+- `test_execute_without_auth_works_before_auth_set` -- `execute_without_auth()` succeeds even when no auth provider is set
+- `test_execute_fails_before_auth_set` -- `execute()` returns error when auth provider not yet set via `OnceLock`
+- `test_execute_succeeds_after_auth_set` -- `set_auth_provider()` then `execute()` succeeds with correct Bearer header
+- `test_set_auth_provider_twice_panics_or_errors` -- calling `set_auth_provider()` a second time is rejected (OnceLock semantics)
+
+### End-to-End Tests
 
 - `test_m2m_end_to_end` -- real Databricks workspace with service principal credentials (requires env vars, `#[ignore]` by default)
 - `test_u2m_end_to_end` -- manual test only (`#[ignore]`), requires interactive browser
