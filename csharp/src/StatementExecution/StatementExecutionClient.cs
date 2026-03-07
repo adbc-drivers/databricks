@@ -1,3 +1,4 @@
+// test: dummy change to verify SEA path triggers REST integration tests (PECO-2945)
 /*
 * Copyright (c) 2025 ADBC Drivers Contributors
 *
