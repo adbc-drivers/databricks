@@ -21,6 +21,7 @@
 //! - OIDC endpoint discovery
 //! - File-based token caching
 
+pub mod cache;
 pub mod oidc;
 pub mod token;
 
