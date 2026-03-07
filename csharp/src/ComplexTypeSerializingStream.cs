@@ -129,8 +129,7 @@ namespace AdbcDrivers.Databricks
                 StructArray sa => ToDict(sa, index),
                 Decimal128Array dec => dec.GetString(index),            // preserve precision as string
                 Date32Array d32 => d32.GetDateTime(index)?.ToString("yyyy-MM-dd"),
-                TimestampArray ts => ts.GetTimestamp(index)?.ToString("o"),
-                _ => array.ValueAt(index, StructResultType.Object)      // int, long, float, bool, string, etc.
+                _ => array.ValueAt(index, StructResultType.Object)      // int, long, float, bool, string, timestamp, etc.
             };
         }
 
