@@ -20,6 +20,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
+using Apache.Arrow.Adbc.Extensions;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 
@@ -76,18 +77,17 @@ namespace AdbcDrivers.Databricks
             var builder = new StringArray.Builder();
             for (int i = 0; i < array.Length; i++)
             {
-                string? json = SerializeElement(array, i);
-                if (json == null)
+                if (array.IsNull(i))
                     builder.AppendNull();
                 else
-                    builder.Append(json);
+                    builder.Append(JsonSerializer.Serialize(ToObject(array, i)));
             }
             return builder.Build();
         }
 
         /// <summary>
         /// Builds a new schema where all complex-type fields are replaced with StringType,
-        /// and returns the list of column indices that were converted.
+        /// and returns the set of column indices that were converted.
         /// </summary>
         private static (Schema schema, HashSet<int> complexIndices) BuildStringSchema(Schema original)
         {
@@ -116,49 +116,22 @@ namespace AdbcDrivers.Databricks
 
         // --- JSON serialization helpers ---
 
-        private static string? SerializeElement(IArrowArray array, int index)
-        {
-            if (array.IsNull(index))
-                return null;
-            return JsonSerializer.Serialize(ToObject(array, index));
-        }
-
         private static object? ToObject(IArrowArray array, int index)
         {
             if (array.IsNull(index))
                 return null;
 
-            switch (array)
+            // Handle complex types with recursive traversal, and types needing specific
+            // string formatting. All other primitives delegate to ValueAt().
+            return array switch
             {
-                case ListArray listArray:
-                    return ToListOrMap(listArray, index);
-                case StructArray structArray:
-                    return ToDict(structArray, index);
-                case StringArray sa:
-                    return sa.GetString(index);
-                case Int32Array ia:
-                    return ia.GetValue(index);
-                case Int64Array la:
-                    return la.GetValue(index);
-                case Int16Array sa16:
-                    return sa16.GetValue(index);
-                case Int8Array sa8:
-                    return sa8.GetValue(index);
-                case FloatArray fa:
-                    return fa.GetValue(index);
-                case DoubleArray da:
-                    return da.GetValue(index);
-                case BooleanArray ba:
-                    return ba.GetValue(index);
-                case Decimal128Array dec:
-                    return dec.GetString(index);
-                case Date32Array d32:
-                    return d32.GetDateTime(index)?.ToString("yyyy-MM-dd");
-                case TimestampArray ts:
-                    return ts.GetTimestamp(index)?.ToString("o");
-                default:
-                    return array.ToString();
-            }
+                ListArray la => ToListOrMap(la, index),
+                StructArray sa => ToDict(sa, index),
+                Decimal128Array dec => dec.GetString(index),            // preserve precision as string
+                Date32Array d32 => d32.GetDateTime(index)?.ToString("yyyy-MM-dd"),
+                TimestampArray ts => ts.GetTimestamp(index)?.ToString("o"),
+                _ => array.ValueAt(index, StructResultType.Object)      // int, long, float, bool, string, etc.
+            };
         }
 
         private static object ToListOrMap(ListArray listArray, int index)
