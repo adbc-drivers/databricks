@@ -37,7 +37,9 @@ graph TD
 
     M2M --> OIDC[OidcDiscovery]
     U2M --> OIDC
-    U2M --> PKCE[PkceChallenge]
+
+    M2M --> OC[oauth2::BasicClient]
+    U2M --> OC
 
     TS --> TK[OAuthToken]
     TC --> TK
@@ -56,12 +58,14 @@ src/auth/
     token.rs          -- OAuthToken struct, expiry/stale logic
     token_store.rs    -- Thread-safe token container with refresh state machine
     oidc.rs           -- OIDC endpoint discovery
-    pkce.rs           -- PKCE verifier/challenge generation
     cache.rs          -- File-based token persistence
     callback.rs       -- Localhost HTTP server for U2M browser redirect
     m2m.rs            -- ClientCredentialsProvider (implements AuthProvider)
     u2m.rs            -- AuthorizationCodeProvider (implements AuthProvider)
 ```
+
+> **Note:** No `pkce.rs` -- PKCE generation is handled by the `oauth2` crate's
+> `PkceCodeChallenge::new_random_sha256()` method.
 
 ---
 
@@ -109,19 +113,33 @@ pub struct OidcEndpoints {
 
 Discovered via `GET {host}/oidc/.well-known/oauth-authorization-server`.
 
-### PkceChallenge
+### Usage of the `oauth2` Crate
+
+Both U2M and M2M providers use [`oauth2::BasicClient`](https://docs.rs/oauth2/latest/oauth2/struct.Client.html) for protocol-level operations. The crate handles:
+
+- **PKCE generation**: `PkceCodeChallenge::new_random_sha256()` generates the verifier/challenge pair (RFC 7636 S256)
+- **Authorization URL construction**: `client.authorize_url(...)` with state, scopes, and PKCE challenge
+- **Token exchange**: `client.exchange_code(code).set_pkce_verifier(verifier)` for U2M
+- **Client credentials exchange**: `client.exchange_client_credentials()` for M2M
+- **Refresh token exchange**: `client.exchange_refresh_token(refresh_token)` for U2M
+- **HTTP client integration**: Pluggable async HTTP client via `oauth2::reqwest::async_http_client`
+
+The `oauth2::BasicClient` is constructed from OIDC-discovered endpoints:
 
 ```rust
-pub(crate) struct PkceChallenge {
-    pub verifier: String,    // 32 random bytes, base64url, no padding
-    pub challenge: String,   // SHA256(verifier), base64url, no padding
-}
+let client = BasicClient::new(ClientId::new(client_id))
+    .set_client_secret(ClientSecret::new(client_secret))  // M2M only
+    .set_auth_uri(AuthUrl::new(endpoints.authorization_endpoint)?)
+    .set_token_uri(TokenUrl::new(endpoints.token_endpoint)?)
+    .set_redirect_uri(RedirectUrl::new(redirect_uri)?);    // U2M only
 ```
 
-**Contract:**
-- Uses S256 challenge method per RFC 7636
-- `verifier`: 32 cryptographically random bytes, base64url-encoded without `=` padding
-- `challenge`: SHA-256 hash of the UTF-8 encoded verifier, base64url-encoded without `=` padding
+**What the `oauth2` crate does NOT handle** (we implement ourselves):
+- OIDC endpoint discovery (`oidc.rs`)
+- Token lifecycle management -- FRESH/STALE/EXPIRED state machine (`token_store.rs`)
+- File-based token caching (`cache.rs`)
+- Browser launch and localhost callback server (`callback.rs`)
+- Integration with the driver's `AuthProvider` trait
 
 ---
 
@@ -187,14 +205,14 @@ sequenceDiagram
         U2M->>U2M: Store in TokenStore
         Note over U2M: On first get_auth_header(),<br/>refresh if stale/expired
     else No cache or expired refresh_token
-        U2M->>U2M: Generate PKCE (verifier + challenge)
-        U2M->>U2M: Generate state nonce (16 bytes)
+        U2M->>U2M: PkceCodeChallenge::new_random_sha256()
+        U2M->>U2M: client.authorize_url() with PKCE + state
         U2M->>CB: Start on localhost:8020
         U2M->>Browser: Open authorization URL
         Browser->>IDP: User authenticates
         IDP->>CB: Redirect with code + state
         CB-->>U2M: Authorization code
-        U2M->>IDP: POST token endpoint (code + verifier)
+        U2M->>IDP: client.exchange_code(code).set_pkce_verifier(verifier)
         IDP-->>U2M: access_token + refresh_token
         U2M->>Cache: save(token)
     end
@@ -231,27 +249,30 @@ impl CallbackServer {
 
 ### Token Exchange (U2M)
 
-Authorization code exchange request:
-```
-POST {token_endpoint}
-Content-Type: application/x-www-form-urlencoded
+Both exchanges are handled by the `oauth2` crate, routed through `DatabricksHttpClient`:
 
-grant_type=authorization_code
-&code={authorization_code}
-&code_verifier={pkce_verifier}
-&redirect_uri=http://localhost:8020
-&client_id={client_id}
+```rust
+// Custom HTTP client function that routes through DatabricksHttpClient::execute_without_auth()
+let http_fn = |request: oauth2::HttpRequest| {
+    let http_client = http_client.clone();
+    async move { http_client.execute_without_auth(request.into()).await }
+};
+
+// Authorization code exchange (with PKCE verifier)
+let token_response = client
+    .exchange_code(AuthorizationCode::new(code))
+    .set_pkce_verifier(pkce_verifier)
+    .request_async(&http_fn)
+    .await?;
+
+// Refresh token exchange
+let token_response = client
+    .exchange_refresh_token(&RefreshToken::new(refresh_token))
+    .request_async(&http_fn)
+    .await?;
 ```
 
-Token refresh request:
-```
-POST {token_endpoint}
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=refresh_token
-&refresh_token={refresh_token}
-&client_id={client_id}
-```
+The `oauth2` crate constructs the correct `POST` request with `grant_type`, `code_verifier`, `redirect_uri`, `client_id`, and `refresh_token` parameters. We use `execute_without_auth()` since the `oauth2` crate adds its own auth (Basic or form-encoded) -- this avoids the circular `get_auth_header()` call.
 
 ---
 
@@ -272,7 +293,7 @@ sequenceDiagram
 
     Note over App,TE: First get_auth_header() call
     App->>M2M: get_auth_header()
-    M2M->>TE: POST grant_type=client_credentials
+    M2M->>TE: client.exchange_client_credentials()
     TE-->>M2M: access_token (no refresh_token)
     M2M-->>App: "Bearer {access_token}"
 
@@ -284,20 +305,21 @@ sequenceDiagram
     App->>M2M: get_auth_header()
     M2M->>M2M: Spawn background refresh
     M2M-->>App: "Bearer {current_token}"
-    M2M->>TE: POST grant_type=client_credentials (background)
+    M2M->>TE: client.exchange_client_credentials() (background)
     TE-->>M2M: new access_token
 ```
 
 ### Token Exchange (M2M)
 
+```rust
+let token_response = client
+    .exchange_client_credentials()
+    .add_scope(Scope::new("all-apis".to_string()))
+    .request_async(&http_fn)  // routes through DatabricksHttpClient::execute_without_auth()
+    .await?;
 ```
-POST {token_endpoint}
-Content-Type: application/x-www-form-urlencoded
-Authorization: Basic base64({client_id}:{client_secret})
 
-grant_type=client_credentials
-&scope={scopes}
-```
+The `oauth2` crate sends `POST {token_endpoint}` with `grant_type=client_credentials`, `Authorization: Basic base64(client_id:client_secret)`, and the requested scopes. The request goes through `DatabricksHttpClient::execute_without_auth()` to get retry logic and connection pooling.
 
 **Contract:**
 - M2M tokens have no `refresh_token`; re-authentication uses the same client credentials
@@ -371,11 +393,55 @@ When `auth_type` is not explicitly set, the driver infers the auth method from w
 
 The `AuthProvider::get_auth_header()` trait method is synchronous, but OAuth token fetches require HTTP calls (async via `reqwest`).
 
-**Approach:** OAuth providers use a dedicated `reqwest::Client` (separate from `DatabricksHttpClient`) and bridge to async:
+**Approach:** OAuth providers reuse `DatabricksHttpClient` for all HTTP calls (including token endpoint requests), bridged to the sync `get_auth_header()`:
 - Inside a tokio runtime (which the driver always has): use `tokio::task::block_in_place` + `Handle::block_on`
 - For background stale-refresh: use `std::thread::spawn` with a captured `tokio::runtime::Handle`
 
-**Why a separate reqwest::Client?** `DatabricksHttpClient` calls `auth_provider.get_auth_header()` on every request. If the OAuth provider used `DatabricksHttpClient` to fetch tokens, it would create a circular dependency. Token endpoints use HTTP Basic auth (`base64(client_id:client_secret)`) or form-encoded `client_id`, not Bearer tokens.
+**Avoiding circular dependency with `DatabricksHttpClient`:**
+
+`DatabricksHttpClient` currently requires an `AuthProvider` at construction time and calls `get_auth_header()` on every `execute()` call. This creates a circular dependency if the OAuth provider also needs the HTTP client to fetch tokens. The solution is a two-phase initialization:
+
+1. **Decouple auth from HTTP client construction.** Change `DatabricksHttpClient` to accept `auth_provider` via `OnceLock<Arc<dyn AuthProvider>>` (matching the existing `SeaClient` pattern for `reader_factory`). The client is created first without auth.
+2. **OAuth providers use `execute_without_auth()`** for token endpoint calls. Token endpoints authenticate via form-encoded `client_id`/`client_secret` or `Authorization: Basic` header -- not Bearer tokens. The OAuth provider manually adds these credentials to the request before calling `execute_without_auth()`.
+3. **Auth provider is set on the HTTP client after creation.**
+
+```rust
+// In database.rs new_connection():
+// 1. Create HTTP client (no auth yet)
+let http_client = Arc::new(DatabricksHttpClient::new(self.http_config.clone())?);
+
+// 2. Create auth provider (can reference http_client for token fetches)
+let auth_provider: Arc<dyn AuthProvider> = match self.resolved_auth_type() {
+    AuthType::AccessToken => Arc::new(PersonalAccessToken::new(token)),
+    AuthType::ClientCredentials => Arc::new(
+        ClientCredentialsProvider::new(host, client_id, client_secret, http_client.clone())?
+    ),
+    AuthType::AuthorizationCode => Arc::new(
+        AuthorizationCodeProvider::new(host, client_id, http_client.clone())?
+    ),
+};
+
+// 3. Set auth on HTTP client
+http_client.set_auth_provider(auth_provider);
+```
+
+This gives us a single HTTP client with shared retry logic, timeouts, and connection pooling for both API calls and token endpoint calls.
+
+**Changes to `DatabricksHttpClient`:**
+
+```rust
+pub struct DatabricksHttpClient {
+    client: Client,
+    config: HttpClientConfig,
+    auth_provider: OnceLock<Arc<dyn AuthProvider>>,  // was: Arc<dyn AuthProvider>
+}
+
+impl DatabricksHttpClient {
+    pub fn new(config: HttpClientConfig) -> Result<Self>;  // no auth_provider param
+    pub fn set_auth_provider(&self, provider: Arc<dyn AuthProvider>);
+    pub fn auth_header(&self) -> Result<String>;  // reads from OnceLock, errors if not set
+}
+```
 
 ### Thread Safety
 
@@ -405,6 +471,15 @@ The `AuthProvider::get_auth_header()` trait method is synchronous, but OAuth tok
 
 ## Changes to Existing Code
 
+### `src/client/http.rs`
+
+- Change `auth_provider` field from `Arc<dyn AuthProvider>` to `OnceLock<Arc<dyn AuthProvider>>`
+- Remove `auth_provider` from `new()` constructor
+- Add `set_auth_provider(&self, provider: Arc<dyn AuthProvider>)` method
+- `auth_header()` reads from `OnceLock`, returns error if not yet set
+- `execute()` unchanged (still calls `auth_header()`)
+- `execute_without_auth()` unchanged (still skips auth)
+
 ### `src/auth/mod.rs`
 
 - Remove `pub use oauth::OAuthCredentials`
@@ -422,9 +497,13 @@ oauth_token_endpoint: Option<String>,
 oauth_redirect_port: Option<u16>,
 ```
 
-**Modified `new_connection()`:** Replace hardcoded PAT creation with auth provider factory:
+**Modified `new_connection()`:** Two-phase initialization replacing the current hardcoded PAT flow:
 
 ```rust
+// Phase 1: Create HTTP client without auth
+let http_client = Arc::new(DatabricksHttpClient::new(self.http_config.clone())?);
+
+// Phase 2: Create auth provider (OAuth providers receive http_client for token fetches)
 let auth_provider: Arc<dyn AuthProvider> = match self.resolved_auth_type() {
     AuthType::AccessToken => {
         let token = self.access_token.as_ref()
@@ -436,12 +515,19 @@ let auth_provider: Arc<dyn AuthProvider> = match self.resolved_auth_type() {
             .ok_or_else(|| /* error */)?;
         let client_secret = self.oauth_client_secret.as_ref()
             .ok_or_else(|| /* error */)?;
-        Arc::new(ClientCredentialsProvider::new(/* ... */)?)
+        Arc::new(ClientCredentialsProvider::new(
+            host, client_id, client_secret, http_client.clone(), /* ... */
+        )?)
     }
     AuthType::AuthorizationCode => {
-        Arc::new(AuthorizationCodeProvider::new(/* ... */)?)
+        Arc::new(AuthorizationCodeProvider::new(
+            host, client_id, http_client.clone(), /* ... */
+        )?)
     }
 };
+
+// Phase 3: Wire auth into HTTP client
+http_client.set_auth_provider(auth_provider);
 ```
 
 **`access_token` becomes optional:** Only required when `auth_type` is `access_token`.
@@ -450,9 +536,8 @@ let auth_provider: Arc<dyn AuthProvider> = match self.resolved_auth_type() {
 
 New dependencies:
 ```toml
-sha2 = "0.10"       # SHA-256 for PKCE and cache keys
-rand = "0.8"         # Cryptographic random for PKCE verifier and state
-url = "2"            # URL parsing/building for auth URLs
+oauth2 = "5"         # OAuth 2.0 protocol (PKCE, token exchange, client credentials)
+sha2 = "0.10"        # SHA-256 for token cache key generation
 open = "5"           # Cross-platform browser launch
 dirs = "5"           # Cross-platform config directory (~/.config/)
 ```
@@ -467,10 +552,13 @@ dirs = "5"           # Cross-platform config directory (~/.config/)
 ### 2. Make AuthProvider trait async
 **Rejected.** Would require changes across the entire call chain (`DatabricksHttpClient`, `SeaClient`, `Connection`, `Statement`). The sync interface with internal async bridge is simpler, matches how the Python SDK wraps async refresh behind a sync API, and `block_in_place` is efficient in a tokio multi-threaded runtime.
 
-### 3. Use `oauth2` crate
-**Rejected.** The `oauth2` Rust crate provides OAuth protocol types but doesn't handle OIDC discovery, token caching, or the specific Databricks token endpoint behavior. The additional abstraction layer adds complexity without reducing the implementation surface significantly. The Python, Java, and Go SDKs all implement OAuth from scratch for the same reasons.
+### 3. Implement OAuth protocol from scratch (no `oauth2` crate)
+**Rejected.** While the Python, Java, and Go SDKs implement OAuth from scratch, the Rust ecosystem has a mature, well-maintained `oauth2` crate (87M+ downloads) that handles PKCE generation, authorization URL construction, token exchange, client credentials flow, and refresh token flow with strongly-typed APIs. Using it eliminates ~200 lines of hand-rolled protocol code, reduces risk of spec compliance bugs, and provides free support for edge cases like token response parsing. We still implement OIDC discovery, token lifecycle management, caching, and the browser callback server ourselves.
 
-### 4. Single OAuthProvider struct handling both U2M and M2M
+### 4. Separate `reqwest::Client` for token endpoint calls
+**Rejected.** An earlier design proposed using a standalone `reqwest::Client` for OAuth token endpoint calls to avoid a circular dependency with `DatabricksHttpClient`. This would duplicate retry logic, timeout configuration, and connection pooling. Instead, we use two-phase initialization (HTTP client created first, auth provider set later via `OnceLock`) and route token endpoint calls through `execute_without_auth()`. This gives a single HTTP client with unified behavior.
+
+### 5. Single OAuthProvider struct handling both U2M and M2M
 **Rejected.** U2M and M2M have fundamentally different flows (browser vs. direct token exchange), different refresh strategies (refresh_token vs. re-authenticate), and different caching needs (disk cache vs. none). Separate types are clearer and match the Python SDK's `SessionCredentials` vs `ClientCredentials` split.
 
 ---
@@ -479,11 +567,10 @@ dirs = "5"           # Cross-platform config directory (~/.config/)
 
 | Crate | Version | Purpose | Size Impact |
 |-------|---------|---------|-------------|
-| `sha2` | 0.10 | SHA-256 for PKCE challenge and cache keys | ~50KB |
-| `rand` | 0.8 | Cryptographic random bytes for PKCE and state | Already transitive dep |
-| `url` | 2 | URL parsing/construction for auth URLs | ~100KB |
+| `oauth2` | 5 | OAuth 2.0 protocol: PKCE, token exchange, client credentials, refresh | ~200KB (brings `url`, `sha2`, `rand` as transitive deps) |
 | `open` | 5 | Cross-platform `open::that(url)` for browser launch | ~10KB |
 | `dirs` | 5 | Cross-platform `config_dir()` for cache path | ~15KB |
+| `sha2` | 0.10 | SHA-256 for token cache key generation | Already transitive dep via `oauth2` |
 
 ---
 
@@ -496,11 +583,6 @@ dirs = "5"           # Cross-platform config directory (~/.config/)
 - `test_token_stale_threshold` -- token within stale window is stale but not expired
 - `test_token_expired_within_buffer` -- token within 40s of expiry is expired
 - `test_token_serialization_roundtrip` -- JSON serialize/deserialize preserves all fields
-
-**pkce.rs:**
-- `test_pkce_verifier_length` -- verifier is base64url of 32 bytes
-- `test_pkce_challenge_is_sha256` -- challenge = SHA256(verifier) base64url no padding
-- `test_pkce_no_padding` -- no `=` characters in verifier or challenge
 
 **oidc.rs:**
 - `test_discover_workspace_endpoints` -- mock well-known endpoint, verify parsed endpoints
@@ -546,7 +628,7 @@ dirs = "5"           # Cross-platform config directory (~/.config/)
 
 | Phase | Scope | Dependencies |
 |-------|-------|-------------|
-| **1. Foundation** | `token.rs`, `pkce.rs`, `oidc.rs`, `cache.rs`, Cargo.toml updates | None |
+| **1. Foundation** | `token.rs`, `oidc.rs`, `cache.rs`, Cargo.toml updates (`oauth2`, `sha2`, `open`, `dirs`) | None |
 | **2. M2M** | `token_store.rs`, `m2m.rs`, `oauth/mod.rs` | Phase 1 |
 | **3. U2M** | `callback.rs`, `u2m.rs` | Phase 1 + 2 |
 | **4. Integration** | `database.rs` changes, `auth/mod.rs` re-exports, config options | Phase 1 + 2 + 3 |
