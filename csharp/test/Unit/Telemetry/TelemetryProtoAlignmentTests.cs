@@ -245,6 +245,98 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal(protoMessage.OperationLatencyMs, deserializedMessage.OperationLatencyMs);
         }
 
+        /// <summary>
+        /// Tests that the telemetry JSON converter serializes proto enums as integer values
+        /// (not string names) to match what the Databricks telemetry endpoint expects.
+        /// </summary>
+        [Fact]
+        public void Proto_TelemetryJsonConverter_SerializesEnumsAsIntegers()
+        {
+            var protoMessage = CreateFullProtoMessage();
+
+            var frontendLog = new TelemetryFrontendLog
+            {
+                WorkspaceId = 12345,
+                FrontendLogEventId = "test-event-id",
+                Context = new FrontendLogContext
+                {
+                    TimestampMillis = 1000,
+                },
+                Entry = new FrontendLogEntry
+                {
+                    SqlDriverLog = protoMessage
+                }
+            };
+
+            var json = JsonSerializer.Serialize(frontendLog, TelemetryJsonOptions.Default);
+
+            // Parse the sql_driver_log portion to inspect proto enum serialization
+            using var doc = JsonDocument.Parse(json);
+            var sqlDriverLog = doc.RootElement
+                .GetProperty("entry")
+                .GetProperty("sql_driver_log");
+
+            // DriverConnectionParams enum fields should be integers
+            var connParams = sqlDriverLog.GetProperty("driver_connection_params");
+            Assert.Equal(JsonValueKind.Number, connParams.GetProperty("auth_mech").ValueKind);
+            Assert.Equal(2, connParams.GetProperty("auth_mech").GetInt32()); // DRIVER_AUTH_MECH_PAT
+            Assert.Equal(JsonValueKind.Number, connParams.GetProperty("auth_flow").ValueKind);
+            Assert.Equal(1, connParams.GetProperty("auth_flow").GetInt32()); // DRIVER_AUTH_FLOW_TOKEN_PASSTHROUGH
+            Assert.Equal(JsonValueKind.Number, connParams.GetProperty("mode").ValueKind);
+            Assert.Equal(1, connParams.GetProperty("mode").GetInt32()); // DRIVER_MODE_THRIFT
+
+            // SqlOperation enum fields should be integers
+            var sqlOp = sqlDriverLog.GetProperty("sql_operation");
+            Assert.Equal(JsonValueKind.Number, sqlOp.GetProperty("statement_type").ValueKind);
+            Assert.Equal(1, sqlOp.GetProperty("statement_type").GetInt32()); // STATEMENT_QUERY = 1
+            Assert.Equal(JsonValueKind.Number, sqlOp.GetProperty("execution_result").ValueKind);
+            Assert.Equal(3, sqlOp.GetProperty("execution_result").GetInt32()); // EXECUTION_RESULT_EXTERNAL_LINKS = 3
+
+            // Enums should NOT be serialized as string names
+            Assert.DoesNotContain("DRIVER_AUTH_MECH_PAT", json);
+            Assert.DoesNotContain("DRIVER_AUTH_FLOW_TOKEN_PASSTHROUGH", json);
+            Assert.DoesNotContain("DRIVER_MODE_THRIFT", json);
+        }
+
+        /// <summary>
+        /// Tests that default/zero-value enum fields are included in serialized output
+        /// (not omitted) so the server always receives complete telemetry data.
+        /// </summary>
+        [Fact]
+        public void Proto_TelemetryJsonConverter_IncludesDefaultEnumValues()
+        {
+            // Create a message with default (unspecified) enum values
+            var protoMessage = new OssSqlDriverTelemetryLog
+            {
+                SessionId = "test-session",
+                DriverConnectionParams = new DriverConnectionParameters
+                {
+                    // AuthMech and AuthFlow default to Unspecified (0)
+                    HttpPath = "/sql/1.0/warehouses/test"
+                }
+            };
+
+            var frontendLog = new TelemetryFrontendLog
+            {
+                WorkspaceId = 12345,
+                FrontendLogEventId = "test-event-id",
+                Context = new FrontendLogContext { TimestampMillis = 1000 },
+                Entry = new FrontendLogEntry { SqlDriverLog = protoMessage }
+            };
+
+            var json = JsonSerializer.Serialize(frontendLog, TelemetryJsonOptions.Default);
+
+            // Default enum values (0) should still be present in the output
+            using var doc = JsonDocument.Parse(json);
+            var connParams = doc.RootElement
+                .GetProperty("entry")
+                .GetProperty("sql_driver_log")
+                .GetProperty("driver_connection_params");
+            Assert.Equal(0, connParams.GetProperty("auth_mech").GetInt32());
+            Assert.Equal(0, connParams.GetProperty("auth_flow").GetInt32());
+            Assert.Equal(0, connParams.GetProperty("mode").GetInt32());
+        }
+
         #endregion
 
         #region FrontendLog Integration Tests
@@ -296,9 +388,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Contains("\"frontend_log_event_id\"", json);
             Assert.Contains("\"sql_driver_log\"", json);
 
-            // Verify proto fields are included
-            Assert.Contains("sessionId", json);  // proto uses camelCase
-            Assert.Contains("sqlStatementId", json);
+            // Verify proto fields use snake_case (PreserveProtoFieldNames)
+            Assert.Contains("session_id", json);
+            Assert.Contains("sql_statement_id", json);
         }
 
         #endregion
@@ -312,7 +404,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 SessionId = "test-session-123",
                 SqlStatementId = "test-statement-456",
                 OperationLatencyMs = 1500,
-                AuthType = "oauth-m2m",
+                DriverConnectionParams = new DriverConnectionParameters
+                {
+                    HttpPath = "/sql/1.0/warehouses/abc123",
+                    Mode = DriverModeType.DriverModeThrift,
+                    AuthMech = DriverAuthMechType.DriverAuthMechPat,
+                    AuthFlow = DriverAuthFlowType.DriverAuthFlowTokenPassthrough,
+                    HostInfo = new HostDetails
+                    {
+                        HostUrl = "https://test.databricks.com:443",
+                        Port = 0
+                    }
+                },
                 SystemConfiguration = new DriverSystemConfiguration
                 {
                     DriverName = "adbc-databricks",
