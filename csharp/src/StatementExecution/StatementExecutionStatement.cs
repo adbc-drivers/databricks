@@ -100,8 +100,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-            _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(
-                properties, DatabricksParameters.EnableComplexDatatypeSupport, false);
+            _enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
         }
 
         /// <summary>
