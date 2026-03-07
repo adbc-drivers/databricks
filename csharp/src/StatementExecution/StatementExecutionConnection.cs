@@ -304,23 +304,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Builds the user agent string for HTTP requests.
-        /// Format: DatabricksJDBCDriverOSS/{version} (ADBC)
-        /// Uses DatabricksJDBCDriverOSS prefix for server-side feature compatibility.
+        /// Uses the same format as Thrift mode for consistency.
         /// </summary>
         private string GetUserAgent(IReadOnlyDictionary<string, string> properties)
         {
-            // Use DatabricksJDBCDriverOSS prefix for server-side feature compatibility
-            // (e.g., INLINE_OR_EXTERNAL_LINKS disposition support)
-            string baseUserAgent = $"DatabricksJDBCDriverOSS/{AssemblyVersion} (ADBC)";
-
-            // Check if a client has provided a user-agent entry
-            string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
-            if (!string.IsNullOrWhiteSpace(userAgentEntry))
-            {
-                return $"{baseUserAgent} {userAgentEntry}";
-            }
-
-            return baseUserAgent;
+            return UserAgentHelper.GetUserAgent(AssemblyVersion, properties);
         }
 
         /// <summary>
