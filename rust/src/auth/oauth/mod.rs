@@ -21,7 +21,9 @@
 //! - OIDC endpoint discovery
 //! - File-based token caching
 
+pub mod oidc;
 pub mod token;
 
 // Re-export the main types
+pub use oidc::OidcEndpoints;
 pub use token::OAuthToken;
