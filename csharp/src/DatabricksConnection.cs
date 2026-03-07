@@ -629,10 +629,6 @@ namespace AdbcDrivers.Databricks
                     return;
                 }
 
-                // Always use authenticated telemetry endpoint since a valid connection
-                // implies successful authentication. If it fails, we just log the error.
-                bool isAuthenticated = true;
-
                 // Create HTTP client for telemetry export
                 HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties, _host, s_assemblyVersion);
 
@@ -640,7 +636,7 @@ namespace AdbcDrivers.Databricks
                 _telemetryClient = TelemetryClientManager.GetInstance().GetOrCreateClient(
                     _host,
                     telemetryHttpClient,
-                    isAuthenticated,
+                    true, // unauthed failure will be report separately
                     telemetryConfig);
 
                 // Create session-level telemetry context for V3 direct-object pipeline
@@ -649,11 +645,9 @@ namespace AdbcDrivers.Databricks
                     SessionId = SessionHandle?.SessionId?.Guid != null
                         ? new Guid(SessionHandle.SessionId.Guid).ToString()
                         : null,
-                    // TODO: Update AuthType to reflect actual auth mechanism (PAT, OAuth, etc.)
-                    AuthType = isAuthenticated ? "token" : "none",
                     TelemetryClient = _telemetryClient,
                     SystemConfiguration = BuildSystemConfiguration(),
-                    DriverConnectionParams = BuildDriverConnectionParams(isAuthenticated)
+                    DriverConnectionParams = BuildDriverConnectionParams(true)
                 };
 
                 activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",

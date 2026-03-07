@@ -51,11 +51,6 @@ namespace AdbcDrivers.Databricks.Telemetry
         public string? SessionId => _sessionContext.SessionId;
 
         /// <summary>
-        /// Gets the authentication type from the connection.
-        /// </summary>
-        public string? AuthType => _sessionContext.AuthType;
-
-        /// <summary>
         /// Gets the workspace ID from the connection.
         /// </summary>
         public long WorkspaceId => _sessionContext.WorkspaceId;
@@ -232,7 +227,6 @@ namespace AdbcDrivers.Databricks.Telemetry
             {
                 SessionId = SessionId ?? string.Empty,
                 SqlStatementId = StatementId ?? string.Empty,
-                AuthType = AuthType ?? string.Empty,
                 SystemConfiguration = SystemConfiguration,
                 DriverConnectionParams = DriverConnectionParams
             };

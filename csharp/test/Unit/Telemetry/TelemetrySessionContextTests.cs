@@ -57,7 +57,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             TelemetrySessionContext context = new TelemetrySessionContext
             {
                 SessionId = "session-uuid-123",
-                AuthType = "PAT",
                 WorkspaceId = 12345678901234L,
                 SystemConfiguration = systemConfig,
                 DriverConnectionParams = connParams,
@@ -68,7 +67,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert
             Assert.Equal("session-uuid-123", context.SessionId);
-            Assert.Equal("PAT", context.AuthType);
             Assert.Equal(12345678901234L, context.WorkspaceId);
             Assert.Same(systemConfig, context.SystemConfiguration);
             Assert.Same(connParams, context.DriverConnectionParams);
@@ -102,7 +100,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             TelemetrySessionContext context = new TelemetrySessionContext
             {
                 SessionId = null,
-                AuthType = null,
                 SystemConfiguration = null,
                 DriverConnectionParams = null,
                 TelemetryClient = null
@@ -110,7 +107,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert
             Assert.Null(context.SessionId);
-            Assert.Null(context.AuthType);
             Assert.Null(context.SystemConfiguration);
             Assert.Null(context.DriverConnectionParams);
             Assert.Null(context.TelemetryClient);
@@ -124,7 +120,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert - verify default values
             Assert.Null(context.SessionId);
-            Assert.Null(context.AuthType);
             Assert.Equal(0L, context.WorkspaceId);
             Assert.Null(context.SystemConfiguration);
             Assert.Null(context.DriverConnectionParams);
