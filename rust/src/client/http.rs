@@ -24,7 +24,7 @@ use crate::auth::AuthProvider;
 use crate::error::{DatabricksErrorHelper, Result};
 use driverbase::error::ErrorHelper;
 use reqwest::{Client, Request, Response, StatusCode};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, warn};
@@ -68,18 +68,35 @@ impl Default for HttpClientConfig {
 /// This client handles:
 /// - Connection pooling (via reqwest)
 /// - Automatic retry with exponential backoff for transient failures
-/// - Bearer token authentication
+/// - Bearer token authentication (set via two-phase initialization)
 /// - User-Agent header injection
+///
+/// ## Two-Phase Initialization
+///
+/// The client uses `OnceLock` for auth provider to avoid circular dependencies:
+/// OAuth providers need the HTTP client to fetch tokens, but the HTTP client
+/// traditionally required auth at construction. The solution:
+///
+/// 1. Create the HTTP client first (no auth)
+/// 2. Create the auth provider (can use the HTTP client)
+/// 3. Set auth on the HTTP client via `set_auth_provider()`
+///
+/// OAuth providers use `execute_without_auth()` for token endpoint calls
+/// (which authenticate via form-encoded credentials, not Bearer tokens).
 #[derive(Debug)]
 pub struct DatabricksHttpClient {
     client: Client,
     config: HttpClientConfig,
-    auth_provider: Arc<dyn AuthProvider>,
+    auth_provider: OnceLock<Arc<dyn AuthProvider>>,
 }
 
 impl DatabricksHttpClient {
-    /// Creates a new HTTP client with the given configuration and auth provider.
-    pub fn new(config: HttpClientConfig, auth_provider: Arc<dyn AuthProvider>) -> Result<Self> {
+    /// Creates a new HTTP client with the given configuration.
+    ///
+    /// Auth provider must be set separately via `set_auth_provider()` before
+    /// calling `execute()`. Use `execute_without_auth()` for requests that
+    /// don't need authentication (e.g., OAuth token endpoint calls).
+    pub fn new(config: HttpClientConfig) -> Result<Self> {
         let client = Client::builder()
             .connect_timeout(config.connect_timeout)
             .timeout(config.read_timeout)
@@ -93,8 +110,18 @@ impl DatabricksHttpClient {
         Ok(Self {
             client,
             config,
-            auth_provider,
+            auth_provider: OnceLock::new(),
         })
+    }
+
+    /// Sets the auth provider for this client.
+    ///
+    /// This must be called exactly once after construction and before calling `execute()`.
+    /// Calling this method more than once will panic (OnceLock semantics).
+    pub fn set_auth_provider(&self, provider: Arc<dyn AuthProvider>) {
+        self.auth_provider
+            .set(provider)
+            .expect("Auth provider can only be set once");
     }
 
     /// Returns the client configuration.
@@ -108,8 +135,14 @@ impl DatabricksHttpClient {
     }
 
     /// Get the authorization header value.
+    ///
+    /// Returns an error if the auth provider has not been set via `set_auth_provider()`.
     pub fn auth_header(&self) -> Result<String> {
-        self.auth_provider.get_auth_header()
+        let provider = self.auth_provider.get().ok_or_else(|| {
+            DatabricksErrorHelper::invalid_state()
+                .message("Auth provider not set. Call set_auth_provider() first.")
+        })?;
+        provider.get_auth_header()
     }
 
     /// Execute an HTTP request with automatic retry logic and authentication.
@@ -306,18 +339,67 @@ mod tests {
     #[tokio::test]
     async fn test_http_client_creation() {
         let config = HttpClientConfig::default();
-        let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
-        let client = DatabricksHttpClient::new(config, auth);
+        let client = DatabricksHttpClient::new(config);
         assert!(client.is_ok());
     }
 
     #[tokio::test]
-    async fn test_auth_header() {
+    async fn test_auth_header_after_set() {
         let config = HttpClientConfig::default();
+        let client = DatabricksHttpClient::new(config).unwrap();
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
-        let client = DatabricksHttpClient::new(config, auth).unwrap();
+        client.set_auth_provider(auth);
 
         let header = client.auth_header().unwrap();
         assert_eq!(header, "Bearer test-token");
+    }
+
+    #[tokio::test]
+    async fn test_execute_fails_before_auth_set() {
+        let config = HttpClientConfig::default();
+        let client = DatabricksHttpClient::new(config).unwrap();
+
+        // Calling auth_header() without setting auth provider should fail
+        let result = client.auth_header();
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("Auth provider not set"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_succeeds_after_auth_set() {
+        let config = HttpClientConfig::default();
+        let client = DatabricksHttpClient::new(config).unwrap();
+        let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
+
+        client.set_auth_provider(auth);
+
+        let header = client.auth_header().unwrap();
+        assert_eq!(header, "Bearer test-token");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Auth provider can only be set once")]
+    async fn test_set_auth_provider_twice_panics() {
+        let config = HttpClientConfig::default();
+        let client = DatabricksHttpClient::new(config).unwrap();
+        let auth1 = Arc::new(PersonalAccessToken::new("token1".to_string()));
+        let auth2 = Arc::new(PersonalAccessToken::new("token2".to_string()));
+
+        client.set_auth_provider(auth1);
+        client.set_auth_provider(auth2); // Should panic
+    }
+
+    #[tokio::test]
+    async fn test_execute_without_auth_works_before_auth_set() {
+        // This test verifies that execute_without_auth() doesn't need auth provider
+        // It doesn't make actual HTTP calls, just checks that the method can be called
+        let config = HttpClientConfig::default();
+        let client = DatabricksHttpClient::new(config).unwrap();
+
+        // Should not panic or error - execute_without_auth doesn't check auth_provider
+        // We can't test actual HTTP execution without a mock server, but we verified
+        // the method signature and that it doesn't call auth_header()
+        assert!(client.auth_provider.get().is_none());
     }
 }

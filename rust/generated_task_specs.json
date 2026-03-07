@@ -1,0 +1,731 @@
+[
+  {
+    "id": "task-1.1-oauth-token-struct",
+    "title": "Create OAuthToken struct with expiry and stale logic",
+    "description": "Implement the OAuthToken struct with fields for access_token, token_type, refresh_token, expires_at, and scopes. Implement is_expired() (40s buffer matching Python SDK) and is_stale() (min(initial_TTL * 0.5, 20 minutes) threshold) methods. Add JSON serialization/deserialization for disk caching.",
+    "pr_group": "pr-oauth-foundation",
+    "pr_group_order": 1,
+    "design_context": "OAuthToken is the core data structure representing an OAuth access token with its metadata. The is_expired() method uses a 40-second buffer (matching Python SDK; Azure rejects tokens within 30s of expiry). The is_stale() method computes a stale threshold as min(initial_TTL * 0.5, 20 minutes), computed once at token acquisition (using the full TTL at that moment, not the current remaining time). Tokens are serializable to JSON for disk caching.",
+    "dependencies": [],
+    "input_requirements": [
+      "Design doc OAuthToken specification"
+    ],
+    "output_deliverables": [
+      "src/auth/oauth/token.rs",
+      "Unit tests for token expiry/stale logic"
+    ],
+    "exit_criteria": [
+      "OAuthToken struct compiles",
+      "is_expired() returns true when TTL < 40s",
+      "is_stale() uses correct threshold formula",
+      "JSON roundtrip serialization works",
+      "All unit tests pass"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "src/auth/oauth/token.rs"
+    ],
+    "test_requirements": [
+      "test_token_fresh_not_expired",
+      "test_token_stale_threshold",
+      "test_token_expired_within_buffer",
+      "test_token_serialization_roundtrip"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "low"
+  },
+  {
+    "id": "task-1.2-oidc-discovery",
+    "title": "Implement OIDC endpoint discovery",
+    "description": "Create OidcEndpoints struct and discover() function that fetches {host}/oidc/.well-known/oauth-authorization-server and parses authorization_endpoint and token_endpoint from the JSON response. Use DatabricksHttpClient::execute_without_auth() for the request.",
+    "pr_group": "pr-oauth-foundation",
+    "pr_group_order": 2,
+    "design_context": "OIDC discovery is used to find the OAuth authorization and token endpoints for a Databricks workspace. The well-known endpoint returns JSON with 'authorization_endpoint' and 'token_endpoint' fields. This is needed by both M2M and U2M providers to construct the oauth2::BasicClient.",
+    "dependencies": [
+      "task-1.1-oauth-token-struct"
+    ],
+    "input_requirements": [
+      "DatabricksHttpClient available",
+      "Host URL"
+    ],
+    "output_deliverables": [
+      "src/auth/oauth/oidc.rs",
+      "Unit tests with mocked HTTP responses"
+    ],
+    "exit_criteria": [
+      "OidcEndpoints struct compiles",
+      "discover() successfully parses valid OIDC response",
+      "discover() returns error for invalid JSON",
+      "discover() returns error for HTTP failures",
+      "All unit tests pass"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "src/auth/oauth/oidc.rs"
+    ],
+    "test_requirements": [
+      "test_discover_workspace_endpoints",
+      "test_discover_invalid_response",
+      "test_discover_http_error"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "low"
+  },
+  {
+    "id": "task-1.3-token-cache",
+    "title": "Implement file-based token cache for U2M",
+    "description": "Create TokenCache struct with load() and save() methods. Cache location is ~/.config/databricks-adbc/oauth/. Filename is SHA256(json({host, client_id, scopes})).json. File permissions must be 0o600 (owner read/write only). Cache I/O errors are logged as warnings but never block authentication.",
+    "pr_group": "pr-oauth-foundation",
+    "pr_group_order": 3,
+    "design_context": "TokenCache provides disk persistence for U2M tokens across connections. Cache is separate from Python SDK cache to avoid compatibility issues. Filename is a SHA-256 hash of the cache key (host, client_id, scopes) to ensure uniqueness. On load, expired tokens with a valid refresh_token are still returned (refresh will be attempted).",
+    "dependencies": [
+      "task-1.1-oauth-token-struct"
+    ],
+    "input_requirements": [
+      "OAuthToken struct",
+      "dirs crate for config_dir()",
+      "sha2 crate for hashing"
+    ],
+    "output_deliverables": [
+      "src/auth/oauth/cache.rs",
+      "Unit tests for cache operations"
+    ],
+    "exit_criteria": [
+      "TokenCache compiles",
+      "save() creates file with 0o600 permissions",
+      "load() returns saved token",
+      "load() returns None for missing files",
+      "load() returns None for corrupted files (not error)",
+      "Cache key is deterministic",
+      "All unit tests pass"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "src/auth/oauth/cache.rs"
+    ],
+    "test_requirements": [
+      "test_cache_key_deterministic",
+      "test_cache_save_load_roundtrip",
+      "test_cache_missing_file",
+      "test_cache_file_permissions",
+      "test_cache_corrupted_file"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "medium"
+  },
+  {
+    "id": "task-1.4-token-store",
+    "title": "Implement TokenStore with FRESH/STALE/EXPIRED state machine",
+    "description": "Create TokenStore struct with RwLock<Option<OAuthToken>> and AtomicBool for refresh coordination. Implement get_or_refresh() that returns a valid token: if FRESH, returns immediately; if STALE, spawns background refresh via std::thread::spawn and returns current token; if EXPIRED, blocks caller until refresh completes. Only one refresh runs at a time.",
+    "pr_group": "pr-oauth-foundation",
+    "pr_group_order": 4,
+    "design_context": "TokenStore manages the token lifecycle state machine. FRESH tokens (not stale or expired) are returned immediately. STALE tokens (remaining TTL < stale threshold) trigger a background refresh while returning the current token. EXPIRED tokens (remaining TTL < 40s) block the caller until refresh completes. The stale threshold is min(initial_TTL * 0.5, 20 minutes), computed once when the token is first acquired.",
+    "dependencies": [
+      "task-1.1-oauth-token-struct"
+    ],
+    "input_requirements": [
+      "OAuthToken struct with is_expired() and is_stale() methods"
+    ],
+    "output_deliverables": [
+      "src/auth/oauth/token_store.rs",
+      "Unit tests for state machine transitions"
+    ],
+    "exit_criteria": [
+      "TokenStore compiles",
+      "FRESH tokens returned without calling refresh",
+      "EXPIRED tokens trigger blocking refresh",
+      "STALE tokens return current token immediately",
+      "Concurrent refresh calls result in single fetch",
+      "All unit tests pass"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "src/auth/oauth/token_store.rs"
+    ],
+    "test_requirements": [
+      "test_store_fresh_token_no_refresh",
+      "test_store_expired_triggers_blocking_refresh",
+      "test_store_concurrent_refresh_single_fetch",
+      "test_store_stale_returns_current_token"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "high"
+  },
+  {
+    "id": "task-1.5-oauth-module-setup",
+    "title": "Set up oauth directory module and add Cargo dependencies",
+    "description": "Delete src/auth/oauth.rs (replaced by directory module). Create src/auth/oauth/mod.rs with re-exports for token, oidc, cache, and token_store modules. Update Cargo.toml to add oauth2 = \"5\", sha2 = \"0.10\", open = \"5\", dirs = \"5\".",
+    "pr_group": "pr-oauth-foundation",
+    "pr_group_order": 5,
+    "design_context": "The oauth module is being converted from a single file (oauth.rs) to a directory module (oauth/mod.rs) to organize the OAuth subsystem. The oauth2 crate handles protocol-level operations (PKCE, token exchange, client credentials). sha2 is for cache key generation, open for browser launch, dirs for cross-platform config directory.",
+    "dependencies": [
+      "task-1.1-oauth-token-struct",
+      "task-1.2-oidc-discovery",
+      "task-1.3-token-cache",
+      "task-1.4-token-store"
+    ],
+    "input_requirements": [
+      "All foundation modules created"
+    ],
+    "output_deliverables": [
+      "src/auth/oauth/mod.rs",
+      "Updated Cargo.toml"
+    ],
+    "exit_criteria": [
+      "oauth directory module compiles",
+      "All submodules are properly re-exported",
+      "Cargo dependencies resolve",
+      "cargo build succeeds"
+    ],
+    "files_to_modify": [
+      "Cargo.toml"
+    ],
+    "files_to_create": [
+      "src/auth/oauth/mod.rs"
+    ],
+    "test_requirements": [
+      "cargo build succeeds"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "low"
+  },
+  {
+    "id": "task-2.1-auth-enums",
+    "title": "Add AuthMechanism and AuthFlow enums to database.rs",
+    "description": "Define AuthMechanism enum (Pat=0, OAuth=11) and AuthFlow enum (TokenPassthrough=0, ClientCredentials=1, Browser=2) with #[repr(u8)] and TryFrom<i64> implementations. These match ODBC driver's AuthMech/Auth_Flow numeric codes.",
+    "pr_group": "pr-database-config",
+    "pr_group_order": 1,
+    "design_context": "Following the Databricks ODBC driver's two-level authentication scheme, configuration uses AuthMech (mechanism) and Auth_Flow (OAuth flow type) as the primary selectors. Both are required -- no auto-detection. The numeric values match ODBC: mechanism 0=PAT, 11=OAuth; flow 0=token passthrough, 1=client credentials (M2M), 2=browser (U2M).",
+    "dependencies": [
+      "task-1.5-oauth-module-setup"
+    ],
+    "input_requirements": [
+      "Design doc enum specifications"
+    ],
+    "output_deliverables": [
+      "AuthMechanism and AuthFlow enums in database.rs"
+    ],
+    "exit_criteria": [
+      "Enums compile with correct repr(u8) values",
+      "TryFrom<i64> implementations work",
+      "Invalid values return error"
+    ],
+    "files_to_modify": [
+      "src/database.rs"
+    ],
+    "files_to_create": [],
+    "test_requirements": [
+      "test_set_auth_mechanism_valid",
+      "test_set_auth_mechanism_invalid",
+      "test_set_auth_flow_valid",
+      "test_set_auth_flow_invalid"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "low"
+  },
+  {
+    "id": "task-2.2-database-config-fields",
+    "title": "Add OAuth config fields and set_option parsing to Database",
+    "description": "Add fields to Database struct: auth_mechanism, auth_flow, auth_client_id, auth_client_secret, auth_scopes, auth_token_endpoint, auth_redirect_port. Update set_option() to parse 'databricks.auth.mechanism' and 'databricks.auth.flow' as integers and convert to enums. Add set_option() handlers for all other OAuth config keys.",
+    "pr_group": "pr-database-config",
+    "pr_group_order": 2,
+    "design_context": "Database configuration follows ODBC-aligned numeric config values. databricks.auth.mechanism (0 or 11) and databricks.auth.flow (0, 1, or 2) are required and determine which auth provider to create. Additional config includes client_id, client_secret (M2M), scopes, token_endpoint override, and redirect_port (U2M).",
+    "dependencies": [
+      "task-2.1-auth-enums"
+    ],
+    "input_requirements": [
+      "AuthMechanism and AuthFlow enums",
+      "Design doc configuration options table"
+    ],
+    "output_deliverables": [
+      "New config fields in Database struct",
+      "set_option() and get_option_string() handlers"
+    ],
+    "exit_criteria": [
+      "All config fields compile",
+      "set_option() parses mechanism and flow as integers",
+      "set_option() stores all OAuth config values",
+      "Invalid integer values return error"
+    ],
+    "files_to_modify": [
+      "src/database.rs"
+    ],
+    "files_to_create": [],
+    "test_requirements": [
+      "Config parsing tests in database.rs"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "medium"
+  },
+  {
+    "id": "task-2.3-database-validation",
+    "title": "Add config validation to Database::new_connection()",
+    "description": "Update new_connection() to validate required config based on mechanism and flow: mechanism is always required; if mechanism=OAuth, flow is required; if flow=ClientCredentials, client_id and client_secret are required; if mechanism=Pat or flow=TokenPassthrough, access_token is required. Return clear error messages for missing required fields.",
+    "pr_group": "pr-database-config",
+    "pr_group_order": 3,
+    "design_context": "Configuration validation happens at new_connection() time. Both mechanism and flow are mandatory -- no auto-detection. This makes configuration explicit and predictable, matching the ODBC driver's approach. Each mechanism/flow combination has specific required fields that must be validated before attempting to create an auth provider.",
+    "dependencies": [
+      "task-2.2-database-config-fields"
+    ],
+    "input_requirements": [
+      "Database with OAuth config fields",
+      "Design doc validation rules"
+    ],
+    "output_deliverables": [
+      "Validation logic in new_connection()",
+      "Unit tests for validation errors"
+    ],
+    "exit_criteria": [
+      "Missing mechanism returns clear error",
+      "OAuth without flow returns error",
+      "ClientCredentials without client_secret returns error",
+      "Pat without access_token returns error",
+      "TokenPassthrough without access_token returns error",
+      "All validation tests pass"
+    ],
+    "files_to_modify": [
+      "src/database.rs"
+    ],
+    "files_to_create": [],
+    "test_requirements": [
+      "test_new_connection_missing_mechanism",
+      "test_new_connection_oauth_missing_flow",
+      "test_new_connection_client_credentials_missing_secret",
+      "test_new_connection_pat_missing_token",
+      "test_new_connection_token_passthrough_missing_token"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "low"
+  },
+  {
+    "id": "task-3.1-m2m-provider",
+    "title": "Implement ClientCredentialsProvider for M2M authentication",
+    "description": "Create ClientCredentialsProvider that implements AuthProvider. Use oauth2::BasicClient for client credentials exchange. Construct client from OIDC-discovered endpoints. Implement oauth2 HTTP adapter that routes through DatabricksHttpClient::execute_without_auth(). Use TokenStore for token lifecycle (no disk cache for M2M). get_auth_header() calls TokenStore::get_or_refresh() which triggers client.exchange_client_credentials() if needed.",
+    "pr_group": "pr-m2m-flow",
+    "pr_group_order": 1,
+    "design_context": "M2M uses OAuth 2.0 client credentials flow for service principal authentication. The provider discovers token endpoint via OIDC, then uses oauth2::BasicClient to exchange client_id/client_secret for access tokens. M2M tokens have no refresh_token; re-authentication uses the same client credentials. No disk caching since credentials are always available and tokens are short-lived. The oauth2 crate sends POST {token_endpoint} with grant_type=client_credentials and Authorization: Basic base64(client_id:client_secret).",
+    "dependencies": [
+      "task-1.5-oauth-module-setup",
+      "task-2.3-database-validation"
+    ],
+    "input_requirements": [
+      "TokenStore",
+      "OidcEndpoints discovery",
+      "oauth2 crate",
+      "DatabricksHttpClient"
+    ],
+    "output_deliverables": [
+      "src/auth/oauth/m2m.rs",
+      "Unit tests for token exchange and refresh"
+    ],
+    "exit_criteria": [
+      "ClientCredentialsProvider implements AuthProvider",
+      "OIDC discovery works before token exchange",
+      "Token exchange uses correct grant_type and auth header",
+      "Expired tokens trigger new client_credentials exchange",
+      "All unit tests pass"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "src/auth/oauth/m2m.rs"
+    ],
+    "test_requirements": [
+      "test_m2m_token_exchange",
+      "test_m2m_auto_refresh",
+      "test_m2m_oidc_discovery"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "high"
+  },
+  {
+    "id": "task-3.2-m2m-integration",
+    "title": "Wire M2M provider into Database::new_connection()",
+    "description": "Update Database::new_connection() to handle AuthFlow::ClientCredentials case. Create ClientCredentialsProvider with host, client_id, client_secret, and http_client. Update src/auth/oauth/mod.rs and src/auth/mod.rs to re-export ClientCredentialsProvider.",
+    "pr_group": "pr-m2m-flow",
+    "pr_group_order": 2,
+    "design_context": "The two-phase initialization pattern is used: (1) create HTTP client without auth, (2) create auth provider (can use HTTP client for token endpoint calls via execute_without_auth), (3) set auth on HTTP client. For M2M, the match arm checks that client_id and client_secret are present, then creates ClientCredentialsProvider.",
+    "dependencies": [
+      "task-3.1-m2m-provider"
+    ],
+    "input_requirements": [
+      "ClientCredentialsProvider implemented",
+      "Database validation in place"
+    ],
+    "output_deliverables": [
+      "Updated new_connection() with M2M wiring",
+      "Updated auth module re-exports"
+    ],
+    "exit_criteria": [
+      "AuthFlow::ClientCredentials match arm compiles",
+      "ClientCredentialsProvider is re-exported in auth/mod.rs",
+      "End-to-end flow from Database config to get_auth_header() works"
+    ],
+    "files_to_modify": [
+      "src/database.rs",
+      "src/auth/oauth/mod.rs",
+      "src/auth/mod.rs"
+    ],
+    "files_to_create": [],
+    "test_requirements": [
+      "Integration test or manual verification of full M2M flow"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "medium"
+  },
+  {
+    "id": "task-3.3-m2m-wiremock-tests",
+    "title": "Add wiremock integration tests for M2M flow",
+    "description": "Create integration tests using wiremock to simulate OIDC discovery and token endpoints. Tests: (1) full flow with discovery and token exchange, (2) token refresh on expiry, (3) discovery failure propagation. Verify get_auth_header() returns valid Bearer token and refresh logic works correctly.",
+    "pr_group": "pr-m2m-flow",
+    "pr_group_order": 3,
+    "design_context": "Wiremock tests verify the complete wiring from Database config through new_connection() to get_auth_header(). These test the full HTTP flow without requiring a real Databricks workspace. The tests mock both OIDC well-known endpoint and token endpoint responses.",
+    "dependencies": [
+      "task-3.2-m2m-integration"
+    ],
+    "input_requirements": [
+      "M2M provider wired into Database",
+      "wiremock crate (already in dev-dependencies)"
+    ],
+    "output_deliverables": [
+      "tests/m2m_integration.rs or similar",
+      "Three wiremock test cases"
+    ],
+    "exit_criteria": [
+      "test_m2m_full_flow_discovery_and_token_exchange passes",
+      "test_m2m_token_refresh_on_expiry passes",
+      "test_m2m_discovery_failure_propagates passes",
+      "cargo test succeeds"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "tests/m2m_integration.rs"
+    ],
+    "test_requirements": [
+      "test_m2m_full_flow_discovery_and_token_exchange",
+      "test_m2m_token_refresh_on_expiry",
+      "test_m2m_discovery_failure_propagates"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "medium"
+  },
+  {
+    "id": "task-4.1-callback-server",
+    "title": "Implement CallbackServer for U2M browser redirect",
+    "description": "Create CallbackServer struct with localhost HTTP listener (default port 8020). Implement redirect_uri() method and wait_for_code(expected_state, timeout) method. Server validates state parameter (CSRF protection), returns HTML response 'You can close this tab', times out after configurable duration (default 120s), and returns the authorization code extracted from callback query parameters.",
+    "pr_group": "pr-u2m-flow",
+    "pr_group_order": 1,
+    "design_context": "CallbackServer handles the OAuth redirect after browser authentication. It binds to localhost:{port}, receives the callback with code and state query parameters, validates the state matches expected value, and returns the code to the auth provider. The server is single-use and owned by the U2M provider.",
+    "dependencies": [
+      "task-1.5-oauth-module-setup"
+    ],
+    "input_requirements": [
+      "Design doc CallbackServer specification",
+      "tokio for async HTTP server"
+    ],
+    "output_deliverables": [
+      "src/auth/oauth/callback.rs",
+      "Unit tests for callback capture and validation"
+    ],
+    "exit_criteria": [
+      "CallbackServer compiles",
+      "wait_for_code() captures code from simulated request",
+      "State validation rejects mismatched state",
+      "Timeout returns error after duration",
+      "All unit tests pass"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "src/auth/oauth/callback.rs"
+    ],
+    "test_requirements": [
+      "test_callback_captures_code",
+      "test_callback_validates_state",
+      "test_callback_timeout"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "high"
+  },
+  {
+    "id": "task-4.2-u2m-provider",
+    "title": "Implement AuthorizationCodeProvider for U2M authentication",
+    "description": "Create AuthorizationCodeProvider that implements AuthProvider. On creation: try loading cached token via TokenCache::load(). If cached token has valid refresh_token: store in TokenStore. If no cache: generate PKCE via PkceCodeChallenge::new_random_sha256(), build auth URL via oauth2::BasicClient.authorize_url(), start CallbackServer, launch browser via open::that(), wait for callback, exchange code via client.exchange_code().set_pkce_verifier(). Save token to cache after every successful acquisition/refresh. Refresh uses client.exchange_refresh_token(). If refresh token is expired, fall back to full browser flow.",
+    "pr_group": "pr-u2m-flow",
+    "pr_group_order": 2,
+    "design_context": "U2M uses OAuth 2.0 authorization code flow with PKCE for interactive browser-based login. The provider first checks disk cache for existing token. If cached token has a refresh_token, it stores it and refreshes on first get_auth_header() if stale/expired. If no cache or expired refresh token, it launches the full browser flow: PKCE generation, authorization URL construction, browser launch, callback capture, and code exchange. The oauth2 crate handles PKCE generation and all protocol-level operations.",
+    "dependencies": [
+      "task-4.1-callback-server",
+      "task-1.3-token-cache"
+    ],
+    "input_requirements": [
+      "CallbackServer",
+      "TokenCache",
+      "TokenStore",
+      "oauth2 crate",
+      "open crate for browser launch"
+    ],
+    "output_deliverables": [
+      "src/auth/oauth/u2m.rs",
+      "Unit tests for refresh flow and cache behavior"
+    ],
+    "exit_criteria": [
+      "AuthorizationCodeProvider implements AuthProvider",
+      "Cached tokens skip browser flow",
+      "Refresh token flow works",
+      "Expired refresh token falls back to browser flow",
+      "All unit tests pass"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "src/auth/oauth/u2m.rs"
+    ],
+    "test_requirements": [
+      "test_u2m_refresh_token_flow",
+      "test_u2m_cache_hit",
+      "test_u2m_cache_miss_with_expired_refresh"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "high"
+  },
+  {
+    "id": "task-4.3-u2m-integration",
+    "title": "Wire U2M provider into Database::new_connection()",
+    "description": "Update Database::new_connection() to handle AuthFlow::Browser case. Create AuthorizationCodeProvider with host, client_id (default 'databricks-cli'), scopes (default 'all-apis offline_access'), redirect_port, and http_client. Update src/auth/oauth/mod.rs and src/auth/mod.rs to re-export AuthorizationCodeProvider and CallbackServer.",
+    "pr_group": "pr-u2m-flow",
+    "pr_group_order": 3,
+    "design_context": "For U2M, the match arm creates AuthorizationCodeProvider with defaults: client_id defaults to 'databricks-cli', scopes default to 'all-apis offline_access'. The provider handles browser launch and token caching internally. The two-phase initialization pattern is used same as M2M.",
+    "dependencies": [
+      "task-4.2-u2m-provider"
+    ],
+    "input_requirements": [
+      "AuthorizationCodeProvider implemented",
+      "Database config fields for redirect_port and scopes"
+    ],
+    "output_deliverables": [
+      "Updated new_connection() with U2M wiring",
+      "Updated auth module re-exports"
+    ],
+    "exit_criteria": [
+      "AuthFlow::Browser match arm compiles",
+      "AuthorizationCodeProvider is re-exported",
+      "Defaults for client_id and scopes are applied"
+    ],
+    "files_to_modify": [
+      "src/database.rs",
+      "src/auth/oauth/mod.rs",
+      "src/auth/mod.rs"
+    ],
+    "files_to_create": [],
+    "test_requirements": [
+      "Compilation succeeds"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "low"
+  },
+  {
+    "id": "task-4.4-u2m-tests",
+    "title": "Add wiremock and E2E tests for U2M flow",
+    "description": "Create wiremock integration test for U2M refresh path (test_u2m_refresh_token_full_flow) that pre-populates cache and verifies refresh via grant_type=refresh_token. Add ignored E2E tests (test_m2m_end_to_end, test_u2m_end_to_end) that require real Databricks workspace credentials. Browser flow is verified manually.",
+    "pr_group": "pr-u2m-flow",
+    "pr_group_order": 4,
+    "design_context": "Wiremock tests can verify the refresh token path without browser interaction by pre-populating the cache. Full browser flow requires manual testing since it involves interactive browser authentication. E2E tests are marked #[ignore] by default and require environment variables with real credentials.",
+    "dependencies": [
+      "task-4.3-u2m-integration"
+    ],
+    "input_requirements": [
+      "U2M provider wired into Database",
+      "wiremock crate"
+    ],
+    "output_deliverables": [
+      "tests/u2m_integration.rs or similar",
+      "Wiremock test for refresh path",
+      "Ignored E2E tests"
+    ],
+    "exit_criteria": [
+      "test_u2m_refresh_token_full_flow passes",
+      "E2E tests compile (ignored by default)",
+      "cargo test succeeds"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [
+      "tests/u2m_integration.rs"
+    ],
+    "test_requirements": [
+      "test_u2m_refresh_token_full_flow",
+      "test_m2m_end_to_end (ignored)",
+      "test_u2m_end_to_end (ignored)"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "medium"
+  },
+  {
+    "id": "task-5.1-cleanup-old-oauth",
+    "title": "Remove old OAuth stub and update auth module exports",
+    "description": "Delete src/auth/oauth.rs (replaced by oauth directory module). Update src/auth/mod.rs to remove 'pub use oauth::OAuthCredentials' and add 'pub use oauth::{ClientCredentialsProvider, AuthorizationCodeProvider}' as final exports. Verify no references to OAuthCredentials remain in the codebase.",
+    "pr_group": "pr-final-cleanup",
+    "pr_group_order": 1,
+    "design_context": "The old oauth.rs file contained a stub OAuthCredentials implementation that returned 'not implemented' error. This is being replaced by the full OAuth directory module with M2M and U2M providers. The auth module should now export the new provider types instead of the old stub.",
+    "dependencies": [
+      "task-3.2-m2m-integration",
+      "task-4.3-u2m-integration"
+    ],
+    "input_requirements": [
+      "M2M and U2M providers fully implemented and integrated"
+    ],
+    "output_deliverables": [
+      "Deleted src/auth/oauth.rs",
+      "Updated src/auth/mod.rs exports"
+    ],
+    "exit_criteria": [
+      "oauth.rs is deleted",
+      "OAuthCredentials is no longer exported",
+      "ClientCredentialsProvider and AuthorizationCodeProvider are exported",
+      "cargo build succeeds",
+      "No references to OAuthCredentials in code"
+    ],
+    "files_to_modify": [
+      "src/auth/mod.rs"
+    ],
+    "files_to_create": [],
+    "test_requirements": [
+      "cargo build succeeds",
+      "cargo clippy passes"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "low"
+  },
+  {
+    "id": "task-5.2-final-validation",
+    "title": "Run full test suite and code quality checks",
+    "description": "Run cargo fmt, cargo clippy -- -D warnings, and cargo test to ensure all code meets quality standards and all tests pass. Fix any clippy warnings or test failures. Verify that both M2M and U2M flows work end-to-end via wiremock tests.",
+    "pr_group": "pr-final-cleanup",
+    "pr_group_order": 2,
+    "design_context": "Final validation ensures the implementation meets the sprint acceptance criteria: cargo fmt for formatting, cargo clippy for linting (with warnings as errors), cargo test for all unit and integration tests. All foundation modules, M2M flow, and U2M flow should be fully functional.",
+    "dependencies": [
+      "task-5.1-cleanup-old-oauth"
+    ],
+    "input_requirements": [
+      "All implementation tasks complete"
+    ],
+    "output_deliverables": [
+      "Clean cargo fmt output",
+      "Zero clippy warnings",
+      "All tests passing"
+    ],
+    "exit_criteria": [
+      "cargo fmt succeeds with no changes",
+      "cargo clippy -- -D warnings succeeds with zero warnings",
+      "cargo test passes all tests",
+      "M2M wiremock tests pass",
+      "U2M wiremock tests pass"
+    ],
+    "files_to_modify": [],
+    "files_to_create": [],
+    "test_requirements": [
+      "All tests in test suite pass"
+    ],
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "max_turns": 100,
+    "estimated_complexity": "low"
+  }
+]

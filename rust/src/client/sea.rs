@@ -634,9 +634,9 @@ mod tests {
     use crate::client::HttpClientConfig;
 
     fn create_test_client() -> SeaClient {
+        let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
-        let http_client =
-            Arc::new(DatabricksHttpClient::new(HttpClientConfig::default(), auth).unwrap());
+        http_client.set_auth_provider(auth);
         SeaClient::new(
             http_client,
             "https://test.databricks.com",
@@ -653,9 +653,9 @@ mod tests {
 
     #[test]
     fn test_base_url_strips_trailing_slash() {
+        let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
-        let http_client =
-            Arc::new(DatabricksHttpClient::new(HttpClientConfig::default(), auth).unwrap());
+        http_client.set_auth_provider(auth);
         let client = SeaClient::new(
             http_client,
             "https://test.databricks.com/",
