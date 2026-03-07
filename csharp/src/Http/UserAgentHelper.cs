@@ -31,9 +31,7 @@ namespace AdbcDrivers.Databricks.Http
         /// <param name="properties">Connection properties (optional, for user_agent_entry).</param>
         /// <returns>The User-Agent string.</returns>
         /// <remarks>
-        /// This is used for internal driver HTTP requests like feature flag fetching.
-        /// Statement execution uses a different User-Agent (DatabricksJDBCDriverOSS) for
-        /// server-side feature compatibility.
+        /// Used for all driver HTTP requests (feature flags, Thrift, and SEA statement execution).
         /// </remarks>
         public static string GetUserAgent(string assemblyVersion, IReadOnlyDictionary<string, string>? properties = null)
         {

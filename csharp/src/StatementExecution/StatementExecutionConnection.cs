@@ -304,7 +304,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Builds the user agent string for HTTP requests.
-        /// Format: DatabricksJDBCDriverOSS/{version} (ADBC)
         /// Uses the same format as Thrift mode for consistency.
         /// </summary>
         private string GetUserAgent(IReadOnlyDictionary<string, string> properties)
