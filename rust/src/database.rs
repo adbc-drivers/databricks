@@ -30,6 +30,66 @@ use driverbase::error::ErrorHelper;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Authentication mechanism -- top-level selector.
+/// Config values match the ODBC driver's AuthMech numeric codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AuthMechanism {
+    /// Personal access token (no OAuth). Config value: 0
+    Pat = 0,
+    /// OAuth 2.0 -- requires AuthFlow to select the specific flow. Config value: 11
+    OAuth = 11,
+}
+
+impl TryFrom<i64> for AuthMechanism {
+    type Error = crate::error::Error;
+
+    fn try_from(value: i64) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(AuthMechanism::Pat),
+            11 => Ok(AuthMechanism::OAuth),
+            _ => Err(DatabricksErrorHelper::invalid_argument()
+                .message(format!(
+                    "Invalid auth mechanism value: {}. Valid values are 0 (PAT) or 11 (OAuth)",
+                    value
+                ))
+                .into()),
+        }
+    }
+}
+
+/// OAuth authentication flow -- selects the specific OAuth grant type.
+/// Config values match the ODBC driver's Auth_Flow numeric codes.
+/// Only applicable when AuthMechanism is OAuth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AuthFlow {
+    /// Use a pre-obtained OAuth access token directly. Config value: 0
+    TokenPassthrough = 0,
+    /// M2M: client credentials grant for service principals. Config value: 1
+    ClientCredentials = 1,
+    /// U2M: browser-based authorization code + PKCE. Config value: 2
+    Browser = 2,
+}
+
+impl TryFrom<i64> for AuthFlow {
+    type Error = crate::error::Error;
+
+    fn try_from(value: i64) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(AuthFlow::TokenPassthrough),
+            1 => Ok(AuthFlow::ClientCredentials),
+            2 => Ok(AuthFlow::Browser),
+            _ => Err(DatabricksErrorHelper::invalid_argument()
+                .message(format!(
+                    "Invalid auth flow value: {}. Valid values are 0 (token passthrough), 1 (client credentials), or 2 (browser)",
+                    value
+                ))
+                .into()),
+        }
+    }
+}
+
 /// Represents a database instance that holds connection configuration.
 ///
 /// A Database is created from a Driver and is used to establish Connections.
@@ -591,5 +651,55 @@ mod tests {
         assert!(db
             .get_option_string(OptionDatabase::Other("databricks.log_file".into()))
             .is_err());
+    }
+
+    #[test]
+    fn test_set_auth_mechanism_valid() {
+        // Test valid PAT value (0)
+        let mechanism = AuthMechanism::try_from(0).unwrap();
+        assert_eq!(mechanism, AuthMechanism::Pat);
+        assert_eq!(mechanism as u8, 0);
+
+        // Test valid OAuth value (11)
+        let mechanism = AuthMechanism::try_from(11).unwrap();
+        assert_eq!(mechanism, AuthMechanism::OAuth);
+        assert_eq!(mechanism as u8, 11);
+    }
+
+    #[test]
+    fn test_set_auth_mechanism_invalid() {
+        // Test invalid values
+        assert!(AuthMechanism::try_from(1).is_err());
+        assert!(AuthMechanism::try_from(10).is_err());
+        assert!(AuthMechanism::try_from(12).is_err());
+        assert!(AuthMechanism::try_from(-1).is_err());
+        assert!(AuthMechanism::try_from(100).is_err());
+    }
+
+    #[test]
+    fn test_set_auth_flow_valid() {
+        // Test valid TokenPassthrough value (0)
+        let flow = AuthFlow::try_from(0).unwrap();
+        assert_eq!(flow, AuthFlow::TokenPassthrough);
+        assert_eq!(flow as u8, 0);
+
+        // Test valid ClientCredentials value (1)
+        let flow = AuthFlow::try_from(1).unwrap();
+        assert_eq!(flow, AuthFlow::ClientCredentials);
+        assert_eq!(flow as u8, 1);
+
+        // Test valid Browser value (2)
+        let flow = AuthFlow::try_from(2).unwrap();
+        assert_eq!(flow, AuthFlow::Browser);
+        assert_eq!(flow as u8, 2);
+    }
+
+    #[test]
+    fn test_set_auth_flow_invalid() {
+        // Test invalid values
+        assert!(AuthFlow::try_from(3).is_err());
+        assert!(AuthFlow::try_from(-1).is_err());
+        assert!(AuthFlow::try_from(10).is_err());
+        assert!(AuthFlow::try_from(100).is_err());
     }
 }
