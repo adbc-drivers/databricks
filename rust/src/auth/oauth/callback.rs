@@ -443,7 +443,7 @@ mod tests {
                 .expect("Failed to write request");
             stream.flush().await.expect("Failed to flush");
 
-            // Read the response
+            // Read the response (ignore result, just consume it)
             let mut response = vec![0u8; 4096];
             let _ = stream.read(&mut response).await;
         });

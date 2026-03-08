@@ -68,7 +68,7 @@ impl CacheKey {
 /// set to `0o600` (owner read/write only) for security.
 ///
 /// Cache I/O errors are logged as warnings and never block authentication.
-pub(crate) struct TokenCache;
+pub struct TokenCache;
 
 impl TokenCache {
     /// Returns the cache directory path.
