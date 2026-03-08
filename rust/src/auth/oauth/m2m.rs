@@ -57,6 +57,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```no_run
+/// use databricks_adbc::auth::AuthProvider;
 /// use databricks_adbc::auth::oauth::m2m::ClientCredentialsProvider;
 /// use databricks_adbc::client::http::{DatabricksHttpClient, HttpClientConfig};
 /// use std::sync::Arc;

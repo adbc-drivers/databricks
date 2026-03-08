@@ -135,6 +135,9 @@ fn test_auth_providers() {
     // Test PAT
     let pat = PersonalAccessToken::new("test-token");
     assert_eq!(pat.get_auth_header().unwrap(), "Bearer test-token");
+
+    // OAuth providers (ClientCredentialsProvider and AuthorizationCodeProvider)
+    // require async initialization and HTTP client, so they are tested in unit tests
 }
 
 #[test]

@@ -19,7 +19,7 @@ pub mod oauth;
 pub mod pat;
 
 pub use config::{AuthConfig, AuthType};
-pub use oauth::ClientCredentialsProvider;
+pub use oauth::{AuthorizationCodeProvider, ClientCredentialsProvider};
 pub use pat::PersonalAccessToken;
 
 use crate::error::Result;

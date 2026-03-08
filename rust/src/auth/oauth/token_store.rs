@@ -67,6 +67,7 @@ impl Drop for RefreshGuard {
 /// # Example
 ///
 /// ```rust,ignore
+/// // This is a private internal module - example shown for documentation only
 /// use databricks_adbc::auth::oauth::token_store::TokenStore;
 /// use databricks_adbc::auth::oauth::token::OAuthToken;
 ///
