@@ -296,12 +296,10 @@ mod tests {
         // Mock OIDC discovery
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
-                    "token_endpoint": token_endpoint,
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
+                "token_endpoint": token_endpoint,
+            })))
             .mount(&mock_server)
             .await;
 
@@ -309,7 +307,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/oidc/v1/token"))
             .and(header("content-type", "application/x-www-form-urlencoded"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&mock_token_response_body()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_token_response_body()))
             .expect(1)
             .mount(&mock_server)
             .await;
@@ -345,12 +343,10 @@ mod tests {
         // Mock OIDC discovery
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
-                    "token_endpoint": token_endpoint,
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
+                "token_endpoint": token_endpoint,
+            })))
             .mount(&mock_server)
             .await;
 
@@ -365,7 +361,7 @@ mod tests {
                 let count = call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if count == 0 {
                     // First call - return short-lived token
-                    ResponseTemplate::new(200).set_body_json(&serde_json::json!({
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
                         "access_token": "initial-token",
                         "token_type": "Bearer",
                         "expires_in": 1, // Very short expiry to trigger refresh
@@ -373,7 +369,7 @@ mod tests {
                     }))
                 } else {
                     // Subsequent calls - return long-lived token
-                    ResponseTemplate::new(200).set_body_json(&serde_json::json!({
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
                         "access_token": "refreshed-token",
                         "token_type": "Bearer",
                         "expires_in": 3600,
@@ -422,19 +418,17 @@ mod tests {
         // Mock OIDC discovery with specific endpoints
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "authorization_endpoint": "https://custom.example.com/auth",
-                    "token_endpoint": "https://custom.example.com/token",
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authorization_endpoint": "https://custom.example.com/auth",
+                "token_endpoint": "https://custom.example.com/token",
+            })))
             .mount(&mock_server)
             .await;
 
         // Mock token endpoint
         Mock::given(method("POST"))
             .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&mock_token_response_body()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_token_response_body()))
             .mount(&mock_server)
             .await;
 
@@ -501,19 +495,17 @@ mod tests {
         // Mock OIDC discovery
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
-                    "token_endpoint": token_endpoint,
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
+                "token_endpoint": token_endpoint,
+            })))
             .mount(&mock_server)
             .await;
 
         // Mock token endpoint - should only be called once despite concurrent requests
         Mock::given(method("POST"))
             .and(path("/oidc/v1/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&mock_token_response_body()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_token_response_body()))
             .expect(1) // Verify only one token fetch occurs
             .mount(&mock_server)
             .await;
@@ -569,26 +561,22 @@ mod tests {
         // Mock OIDC discovery
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
-                    "token_endpoint": token_endpoint,
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
+                "token_endpoint": token_endpoint,
+            })))
             .mount(&mock_server)
             .await;
 
         // Mock token endpoint
         Mock::given(method("POST"))
             .and(path("/oidc/v1/token"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "access_token": "test-token-custom-scopes",
-                    "token_type": "Bearer",
-                    "expires_in": 3600,
-                    "scope": "custom-scope-1 custom-scope-2"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "test-token-custom-scopes",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": "custom-scope-1 custom-scope-2"
+            })))
             .mount(&mock_server)
             .await;
 

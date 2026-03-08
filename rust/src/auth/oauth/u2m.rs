@@ -485,12 +485,10 @@ mod tests {
     async fn mock_oidc_discovery(mock_server: &MockServer) {
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
-                    "token_endpoint": format!("{}/oidc/v1/token", mock_server.uri()),
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
+                "token_endpoint": format!("{}/oidc/v1/token", mock_server.uri()),
+            })))
             .mount(mock_server)
             .await;
     }
@@ -504,15 +502,13 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/oidc/v1/token"))
             .and(body_string_contains("grant_type=refresh_token"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "access_token": "refreshed-access-token",
-                    "token_type": "Bearer",
-                    "expires_in": 3600,
-                    "refresh_token": "new-refresh-token",
-                    "scope": "all-apis offline_access"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "refreshed-access-token",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "new-refresh-token",
+                "scope": "all-apis offline_access"
+            })))
             .expect(1)
             .mount(&mock_server)
             .await;
@@ -619,12 +615,10 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/oidc/v1/token"))
             .and(body_string_contains("grant_type=refresh_token"))
-            .respond_with(
-                ResponseTemplate::new(400).set_body_json(&serde_json::json!({
-                    "error": "invalid_grant",
-                    "error_description": "Refresh token expired"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "Refresh token expired"
+            })))
             .expect(1)
             .mount(&mock_server)
             .await;

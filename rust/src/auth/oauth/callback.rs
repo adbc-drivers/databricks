@@ -434,9 +434,9 @@ mod tests {
                 .expect("Failed to write request");
             stream.flush().await.expect("Failed to flush");
 
-            // Read the response
+            // Read the response (ignore result, just consume it)
             let mut response = vec![0u8; 4096];
-            stream.read(&mut response).await.ok();
+            let _ = stream.read(&mut response).await;
         });
 
         // Wait for callback
@@ -473,7 +473,7 @@ mod tests {
             stream.flush().await.ok();
 
             let mut response = vec![0u8; 4096];
-            stream.read(&mut response).await.ok();
+            let _ = stream.read(&mut response).await;
         });
 
         // Wait for callback - should fail due to state mismatch

@@ -30,6 +30,7 @@ pub(crate) mod token_store;
 pub mod u2m;
 
 // Re-export the main types
+pub use cache::TokenCache;
 pub use callback::CallbackServer;
 pub use m2m::ClientCredentialsProvider;
 pub use oidc::OidcEndpoints;
