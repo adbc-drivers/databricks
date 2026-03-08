@@ -157,14 +157,53 @@ impl ClientCredentialsProvider {
         http_client: Arc<DatabricksHttpClient>,
         scopes: Vec<String>,
     ) -> Result<Self> {
-        // Discover OIDC endpoints
-        let endpoints = OidcEndpoints::discover(host, &http_client).await?;
+        Self::new_with_full_config(host, client_id, client_secret, http_client, scopes, None).await
+    }
+
+    /// Creates a new M2M provider with full configuration options.
+    ///
+    /// Allows overriding the token endpoint URL. If `token_endpoint_override` is `None`,
+    /// the endpoint will be discovered via OIDC.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Databricks workspace URL
+    /// * `client_id` - OAuth client ID for the service principal
+    /// * `client_secret` - OAuth client secret for the service principal
+    /// * `http_client` - Shared HTTP client for token endpoint requests
+    /// * `scopes` - OAuth scopes to request
+    /// * `token_endpoint_override` - Optional token endpoint URL override
+    ///
+    /// # Returns
+    ///
+    /// A configured provider ready for authentication, or an error if:
+    /// - OIDC discovery fails (when token_endpoint_override is None)
+    /// - The runtime handle cannot be obtained
+    pub async fn new_with_full_config(
+        host: &str,
+        client_id: &str,
+        client_secret: &str,
+        http_client: Arc<DatabricksHttpClient>,
+        scopes: Vec<String>,
+        token_endpoint_override: Option<String>,
+    ) -> Result<Self> {
+        // Discover OIDC endpoints or use override
+        let (token_endpoint, auth_endpoint) = if let Some(token_endpoint) = token_endpoint_override {
+            // Use override for token endpoint, still discover auth endpoint
+            // (auth endpoint is not typically overridden for M2M since it's not used)
+            let endpoints = OidcEndpoints::discover(host, &http_client).await?;
+            (token_endpoint, endpoints.authorization_endpoint)
+        } else {
+            // Discover both endpoints via OIDC
+            let endpoints = OidcEndpoints::discover(host, &http_client).await?;
+            (endpoints.token_endpoint, endpoints.authorization_endpoint)
+        };
 
         Ok(Self {
             client_id: client_id.to_string(),
             client_secret: client_secret.to_string(),
-            token_endpoint: endpoints.token_endpoint,
-            auth_endpoint: endpoints.authorization_endpoint,
+            token_endpoint,
+            auth_endpoint,
             token_store: TokenStore::new(),
             http_client,
             scopes,
