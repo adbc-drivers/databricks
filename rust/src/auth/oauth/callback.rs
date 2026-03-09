@@ -152,9 +152,10 @@ impl CallbackServer {
     /// Returns the redirect URI for this callback server.
     ///
     /// This URI should be used when constructing the OAuth authorization URL.
-    /// The format is `http://localhost:{port}/callback`.
+    /// The format is `http://localhost:{port}` (matching the redirect URI
+    /// registered for the `databricks-cli` OAuth application).
     pub fn redirect_uri(&self) -> String {
-        format!("http://localhost:{}/callback", self.port)
+        format!("http://localhost:{}", self.port)
     }
 
     /// Waits for the OAuth callback with the authorization code.
@@ -276,7 +277,7 @@ impl CallbackServer {
 
         let request = String::from_utf8_lossy(&buffer[..n]);
 
-        // Parse the request line (e.g., "GET /callback?code=...&state=... HTTP/1.1")
+        // Parse the request line (e.g., "GET /?code=...&state=... HTTP/1.1")
         let first_line = request.lines().next().unwrap_or("");
         let parts: Vec<&str> = first_line.split_whitespace().collect();
 
@@ -424,7 +425,7 @@ mod tests {
                 .expect("Failed to connect to callback server");
 
             let request = format!(
-                "GET /callback?code=test-auth-code-123&state={} HTTP/1.1\r\nHost: localhost:{}\r\n\r\n",
+                "GET /?code=test-auth-code-123&state={} HTTP/1.1\r\nHost: localhost:{}\r\n\r\n",
                 expected_state, port
             );
 
@@ -465,7 +466,7 @@ mod tests {
                 .expect("Failed to connect");
 
             let request = format!(
-                "GET /callback?code=auth-code&state={} HTTP/1.1\r\nHost: localhost:{}\r\n\r\n",
+                "GET /?code=auth-code&state={} HTTP/1.1\r\nHost: localhost:{}\r\n\r\n",
                 wrong_state, port
             );
 
@@ -529,7 +530,7 @@ mod tests {
 
             // Send callback without 'code' parameter
             let request = format!(
-                "GET /callback?state=test-state HTTP/1.1\r\nHost: localhost:{}\r\n\r\n",
+                "GET /?state=test-state HTTP/1.1\r\nHost: localhost:{}\r\n\r\n",
                 port
             );
 
@@ -560,7 +561,7 @@ mod tests {
 
             // Simulate authorization server error response
             let request = format!(
-                "GET /callback?error=access_denied&error_description=User%20denied%20consent HTTP/1.1\r\nHost: localhost:{}\r\n\r\n",
+                "GET /?error=access_denied&error_description=User%20denied%20consent HTTP/1.1\r\nHost: localhost:{}\r\n\r\n",
                 port
             );
 
