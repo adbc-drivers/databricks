@@ -930,6 +930,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("column_pattern", _metadataColumnName ?? "(none)");
                 activity?.SetTag("enable_multiple_catalog_support", _connection.EnableMultipleCatalogSupport);
 
+                // When EnableMultipleCatalogSupport is false, only the session's default catalog
+                // is accessible. If the user specified an explicit non-SPARK catalog, return empty
+                // results immediately (matching Thrift behavior in DatabricksStatement).
                 if (!_connection.EnableMultipleCatalogSupport
                     && MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) != null)
                     return FlatColumnsResultBuilder.BuildFlatColumnsResult(

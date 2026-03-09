@@ -187,7 +187,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string baseUrl = $"https://{hostName}";
 
             // Session configuration
-            properties.TryGetValue(AdbcOptions.Connection.CurrentCatalog, out _catalog);
+            // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
+            // This matches DatabricksConnection (Thrift) behavior: when flag=false, the session uses
+            // the server's default catalog rather than a client-specified one.
+            if (_enableMultipleCatalogSupport)
+            {
+                properties.TryGetValue(AdbcOptions.Connection.CurrentCatalog, out _catalog);
+            }
             properties.TryGetValue(AdbcOptions.Connection.CurrentDbSchema, out _schema);
 
             // Result configuration
@@ -460,7 +466,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 using var cts = CreateMetadataTimeoutCts();
                 string sql = new ShowColumnsCommand(
-                    catalog ?? _catalog, dbSchema, tableName).Build();
+                    ResolveEffectiveCatalog(catalog), dbSchema, tableName).Build();
                 activity?.SetTag("sql_query", sql);
                 var batches = ExecuteMetadataSql(sql, cts.Token);
 
@@ -515,12 +521,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         async Task<IReadOnlyList<(string catalog, string schema)>> IGetObjectsDataProvider.GetSchemasAsync(string? catalogPattern, string? schemaPattern, CancellationToken cancellationToken)
         {
+            // Note: catalogPattern comes from GetObjectsResultBuilder which resolves individual
+            // catalog names before calling this method. Despite the "pattern" name (from the
+            // IGetObjectsDataProvider interface), the value passed to ShowSchemasCommand is used
+            // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
             var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
             // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog, databaseName
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
-            bool showAllCatalogs = catalogPattern == null;
+            bool showSchemasInAllCatalogs = catalogPattern == null;
 
             var result = new List<(string, string)>();
             foreach (var batch in batches)
@@ -528,7 +538,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 StringArray? catalogArray = null;
                 StringArray? schemaArray = null;
 
-                if (showAllCatalogs)
+                if (showSchemasInAllCatalogs)
                 {
                     catalogArray = batch.Column(0) as StringArray;
                     schemaArray = batch.Column(1) as StringArray;
@@ -702,11 +712,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Resolves the effective catalog for metadata queries.
+        /// SEA SHOW commands require an explicit catalog name in the SQL string
+        /// (e.g., SHOW SCHEMAS IN `catalog`), unlike Thrift which treats null
+        /// as "use session default." So we must always resolve to a concrete value.
         /// When EnableMultipleCatalogSupport is true: uses the provided catalog,
-        ///   falling back to the connection default catalog if null.
-        /// When EnableMultipleCatalogSupport is false: queries the server with
-        ///   SELECT CURRENT_CATALOG() since SEA requires an explicit catalog
-        ///   (unlike Thrift which treats null as default).
+        ///   falling back to the connection default catalog.
+        /// When EnableMultipleCatalogSupport is false: resolves via the session's
+        ///   current catalog (SELECT CURRENT_CATALOG()) since _catalog is null
+        ///   when the flag is false (matching Thrift behavior).
         /// </summary>
         internal string? ResolveEffectiveCatalog(string? requestedCatalog)
         {
