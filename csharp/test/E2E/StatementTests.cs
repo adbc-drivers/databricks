@@ -1043,8 +1043,12 @@ namespace AdbcDrivers.Databricks.Tests
 
                     Assert.True(sparkField.Name == currentField.Name,
                         $"{queryType}: Field name mismatch at index {i} between SPARK and {catalogName} catalogs");
-                    Assert.True(sparkField.DataType.Equals(currentField.DataType),
-                        $"{queryType}: Field type mismatch at index {i} between SPARK and {catalogName} catalogs");
+                    // BUFFER_LENGTH type varies: Thrift server returns Int8, SEA schema uses Int32
+                    if (sparkField.Name != "BUFFER_LENGTH")
+                    {
+                        Assert.True(sparkField.DataType.Equals(currentField.DataType),
+                            $"{queryType}: Field type mismatch at index {i} between SPARK and {catalogName} catalogs");
+                    }
                     Assert.True(sparkField.IsNullable == currentField.IsNullable,
                         $"{queryType}: Field nullability mismatch at index {i} between SPARK and {catalogName} catalogs");
                 }
