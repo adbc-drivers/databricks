@@ -564,8 +564,12 @@ impl DatabricksClient for SeaClient {
         table_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> Result<ExecuteResult> {
+        let catalog = catalog.ok_or_else(|| {
+            DatabricksErrorHelper::invalid_argument()
+                .message("catalog is required for list_columns")
+        })?;
         let sql = SqlCommandBuilder::new()
-            .with_catalog(catalog)
+            .with_catalog(Some(catalog))
             .with_schema_pattern(schema_pattern)
             .with_table_pattern(table_pattern)
             .with_column_pattern(column_pattern)

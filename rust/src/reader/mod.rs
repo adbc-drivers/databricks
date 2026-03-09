@@ -359,7 +359,8 @@ pub struct EmptyReader {
 }
 
 impl EmptyReader {
-    fn new(schema: SchemaRef) -> Self {
+    /// Create an empty reader that returns no batches.
+    pub fn new(schema: SchemaRef) -> Self {
         Self { schema }
     }
 }

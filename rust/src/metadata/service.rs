@@ -21,8 +21,9 @@
 use crate::client::DatabricksClient;
 use crate::error::Result;
 use crate::metadata::sql::SqlCommandBuilder;
-use crate::reader::ResultReader;
+use crate::reader::{EmptyReader, ResultReader};
 use crate::types::sea::ExecuteParams;
+use arrow_schema::Schema;
 use std::sync::Arc;
 
 /// Metadata service backed by a Databricks connection.
@@ -90,6 +91,9 @@ impl ConnectionMetadataService {
     }
 
     /// List columns. Returns a streaming reader over `SHOW COLUMNS` results.
+    ///
+    /// Catalog is required for `SHOW COLUMNS`. When catalog is `None` or empty,
+    /// returns an empty result set.
     pub fn get_columns(
         &self,
         catalog: Option<&str>,
@@ -97,9 +101,13 @@ impl ConnectionMetadataService {
         table_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> Result<Box<dyn ResultReader + Send>> {
+        let catalog = match catalog.filter(|c| !c.is_empty()) {
+            Some(c) => c,
+            None => return Ok(Box::new(EmptyReader::new(Arc::new(Schema::empty())))),
+        };
         let result = self.runtime.block_on(self.client.list_columns(
             &self.session_id,
-            catalog,
+            Some(catalog),
             schema_pattern,
             table_pattern,
             column_pattern,

@@ -148,16 +148,16 @@ impl SqlCommandBuilder {
     }
 
     /// Build SHOW COLUMNS command.
-    /// When catalog is None or wildcard, uses "SHOW COLUMNS IN ALL CATALOGS".
+    /// Catalog must be set via `with_catalog()` — panics if missing.
     pub fn build_show_columns(&self) -> String {
-        let mut sql = if Self::is_null_or_wildcard(&self.catalog) {
-            "SHOW COLUMNS IN ALL CATALOGS".to_string()
-        } else {
-            format!(
-                "SHOW COLUMNS IN CATALOG {}",
-                Self::escape_identifier(self.catalog.as_ref().unwrap())
-            )
-        };
+        let cat = self
+            .catalog
+            .as_deref()
+            .expect("catalog is required for SHOW COLUMNS");
+        let mut sql = format!(
+            "SHOW COLUMNS IN CATALOG {}",
+            Self::escape_identifier(cat)
+        );
 
         if let Some(ref pattern) = self.schema_pattern {
             sql.push_str(&format!(" SCHEMA LIKE '{}'", pattern));
@@ -277,17 +277,9 @@ mod tests {
     }
 
     #[test]
-    fn test_show_columns_all_catalogs() {
-        let sql = SqlCommandBuilder::new().build_show_columns();
-        assert_eq!(sql, "SHOW COLUMNS IN ALL CATALOGS");
-    }
-
-    #[test]
-    fn test_show_columns_wildcard_catalog() {
-        let sql = SqlCommandBuilder::new()
-            .with_catalog(Some("%"))
-            .build_show_columns();
-        assert_eq!(sql, "SHOW COLUMNS IN ALL CATALOGS");
+    #[should_panic(expected = "catalog is required")]
+    fn test_show_columns_requires_catalog() {
+        SqlCommandBuilder::new().build_show_columns();
     }
 
     #[test]
