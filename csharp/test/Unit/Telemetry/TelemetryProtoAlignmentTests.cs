@@ -252,11 +252,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         /// <summary>
-        /// Tests that the telemetry JSON converter serializes proto enums as integer values
-        /// (not string names) to match what the Databricks telemetry endpoint expects.
+        /// Tests that the telemetry JSON converter serializes proto enums as uppercase string names
+        /// matching the JDBC driver format (e.g., "THRIFT", "PAT", "EXECUTE_STATEMENT").
         /// </summary>
         [Fact]
-        public void Proto_TelemetryJsonConverter_SerializesEnumsAsIntegers()
+        public void Proto_TelemetryJsonConverter_SerializesEnumsAsStrings()
         {
             var protoMessage = CreateFullProtoMessage();
 
@@ -282,26 +282,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 .GetProperty("entry")
                 .GetProperty("sql_driver_log");
 
-            // DriverConnectionParams enum fields should be integers
+            // DriverConnectionParams enum fields should be uppercase strings
             var connParams = sqlDriverLog.GetProperty("driver_connection_params");
-            Assert.Equal(JsonValueKind.Number, connParams.GetProperty("auth_mech").ValueKind);
-            Assert.Equal(2, connParams.GetProperty("auth_mech").GetInt32()); // DRIVER_AUTH_MECH_PAT
-            Assert.Equal(JsonValueKind.Number, connParams.GetProperty("auth_flow").ValueKind);
-            Assert.Equal(1, connParams.GetProperty("auth_flow").GetInt32()); // DRIVER_AUTH_FLOW_TOKEN_PASSTHROUGH
-            Assert.Equal(JsonValueKind.Number, connParams.GetProperty("mode").ValueKind);
-            Assert.Equal(1, connParams.GetProperty("mode").GetInt32()); // DRIVER_MODE_THRIFT
+            Assert.Equal(JsonValueKind.String, connParams.GetProperty("auth_mech").ValueKind);
+            Assert.Equal("PAT", connParams.GetProperty("auth_mech").GetString());
+            Assert.Equal(JsonValueKind.String, connParams.GetProperty("auth_flow").ValueKind);
+            Assert.Equal("TOKEN_PASSTHROUGH", connParams.GetProperty("auth_flow").GetString());
+            Assert.Equal(JsonValueKind.String, connParams.GetProperty("mode").ValueKind);
+            Assert.Equal("THRIFT", connParams.GetProperty("mode").GetString());
 
-            // SqlOperation enum fields should be integers
+            // SqlOperation enum fields should be uppercase strings
             var sqlOp = sqlDriverLog.GetProperty("sql_operation");
-            Assert.Equal(JsonValueKind.Number, sqlOp.GetProperty("statement_type").ValueKind);
-            Assert.Equal(1, sqlOp.GetProperty("statement_type").GetInt32()); // STATEMENT_QUERY = 1
-            Assert.Equal(JsonValueKind.Number, sqlOp.GetProperty("execution_result").ValueKind);
-            Assert.Equal(3, sqlOp.GetProperty("execution_result").GetInt32()); // EXECUTION_RESULT_EXTERNAL_LINKS = 3
-
-            // Enums should NOT be serialized as string names
-            Assert.DoesNotContain("DRIVER_AUTH_MECH_PAT", json);
-            Assert.DoesNotContain("DRIVER_AUTH_FLOW_TOKEN_PASSTHROUGH", json);
-            Assert.DoesNotContain("DRIVER_MODE_THRIFT", json);
+            Assert.Equal(JsonValueKind.String, sqlOp.GetProperty("statement_type").ValueKind);
+            Assert.Equal("QUERY", sqlOp.GetProperty("statement_type").GetString());
+            Assert.Equal(JsonValueKind.String, sqlOp.GetProperty("execution_result").ValueKind);
+            Assert.Equal("EXTERNAL_LINKS", sqlOp.GetProperty("execution_result").GetString());
         }
 
         /// <summary>

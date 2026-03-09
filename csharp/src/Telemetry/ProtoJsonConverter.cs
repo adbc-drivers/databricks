@@ -31,9 +31,7 @@ namespace AdbcDrivers.Databricks.Telemetry
     {
         private static readonly JsonFormatter s_snakeCaseFormatter =
             new JsonFormatter(JsonFormatter.Settings.Default
-                .WithPreserveProtoFieldNames(true)
-                .WithFormatEnumsAsIntegers(true)
-                .WithFormatDefaultValues(true));
+                .WithPreserveProtoFieldNames(true));
 
         public override OssSqlDriverTelemetryLog? Read(
             ref Utf8JsonReader reader,
