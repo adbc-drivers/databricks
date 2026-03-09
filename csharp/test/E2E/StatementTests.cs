@@ -515,7 +515,14 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(hasPkKeySeq, "Schema should contain PK_KEY_SEQ field from GetPrimaryKeys");
             Assert.True(hasFkTableName, "Schema should contain FK_PKTABLE_NAME field from GetCrossReference");
 
-            var expectedSchema = new (string Name, string Type)[]
+            // BUFFER_LENGTH type varies: Thrift server returns Int8, SEA schema uses Int32
+            var allowedBufferLengthTypes = new HashSet<string>
+            {
+                "Apache.Arrow.Types.Int8Type",
+                "Apache.Arrow.Types.Int32Type",
+            };
+
+            var expectedSchema = new (string Name, string? Type)[]
             {
                 ("TABLE_CAT", "Apache.Arrow.Types.StringType"),
                 ("TABLE_SCHEM", "Apache.Arrow.Types.StringType"),
@@ -524,7 +531,7 @@ namespace AdbcDrivers.Databricks.Tests
                 ("DATA_TYPE", "Apache.Arrow.Types.Int32Type"),
                 ("TYPE_NAME", "Apache.Arrow.Types.StringType"),
                 ("COLUMN_SIZE", "Apache.Arrow.Types.Int32Type"),
-                ("BUFFER_LENGTH", "Apache.Arrow.Types.Int8Type"),
+                ("BUFFER_LENGTH", null),
                 ("DECIMAL_DIGITS", "Apache.Arrow.Types.Int32Type"),
                 ("NUM_PREC_RADIX", "Apache.Arrow.Types.Int32Type"),
                 ("NULLABLE", "Apache.Arrow.Types.Int32Type"),
@@ -558,7 +565,10 @@ namespace AdbcDrivers.Databricks.Tests
                     .FirstOrDefault(f => f.Name == expectedName);
 
                 Assert.NotNull(actualField); // Field must exist
-                Assert.Equal(expectedType, actualField.DataType.GetType().ToString());
+                if (expectedType == null)
+                    Assert.Contains(actualField.DataType.GetType().ToString(), allowedBufferLengthTypes);
+                else
+                    Assert.Equal(expectedType, actualField.DataType.GetType().ToString());
             }
 
             // Read and verify data
@@ -710,8 +720,15 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(hasPkKeySeq, "Schema should contain PK_KEY_SEQ field from GetPrimaryKeys");
             Assert.True(hasFkTableName, "Schema should contain FK_PKTABLE_NAME field from GetCrossReference");
 
+            // BUFFER_LENGTH type varies: Thrift server returns Int8, SEA schema uses Int32
+            var allowedBufferLengthTypes = new HashSet<string>
+            {
+                "Apache.Arrow.Types.Int8Type",
+                "Apache.Arrow.Types.Int32Type",
+            };
+
             // Define the expected schema as (name, type) pairs
-            var expectedSchema = new (string Name, string Type)[]
+            var expectedSchema = new (string Name, string? Type)[]
             {
                 ("TABLE_CAT", "Apache.Arrow.Types.StringType"),
                 ("TABLE_SCHEM", "Apache.Arrow.Types.StringType"),
@@ -720,7 +737,7 @@ namespace AdbcDrivers.Databricks.Tests
                 ("DATA_TYPE", "Apache.Arrow.Types.Int32Type"),
                 ("TYPE_NAME", "Apache.Arrow.Types.StringType"),
                 ("COLUMN_SIZE", "Apache.Arrow.Types.Int32Type"),
-                ("BUFFER_LENGTH", "Apache.Arrow.Types.Int8Type"),
+                ("BUFFER_LENGTH", null),
                 ("DECIMAL_DIGITS", "Apache.Arrow.Types.Int32Type"),
                 ("NUM_PREC_RADIX", "Apache.Arrow.Types.Int32Type"),
                 ("NULLABLE", "Apache.Arrow.Types.Int32Type"),
@@ -752,12 +769,15 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert each expected field exists in the actual schema with the correct type
             for (int i = 0; i < expectedSchema.Length; i++)
             {
-                (string expectedName, string expectedType) = expectedSchema[i];
+                (string expectedName, string? expectedType) = expectedSchema[i];
                 var actualField = queryResult.Stream?.Schema.FieldsList
                     .FirstOrDefault(f => f.Name == expectedName);
 
                 Assert.NotNull(actualField); // Field must exist
-                Assert.Equal(expectedType, actualField.DataType.GetType().ToString());
+                if (expectedType == null)
+                    Assert.Contains(actualField.DataType.GetType().ToString(), allowedBufferLengthTypes);
+                else
+                    Assert.Equal(expectedType, actualField.DataType.GetType().ToString());
                 var columnArray = batch.Column(i);
                 Assert.Equal(actualField.DataType, columnArray.Data.DataType);
             }

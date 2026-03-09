@@ -827,7 +827,7 @@ namespace AdbcDrivers.Databricks
             var dataTypeBuilder = new Int32Array.Builder();
             var typeNameBuilder = new StringArray.Builder();
             var columnSizeBuilder = new Int32Array.Builder();
-            var bufferLengthBuilder = new Int8Array.Builder();
+            var bufferLengthBuilder = new Int32Array.Builder();
             var decimalDigitsBuilder = new Int32Array.Builder();
             var numPrecRadixBuilder = new Int32Array.Builder();
             var nullableBuilder = new Int32Array.Builder();
