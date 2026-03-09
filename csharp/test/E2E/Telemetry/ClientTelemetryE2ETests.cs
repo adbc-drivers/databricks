@@ -1072,13 +1072,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"  StatementType: {sqlOp.StatementType}");
                 OutputHelper?.WriteLine($"  ExecutionResult: {sqlOp.ExecutionResult}");
 
-                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.StatementType.Unspecified, sqlOp.StatementType);
-                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResultFormat.Unspecified, sqlOp.ExecutionResult);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type.Unspecified, sqlOp.StatementType);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format.Unspecified, sqlOp.ExecutionResult);
 
                 // Verify OperationDetail
                 Assert.NotNull(sqlOp.OperationDetail);
                 OutputHelper?.WriteLine($"  OperationType: {sqlOp.OperationDetail.OperationType}");
-                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.OperationType.Unspecified, sqlOp.OperationDetail.OperationType);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type.Unspecified, sqlOp.OperationDetail.OperationType);
 
                 // Verify SystemConfiguration (from TelemetrySessionContext)
                 Assert.NotNull(sqlLog.SystemConfiguration);
@@ -1110,12 +1110,12 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"  Port: {connParams.HostInfo?.Port}");
                 OutputHelper?.WriteLine($"  AuthMech: {connParams.AuthMech}");
                 OutputHelper?.WriteLine($"  AuthFlow: {connParams.AuthFlow}");
-                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverModeType.Unspecified, connParams.Mode);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type.Unspecified, connParams.Mode);
                 Assert.NotNull(connParams.HostInfo);
                 Assert.False(string.IsNullOrEmpty(connParams.HostInfo.HostUrl), "HostUrl should be populated");
                 Assert.Contains("https://", connParams.HostInfo.HostUrl);
-                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthMechType.Unspecified, connParams.AuthMech);
-                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthFlowType.Unspecified, connParams.AuthFlow);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthMech.Types.Type.Unspecified, connParams.AuthMech);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthFlow.Types.Type.Unspecified, connParams.AuthFlow);
 
                 // Log IsCompressed
                 OutputHelper?.WriteLine($"  IsCompressed: {sqlOp.IsCompressed}");

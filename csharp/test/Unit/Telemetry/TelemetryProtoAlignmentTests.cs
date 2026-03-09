@@ -21,6 +21,9 @@ using System.Text.Json;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.Databricks.Telemetry.Proto;
+using DriverAuthFlowType = AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthFlow.Types.Type;
+using DriverAuthMechType = AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthMech.Types.Type;
+using DriverModeType = AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type;
 using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
 using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
@@ -329,15 +332,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var json = JsonSerializer.Serialize(frontendLog, TelemetryJsonOptions.Default);
 
-            // Default enum values (0) should still be present in the output
+            // With proto2 optional fields, default enum values are omitted from serialization.
+            // Verify that the driver_connection_params is present but default enum fields are not included.
             using var doc = JsonDocument.Parse(json);
             var connParams = doc.RootElement
                 .GetProperty("entry")
                 .GetProperty("sql_driver_log")
                 .GetProperty("driver_connection_params");
-            Assert.Equal(0, connParams.GetProperty("auth_mech").GetInt32());
-            Assert.Equal(0, connParams.GetProperty("auth_flow").GetInt32());
-            Assert.Equal(0, connParams.GetProperty("mode").GetInt32());
+            Assert.False(connParams.TryGetProperty("auth_mech", out _), "Default enum auth_mech should be omitted in proto2");
+            Assert.False(connParams.TryGetProperty("auth_flow", out _), "Default enum auth_flow should be omitted in proto2");
+            Assert.False(connParams.TryGetProperty("mode", out _), "Default enum mode should be omitted in proto2");
         }
 
         #endregion
@@ -410,9 +414,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 DriverConnectionParams = new DriverConnectionParameters
                 {
                     HttpPath = "/sql/1.0/warehouses/abc123",
-                    Mode = DriverModeType.DriverModeThrift,
-                    AuthMech = DriverAuthMechType.DriverAuthMechPat,
-                    AuthFlow = DriverAuthFlowType.DriverAuthFlowTokenPassthrough,
+                    Mode = DriverModeType.Thrift,
+                    AuthMech = DriverAuthMechType.Pat,
+                    AuthFlow = DriverAuthFlowType.TokenPassthrough,
                     HostInfo = new HostDetails
                     {
                         HostUrl = "https://test.databricks.com:443",

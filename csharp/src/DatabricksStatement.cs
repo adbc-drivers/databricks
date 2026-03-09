@@ -31,6 +31,8 @@ using AdbcDrivers.Databricks.Result;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.Databricks.Telemetry.Proto;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -96,13 +98,13 @@ namespace AdbcDrivers.Databricks
             }
         }
 
-        private StatementTelemetryContext? CreateTelemetryContext(Telemetry.Proto.StatementType statementType)
+        private StatementTelemetryContext? CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type statementType)
         {
             var session = ((DatabricksConnection)Connection).TelemetrySession;
             if (session?.TelemetryClient == null) return null;
 
             var ctx = new StatementTelemetryContext(session);
-            ctx.OperationType = OperationType.OperationExecuteStatement;
+            ctx.OperationType = OperationType.ExecuteStatement;
             ctx.StatementType = statementType;
             ctx.IsCompressed = canDecompressLz4;
             return ctx;
@@ -112,8 +114,8 @@ namespace AdbcDrivers.Databricks
         {
             ctx.RecordFirstBatchReady();
             ctx.ResultFormat = useCloudFetch
-                ? ExecutionResultFormat.ExecutionResultExternalLinks
-                : ExecutionResultFormat.ExecutionResultInlineArrow;
+                ? ExecutionResultFormat.ExternalLinks
+                : ExecutionResultFormat.InlineArrow;
             ctx.StatementId = StatementId;
         }
 
@@ -126,7 +128,7 @@ namespace AdbcDrivers.Databricks
 
         public override QueryResult ExecuteQuery()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementQuery);
+            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
             if (ctx == null) return base.ExecuteQuery();
 
             try
@@ -141,7 +143,7 @@ namespace AdbcDrivers.Databricks
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementQuery);
+            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
             if (ctx == null) return await base.ExecuteQueryAsync();
 
             try
@@ -156,7 +158,7 @@ namespace AdbcDrivers.Databricks
 
         public override UpdateResult ExecuteUpdate()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementUpdate);
+            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return base.ExecuteUpdate();
 
             try
@@ -171,7 +173,7 @@ namespace AdbcDrivers.Databricks
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.StatementType.StatementUpdate);
+            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return await base.ExecuteUpdateAsync();
 
             try

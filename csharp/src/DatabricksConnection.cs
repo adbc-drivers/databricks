@@ -695,8 +695,8 @@ namespace AdbcDrivers.Databricks
             Properties.TryGetValue("adbc.spark.http_path", out string? httpPath);
 
             // Determine auth mechanism
-            var authMech = Telemetry.Proto.DriverAuthMechType.Unspecified;
-            var authFlow = Telemetry.Proto.DriverAuthFlowType.Unspecified;
+            var authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Unspecified;
+            var authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.Unspecified;
 
             Properties.TryGetValue(SparkParameters.AuthType, out string? authType);
             Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
@@ -704,19 +704,19 @@ namespace AdbcDrivers.Databricks
             if (!string.IsNullOrEmpty(grantType) &&
                 grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
             {
-                authMech = Telemetry.Proto.DriverAuthMechType.DriverAuthMechOauth;
-                authFlow = Telemetry.Proto.DriverAuthFlowType.DriverAuthFlowClientCredentials;
+                authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Oauth;
+                authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.ClientCredentials;
             }
             else if (isAuthenticated)
             {
-                authMech = Telemetry.Proto.DriverAuthMechType.DriverAuthMechPat;
-                authFlow = Telemetry.Proto.DriverAuthFlowType.DriverAuthFlowTokenPassthrough;
+                authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Pat;
+                authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
             }
 
             return new Telemetry.Proto.DriverConnectionParameters
             {
                 HttpPath = httpPath ?? "",
-                Mode = Telemetry.Proto.DriverModeType.DriverModeThrift,
+                Mode = Telemetry.Proto.DriverMode.Types.Type.Thrift,
                 HostInfo = new Telemetry.Proto.HostDetails
                 {
                     HostUrl = $"https://{_host}:443",
