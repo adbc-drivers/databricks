@@ -515,7 +515,13 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(hasPkKeySeq, "Schema should contain PK_KEY_SEQ field from GetPrimaryKeys");
             Assert.True(hasFkTableName, "Schema should contain FK_PKTABLE_NAME field from GetCrossReference");
 
-            // Define the expected schema as (name, type) pairs
+            // Define the expected schema as (name, type) pairs.
+            // BUFFER_LENGTH: Thrift server returns Int8Type for GetColumns RPC (useDescTableExtended=false),
+            // but our CreateExtendedColumnsResult builder uses Int32Type (useDescTableExtended=true).
+            string bufferLengthType = useDescTableExtended
+                ? "Apache.Arrow.Types.Int32Type"
+                : "Apache.Arrow.Types.Int8Type";
+
             var expectedSchema = new (string Name, string Type)[]
             {
                 ("TABLE_CAT", "Apache.Arrow.Types.StringType"),
@@ -525,7 +531,7 @@ namespace AdbcDrivers.Databricks.Tests
                 ("DATA_TYPE", "Apache.Arrow.Types.Int32Type"),
                 ("TYPE_NAME", "Apache.Arrow.Types.StringType"),
                 ("COLUMN_SIZE", "Apache.Arrow.Types.Int32Type"),
-                ("BUFFER_LENGTH", "Apache.Arrow.Types.Int8Type"),
+                ("BUFFER_LENGTH", bufferLengthType),
                 ("DECIMAL_DIGITS", "Apache.Arrow.Types.Int32Type"),
                 ("NUM_PREC_RADIX", "Apache.Arrow.Types.Int32Type"),
                 ("NULLABLE", "Apache.Arrow.Types.Int32Type"),
@@ -721,7 +727,7 @@ namespace AdbcDrivers.Databricks.Tests
                 ("DATA_TYPE", "Apache.Arrow.Types.Int32Type"),
                 ("TYPE_NAME", "Apache.Arrow.Types.StringType"),
                 ("COLUMN_SIZE", "Apache.Arrow.Types.Int32Type"),
-                ("BUFFER_LENGTH", "Apache.Arrow.Types.Int8Type"),
+                ("BUFFER_LENGTH", "Apache.Arrow.Types.Int32Type"),
                 ("DECIMAL_DIGITS", "Apache.Arrow.Types.Int32Type"),
                 ("NUM_PREC_RADIX", "Apache.Arrow.Types.Int32Type"),
                 ("NULLABLE", "Apache.Arrow.Types.Int32Type"),
