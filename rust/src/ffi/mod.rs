@@ -35,7 +35,7 @@
 //! metadata_connection_free(handle);
 //! ```
 
-pub mod catalog;
+pub mod metadata;
 pub mod error;
 pub mod handle;
 
