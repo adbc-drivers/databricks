@@ -17,6 +17,9 @@
 using System;
 using System.Diagnostics;
 using AdbcDrivers.Databricks.Telemetry.Proto;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
+using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
 
 namespace AdbcDrivers.Databricks.Telemetry
 {

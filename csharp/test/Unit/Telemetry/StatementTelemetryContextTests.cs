@@ -18,6 +18,10 @@ using System;
 using System.Threading;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Proto;
+using DriverModeType = AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
+using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
@@ -44,9 +48,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 DriverConnectionParams = new DriverConnectionParameters
                 {
                     HttpPath = "/sql/1.0/warehouses/abc123",
-                    Mode = DriverModeType.DriverModeThrift
+                    Mode = DriverModeType.Thrift
                 },
-                DefaultResultFormat = ExecutionResultFormat.ExecutionResultExternalLinks,
+                DefaultResultFormat = ExecutionResultFormat.ExternalLinks,
                 DefaultCompressionEnabled = true
             };
         }
@@ -100,16 +104,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Act
             context.StatementId = "statement-uuid-789";
-            context.StatementType = StatementType.StatementQuery;
-            context.OperationType = OperationType.OperationExecuteStatement;
-            context.ResultFormat = ExecutionResultFormat.ExecutionResultExternalLinks;
+            context.StatementType = StatementType.Query;
+            context.OperationType = OperationType.ExecuteStatement;
+            context.ResultFormat = ExecutionResultFormat.ExternalLinks;
             context.IsCompressed = true;
 
             // Assert
             Assert.Equal("statement-uuid-789", context.StatementId);
-            Assert.Equal(StatementType.StatementQuery, context.StatementType);
-            Assert.Equal(OperationType.OperationExecuteStatement, context.OperationType);
-            Assert.Equal(ExecutionResultFormat.ExecutionResultExternalLinks, context.ResultFormat);
+            Assert.Equal(StatementType.Query, context.StatementType);
+            Assert.Equal(OperationType.ExecuteStatement, context.OperationType);
+            Assert.Equal(ExecutionResultFormat.ExternalLinks, context.ResultFormat);
             Assert.True(context.IsCompressed);
         }
 
@@ -197,9 +201,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             TelemetrySessionContext sessionContext = CreateTestSessionContext();
             StatementTelemetryContext context = new StatementTelemetryContext(sessionContext);
             context.StatementId = "stmt-123";
-            context.StatementType = StatementType.StatementQuery;
-            context.OperationType = OperationType.OperationExecuteStatement;
-            context.ResultFormat = ExecutionResultFormat.ExecutionResultExternalLinks;
+            context.StatementType = StatementType.Query;
+            context.OperationType = OperationType.ExecuteStatement;
+            context.ResultFormat = ExecutionResultFormat.ExternalLinks;
             context.IsCompressed = true;
             Thread.Sleep(10);
 
@@ -218,13 +222,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert - verify SQL execution event
             Assert.NotNull(log.SqlOperation);
-            Assert.Equal(StatementType.StatementQuery, log.SqlOperation.StatementType);
+            Assert.Equal(StatementType.Query, log.SqlOperation.StatementType);
             Assert.True(log.SqlOperation.IsCompressed);
-            Assert.Equal(ExecutionResultFormat.ExecutionResultExternalLinks, log.SqlOperation.ExecutionResult);
+            Assert.Equal(ExecutionResultFormat.ExternalLinks, log.SqlOperation.ExecutionResult);
 
             // Assert - verify operation detail
             Assert.NotNull(log.SqlOperation.OperationDetail);
-            Assert.Equal(OperationType.OperationExecuteStatement, log.SqlOperation.OperationDetail.OperationType);
+            Assert.Equal(OperationType.ExecuteStatement, log.SqlOperation.OperationDetail.OperationType);
             Assert.False(log.SqlOperation.OperationDetail.IsInternalCall);
         }
 
@@ -283,7 +287,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Arrange
             TelemetrySessionContext sessionContext = CreateTestSessionContext();
             StatementTelemetryContext context = new StatementTelemetryContext(sessionContext);
-            context.OperationType = OperationType.OperationExecuteStatement;
+            context.OperationType = OperationType.ExecuteStatement;
             context.PollCount = 3;
             context.PollLatencyMs = 450;
 
@@ -295,7 +299,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.NotNull(log.SqlOperation.OperationDetail);
             Assert.Equal(3, log.SqlOperation.OperationDetail.NOperationStatusCalls);
             Assert.Equal(450, log.SqlOperation.OperationDetail.OperationStatusLatencyMillis);
-            Assert.Equal(OperationType.OperationExecuteStatement, log.SqlOperation.OperationDetail.OperationType);
+            Assert.Equal(OperationType.ExecuteStatement, log.SqlOperation.OperationDetail.OperationType);
         }
 
         [Fact]
@@ -358,7 +362,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 WorkspaceId = 123L,
                 DriverConnectionParams = new DriverConnectionParameters
                 {
-                    Mode = DriverModeType.DriverModeThrift
+                    Mode = DriverModeType.Thrift
                 }
             };
             StatementTelemetryContext thriftContext = new StatementTelemetryContext(thriftSession);
@@ -372,7 +376,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 WorkspaceId = 456L,
                 DriverConnectionParams = new DriverConnectionParameters
                 {
-                    Mode = DriverModeType.DriverModeSea
+                    Mode = DriverModeType.Sea
                 }
             };
             StatementTelemetryContext seaContext = new StatementTelemetryContext(seaSession);
@@ -382,11 +386,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // Assert - both work the same way
             Assert.Equal("thrift-session", thriftLog.SessionId);
             Assert.Equal("thrift-stmt", thriftLog.SqlStatementId);
-            Assert.Equal(DriverModeType.DriverModeThrift, thriftLog.DriverConnectionParams.Mode);
+            Assert.Equal(DriverModeType.Thrift, thriftLog.DriverConnectionParams.Mode);
 
             Assert.Equal("sea-session", seaLog.SessionId);
             Assert.Equal("sea-stmt", seaLog.SqlStatementId);
-            Assert.Equal(DriverModeType.DriverModeSea, seaLog.DriverConnectionParams.Mode);
+            Assert.Equal(DriverModeType.Sea, seaLog.DriverConnectionParams.Mode);
         }
 
         [Fact]

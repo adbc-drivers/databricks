@@ -16,6 +16,8 @@
 
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Proto;
+using DriverModeType = AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
@@ -43,7 +45,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             DriverConnectionParameters connParams = new DriverConnectionParameters
             {
                 HttpPath = "/sql/1.0/warehouses/abc123",
-                Mode = DriverModeType.DriverModeThrift,
+                Mode = DriverModeType.Thrift,
                 HostInfo = new HostDetails
                 {
                     HostUrl = "https://dbc-12345678-abcd.cloud.databricks.com",
@@ -61,7 +63,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 WorkspaceId = 12345678901234L,
                 SystemConfiguration = systemConfig,
                 DriverConnectionParams = connParams,
-                DefaultResultFormat = ExecutionResultFormat.ExecutionResultExternalLinks,
+                DefaultResultFormat = ExecutionResultFormat.ExternalLinks,
                 DefaultCompressionEnabled = true,
                 TelemetryClient = null
             };
@@ -72,7 +74,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal(12345678901234L, context.WorkspaceId);
             Assert.Same(systemConfig, context.SystemConfiguration);
             Assert.Same(connParams, context.DriverConnectionParams);
-            Assert.Equal(ExecutionResultFormat.ExecutionResultExternalLinks, context.DefaultResultFormat);
+            Assert.Equal(ExecutionResultFormat.ExternalLinks, context.DefaultResultFormat);
             Assert.True(context.DefaultCompressionEnabled);
             Assert.Null(context.TelemetryClient);
         }
@@ -143,13 +145,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             {
                 DriverConnectionParams = new DriverConnectionParameters
                 {
-                    Mode = DriverModeType.DriverModeThrift
+                    Mode = DriverModeType.Thrift
                 }
             };
 
             // Assert
             Assert.NotNull(context.DriverConnectionParams);
-            Assert.Equal(DriverModeType.DriverModeThrift, context.DriverConnectionParams.Mode);
+            Assert.Equal(DriverModeType.Thrift, context.DriverConnectionParams.Mode);
         }
 
         [Fact]
@@ -160,13 +162,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             {
                 DriverConnectionParams = new DriverConnectionParameters
                 {
-                    Mode = DriverModeType.DriverModeSea
+                    Mode = DriverModeType.Sea
                 }
             };
 
             // Assert
             Assert.NotNull(context.DriverConnectionParams);
-            Assert.Equal(DriverModeType.DriverModeSea, context.DriverConnectionParams.Mode);
+            Assert.Equal(DriverModeType.Sea, context.DriverConnectionParams.Mode);
         }
     }
 }
