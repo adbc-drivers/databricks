@@ -59,6 +59,9 @@ pub struct ServiceError {
     pub error_code: Option<String>,
     #[serde(default)]
     pub message: Option<String>,
+    /// SQL state code if provided by server (typically in the message, but may be a separate field)
+    #[serde(default)]
+    pub sql_state: Option<String>,
 }
 
 /// Manifest describing the result set structure.
