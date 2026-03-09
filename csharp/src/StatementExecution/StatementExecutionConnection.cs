@@ -42,7 +42,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
     {
         private readonly IStatementExecutionClient _client;
         private readonly string _warehouseId;
-        private readonly string? _catalog;
+        private string? _catalog;
         private readonly string? _schema;
         private readonly HttpClient _httpClient;
         private readonly HttpClient _cloudFetchHttpClient; // Separate HttpClient without auth headers for CloudFetch downloads
@@ -186,6 +186,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             string baseUrl = $"https://{hostName}";
 
+            // Connection feature flags — parse before catalog/schema loading that depends on them
+            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
+            _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
+
             // Session configuration
             // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
             // This matches DatabricksConnection (Thrift) behavior: when flag=false, the session uses
@@ -203,8 +207,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
-            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
-            _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
@@ -361,6 +363,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                         var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
                         _sessionId = response.SessionId;
+
+                        // If user didn't specify a catalog, discover the server's default.
+                        // In Thrift, the server returns this in OpenSessionResp.InitialNamespace.
+                        // SEA's CreateSession response doesn't include it, so we query explicitly.
+                        if (_catalog == null && _enableMultipleCatalogSupport)
+                        {
+                            _catalog = GetCurrentCatalog();
+                        }
                     }
                 }
                 finally
@@ -421,8 +431,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     AdbcInfoCode.DriverVersion,
                     AdbcInfoCode.DriverArrowVersion,
                     AdbcInfoCode.VendorName,
-                    AdbcInfoCode.VendorVersion,
                     AdbcInfoCode.VendorSql,
+                    AdbcInfoCode.VendorVersion,
                 };
 
                 if (codes == null || codes.Count == 0)
@@ -687,8 +697,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var batches = new List<RecordBatch>();
             using var stmt = (StatementExecutionStatement)CreateStatement();
             stmt.SqlQuery = sql;
-            stmt.IsMetadataExecution = true;
-            var result = await stmt.ExecuteQueryAsync(cancellationToken).ConfigureAwait(false);
+            var result = await stmt.ExecuteQueryAsync(cancellationToken, isMetadataExecution: true).ConfigureAwait(false);
             using var stream = result.Stream;
             if (stream == null) return batches;
             while (true)

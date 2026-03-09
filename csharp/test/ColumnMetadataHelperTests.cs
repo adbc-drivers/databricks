@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-using AdbcDrivers.Databricks;
+using AdbcDrivers.Databricks.StatementExecution;
 using Xunit;
 using static AdbcDrivers.HiveServer2.Hive2.HiveServer2Connection;
 

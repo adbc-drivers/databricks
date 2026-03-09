@@ -73,7 +73,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Metadata command support
         private bool _isMetadataCommand;
-        private bool _isMetadataExecution;
         private bool _escapePatternWildcards;
         private string? _metadataCatalogName;
         private string? _metadataSchemaName;
@@ -128,15 +127,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             set => _sqlQuery = value;
         }
 
-        /// <summary>
-        /// Marks this statement as a metadata operation so the HTTP request includes
-        /// the x-databricks-sea-can-run-fully-sync header for optimized server execution.
-        /// </summary>
-        internal bool IsMetadataExecution
-        {
-            set => _isMetadataExecution = value;
-        }
-
         public override void SetOption(string key, string value)
         {
             switch (key)
@@ -181,9 +171,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     break;
 
                 // DatabricksStatement-specific options: accept but ignore for now.
-                // SEA handles these differently (e.g., query_tags uses a JSON array in the
-                // executestatement request body instead of confOverlay). Full support will
-                // be added in a follow-up PR.
+                // TODO(PECOBLR-2259): Implement query_tags support for SEA. The SEA API uses a
+                // JSON array of {key, value} objects in the executestatement request body,
+                // unlike Thrift which sends a string in confOverlay.
                 case DatabricksParameters.QueryTags:
                 case DatabricksParameters.UseCloudFetch:
                 case DatabricksParameters.CanDecompressLz4:
@@ -202,7 +192,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return ExecuteQueryAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
 
-        public async Task<QueryResult> ExecuteQueryAsync(CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Executes the query asynchronously.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <param name="isMetadataExecution">When true, adds the x-databricks-sea-can-run-fully-sync
+        /// header for optimized metadata query execution on the server.</param>
+        public async Task<QueryResult> ExecuteQueryAsync(
+            CancellationToken cancellationToken = default,
+            bool isMetadataExecution = false)
         {
             if (_isMetadataCommand)
             {
@@ -229,7 +227,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ResultCompression = _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
-                IsMetadata = _isMetadataExecution
+                IsMetadata = isMetadataExecution
             };
 
             // Execute the statement
@@ -507,7 +505,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ResultCompression = _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
-                IsMetadata = _isMetadataExecution
+                IsMetadata = false
             };
 
             // Execute the statement
@@ -1000,12 +998,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
 
-                if (string.IsNullOrEmpty(catalog) || string.IsNullOrEmpty(_metadataSchemaName) ||
-                    string.IsNullOrEmpty(_metadataTableName))
-                    throw new ArgumentException("Catalog, schema, and table name are required for GetColumnsExtended");
+                if (string.IsNullOrEmpty(_metadataTableName))
+                    throw new ArgumentException("Table name is required for GetColumnsExtended");
+
+                // For building the qualified table name, use the user-specified catalog
+                // (normalized to null for SPARK) rather than EffectiveCatalog. This matches
+                // Thrift's BuildTableName which omits the catalog prefix when it's null/SPARK,
+                // letting the server resolve to its default catalog.
+                string? catalogForTableName = _connection.EnableMultipleCatalogSupport
+                    ? catalog
+                    : MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName);
 
                 string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
-                    catalog, _metadataSchemaName, _metadataTableName);
+                    catalogForTableName, _metadataSchemaName, _metadataTableName);
 
                 string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
                 activity?.SetTag("sql_query", query);
