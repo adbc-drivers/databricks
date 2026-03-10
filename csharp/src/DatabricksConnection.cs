@@ -105,6 +105,9 @@ namespace AdbcDrivers.Databricks
         // Default namespace
         private TNamespace? _defaultNamespace;
 
+        // Shared OAuth token provider for connection-wide token caching
+        private OAuthClientCredentialsProvider? _oauthTokenProvider;
+
         // Telemetry fields
         private ITelemetryClient? _telemetryClient;
         private string? _host;
@@ -411,8 +414,9 @@ namespace AdbcDrivers.Databricks
                 AddThriftErrorHandler = true
             };
 
-            var result = HttpHandlerFactory.CreateHandlers(config);
-            return result;
+            var result = HttpHandlerFactory.CreateHandlersWithTokenProvider(config);
+            _oauthTokenProvider = result.TokenProvider;
+            return result.Handler;
         }
 
         protected override bool GetObjectsPatternsRequireLowerCase => true;
@@ -630,8 +634,8 @@ namespace AdbcDrivers.Databricks
                     return;
                 }
 
-                // Create HTTP client for telemetry export
-                HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties, _host, s_assemblyVersion);
+                // Create HTTP client for telemetry export, reusing the connection's OAuth token provider
+                HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties, _host, s_assemblyVersion, _oauthTokenProvider);
 
                 // Get or create telemetry client from manager (per-host singleton)
                 _telemetryClient = TelemetryClientManager.GetInstance().GetOrCreateClient(
