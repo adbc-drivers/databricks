@@ -21,6 +21,9 @@ using System.Text.Json;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.Databricks.Telemetry.Proto;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
+using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
 using Google.Protobuf;
 using Xunit;
 
@@ -296,9 +299,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Contains("\"frontend_log_event_id\"", json);
             Assert.Contains("\"sql_driver_log\"", json);
 
-            // Verify proto fields are included
-            Assert.Contains("sessionId", json);  // proto uses camelCase
-            Assert.Contains("sqlStatementId", json);
+            // Verify proto fields use snake_case (PreserveProtoFieldNames)
+            Assert.Contains("session_id", json);
+            Assert.Contains("sql_statement_id", json);
         }
 
         #endregion
@@ -323,9 +326,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 },
                 SqlOperation = new SqlExecutionEvent
                 {
-                    StatementType = StatementType.StatementQuery,
+                    StatementType = StatementType.Query,
                     IsCompressed = true,
-                    ExecutionResult = ExecutionResultFormat.ExecutionResultExternalLinks,
+                    ExecutionResult = ExecutionResultFormat.ExternalLinks,
                     RetryCount = 0,
                     ChunkDetails = new ChunkDetails
                     {
@@ -339,7 +342,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                     {
                         NOperationStatusCalls = 5,
                         OperationStatusLatencyMillis = 250,
-                        OperationType = OperationType.OperationExecuteStatementAsync,
+                        OperationType = OperationType.ExecuteStatementAsync,
                         IsInternalCall = false
                     },
                     ResultLatency = new ResultLatency
