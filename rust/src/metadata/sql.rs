@@ -148,15 +148,13 @@ impl SqlCommandBuilder {
     }
 
     /// Build SHOW COLUMNS command.
-    /// Catalog must be set via `with_catalog()` — panics if missing.
-    pub fn build_show_columns(&self) -> String {
-        let cat = self
-            .catalog
-            .as_deref()
-            .expect("catalog is required for SHOW COLUMNS");
+    ///
+    /// Catalog is a required parameter (not taken from builder state) because
+    /// `SHOW COLUMNS IN ALL CATALOGS` is not supported by Databricks.
+    pub fn build_show_columns(&self, catalog: &str) -> String {
         let mut sql = format!(
             "SHOW COLUMNS IN CATALOG {}",
-            Self::escape_identifier(cat)
+            Self::escape_identifier(catalog)
         );
 
         if let Some(ref pattern) = self.schema_pattern {
@@ -277,27 +275,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "catalog is required")]
-    fn test_show_columns_requires_catalog() {
-        SqlCommandBuilder::new().build_show_columns();
-    }
-
-    #[test]
     fn test_show_columns_with_catalog() {
-        let sql = SqlCommandBuilder::new()
-            .with_catalog(Some("main"))
-            .build_show_columns();
+        let sql = SqlCommandBuilder::new().build_show_columns("main");
         assert_eq!(sql, "SHOW COLUMNS IN CATALOG `main`");
     }
 
     #[test]
     fn test_show_columns_with_all_patterns() {
         let sql = SqlCommandBuilder::new()
-            .with_catalog(Some("main"))
             .with_schema_pattern(Some("default"))
             .with_table_pattern(Some("my_table"))
             .with_column_pattern(Some("id%"))
-            .build_show_columns();
+            .build_show_columns("main");
         assert_eq!(
             sql,
             "SHOW COLUMNS IN CATALOG `main` SCHEMA LIKE 'default' TABLE LIKE 'my.table' LIKE 'id*'"

@@ -22,7 +22,5 @@
 
 pub mod builder;
 pub mod parse;
-#[cfg(feature = "metadata-ffi")]
-pub mod service;
 pub mod sql;
 pub mod type_mapping;

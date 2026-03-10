@@ -21,24 +21,13 @@
 //! ## Usage from C/C++
 //!
 //! ```c
-//! // 1. Create connection via ADBC FFI (AdbcDriverInit, etc.)
-//! // 2. Get metadata handle
-//! FfiConnectionHandle handle = metadata_connection_from_ref(adbc_conn_ptr);
-//!
-//! // 3. Call metadata functions
+//! // 1. Get Connection* from adbc_connection_.private_data
+//! // 2. Call metadata functions directly
 //! FFI_ArrowArrayStream stream;
-//! FfiStatus status = metadata_get_tables(handle, "main", NULL, "%", NULL, &stream);
+//! FfiStatus status = metadata_get_tables(conn_ptr, "main", NULL, "%", NULL, &stream);
 //!
-//! // 4. Process Arrow stream...
-//!
-//! // 5. Free handle when done
-//! metadata_connection_free(handle);
+//! // 3. Process Arrow stream...
 //! ```
 
-pub mod metadata;
 pub mod error;
-pub mod handle;
-
-// Re-export key types for convenience
-pub use error::{FfiError, FfiStatus};
-pub use handle::FfiConnectionHandle;
+pub mod metadata;

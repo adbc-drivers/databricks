@@ -559,21 +559,16 @@ impl DatabricksClient for SeaClient {
     async fn list_columns(
         &self,
         session_id: &str,
-        catalog: Option<&str>,
+        catalog: &str,
         schema_pattern: Option<&str>,
         table_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> Result<ExecuteResult> {
-        let catalog = catalog.ok_or_else(|| {
-            DatabricksErrorHelper::invalid_argument()
-                .message("catalog is required for list_columns")
-        })?;
         let sql = SqlCommandBuilder::new()
-            .with_catalog(Some(catalog))
             .with_schema_pattern(schema_pattern)
             .with_table_pattern(table_pattern)
             .with_column_pattern(column_pattern)
-            .build_show_columns();
+            .build_show_columns(catalog);
         debug!("list_columns: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await

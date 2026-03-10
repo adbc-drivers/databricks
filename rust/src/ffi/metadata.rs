@@ -12,25 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `extern "C"` catalog metadata functions.
+//! `extern "C"` metadata functions exposed via the Arrow C Data Interface.
 //!
 //! Each function follows this pattern:
 //! 1. Clear thread-local error buffer
 //! 2. Wrap body in `catch_unwind` (panics must not cross FFI boundary)
-//! 3. Validate handle (null check)
-//! 4. Recover `ConnectionMetadataService` from handle
-//! 5. Convert C strings to Rust &str
-//! 6. Call service method
-//! 7. Export result via Arrow C Data Interface (`FFI_ArrowArrayStream`)
-//! 8. Return status code; on error, set thread-local error buffer
+//! 3. Validate connection pointer (null check)
+//! 4. Convert C strings to Rust `&str`
+//! 5. Call client method via `Connection`
+//! 6. Export result via `FFI_ArrowArrayStream`
+//! 7. Return status code; on error, set thread-local error buffer
 
 use crate::ffi::error::{clear_last_error, set_error_from_result, set_last_error, FfiStatus};
-use crate::ffi::handle::{handle_to_service, FfiConnectionHandle};
-use crate::reader::{ResultReader, ResultReaderAdapter};
+use crate::metadata::sql::SqlCommandBuilder;
+use crate::reader::{EmptyReader, ResultReader, ResultReaderAdapter};
+use crate::types::sea::ExecuteParams;
+use crate::Connection;
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow_array::RecordBatchReader;
-use std::ffi::{c_char, CStr};
+use arrow_schema::Schema;
+use std::ffi::{c_char, c_void, CStr};
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 
 /// Convert a nullable C string pointer to an `Option<&str>`.
 ///
@@ -80,7 +83,7 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> std::result::Result<&'a str, (
     }
 }
 
-/// Export a ResultReader as an FFI_ArrowArrayStream via ResultReaderAdapter.
+/// Export a `ResultReader` as an `FFI_ArrowArrayStream` via `ResultReaderAdapter`.
 ///
 /// The caller is responsible for releasing the stream.
 fn export_reader(
@@ -105,15 +108,14 @@ fn export_reader(
     FfiStatus::Success
 }
 
-/// Validate handle and recover service, or return error status.
-macro_rules! get_service {
+/// Validate connection pointer and recover `&Connection`, or return error status.
+macro_rules! get_connection {
     ($conn:expr) => {
-        match unsafe { handle_to_service($conn) } {
-            Some(svc) => svc,
-            None => {
-                set_last_error("Invalid connection handle", "08003", -1);
-                return FfiStatus::InvalidHandle;
-            }
+        if $conn.is_null() {
+            set_last_error("Null connection pointer", "08003", -1);
+            return FfiStatus::InvalidHandle;
+        } else {
+            unsafe { &*($conn as *const Connection) }
         }
     };
 }
@@ -137,18 +139,21 @@ fn handle_panic(panic: Box<dyn std::any::Any + Send>) -> FfiStatus {
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
+/// - `conn` must be a valid pointer to a `Connection` (e.g. from `adbc_connection_.private_data`)
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
 pub unsafe extern "C" fn metadata_get_catalogs(
-    conn: FfiConnectionHandle,
+    conn: *const c_void,
     out: *mut FFI_ArrowArrayStream,
 ) -> FfiStatus {
     clear_last_error();
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let svc = get_service!(conn);
-        match svc.get_catalogs() {
-            Ok(reader) => export_reader(reader, out),
+        let conn = get_connection!(conn);
+        match conn
+            .runtime_handle()
+            .block_on(conn.client().list_catalogs(conn.session_id()))
+        {
+            Ok(result) => export_reader(result.reader, out),
             Err(e) => set_error_from_result(&e),
         }
     }))
@@ -159,19 +164,19 @@ pub unsafe extern "C" fn metadata_get_catalogs(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
+/// - `conn` must be a valid pointer to a `Connection`
 /// - String arguments may be null (treated as no filter)
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
 pub unsafe extern "C" fn metadata_get_schemas(
-    conn: FfiConnectionHandle,
+    conn: *const c_void,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     out: *mut FFI_ArrowArrayStream,
 ) -> FfiStatus {
     clear_last_error();
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let svc = get_service!(conn);
+        let conn = get_connection!(conn);
         let Ok(catalog) = (unsafe { c_str_to_option(catalog) }) else {
             return FfiStatus::Error;
         };
@@ -179,8 +184,12 @@ pub unsafe extern "C" fn metadata_get_schemas(
             return FfiStatus::Error;
         };
 
-        match svc.get_schemas(catalog, schema_pattern) {
-            Ok(reader) => export_reader(reader, out),
+        match conn.runtime_handle().block_on(conn.client().list_schemas(
+            conn.session_id(),
+            catalog,
+            schema_pattern,
+        )) {
+            Ok(result) => export_reader(result.reader, out),
             Err(e) => set_error_from_result(&e),
         }
     }))
@@ -189,18 +198,15 @@ pub unsafe extern "C" fn metadata_get_schemas(
 
 /// List tables matching the given filter criteria.
 ///
-/// Results are exported via the Arrow C Data Interface.
-/// Caller must release the ArrowArrayStream when done.
-///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
+/// - `conn` must be a valid pointer to a `Connection`
 /// - String arguments may be null (treated as no filter)
 /// - `table_types` is a comma-separated list if non-null
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
 pub unsafe extern "C" fn metadata_get_tables(
-    conn: FfiConnectionHandle,
+    conn: *const c_void,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     table_pattern: *const c_char,
@@ -209,7 +215,7 @@ pub unsafe extern "C" fn metadata_get_tables(
 ) -> FfiStatus {
     clear_last_error();
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let svc = get_service!(conn);
+        let conn = get_connection!(conn);
         let Ok(catalog) = (unsafe { c_str_to_option(catalog) }) else {
             return FfiStatus::Error;
         };
@@ -227,8 +233,14 @@ pub unsafe extern "C" fn metadata_get_tables(
         let types_vec: Option<Vec<&str>> =
             table_types_str.map(|s| s.split(',').map(|t| t.trim()).collect());
 
-        match svc.get_tables(catalog, schema_pattern, table_pattern, types_vec.as_deref()) {
-            Ok(reader) => export_reader(reader, out),
+        match conn.runtime_handle().block_on(conn.client().list_tables(
+            conn.session_id(),
+            catalog,
+            schema_pattern,
+            table_pattern,
+            types_vec.as_deref(),
+        )) {
+            Ok(result) => export_reader(result.reader, out),
             Err(e) => set_error_from_result(&e),
         }
     }))
@@ -237,14 +249,17 @@ pub unsafe extern "C" fn metadata_get_tables(
 
 /// List columns matching the given filter criteria.
 ///
+/// When catalog is null or empty, returns an empty result set (since
+/// `SHOW COLUMNS IN ALL CATALOGS` is not supported by Databricks).
+///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
+/// - `conn` must be a valid pointer to a `Connection`
 /// - String arguments may be null (treated as no filter)
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
 pub unsafe extern "C" fn metadata_get_columns(
-    conn: FfiConnectionHandle,
+    conn: *const c_void,
     catalog: *const c_char,
     schema_pattern: *const c_char,
     table_pattern: *const c_char,
@@ -253,7 +268,7 @@ pub unsafe extern "C" fn metadata_get_columns(
 ) -> FfiStatus {
     clear_last_error();
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let svc = get_service!(conn);
+        let conn = get_connection!(conn);
         let Ok(catalog) = (unsafe { c_str_to_option(catalog) }) else {
             return FfiStatus::Error;
         };
@@ -267,8 +282,24 @@ pub unsafe extern "C" fn metadata_get_columns(
             return FfiStatus::Error;
         };
 
-        match svc.get_columns(catalog, schema_pattern, table_pattern, column_pattern) {
-            Ok(reader) => export_reader(reader, out),
+        // Catalog is required for SHOW COLUMNS; return empty stream when absent.
+        let catalog = match catalog.filter(|c| !c.is_empty()) {
+            Some(c) => c,
+            None => {
+                let reader: Box<dyn ResultReader + Send> =
+                    Box::new(EmptyReader::new(Arc::new(Schema::empty())));
+                return export_reader(reader, out);
+            }
+        };
+
+        match conn.runtime_handle().block_on(conn.client().list_columns(
+            conn.session_id(),
+            catalog,
+            schema_pattern,
+            table_pattern,
+            column_pattern,
+        )) {
+            Ok(result) => export_reader(result.reader, out),
             Err(e) => set_error_from_result(&e),
         }
     }))
@@ -279,12 +310,12 @@ pub unsafe extern "C" fn metadata_get_columns(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
+/// - `conn` must be a valid pointer to a `Connection`
 /// - `catalog`, `schema`, `table` must be valid non-null C strings
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
 pub unsafe extern "C" fn metadata_get_primary_keys(
-    conn: FfiConnectionHandle,
+    conn: *const c_void,
     catalog: *const c_char,
     schema: *const c_char,
     table: *const c_char,
@@ -292,7 +323,7 @@ pub unsafe extern "C" fn metadata_get_primary_keys(
 ) -> FfiStatus {
     clear_last_error();
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let svc = get_service!(conn);
+        let conn = get_connection!(conn);
         let Ok(catalog) = (unsafe { c_str_to_str(catalog) }) else {
             return FfiStatus::Error;
         };
@@ -303,8 +334,15 @@ pub unsafe extern "C" fn metadata_get_primary_keys(
             return FfiStatus::Error;
         };
 
-        match svc.get_primary_keys(catalog, schema, table) {
-            Ok(reader) => export_reader(reader, out),
+        let sql = SqlCommandBuilder::build_show_primary_keys(catalog, schema, table);
+        match conn
+            .runtime_handle()
+            .block_on(conn.client().execute_statement(
+                conn.session_id(),
+                &sql,
+                &ExecuteParams::default(),
+            )) {
+            Ok(result) => export_reader(result.reader, out),
             Err(e) => set_error_from_result(&e),
         }
     }))
@@ -315,12 +353,12 @@ pub unsafe extern "C" fn metadata_get_primary_keys(
 ///
 /// # Safety
 ///
-/// - `conn` must be a valid handle from `metadata_connection_from_ref()`
+/// - `conn` must be a valid pointer to a `Connection`
 /// - `catalog`, `schema`, `table` must be valid non-null C strings
 /// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
 #[no_mangle]
 pub unsafe extern "C" fn metadata_get_foreign_keys(
-    conn: FfiConnectionHandle,
+    conn: *const c_void,
     catalog: *const c_char,
     schema: *const c_char,
     table: *const c_char,
@@ -328,7 +366,7 @@ pub unsafe extern "C" fn metadata_get_foreign_keys(
 ) -> FfiStatus {
     clear_last_error();
     std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let svc = get_service!(conn);
+        let conn = get_connection!(conn);
         let Ok(catalog) = (unsafe { c_str_to_str(catalog) }) else {
             return FfiStatus::Error;
         };
@@ -339,8 +377,15 @@ pub unsafe extern "C" fn metadata_get_foreign_keys(
             return FfiStatus::Error;
         };
 
-        match svc.get_foreign_keys(catalog, schema, table) {
-            Ok(reader) => export_reader(reader, out),
+        let sql = SqlCommandBuilder::build_show_foreign_keys(catalog, schema, table);
+        match conn
+            .runtime_handle()
+            .block_on(conn.client().execute_statement(
+                conn.session_id(),
+                &sql,
+                &ExecuteParams::default(),
+            )) {
+            Ok(result) => export_reader(result.reader, out),
             Err(e) => set_error_from_result(&e),
         }
     }))
@@ -351,60 +396,9 @@ pub unsafe extern "C" fn metadata_get_foreign_keys(
 mod tests {
     use super::*;
     use crate::ffi::error::FfiError;
+    use crate::reader::test_utils::{MockReader, SchemaErrorReader};
     use arrow_array::{RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
-    use std::sync::Arc;
-
-    /// A simple mock reader that returns predefined batches.
-    struct MockReader {
-        batches: Vec<RecordBatch>,
-        index: usize,
-        schema: SchemaRef,
-    }
-
-    impl MockReader {
-        fn new(batches: Vec<RecordBatch>) -> Self {
-            let schema = if batches.is_empty() {
-                Arc::new(Schema::empty())
-            } else {
-                batches[0].schema()
-            };
-            Self {
-                batches,
-                index: 0,
-                schema,
-            }
-        }
-    }
-
-    impl ResultReader for MockReader {
-        fn schema(&self) -> crate::error::Result<SchemaRef> {
-            Ok(self.schema.clone())
-        }
-
-        fn next_batch(&mut self) -> crate::error::Result<Option<RecordBatch>> {
-            if self.index >= self.batches.len() {
-                Ok(None)
-            } else {
-                let batch = self.batches[self.index].clone();
-                self.index += 1;
-                Ok(Some(batch))
-            }
-        }
-    }
-
-    /// A reader that fails on schema().
-    struct SchemaErrorReader;
-
-    impl ResultReader for SchemaErrorReader {
-        fn schema(&self) -> crate::error::Result<SchemaRef> {
-            Err(crate::error::DatabricksErrorHelper::io().message("schema unavailable"))
-        }
-
-        fn next_batch(&mut self) -> crate::error::Result<Option<RecordBatch>> {
-            Ok(None)
-        }
-    }
+    use arrow_schema::{DataType, Field, Schema};
 
     #[test]
     fn test_export_reader_null_output() {
@@ -447,8 +441,7 @@ mod tests {
             RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["b", "c"]))])
                 .unwrap();
 
-        let reader: Box<dyn ResultReader + Send> =
-            Box::new(MockReader::new(vec![batch1, batch2]));
+        let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch1, batch2]));
         let mut stream = FFI_ArrowArrayStream::empty();
         let status = export_reader(reader, &mut stream);
         assert_eq!(status, FfiStatus::Success);
@@ -481,8 +474,7 @@ mod tests {
 
     #[test]
     fn test_handle_panic_with_string() {
-        let panic =
-            Box::new("owned panic message".to_string()) as Box<dyn std::any::Any + Send>;
+        let panic = Box::new("owned panic message".to_string()) as Box<dyn std::any::Any + Send>;
         let status = handle_panic(panic);
         assert_eq!(status, FfiStatus::Error);
 
@@ -515,15 +507,25 @@ mod tests {
     }
 
     #[test]
-    fn test_null_handle_returns_invalid_handle() {
+    fn test_null_connection_returns_invalid_handle() {
         let mut stream = FFI_ArrowArrayStream::empty();
-        let status = unsafe { metadata_get_catalogs(std::ptr::null_mut(), &mut stream) };
+        let status = unsafe { metadata_get_catalogs(std::ptr::null(), &mut stream) };
         assert_eq!(status, FfiStatus::InvalidHandle);
 
         // Error should be set
         let mut err = FfiError::default();
         unsafe { crate::ffi::error::metadata_get_last_error(&mut err) };
-        assert_ne!(err.message[0], 0); // non-empty message
+        let msg: String = err
+            .message
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8 as char)
+            .collect();
+        assert!(
+            msg.contains("Null connection pointer"),
+            "Expected null pointer error, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -557,13 +559,12 @@ mod tests {
         // Set an error, then call a function that clears it at entry
         crate::ffi::error::set_last_error("stale error", "HY000", -1);
 
-        // Call with null handle — this clears the error first, then sets a new one
+        // Call with null connection — clears the error first, then sets a new one
         let mut stream = FFI_ArrowArrayStream::empty();
-        let _status = unsafe { metadata_get_catalogs(std::ptr::null_mut(), &mut stream) };
+        let _status = unsafe { metadata_get_catalogs(std::ptr::null(), &mut stream) };
 
         let mut err = FfiError::default();
         unsafe { crate::ffi::error::metadata_get_last_error(&mut err) };
-        // The error should be about invalid handle, not "stale error"
         let msg: String = err
             .message
             .iter()
@@ -571,8 +572,8 @@ mod tests {
             .map(|&b| b as u8 as char)
             .collect();
         assert!(
-            msg.contains("Invalid connection handle"),
-            "Expected handle error, got: {}",
+            msg.contains("Null connection pointer"),
+            "Expected connection error, got: {}",
             msg
         );
     }

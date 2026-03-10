@@ -342,7 +342,7 @@ impl adbc_core::Connection for Connection {
                                 client
                                     .list_columns(
                                         &session_id,
-                                        Some(&cat),
+                                        &cat,
                                         schema_pattern.as_deref(),
                                         table_pattern.as_deref(),
                                         col_pattern.as_deref(),
@@ -419,7 +419,7 @@ impl adbc_core::Connection for Connection {
             .runtime
             .block_on(self.client.list_columns(
                 &self.session_id,
-                Some(&resolved_catalog),
+                &resolved_catalog,
                 db_schema,
                 Some(table_name),
                 None, // all columns

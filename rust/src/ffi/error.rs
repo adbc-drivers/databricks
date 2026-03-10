@@ -23,6 +23,7 @@ use std::ffi::c_char;
 /// FFI status codes matching ODBC conventions.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum FfiStatus {
     Success = 0,
     SuccessWithInfo = 1,
