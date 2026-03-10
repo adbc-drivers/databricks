@@ -288,3 +288,4 @@ databricks-test-config.json
 
 # Rust local cargo config (may contain credentials)
 rust/.cargo/
+generated_task_specs.json

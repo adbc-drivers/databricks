@@ -21,6 +21,7 @@ using System.Net.Http.Headers;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;
@@ -234,7 +235,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 },
                 Entry = new FrontendLogEntry
                 {
-                    SqlDriverLog = new TelemetryEvent
+                    SqlDriverLog = new OssSqlDriverTelemetryLog
                     {
                         SessionId = Guid.NewGuid().ToString(),
                         SqlStatementId = Guid.NewGuid().ToString(),
@@ -247,8 +248,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                             OsVersion = Environment.OSVersion.Version.ToString(),
                             RuntimeName = ".NET",
                             RuntimeVersion = Environment.Version.ToString(),
-                            Locale = System.Globalization.CultureInfo.CurrentCulture.Name,
-                            Timezone = TimeZoneInfo.Local.Id
+                            LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name
                         }
                     }
                 }
@@ -473,7 +473,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     },
                     Entry = new FrontendLogEntry
                     {
-                        SqlDriverLog = new TelemetryEvent
+                        SqlDriverLog = new OssSqlDriverTelemetryLog
                         {
                             SessionId = Guid.NewGuid().ToString(),
                             SqlStatementId = Guid.NewGuid().ToString(),
