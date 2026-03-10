@@ -475,6 +475,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // (e.g. the PowerBI connector's AdjustNativeTypes) can read it via
                 // the "Spark:DataType:SqlName" key — the same metadata the Databricks
                 // server embeds in the Arrow IPC stream for non-empty results.
+                //
+                // Note: the Thrift server also sets "Spark:DataType:JsonType" (the JSON
+                // representation of the type, e.g. "{\"type\":\"integer\"}") alongside
+                // SqlName. That key is not read by any known consumer today, so we omit
+                // it here for now. Add it if a consumer requires it (PECO-2950).
                 var metadata = new Dictionary<string, string>
                 {
                     ["Spark:DataType:SqlName"] = column.TypeName
