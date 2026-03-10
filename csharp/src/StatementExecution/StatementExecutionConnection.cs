@@ -16,15 +16,20 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
+using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
-using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
+using static Apache.Arrow.Adbc.AdbcConnection;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -33,11 +38,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// Manages session lifecycle and creates statements for query execution.
     /// Extends TracingConnection for consistent tracing support with Thrift protocol.
     /// </summary>
-    internal class StatementExecutionConnection : TracingConnection
+    internal class StatementExecutionConnection : TracingConnection, IGetObjectsDataProvider
     {
         private readonly IStatementExecutionClient _client;
         private readonly string _warehouseId;
-        private readonly string? _catalog;
+        private string? _catalog;
         private readonly string? _schema;
         private readonly HttpClient _httpClient;
         private readonly HttpClient _cloudFetchHttpClient; // Separate HttpClient without auth headers for CloudFetch downloads
@@ -54,6 +59,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string? _resultCompression;
         private readonly int _waitTimeoutSeconds;
         private readonly int _pollingIntervalMs;
+        private readonly bool _enablePKFK;
+        private readonly bool _enableMultipleCatalogSupport;
 
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
@@ -179,8 +186,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             string baseUrl = $"https://{hostName}";
 
+            // Connection feature flags — parse before catalog/schema loading that depends on them
+            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
+            _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
+
             // Session configuration
-            properties.TryGetValue(AdbcOptions.Connection.CurrentCatalog, out _catalog);
+            // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
+            // This matches DatabricksConnection (Thrift) behavior: when flag=false, the session uses
+            // the server's default catalog rather than a client-specified one.
+            if (_enableMultipleCatalogSupport)
+            {
+                properties.TryGetValue(AdbcOptions.Connection.CurrentCatalog, out _catalog);
+            }
             properties.TryGetValue(AdbcOptions.Connection.CurrentDbSchema, out _schema);
 
             // Result configuration
@@ -348,6 +365,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                         var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
                         _sessionId = response.SessionId;
+
+                        // If user didn't specify a catalog, discover the server's default.
+                        // In Thrift, the server returns this in OpenSessionResp.InitialNamespace.
+                        // SEA's CreateSession response doesn't include it, so we query explicitly.
+                        if (_catalog == null && _enableMultipleCatalogSupport)
+                        {
+                            _catalog = GetCurrentCatalog();
+                        }
                     }
                 }
                 finally
@@ -380,31 +405,368 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 this); // Pass connection as TracingConnection for tracing support
         }
 
-        /// <summary>
-        /// Gets objects (metadata) from the database.
-        /// </summary>
         public override IArrowArrayStream GetObjects(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("depth", depth.ToString());
+                activity?.SetTag("catalog_pattern", catalogPattern ?? "(none)");
+                activity?.SetTag("schema_pattern", schemaPattern ?? "(none)");
+                activity?.SetTag("table_pattern", tableNamePattern ?? "(none)");
+                activity?.SetTag("column_pattern", columnNamePattern ?? "(none)");
+
+                using var cts = CreateMetadataTimeoutCts();
+                return GetObjectsResultBuilder.BuildGetObjectsResultAsync(
+                    this, depth, catalogPattern, schemaPattern,
+                    tableNamePattern, tableTypes, columnNamePattern,
+                    cts.Token).GetAwaiter().GetResult();
+            }, nameof(GetObjects));
         }
 
-        /// <summary>
-        /// Gets table types from the database.
-        /// </summary>
+        public override IArrowArrayStream GetInfo(IReadOnlyList<AdbcInfoCode> codes)
+        {
+            return this.TraceActivity(activity =>
+            {
+                var supportedCodes = new AdbcInfoCode[]
+                {
+                    AdbcInfoCode.DriverName,
+                    AdbcInfoCode.DriverVersion,
+                    AdbcInfoCode.DriverArrowVersion,
+                    AdbcInfoCode.VendorName,
+                    AdbcInfoCode.VendorSql,
+                    AdbcInfoCode.VendorVersion,
+                };
+
+                if (codes == null || codes.Count == 0)
+                    codes = supportedCodes;
+
+                activity?.SetTag("requested_codes", string.Join(",", codes));
+
+                var values = new Dictionary<AdbcInfoCode, object>
+                {
+                    { AdbcInfoCode.DriverName, DatabricksConnection.DatabricksDriverName },
+                    { AdbcInfoCode.DriverVersion, AssemblyVersion },
+                    { AdbcInfoCode.DriverArrowVersion, "1.0.0" },
+                    { AdbcInfoCode.VendorName, "Databricks" },
+                    { AdbcInfoCode.VendorVersion, AssemblyVersion },
+                    { AdbcInfoCode.VendorSql, true },
+                };
+
+                return MetadataSchemaFactory.BuildGetInfoResult(codes, values);
+            }, nameof(GetInfo));
+        }
+
         public override IArrowArrayStream GetTableTypes()
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            return this.TraceActivity(activity =>
+            {
+                var builder = new StringArray.Builder();
+                builder.Append("TABLE");
+                builder.Append("VIEW");
+                var schema = new Schema(new[] { new Field("table_type", StringType.Default, false) }, null);
+                return new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() });
+            }, nameof(GetTableTypes));
+        }
+
+        public override Schema GetTableSchema(string? catalog, string? dbSchema, string tableName)
+        {
+            return this.TraceActivity(activity =>
+            {
+                activity?.SetTag("catalog", catalog ?? "(none)");
+                activity?.SetTag("db_schema", dbSchema ?? "(none)");
+                activity?.SetTag("table_name", tableName);
+
+                using var cts = CreateMetadataTimeoutCts();
+                string sql = new ShowColumnsCommand(
+                    ResolveEffectiveCatalog(catalog), dbSchema, tableName).Build();
+                activity?.SetTag("sql_query", sql);
+                var batches = ExecuteMetadataSql(sql, cts.Token);
+
+                var fields = new List<Field>();
+                foreach (var batch in batches)
+                {
+                    var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
+                    var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
+                    var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
+
+                    if (colNameArray == null || columnTypeArray == null) continue;
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
+
+                        string colName = colNameArray.GetString(i);
+                        string colType = columnTypeArray.GetString(i);
+                        bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
+                            !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+
+                        short typeCode = ColumnMetadataHelper.GetDataTypeCode(colType);
+                        IArrowType arrowType = HiveServer2Connection.GetArrowType(typeCode, colType, false, null, null);
+                        fields.Add(new Field(colName, arrowType, nullable));
+                    }
+                }
+
+                activity?.SetTag("result_fields", fields.Count);
+                return new Schema(fields, null);
+            }, nameof(GetTableSchema));
+        }
+
+        // IGetObjectsDataProvider implementation
+
+        async Task<IReadOnlyList<string>> IGetObjectsDataProvider.GetCatalogsAsync(string? catalogPattern, CancellationToken cancellationToken)
+        {
+            string sql = new ShowCatalogsCommand(catalogPattern).Build();
+            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            var result = new List<string>();
+            foreach (var batch in batches)
+            {
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalog");
+                if (catalogArray == null) continue;
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (!catalogArray.IsNull(i))
+                        result.Add(catalogArray.GetString(i));
+                }
+            }
+            return result;
+        }
+
+        async Task<IReadOnlyList<(string catalog, string schema)>> IGetObjectsDataProvider.GetSchemasAsync(string? catalogPattern, string? schemaPattern, CancellationToken cancellationToken)
+        {
+            // Note: catalogPattern comes from GetObjectsResultBuilder which resolves individual
+            // catalog names before calling this method. Despite the "pattern" name (from the
+            // IGetObjectsDataProvider interface), the value passed to ShowSchemasCommand is used
+            // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
+            string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
+            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog, databaseName
+            // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
+            bool showSchemasInAllCatalogs = catalogPattern == null;
+
+            var result = new List<(string, string)>();
+            foreach (var batch in batches)
+            {
+                StringArray? catalogArray = null;
+                StringArray? schemaArray = null;
+
+                if (showSchemasInAllCatalogs)
+                {
+                    catalogArray = batch.Column(0) as StringArray;
+                    schemaArray = batch.Column(1) as StringArray;
+                }
+                else
+                {
+                    schemaArray = batch.Column(0) as StringArray;
+                }
+
+                if (schemaArray == null) continue;
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (schemaArray.IsNull(i)) continue;
+                    string catalog = catalogArray != null && !catalogArray.IsNull(i)
+                        ? catalogArray.GetString(i)
+                        : catalogPattern ?? "";
+                    result.Add((catalog, schemaArray.GetString(i)));
+                }
+            }
+            return result;
+        }
+
+        async Task<IReadOnlyList<(string catalog, string schema, string table, string tableType)>> IGetObjectsDataProvider.GetTablesAsync(
+            string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, CancellationToken cancellationToken)
+        {
+            string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
+            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            var result = new List<(string, string, string, string)>();
+            foreach (var batch in batches)
+            {
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                var tableArray = TryGetColumn<StringArray>(batch, "tableName");
+                var tableTypeArray = TryGetColumn<StringArray>(batch, "tableType");
+
+                if (catalogArray == null || schemaArray == null || tableArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableArray.IsNull(i)) continue;
+
+                    string tableType = "TABLE";
+                    if (tableTypeArray != null && !tableTypeArray.IsNull(i))
+                    {
+                        string serverType = tableTypeArray.GetString(i);
+                        if (!string.IsNullOrEmpty(serverType))
+                            tableType = serverType;
+                    }
+
+                    if (tableTypes != null && tableTypes.Count > 0 && !tableTypes.Contains(tableType))
+                        continue;
+
+                    result.Add((catalogArray.GetString(i), schemaArray.GetString(i),
+                        tableArray.GetString(i), tableType));
+                }
+            }
+            return result;
+        }
+
+        async Task IGetObjectsDataProvider.PopulateColumnInfoAsync(string? catalogPattern, string? schemaPattern,
+            string? tablePattern, string? columnPattern,
+            Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
+            CancellationToken cancellationToken)
+        {
+            string sql = new ShowColumnsCommand(catalogPattern, schemaPattern, tablePattern, columnPattern).Build();
+            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            var tablePositions = new Dictionary<string, int>();
+
+            foreach (var batch in batches)
+            {
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                var tableNameArray = TryGetColumn<StringArray>(batch, "tableName");
+                var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
+                var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
+                var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
+
+                if (catalogArray == null || schemaArray == null || tableNameArray == null ||
+                    colNameArray == null || columnTypeArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableNameArray.IsNull(i) ||
+                        colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
+
+                    string cat = catalogArray.GetString(i);
+                    string sch = schemaArray.GetString(i);
+                    string tbl = tableNameArray.GetString(i);
+                    string colName = colNameArray.GetString(i);
+                    string colType = columnTypeArray.GetString(i);
+
+                    if (string.IsNullOrEmpty(colName)) continue;
+
+                    string tableKey = $"{cat}.{sch}.{tbl}";
+                    if (!tablePositions.ContainsKey(tableKey))
+                        tablePositions[tableKey] = 1;
+                    int position = tablePositions[tableKey]++;
+
+                    bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
+                        !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+
+                    if (catalogMap.TryGetValue(cat, out var schemaMap)
+                        && schemaMap.TryGetValue(sch, out var tableMap)
+                        && tableMap.TryGetValue(tbl, out var tableInfo))
+                    {
+                        ColumnMetadataHelper.PopulateTableInfoFromTypeName(
+                            tableInfo, colName, colType, position, nullable);
+
+                        // Match Thrift GetObjects behavior: SparkConnection.SetPrecisionScaleAndTypeName
+                        // only sets Precision/Scale for DECIMAL, NUMERIC, CHAR, NCHAR, VARCHAR,
+                        // NVARCHAR, LONGVARCHAR, LONGNVARCHAR. All other types get null.
+                        int lastIdx = tableInfo.Precision.Count - 1;
+                        short typeCode = tableInfo.ColType[lastIdx];
+                        if (typeCode != (short)HiveServer2Connection.ColumnTypeId.DECIMAL
+                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NUMERIC
+                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.CHAR
+                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NCHAR
+                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.VARCHAR
+                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NVARCHAR
+                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.LONGVARCHAR
+                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.LONGNVARCHAR)
+                        {
+                            tableInfo.Precision[lastIdx] = null;
+                            tableInfo.Scale[lastIdx] = null;
+                        }
+                    }
+                }
+            }
+        }
+
+        private static T? TryGetColumn<T>(RecordBatch batch, string name) where T : class, IArrowArray
+        {
+            try
+            {
+                return batch.Column(name) as T;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return null;
+            }
+        }
+
+        internal async Task<List<RecordBatch>> ExecuteMetadataSqlAsync(string sql, CancellationToken cancellationToken = default)
+        {
+            var batches = new List<RecordBatch>();
+            using var stmt = (StatementExecutionStatement)CreateStatement();
+            stmt.SqlQuery = sql;
+            var result = await stmt.ExecuteQueryAsync(cancellationToken, isMetadataExecution: true).ConfigureAwait(false);
+            using var stream = result.Stream;
+            if (stream == null) return batches;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var batch = await stream.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                if (batch == null) break;
+                batches.Add(batch);
+            }
+            return batches;
+        }
+
+        internal List<RecordBatch> ExecuteMetadataSql(string sql, CancellationToken cancellationToken = default)
+        {
+            return ExecuteMetadataSqlAsync(sql, cancellationToken).GetAwaiter().GetResult();
+        }
+
+        internal bool EnablePKFK => _enablePKFK;
+
+        internal bool EnableMultipleCatalogSupport => _enableMultipleCatalogSupport;
+
+        /// <summary>
+        /// Resolves the effective catalog for metadata queries.
+        /// SEA SHOW commands require an explicit catalog name in the SQL string
+        /// (e.g., SHOW SCHEMAS IN `catalog`), unlike Thrift which treats null
+        /// as "use session default." So we must always resolve to a concrete value.
+        /// When EnableMultipleCatalogSupport is true: uses the provided catalog,
+        ///   falling back to the connection default catalog.
+        /// When EnableMultipleCatalogSupport is false: resolves via the session's
+        ///   current catalog (SELECT CURRENT_CATALOG()) since _catalog is null
+        ///   when the flag is false (matching Thrift behavior).
+        /// </summary>
+        internal string? ResolveEffectiveCatalog(string? requestedCatalog)
+        {
+            string? normalized = MetadataUtilities.NormalizeSparkCatalog(requestedCatalog);
+
+            if (_enableMultipleCatalogSupport)
+            {
+                return normalized ?? _catalog;
+            }
+
+            // flag=false: if user specified an explicit non-null catalog, it won't
+            // match the default — the statement layer should return empty.
+            // If null/SPARK, resolve via server query.
+            return normalized ?? GetCurrentCatalog();
         }
 
         /// <summary>
-        /// Gets the schema for a specific table.
+        /// Queries the server for the current catalog via SELECT CURRENT_CATALOG().
         /// </summary>
-        public override Schema GetTableSchema(string? catalog, string? dbSchema, string tableName)
+        private string? GetCurrentCatalog()
         {
-            // TODO (PECO-2792): Implement metadata operations via SQL queries
-            throw new NotImplementedException("Metadata operations are not yet implemented for Statement Execution API (PECO-2792)");
+            var batches = ExecuteMetadataSql("SELECT CURRENT_CATALOG()");
+            foreach (var batch in batches)
+            {
+                if (batch.Length > 0 && batch.Column(0) is StringArray col && !col.IsNull(0))
+                {
+                    return col.GetString(0);
+                }
+            }
+
+            return _catalog;
+        }
+
+        internal CancellationTokenSource CreateMetadataTimeoutCts()
+        {
+            return new CancellationTokenSource(TimeSpan.FromSeconds(_waitTimeoutSeconds));
         }
 
         /// <summary>
