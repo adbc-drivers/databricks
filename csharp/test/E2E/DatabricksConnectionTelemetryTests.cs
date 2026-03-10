@@ -63,7 +63,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E
             QueryResult result = statement.ExecuteQuery();
 
             Assert.NotNull(result);
-            
+
 
             OutputHelper?.WriteLine("OpenAsync_InitializesTelemetry: Connection opened successfully with telemetry enabled");
 
@@ -94,7 +94,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E
             QueryResult result = statement.ExecuteQuery();
 
             Assert.NotNull(result);
-            
+
 
             OutputHelper?.WriteLine("OpenAsync_FeatureFlagDisabled_NoTelemetry: Connection opened successfully with telemetry disabled");
 
@@ -125,7 +125,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E
                 statement.SqlQuery = "SELECT 1";
                 QueryResult result = statement.ExecuteQuery();
                 Assert.NotNull(result);
-                
+
             }
 
             // Dispose connection - should trigger telemetry cleanup
@@ -140,7 +140,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E
                 statement.SqlQuery = "SELECT 1";
                 QueryResult result = statement.ExecuteQuery();
                 Assert.NotNull(result);
-                
+
             }
 
             OutputHelper?.WriteLine("Dispose_ReleasesTelemetryClient: Second connection created successfully after first disposed");
@@ -172,7 +172,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E
                 statement.SqlQuery = $"SELECT {i}";
                 QueryResult result = statement.ExecuteQuery();
                 Assert.NotNull(result);
-                
+
             }
 
             // Give telemetry aggregator time to process events
@@ -212,7 +212,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E
                 QueryResult result = statement.ExecuteQuery();
 
                 Assert.NotNull(result);
-                
+
 
                 OutputHelper?.WriteLine("TelemetryFailures_DoNotImpactConnection: Connection and query execution successful");
             }
@@ -249,7 +249,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E
                     statement.SqlQuery = $"SELECT {i}";
                     QueryResult result = statement.ExecuteQuery();
                     Assert.NotNull(result);
-                    
+
                 }
 
                 OutputHelper?.WriteLine("MultipleConnections_SameHost_ShareTelemetryClient: Created 3 connections successfully");
