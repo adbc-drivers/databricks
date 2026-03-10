@@ -236,7 +236,7 @@ jobs:
               "pr_url": "${{ github.event.pull_request.html_url }}",
               "pr_title": "${{ github.event.pull_request.title }}",
               "pr_author": "${{ github.event.pull_request.user.login }}",
-              "extra_parameters": {"adbc.databricks.protocol": "rest"}
+              "extra_parameters": "{\"adbc.databricks.protocol\": \"rest\"}"
             }
 
       - name: Dispatch Rust tests to internal repo
@@ -410,7 +410,7 @@ jobs:
               "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
               "pr_title": "Merge queue validation",
               "pr_author": "merge-queue",
-              "extra_parameters": {"adbc.databricks.protocol": "rest"}
+              "extra_parameters": "{\"adbc.databricks.protocol\": \"rest\"}"
             }
 
       - name: Fail check on dispatch error
