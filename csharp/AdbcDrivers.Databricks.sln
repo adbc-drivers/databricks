@@ -7,8 +7,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdbcDrivers.Databricks", "s
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc.Drivers.Apache", "hiveserver2\csharp\arrow-adbc\csharp\src\Drivers\Apache\Apache.Arrow.Adbc.Drivers.Apache.csproj", "{F1FD5D2D-B4F9-DFC5-FB32-EA5FE5640A81}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc.Telemetry.Traces.Listeners", "hiveserver2\csharp\arrow-adbc\csharp\src\Telemetry\Traces\Listeners\Apache.Arrow.Adbc.Telemetry.Traces.Listeners.csproj", "{BFE03B71-6E4A-9FCC-3A82-0FEA82BEEA97}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc", "hiveserver2\csharp\arrow-adbc\csharp\src\Apache.Arrow.Adbc\Apache.Arrow.Adbc.csproj", "{147C9F86-54C4-5572-B0F8-D48DFDAAF667}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdbcDrivers.Databricks.Tests", "test\AdbcDrivers.Databricks.Tests.csproj", "{38222237-0B30-A05A-368A-6BBBBF0BBA30}"
@@ -41,10 +39,6 @@ Global
 		{F1FD5D2D-B4F9-DFC5-FB32-EA5FE5640A81}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F1FD5D2D-B4F9-DFC5-FB32-EA5FE5640A81}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F1FD5D2D-B4F9-DFC5-FB32-EA5FE5640A81}.Release|Any CPU.Build.0 = Release|Any CPU
-		{BFE03B71-6E4A-9FCC-3A82-0FEA82BEEA97}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{BFE03B71-6E4A-9FCC-3A82-0FEA82BEEA97}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{BFE03B71-6E4A-9FCC-3A82-0FEA82BEEA97}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{BFE03B71-6E4A-9FCC-3A82-0FEA82BEEA97}.Release|Any CPU.Build.0 = Release|Any CPU
 		{147C9F86-54C4-5572-B0F8-D48DFDAAF667}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{147C9F86-54C4-5572-B0F8-D48DFDAAF667}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{147C9F86-54C4-5572-B0F8-D48DFDAAF667}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -83,7 +77,6 @@ Global
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{F1FD5D2D-B4F9-DFC5-FB32-EA5FE5640A81} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
-		{BFE03B71-6E4A-9FCC-3A82-0FEA82BEEA97} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{147C9F86-54C4-5572-B0F8-D48DFDAAF667} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{DCFAC829-4278-219B-AAA9-BCFEEED23300} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{D329B649-FFF3-6E1D-008A-A29291295470} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
