@@ -471,7 +471,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             foreach (var column in manifest.Schema.Columns)
             {
                 var arrowType = MapDatabricksTypeToArrowType(column.TypeName);
-                fields.Add(new Field(column.Name, arrowType, true));
+                // Embed the SQL type name as Arrow field metadata so that consumers
+                // (e.g. the PowerBI connector's AdjustNativeTypes) can read it via
+                // the "Spark:DataType:SqlName" key — the same metadata the Databricks
+                // server embeds in the Arrow IPC stream for non-empty results.
+                var metadata = new Dictionary<string, string>
+                {
+                    ["Spark:DataType:SqlName"] = column.TypeName
+                };
+                fields.Add(new Field(column.Name, arrowType, true, metadata));
             }
 
             return new Schema(fields, null);

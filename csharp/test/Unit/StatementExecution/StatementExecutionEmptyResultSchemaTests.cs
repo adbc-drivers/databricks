@@ -184,6 +184,39 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
+        public async Task ExecuteQuery_EmptyTable_FieldsHaveSparkSqlNameMetadata()
+        {
+            // Arrange: server returns SUCCEEDED with schema but no data
+            var manifest = BuildManifest(("id", "INT"), ("name", "STRING"));
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData { Attachment = null },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object);
+            stmt.SqlQuery = "SELECT id, name FROM empty_table WHERE 0=1";
+
+            // Act
+            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            var fields = queryResult.Stream!.Schema.FieldsList;
+
+            // Assert: each field carries Spark:DataType:SqlName so that consumers like
+            // the PowerBI connector's AdjustNativeTypes can map to the correct Power Query type.
+            Assert.Equal(2, fields.Count);
+            Assert.Equal("INT", fields[0].Metadata["Spark:DataType:SqlName"]);
+            Assert.Equal("STRING", fields[1].Metadata["Spark:DataType:SqlName"]);
+        }
+
+        [Fact]
         public async Task ExecuteQuery_NullManifest_ReturnsEmptySchema()
         {
             // Arrange: server returns null manifest (no results at all, e.g. DDL)
