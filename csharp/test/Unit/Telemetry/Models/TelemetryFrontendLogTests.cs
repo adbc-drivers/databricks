@@ -18,6 +18,7 @@ using System.Text.Json;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.Databricks.Telemetry.Proto;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
@@ -185,7 +186,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
                         },
                         SqlOperation = new SqlExecutionEvent
                         {
-                            ExecutionResult = ExecutionResultFormat.ExecutionResultExternalLinks,
+                            ExecutionResult = ExecutionResultFormat.ExternalLinks,
                             IsCompressed = true
                         }
                     }
@@ -200,8 +201,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
             Assert.Contains("workspace_id", json);
             Assert.Contains("frontend_log_event_id", json);
             Assert.Contains("sql_driver_log", json);
-            Assert.Contains("sessionId", json);  // Proto uses camelCase
-            Assert.Contains("sqlStatementId", json);
+            Assert.Contains("session_id", json);  // Proto uses snake_case (PreserveProtoFieldNames)
+            Assert.Contains("sql_statement_id", json);
         }
 
         [Fact]
