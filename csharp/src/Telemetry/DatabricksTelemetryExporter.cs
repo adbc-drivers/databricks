@@ -64,10 +64,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly TelemetryConfiguration _config;
         private readonly ResiliencePipeline _retryPipeline;
 
-        private static readonly JsonSerializerOptions s_jsonOptions = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        };
+        private static readonly JsonSerializerOptions s_jsonOptions = TelemetryJsonOptions.Default;
 
         /// <summary>
         /// Gets the host URL for the telemetry endpoint.
@@ -226,6 +223,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         {
             var endpoint = _isAuthenticated ? AuthenticatedEndpoint : UnauthenticatedEndpoint;
             var host = _host.TrimEnd('/');
+            if (!host.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+                !host.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                host = $"https://{host}";
+            }
             return $"{host}{endpoint}";
         }
 

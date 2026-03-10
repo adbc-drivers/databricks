@@ -36,10 +36,30 @@ DATABRICKS_TOKEN = "<your-pat-token>"
 cargo run --example <example_name>
 ```
 
-All examples initialize `tracing_subscriber` with `DEBUG` level, so you will
+Most examples initialize `tracing_subscriber` with `DEBUG` level, so you will
 see detailed debug logs by default. To filter logs, set `RUST_LOG` in
 `.cargo/config.toml`:
 
 ```toml
 RUST_LOG = "databricks_adbc=debug"
+```
+
+## Logging
+
+The `logging_test` example demonstrates the driver's built-in logging support.
+Instead of manually initializing `tracing_subscriber`, you can configure logging
+via ADBC database options:
+
+- `databricks.log_level` — `off`, `error`, `warn`, `info`, `debug`, `trace`
+- `databricks.log_file` — file path (logs go to stderr if unset)
+
+```bash
+cargo run --example logging_test
+```
+
+Alternatively, use the `RUST_LOG` environment variable (takes effect when no
+`databricks.log_level` option is set):
+
+```bash
+RUST_LOG=databricks_adbc=debug cargo run --example logging_test
 ```

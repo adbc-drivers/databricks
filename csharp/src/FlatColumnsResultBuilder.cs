@@ -15,7 +15,7 @@
  */
 
 using System.Collections.Generic;
-using AdbcDrivers.HiveServer2;
+using AdbcDrivers.Databricks.StatementExecution;using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;

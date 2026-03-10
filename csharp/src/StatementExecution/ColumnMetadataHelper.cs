@@ -19,7 +19,7 @@ using System.Collections.Generic;
 using AdbcDrivers.HiveServer2.Hive2;
 using static AdbcDrivers.HiveServer2.Hive2.HiveServer2Connection;
 
-namespace AdbcDrivers.Databricks
+namespace AdbcDrivers.Databricks.StatementExecution
 {
     /// <summary>
     /// Computes column metadata (data type codes, column sizes, decimal digits,

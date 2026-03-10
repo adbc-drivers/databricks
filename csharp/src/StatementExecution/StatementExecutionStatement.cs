@@ -53,6 +53,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string? _resultCompression;
         private readonly int _waitTimeoutSeconds;
         private readonly int _pollingIntervalMs;
+        private readonly int _queryTimeoutSeconds; // 0 = no timeout
 
         // Connection properties for CloudFetch configuration
         private readonly IReadOnlyDictionary<string, string> _properties;
@@ -73,7 +74,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Metadata command support
         private bool _isMetadataCommand;
-        private bool _isMetadataExecution;
         private bool _escapePatternWildcards;
         private string? _metadataCatalogName;
         private string? _metadataSchemaName;
@@ -114,6 +114,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _waitTimeoutSeconds = waitTimeoutSeconds;
             _pollingIntervalMs = pollingIntervalMs;
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
+            _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
+                properties, ApacheParameters.QueryTimeoutSeconds, 0);
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -126,15 +128,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             get => _sqlQuery;
             set => _sqlQuery = value;
-        }
-
-        /// <summary>
-        /// Marks this statement as a metadata operation so the HTTP request includes
-        /// the x-databricks-sea-can-run-fully-sync header for optimized server execution.
-        /// </summary>
-        internal bool IsMetadataExecution
-        {
-            set => _isMetadataExecution = value;
         }
 
         public override void SetOption(string key, string value)
@@ -180,6 +173,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 case ApacheParameters.QueryTimeoutSeconds:
                     break;
 
+                // DatabricksStatement-specific options: accept but ignore for now.
+                // TODO(PECOBLR-2259): Implement query_tags support for SEA. The SEA API uses a
+                // JSON array of {key, value} objects in the executestatement request body,
+                // unlike Thrift which sends a string in confOverlay.
+                case DatabricksParameters.QueryTags:
+                case DatabricksParameters.UseCloudFetch:
+                case DatabricksParameters.CanDecompressLz4:
+                case DatabricksParameters.MaxBytesPerFile:
+                case DatabricksParameters.MaxBytesPerFetchRequest:
+                    break;
+
                 default:
                     base.SetOption(key, value);
                     break;
@@ -191,7 +195,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return ExecuteQueryAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
 
-        public async Task<QueryResult> ExecuteQueryAsync(CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Executes the query asynchronously.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <param name="isMetadataExecution">When true, adds the x-databricks-sea-can-run-fully-sync
+        /// header for optimized metadata query execution on the server.</param>
+        public async Task<QueryResult> ExecuteQueryAsync(
+            CancellationToken cancellationToken = default,
+            bool isMetadataExecution = false)
         {
             if (_isMetadataCommand)
             {
@@ -218,7 +230,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ResultCompression = _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
-                IsMetadata = _isMetadataExecution
+                IsMetadata = isMetadataExecution
             };
 
             // Execute the statement
@@ -235,7 +247,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var state = response.Status?.State;
             if (state == "PENDING" || state == "RUNNING")
             {
-                response = await PollUntilCompleteAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
                 state = response.Status?.State;
             }
 
@@ -274,6 +286,41 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Return query result - use -1 if row count is not available
             long rowCount = response.Manifest?.TotalRowCount ?? -1;
             return new QueryResult(rowCount, reader);
+        }
+
+        /// <summary>
+        /// Wraps PollUntilCompleteAsync with query timeout enforcement.
+        /// If _queryTimeoutSeconds > 0, cancels the server-side statement and throws on timeout.
+        /// </summary>
+        private async Task<ExecuteStatementResponse> PollWithTimeoutAsync(string statementId, CancellationToken cancellationToken)
+        {
+            if (_queryTimeoutSeconds <= 0)
+            {
+                return await PollUntilCompleteAsync(statementId, cancellationToken).ConfigureAwait(false);
+            }
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_queryTimeoutSeconds));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+            try
+            {
+                return await PollUntilCompleteAsync(statementId, linkedCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                // Timeout fired (not caller cancellation) — cancel statement on server, best-effort
+                try
+                {
+                    await _client.CancelStatementAsync(statementId, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort; ignore cancel errors
+                }
+                throw new AdbcException(
+                    $"Query timed out after {_queryTimeoutSeconds} seconds (statement {statementId}). " +
+                    $"Increase timeout via '{ApacheParameters.QueryTimeoutSeconds}' or set to 0 for no timeout.");
+            }
         }
 
         /// <summary>
@@ -496,7 +543,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ResultCompression = _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
-                IsMetadata = _isMetadataExecution
+                IsMetadata = false
             };
 
             // Execute the statement
@@ -507,7 +554,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var state = response.Status?.State;
             if (state == "PENDING" || state == "RUNNING")
             {
-                response = await PollUntilCompleteAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
                 state = response.Status?.State;
             }
 
@@ -695,7 +742,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Metadata command routing
 
-        private string? EffectiveCatalog => MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) ?? _catalog;
+        private string? EffectiveCatalog => _connection.ResolveEffectiveCatalog(_metadataCatalogName);
 
         /// <summary>
         /// Escapes wildcard characters (_ and %) in metadata name parameters when
@@ -729,6 +776,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return await this.TraceActivityAsync(async activity =>
             {
                 activity?.SetTag("catalog_pattern", _metadataCatalogName ?? "(none)");
+                activity?.SetTag("enable_multiple_catalog_support", _connection.EnableMultipleCatalogSupport);
+
+                // When multiple catalog support is disabled, return a single "SPARK" catalog
+                if (!_connection.EnableMultipleCatalogSupport)
+                {
+                    var catalogSchema = MetadataSchemaFactory.CreateCatalogsSchema();
+                    var sparkBuilder = new StringArray.Builder();
+                    sparkBuilder.Append("SPARK");
+                    return new QueryResult(1, new HiveInfoArrowStream(catalogSchema, new IArrowArray[] { sparkBuilder.Build() }));
+                }
 
                 string sql = new ShowCatalogsCommand(EscapePatternWildcardsInName(_metadataCatalogName)).Build();
                 activity?.SetTag("sql_query", sql);
@@ -760,31 +817,53 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                var catalog = EffectiveCatalog;
+                activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
+                activity?.SetTag("enable_multiple_catalog_support", _connection.EnableMultipleCatalogSupport);
+
+                // When flag=false and user specified an explicit non-SPARK catalog, return empty
+                if (!_connection.EnableMultipleCatalogSupport
+                    && MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) != null)
+                    return MetadataSchemaFactory.CreateEmptySchemasResult();
 
                 string sql = new ShowSchemasCommand(
-                    EffectiveCatalog,
+                    catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName)).Build();
                 activity?.SetTag("sql_query", sql);
                 var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+                // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog_name, databaseName
+                // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
+                bool showAllCatalogs = catalog == null;
 
                 var tableSchemaBuilder = new StringArray.Builder();
                 var tableCatalogBuilder = new StringArray.Builder();
                 int count = 0;
                 foreach (var batch in batches)
                 {
-                    var schemaArray = TryGetColumn<StringArray>(batch, "databaseName");
-                    var catalogArray = TryGetColumn<StringArray>(batch, "catalog_name");
+                    StringArray? catalogArray = null;
+                    StringArray? schemaArray = null;
+
+                    if (showAllCatalogs)
+                    {
+                        catalogArray = batch.Column(0) as StringArray;
+                        schemaArray = batch.Column(1) as StringArray;
+                    }
+                    else
+                    {
+                        schemaArray = batch.Column(0) as StringArray;
+                    }
+
                     if (schemaArray == null) continue;
                     for (int i = 0; i < batch.Length; i++)
                     {
                         if (schemaArray.IsNull(i)) continue;
                         tableSchemaBuilder.Append(schemaArray.GetString(i));
-                        string catalog = catalogArray != null && !catalogArray.IsNull(i)
+                        string catalogValue = catalogArray != null && !catalogArray.IsNull(i)
                             ? catalogArray.GetString(i)
-                            : EffectiveCatalog ?? "";
-                        tableCatalogBuilder.Append(catalog);
+                            : catalog ?? "";
+                        tableCatalogBuilder.Append(catalogValue);
                         count++;
                     }
                 }
@@ -802,12 +881,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                var catalog = EffectiveCatalog;
+                activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table_pattern", _metadataTableName ?? "(none)");
+                activity?.SetTag("enable_multiple_catalog_support", _connection.EnableMultipleCatalogSupport);
+
+                if (!_connection.EnableMultipleCatalogSupport
+                    && MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) != null)
+                    return MetadataSchemaFactory.CreateEmptyTablesResult();
 
                 string sql = new ShowTablesCommand(
-                    EffectiveCatalog,
+                    catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName),
                     EscapePatternWildcardsInName(_metadataTableName)).Build();
                 activity?.SetTag("sql_query", sql);
@@ -823,6 +908,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var typeNameBuilder = new StringArray.Builder();
                 var selfRefColBuilder = new StringArray.Builder();
                 var refGenBuilder = new StringArray.Builder();
+                var tableTypeFilter = !string.IsNullOrEmpty(_metadataTableTypes)
+                    ? new HashSet<string>(
+                        _metadataTableTypes!.Split(',').Select(t => t.Trim()),
+                        StringComparer.OrdinalIgnoreCase)
+                    : null;
+
                 int count = 0;
                 foreach (var batch in batches)
                 {
@@ -832,10 +923,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var tableTypeArray = TryGetColumn<StringArray>(batch, "tableType");
                     var remarksArray = TryGetColumn<StringArray>(batch, "remarks");
                     if (catalogArray == null || schemaArray == null || tableArray == null) continue;
-
-                    var tableTypeFilter = !string.IsNullOrEmpty(_metadataTableTypes)
-                        ? new HashSet<string>(_metadataTableTypes!.Split(','), StringComparer.OrdinalIgnoreCase)
-                        : null;
 
                     for (int i = 0; i < batch.Length; i++)
                     {
@@ -872,13 +959,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                var catalog = EffectiveCatalog;
+                activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table_pattern", _metadataTableName ?? "(none)");
                 activity?.SetTag("column_pattern", _metadataColumnName ?? "(none)");
+                activity?.SetTag("enable_multiple_catalog_support", _connection.EnableMultipleCatalogSupport);
+
+                // When EnableMultipleCatalogSupport is false, only the session's default catalog
+                // is accessible. If the user specified an explicit non-SPARK catalog, return empty
+                // results immediately (matching Thrift behavior in DatabricksStatement).
+                if (!_connection.EnableMultipleCatalogSupport
+                    && MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) != null)
+                    return FlatColumnsResultBuilder.BuildFlatColumnsResult(
+                        System.Array.Empty<(string, string, string, TableInfo)>());
 
                 string sql = new ShowColumnsCommand(
-                    EffectiveCatalog,
+                    catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName),
                     EscapePatternWildcardsInName(_metadataTableName),
                     EscapePatternWildcardsInName(_metadataColumnName)).Build();
@@ -934,15 +1031,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", EffectiveCatalog ?? "(none)");
+                var catalog = EffectiveCatalog;
+                activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
 
-                string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
-                    EffectiveCatalog, _metadataSchemaName, _metadataTableName);
+                if (string.IsNullOrEmpty(_metadataTableName))
+                    throw new ArgumentException("Table name is required for GetColumnsExtended");
 
-                if (string.IsNullOrEmpty(fullTableName))
-                    throw new ArgumentException("Catalog, schema, and table name are required for GetColumnsExtended");
+                // For building the qualified table name, use the user-specified catalog
+                // (normalized to null for SPARK) rather than EffectiveCatalog. This matches
+                // Thrift's BuildTableName which omits the catalog prefix when it's null/SPARK,
+                // letting the server resolve to its default catalog.
+                string? catalogForTableName = _connection.EnableMultipleCatalogSupport
+                    ? catalog
+                    : MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName);
+
+                string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
+                    catalogForTableName, _metadataSchemaName, _metadataTableName);
 
                 string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
                 activity?.SetTag("sql_query", query);
@@ -981,25 +1087,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("catalog", _metadataCatalogName ?? "(none)");
                 activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
+                activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-                if (MetadataUtilities.IsInvalidPKFKCatalog(_metadataCatalogName))
+                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
                 if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName) ||
                     string.IsNullOrEmpty(_metadataTableName))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-                List<RecordBatch> batches;
-                try
-                {
-                    string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
-                    activity?.SetTag("sql_query", sql);
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch
-                {
-                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
-                }
+                string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
+                activity?.SetTag("sql_query", sql);
+                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
                 var keys = new List<(string, string, string, string, int, string)>();
                 int seq = 0;
@@ -1034,26 +1133,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("fk_catalog", _metadataForeignCatalogName ?? "(none)");
                 activity?.SetTag("fk_schema", _metadataForeignSchemaName ?? "(none)");
                 activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
+                activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-                if (MetadataUtilities.IsInvalidPKFKCatalog(_metadataForeignCatalogName))
+                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
                 if (string.IsNullOrEmpty(_metadataForeignCatalogName) || string.IsNullOrEmpty(_metadataForeignSchemaName) ||
                     string.IsNullOrEmpty(_metadataForeignTableName))
                     return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-                List<RecordBatch> batches;
-                try
-                {
-                    string sql = new ShowForeignKeysCommand(
-                        _metadataForeignCatalogName!, _metadataForeignSchemaName!, _metadataForeignTableName!).Build();
-                    activity?.SetTag("sql_query", sql);
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch
-                {
-                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-                }
+                string sql = new ShowForeignKeysCommand(
+                    _metadataForeignCatalogName!, _metadataForeignSchemaName!, _metadataForeignTableName!).Build();
+                activity?.SetTag("sql_query", sql);
+                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
                 var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
                 int seq = 0;
