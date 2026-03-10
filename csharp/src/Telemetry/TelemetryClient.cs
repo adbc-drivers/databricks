@@ -53,7 +53,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly CancellationTokenSource _cts;
         private readonly SemaphoreSlim _flushSemaphore = new SemaphoreSlim(1, 1);
         private readonly Timer? _flushTimer;
-        private int _disposed;
+        // State machine: 0 = Active, 1 = Closing (final flush in progress), 2 = Closed
+        private const int StateActive = 0;
+        private const int StateClosing = 1;
+        private const int StateClosed = 2;
+        private int _state;
         private int _queueCount;
 
         /// <summary>
@@ -161,7 +165,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public void Enqueue(TelemetryFrontendLog log)
         {
-            if (_disposed != 0 || !_enabled || log == null)
+            if (_state != StateActive || !_enabled || log == null)
             {
                 return;
             }
@@ -207,7 +211,8 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public async Task FlushAsync(CancellationToken ct = default)
         {
-            if (_disposed != 0)
+            // Allow flush during Active and Closing states, but not after Closed
+            if (_state == StateClosed)
             {
                 return;
             }
@@ -280,7 +285,8 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </remarks>
         public async Task CloseAsync()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) == 1)
+            // Atomically transition from Active to Closing; reject if not Active
+            if (Interlocked.CompareExchange(ref _state, StateClosing, StateActive) != StateActive)
             {
                 return;
             }
@@ -300,16 +306,13 @@ namespace AdbcDrivers.Databricks.Telemetry
                 }
 
                 // Flush remaining queued events before shutdown
+                // FlushAsync allows Closing state, so no need to toggle _state
                 try
                 {
-                    // Temporarily reset _disposed to allow FlushAsync to proceed
-                    Interlocked.Exchange(ref _disposed, 0);
                     await FlushAsync(CancellationToken.None).ConfigureAwait(false);
-                    Interlocked.Exchange(ref _disposed, 1);
                 }
                 catch (Exception ex)
                 {
-                    Interlocked.Exchange(ref _disposed, 1);
                     Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.final_flush_error",
                         tags: new ActivityTagsCollection
                         {
@@ -317,6 +320,9 @@ namespace AdbcDrivers.Databricks.Telemetry
                             { "error.type", ex.GetType().Name }
                         }));
                 }
+
+                // Transition to Closed state
+                Interlocked.Exchange(ref _state, StateClosed);
 
                 // Cancel the token to signal any in-flight operations
                 try
