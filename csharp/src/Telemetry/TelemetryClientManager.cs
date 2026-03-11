@@ -114,21 +114,13 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             lock (_lock)
             {
-                // When ExporterOverride is set (test mode), bypass the cache so the
-                // test's capturing exporter is always used, regardless of any cached
-                // clients that were created by other tests without the override.
-                if (ExporterOverride != null)
-                {
-                    return new TelemetryClient(host, httpClient, isAuthenticated, config, ExporterOverride);
-                }
-
                 if (_clients.TryGetValue(host, out TelemetryClientHolder? existing))
                 {
                     existing.AddRef();
                     return existing.Client;
                 }
 
-                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config, null));
+                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config, ExporterOverride));
                 _clients[host] = holder;
                 return holder.Client;
             }
