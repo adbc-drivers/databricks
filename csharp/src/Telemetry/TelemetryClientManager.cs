@@ -15,6 +15,7 @@
 */
 
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AdbcDrivers.Databricks.Telemetry
@@ -46,12 +47,18 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly Dictionary<string, TelemetryClientHolder> _clients = new Dictionary<string, TelemetryClientHolder>();
         private readonly object _lock = new object();
 
+        private static readonly AsyncLocal<ITelemetryExporter?> s_exporterOverride = new AsyncLocal<ITelemetryExporter?>();
+
         /// <summary>
-        /// Optional exporter override for testing. When set, newly created TelemetryClients
-        /// use this exporter instead of the default DatabricksTelemetryExporter pipeline.
+        /// Optional exporter override for testing. Uses AsyncLocal so the override is scoped
+        /// to the current async context and does not leak to concurrent test classes.
         /// Must be set before connections are opened and cleared after tests complete.
         /// </summary>
-        internal static ITelemetryExporter? ExporterOverride { get; set; }
+        internal static ITelemetryExporter? ExporterOverride
+        {
+            get => s_exporterOverride.Value;
+            set => s_exporterOverride.Value = value;
+        }
 
         /// <summary>
         /// Internal constructor. Public API uses GetInstance() for the singleton.

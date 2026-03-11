@@ -736,31 +736,38 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
                 "Token is required for feature flag test");
 
-            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            properties[TelemetryConfiguration.PropertyKeyEnabled] = "false";
-
-            AdbcDriver driver = NewDriver;
-            AdbcDatabase database = driver.Open(properties);
-
-            using (AdbcConnection connection = database.Connect(properties))
+            var capturingExporter = SetupCapturingExporter();
+            try
             {
-                // Verify telemetry was NOT initialized when disabled
-                var databricksConnection = (DatabricksConnection)connection;
-                Assert.Null(databricksConnection.TelemetrySession);
-                Assert.Equal("telemetry_disabled", databricksConnection.TelemetryInitError);
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "false";
 
-                for (int i = 0; i < 5; i++)
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
                 {
-                    using (AdbcStatement statement = connection.CreateStatement())
+                    for (int i = 0; i < 5; i++)
                     {
-                        statement.SqlQuery = $"SELECT {i} as test";
-                        QueryResult result = statement.ExecuteQuery();
-                        Assert.NotNull(result);
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as test";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
                     }
                 }
-            }
 
-            database.Dispose();
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"With telemetry disabled: ExportAsync called {capturingExporter.ExportCallCount} times, {capturingExporter.ExportedLogs.Count} logs captured");
+                Assert.Equal(0, capturingExporter.ExportCallCount);
+                Assert.Empty(capturingExporter.ExportedLogs);
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
         }
 
         /// <summary>
