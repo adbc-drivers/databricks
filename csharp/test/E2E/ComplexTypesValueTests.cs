@@ -26,7 +26,6 @@ using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
-using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using AdbcDrivers.Tests.HiveServer2.Common;
 using Xunit;
@@ -43,7 +42,7 @@ namespace AdbcDrivers.Databricks.Tests
     ///   Thrift: ComplexTypesAsArrow=false (server returns strings natively).
     ///   SEA:    Native Arrow types are serialized to JSON strings by ComplexTypeSerializingStream.
     ///
-    /// See docs/specs/complex-types.yaml for per-protocol type specifications.
+    /// When EnableComplexDatatypeSupport=true, SEA returns native Arrow types (ListType/MapType/StructType).
     /// </summary>
     public class ComplexTypesValueTests : ComplexTypesValueTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
@@ -70,7 +69,7 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.NotNull(batch);
             Assert.Equal(1, batch.Length);
 
-            var arr = (StringArray)batch.Column(0);
+            StringArray arr = (StringArray)batch.Column(0);
             Assert.Equal(expectedJson, arr.GetString(0));
         }
 

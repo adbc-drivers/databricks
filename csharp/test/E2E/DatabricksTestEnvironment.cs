@@ -63,8 +63,10 @@ namespace AdbcDrivers.Databricks.Tests
 
         /// <summary>
         /// Returns true when the active connection is using the Statement Execution (REST/SEA) protocol.
-        /// In SEA mode, complex types (ARRAY, MAP, STRUCT) are returned as native Arrow types.
-        /// In Thrift mode, they are returned as JSON-encoded strings.
+        /// In SEA mode with EnableComplexDatatypeSupport=true, complex types (ARRAY, MAP, STRUCT) are
+        /// returned as native Arrow types. With EnableComplexDatatypeSupport=false (the default), SEA
+        /// serializes them to JSON strings to match Thrift behavior.
+        /// In Thrift mode, complex types are always returned as JSON-encoded strings regardless of the flag.
         /// </summary>
         public bool IsSeaMode => Connection is StatementExecutionConnection;
 

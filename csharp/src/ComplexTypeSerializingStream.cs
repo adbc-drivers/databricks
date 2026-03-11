@@ -21,7 +21,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc.Extensions;
-using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Databricks
@@ -50,7 +49,7 @@ namespace AdbcDrivers.Databricks
 
         public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
         {
-            var batch = await _inner.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+            RecordBatch? batch = await _inner.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
             if (batch == null)
                 return null;
 
@@ -64,7 +63,7 @@ namespace AdbcDrivers.Databricks
 
         private RecordBatch ConvertComplexColumns(RecordBatch batch)
         {
-            var arrays = new IArrowArray[batch.ColumnCount];
+            IArrowArray[] arrays = new IArrowArray[batch.ColumnCount];
             for (int i = 0; i < batch.ColumnCount; i++)
             {
                 arrays[i] = _complexColumnIndices.Contains(i) ? SerializeToStringArray(batch.Column(i)) : batch.Column(i);
@@ -74,7 +73,7 @@ namespace AdbcDrivers.Databricks
 
         private static StringArray SerializeToStringArray(IArrowArray array)
         {
-            var builder = new StringArray.Builder();
+            StringArray.Builder builder = new StringArray.Builder();
             for (int i = 0; i < array.Length; i++)
             {
                 if (array.IsNull(i))
@@ -91,15 +90,15 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private static (Schema schema, HashSet<int> complexIndices) BuildStringSchema(Schema original)
         {
-            var fields = new List<Field>(original.FieldsList.Count);
-            var indices = new HashSet<int>();
+            List<Field> fields = new List<Field>(original.FieldsList.Count);
+            HashSet<int> indices = new HashSet<int>();
 
             for (int i = 0; i < original.FieldsList.Count; i++)
             {
-                var field = original.FieldsList[i];
+                Field field = original.FieldsList[i];
                 if (IsComplexType(field.DataType))
                 {
-                    fields.Add(new Field(field.Name, StringType.Default, nullable: true, field.Metadata));
+                    fields.Add(new Field(field.Name, StringType.Default, field.IsNullable, field.Metadata));
                     indices.Add(i);
                 }
                 else
@@ -135,7 +134,7 @@ namespace AdbcDrivers.Databricks
 
         private static object ToListOrMap(ListArray listArray, int index)
         {
-            var values = listArray.Values;
+            IArrowArray values = listArray.Values;
             int start = (int)listArray.ValueOffsets[index];
             int end = (int)listArray.ValueOffsets[index + 1];
 
@@ -143,7 +142,7 @@ namespace AdbcDrivers.Databricks
             if (values is StructArray structValues && IsMapStruct(structValues))
                 return ToMapDict(structValues, start, end);
 
-            var list = new List<object?>();
+            List<object?> list = new List<object?>();
             for (int i = start; i < end; i++)
                 list.Add(ToObject(values, i));
             return list;
@@ -151,20 +150,22 @@ namespace AdbcDrivers.Databricks
 
         private static bool IsMapStruct(StructArray structArray)
         {
-            var type = (StructType)structArray.Data.DataType;
+            StructType type = (StructType)structArray.Data.DataType;
             return type.Fields.Count == 2 &&
                    type.Fields[0].Name == "key" &&
                    type.Fields[1].Name == "value";
         }
 
-        private static Dictionary<string, object?> ToMapDict(StructArray entries, int start, int end)
+        private static SortedDictionary<string, object?> ToMapDict(StructArray entries, int start, int end)
         {
-            var keyArray = entries.Fields[0];
-            var valueArray = entries.Fields[1];
-            var result = new Dictionary<string, object?>();
+            IArrowArray keyArray = entries.Fields[0];
+            IArrowArray valueArray = entries.Fields[1];
+            // Use SortedDictionary for deterministic key ordering in the JSON output
+            SortedDictionary<string, object?> result = new SortedDictionary<string, object?>();
             for (int i = start; i < end; i++)
             {
-                string key = keyArray is StringArray sa ? sa.GetString(i) ?? "null" : "null";
+                // Convert any key type to its string representation; treat null keys as "null"
+                string key = ToObject(keyArray, i)?.ToString() ?? "null";
                 result[key] = ToObject(valueArray, i);
             }
             return result;
@@ -172,8 +173,8 @@ namespace AdbcDrivers.Databricks
 
         private static Dictionary<string, object?> ToDict(StructArray structArray, int index)
         {
-            var type = (StructType)structArray.Data.DataType;
-            var dict = new Dictionary<string, object?>();
+            StructType type = (StructType)structArray.Data.DataType;
+            Dictionary<string, object?> dict = new Dictionary<string, object?>();
             for (int i = 0; i < type.Fields.Count; i++)
                 dict[type.Fields[i].Name] = ToObject(structArray.Fields[i], index);
             return dict;
