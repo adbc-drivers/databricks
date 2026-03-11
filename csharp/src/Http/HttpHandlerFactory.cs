@@ -402,8 +402,10 @@ namespace AdbcDrivers.Databricks.Http
             HttpMessageHandler baseHandler = HttpClientFactory.CreateHandler(properties);
 
             // Create auth HTTP client for OAuth if needed
+            // Always create when OAuth is enabled - even with an existing token provider,
+            // the auth handler chain requires an HTTP client for token refresh operations
             HttpClient? authHttpClient = null;
-            if (IsOAuthEnabled(properties) && existingTokenProvider == null)
+            if (IsOAuthEnabled(properties))
             {
                 HttpMessageHandler baseAuthHandler = HttpClientFactory.CreateHandler(properties);
                 authHttpClient = new HttpClient(baseAuthHandler)
