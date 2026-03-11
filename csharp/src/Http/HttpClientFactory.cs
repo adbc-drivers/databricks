@@ -19,6 +19,8 @@ using System.Collections.Generic;
 using System.Net.Http;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.Http
 {
@@ -110,6 +112,10 @@ namespace AdbcDrivers.Databricks.Http
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
                 UserAgentHelper.GetUserAgent(assemblyVersion, properties));
 
+            string? orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
+            if (!string.IsNullOrEmpty(orgId))
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, orgId);
+
             return httpClient;
         }
 
@@ -144,7 +150,12 @@ namespace AdbcDrivers.Databricks.Http
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
                 UserAgentHelper.GetUserAgent(assemblyVersion, properties));
 
+            string? orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
+            if (!string.IsNullOrEmpty(orgId))
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, orgId);
+
             return httpClient;
         }
+
     }
 }

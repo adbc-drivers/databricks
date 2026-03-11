@@ -1035,6 +1035,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 database.Dispose();
 
+                OutputHelper?.WriteLine($"ExportedLogs.Count = {capturingExporter.ExportedLogs.Count}, ExportCallCount = {capturingExporter.ExportCallCount}");
                 Assert.True(capturingExporter.ExportedLogs.Count > 0, "Expected at least one telemetry log");
 
                 // Find the statement telemetry log (has SqlDriverLog with SqlOperation)
@@ -1166,6 +1167,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 }
 
                 database.Dispose();
+
+                OutputHelper?.WriteLine($"ExportedLogs.Count = {capturingExporter.ExportedLogs.Count}, ExportCallCount = {capturingExporter.ExportCallCount}");
 
                 Assert.True(capturingExporter.ExportedLogs.Count > 0, "Expected at least one telemetry log for error query");
 

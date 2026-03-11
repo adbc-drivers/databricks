@@ -1058,7 +1058,7 @@ namespace AdbcDrivers.Databricks
                     Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.started",
                         tags: new ActivityTagsCollection { { "host", _host } }));
 
-                    // Step 1: Flush pending metrics
+                    // Step 1: Flush pending metrics (wait for any in-flight flush to complete)
                     try
                     {
                         await _telemetryClient.FlushAsync(CancellationToken.None).ConfigureAwait(false);

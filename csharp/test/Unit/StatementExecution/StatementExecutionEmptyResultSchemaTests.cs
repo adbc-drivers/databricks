@@ -184,6 +184,72 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
+        public async Task ExecuteQuery_EmptyTable_FieldsHaveSparkSqlNameMetadata()
+        {
+            // Arrange: server returns SUCCEEDED with schema but no data
+            var manifest = BuildManifest(("id", "INT"), ("name", "STRING"));
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData { Attachment = null },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object);
+            stmt.SqlQuery = "SELECT id, name FROM empty_table WHERE 0=1";
+
+            // Act
+            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            var fields = queryResult.Stream!.Schema.FieldsList;
+
+            // Assert: each field carries Spark:DataType:SqlName so that consumers like
+            // the PowerBI connector's AdjustNativeTypes can map to the correct Power Query type.
+            Assert.Equal(2, fields.Count);
+            Assert.Equal("INTEGER", fields[0].Metadata["Spark:DataType:SqlName"]);
+            Assert.Equal("STRING", fields[1].Metadata["Spark:DataType:SqlName"]);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_EmptyTable_SqlNameAliasesNormalized()
+        {
+            // Arrange: SEA server returns Spark-internal aliases (LONG, BYTE, SHORT)
+            // rather than canonical SQL names. Verify they are normalized to the values
+            // PowerBI's DatabricksTypeMap expects (BIGINT, TINYINT, SMALLINT).
+            var manifest = BuildManifest(("a", "LONG"), ("b", "BYTE"), ("c", "SHORT"));
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData { Attachment = null },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object);
+            stmt.SqlQuery = "SELECT a, b, c FROM empty_table WHERE 0=1";
+
+            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            var fields = queryResult.Stream!.Schema.FieldsList;
+
+            Assert.Equal(3, fields.Count);
+            Assert.Equal("BIGINT", fields[0].Metadata["Spark:DataType:SqlName"]);
+            Assert.Equal("TINYINT", fields[1].Metadata["Spark:DataType:SqlName"]);
+            Assert.Equal("SMALLINT", fields[2].Metadata["Spark:DataType:SqlName"]);
+        }
+
+        [Fact]
         public async Task ExecuteQuery_NullManifest_ReturnsEmptySchema()
         {
             // Arrange: server returns null manifest (no results at all, e.g. DDL)

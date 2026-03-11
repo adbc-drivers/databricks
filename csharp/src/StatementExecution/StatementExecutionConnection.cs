@@ -42,6 +42,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
     {
         private readonly IStatementExecutionClient _client;
         private readonly string _warehouseId;
+        private readonly string? _orgId;
         private string? _catalog;
         private readonly string? _schema;
         private readonly HttpClient _httpClient;
@@ -134,6 +135,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     path = parsedUri.AbsolutePath;
                 }
+            }
+
+            // Extract org ID from ?o=yyy query parameter in path or URI
+            _orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
+
+            // Strip query string from path before warehouse regex matching
+            if (!string.IsNullOrEmpty(path))
+            {
+                int queryIndex = path.IndexOf('?');
+                if (queryIndex >= 0)
+                    path = path.Substring(0, queryIndex);
             }
 
             // Try to get warehouse ID from explicit parameter first
@@ -291,6 +303,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Set user agent
             string userAgent = GetUserAgent(properties);
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+
+            if (!string.IsNullOrEmpty(_orgId))
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, _orgId);
 
             return httpClient;
         }
