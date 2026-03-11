@@ -157,7 +157,7 @@ namespace AdbcDrivers.Databricks.Http
             return httpClient;
         }
 
-        private static string? ParseOrgIdFromProperties(IReadOnlyDictionary<string, string>? properties)
+        internal static string? ParseOrgIdFromProperties(IReadOnlyDictionary<string, string>? properties)
         {
             if (properties == null) return null;
 

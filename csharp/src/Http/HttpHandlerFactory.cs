@@ -340,6 +340,9 @@ namespace AdbcDrivers.Databricks.Http
                 {
                     Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes)
                 };
+                string? orgId = HttpClientFactory.ParseOrgIdFromProperties(config.Properties);
+                if (!string.IsNullOrEmpty(orgId))
+                    authHttpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", orgId);
 
                 // Pre-create the token provider so we can return it for sharing
                 if (GetOAuthGrantType(config.Properties) == DatabricksOAuthGrantType.ClientCredentials)
@@ -410,6 +413,9 @@ namespace AdbcDrivers.Databricks.Http
                 {
                     Timeout = TimeSpan.FromSeconds(timeoutSeconds)
                 };
+                string? orgId = HttpClientFactory.ParseOrgIdFromProperties(properties);
+                if (!string.IsNullOrEmpty(orgId))
+                    authHttpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", orgId);
             }
 
             // Add auth handlers, reusing existing token provider if available
