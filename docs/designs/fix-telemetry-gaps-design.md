@@ -631,33 +631,37 @@ The following proto fields are **not applicable** to the C# ADBC driver and will
 
 ## Implementation Priority
 
-### Phase 1: SEA Telemetry (Highest Priority - Zero Coverage Today)
-1. Extract `TelemetryHelper` from `DatabricksConnection` for shared use
-2. Wire `InitializeTelemetry()` into `StatementExecutionConnection` with `mode=SEA`
-3. Add `EmitTelemetry()` to `StatementExecutionStatement`
-4. Wire telemetry dispose/flush into `StatementExecutionConnection.Dispose()`
+### Phase 1: E2E Test Infrastructure (Test-First)
+1. Build E2E test infrastructure using `CapturingTelemetryExporter` to assert proto field values
+2. Write E2E tests for all currently populated proto fields (Thrift) - these establish the baseline
+3. Write failing E2E tests for missing fields (auth_type, WorkspaceId, runtime_vendor, etc.) - these drive Phase 2-5
+4. Write failing E2E tests for SEA telemetry (expect telemetry events from SEA connections) - these drive Phase 2
+5. Write failing E2E tests for ChunkDetails fields - these drive Phase 4
 
-### Phase 2: Missing Fields (Low Risk)
-5. Populate `runtime_vendor` and `client_app_name` in DriverSystemConfiguration
-6. Populate `auth_type` on root log
-7. Populate additional DriverConnectionParameters (enable_arrow, rows_fetched_per_block, etc.)
-8. Set `WorkspaceId` in TelemetrySessionContext
+### Phase 2: SEA Telemetry (Highest Priority - Zero Coverage Today)
+6. Extract `TelemetryHelper` from `DatabricksConnection` for shared use
+7. Wire `InitializeTelemetry()` into `StatementExecutionConnection` with `mode=SEA`
+8. Add `EmitTelemetry()` to `StatementExecutionStatement`
+9. Wire telemetry dispose/flush into `StatementExecutionConnection.Dispose()`
+10. Verify SEA E2E tests from Phase 1 now pass
 
-### Phase 3: ChunkDetails Wiring (Medium Risk - Crosses Component Boundaries)
-9. Add `ChunkMetrics` aggregation to `CloudFetchDownloader`
-10. Expose metrics via `CloudFetchReader.GetChunkMetrics()`
-11. Call `SetChunkDetails()` in `DatabricksStatement.EmitTelemetry()` and `StatementExecutionStatement.EmitTelemetry()`
+### Phase 3: Missing Fields (Low Risk)
+11. Populate `runtime_vendor` and `client_app_name` in DriverSystemConfiguration
+12. Populate `auth_type` on root log
+13. Populate additional DriverConnectionParameters (enable_arrow, rows_fetched_per_block, etc.)
+14. Set `WorkspaceId` in TelemetrySessionContext
+15. Verify missing-field E2E tests from Phase 1 now pass
 
-### Phase 4: Other Behavioral Changes (Medium Risk)
-12. Track `retry_count` on SqlExecutionEvent
-13. Mark internal calls with `is_internal_call = true`
-14. Add metadata operation telemetry (GetObjects, GetTableTypes)
+### Phase 4: ChunkDetails Wiring (Medium Risk - Crosses Component Boundaries)
+16. Add `ChunkMetrics` aggregation to `CloudFetchDownloader`
+17. Expose metrics via `CloudFetchReader.GetChunkMetrics()`
+18. Call `SetChunkDetails()` in `DatabricksStatement.EmitTelemetry()` and `StatementExecutionStatement.EmitTelemetry()`
+19. Verify ChunkDetails E2E tests from Phase 1 now pass
 
-### Phase 5: E2E Test Coverage
-15. E2E tests for every populated proto field (both Thrift and SEA)
-16. CloudFetch chunk detail tests (requires large enough result set to trigger CloudFetch)
-17. SEA-specific telemetry tests
-18. Error scenario tests
+### Phase 5: Other Behavioral Changes (Medium Risk)
+20. Track `retry_count` on SqlExecutionEvent
+21. Mark internal calls with `is_internal_call = true`
+22. Add metadata operation telemetry (GetObjects, GetTableTypes)
 
 ---
 
