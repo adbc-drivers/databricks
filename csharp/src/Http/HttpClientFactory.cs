@@ -19,6 +19,8 @@ using System.Collections.Generic;
 using System.Net.Http;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.Http
 {
@@ -110,7 +112,50 @@ namespace AdbcDrivers.Databricks.Http
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
                 UserAgentHelper.GetUserAgent(assemblyVersion, properties));
 
+            string? orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
+            if (!string.IsNullOrEmpty(orgId))
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, orgId);
+
             return httpClient;
         }
+
+        /// <summary>
+        /// Creates an HttpClient for telemetry export.
+        /// Includes TLS, proxy settings, and full authentication handler chain.
+        /// Uses the same auth/proxy pipeline as feature flag client.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <param name="host">The Databricks host (without protocol).</param>
+        /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
+        /// <param name="existingTokenProvider">Optional existing OAuthClientCredentialsProvider to reuse for token caching.</param>
+        /// <returns>Configured HttpClient for telemetry.</returns>
+        public static HttpClient CreateTelemetryHttpClient(
+            IReadOnlyDictionary<string, string> properties,
+            string host,
+            string assemblyVersion,
+            Auth.OAuthClientCredentialsProvider? existingTokenProvider = null)
+        {
+            const int DefaultTelemetryTimeoutSeconds = 10;
+
+            // Use the same auth handler chain as feature flags (PAT, OAuth, WIF, proxy)
+            // Reuse existing token provider to avoid duplicate OAuth token fetches
+            var handler = HttpHandlerFactory.CreateFeatureFlagHandler(properties, host, DefaultTelemetryTimeoutSeconds, existingTokenProvider);
+
+            var httpClient = new HttpClient(handler)
+            {
+                BaseAddress = new Uri($"https://{host}"),
+                Timeout = TimeSpan.FromSeconds(DefaultTelemetryTimeoutSeconds)
+            };
+
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+                UserAgentHelper.GetUserAgent(assemblyVersion, properties));
+
+            string? orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
+            if (!string.IsNullOrEmpty(orgId))
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, orgId);
+
+            return httpClient;
+        }
+
     }
 }
