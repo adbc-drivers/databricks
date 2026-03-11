@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Net;
 
 namespace AdbcDrivers.Databricks
 {
@@ -199,6 +200,22 @@ namespace AdbcDrivers.Databricks
                 return result;
             }
             return defaultValue;
+        }
+
+        /// <summary>
+        /// Extracts the value of the 'o' parameter from a URL query string.
+        /// </summary>
+        /// <param name="queryString">Query string without leading '?'.</param>
+        /// <returns>The org ID value, or null if not present or empty.</returns>
+        public static string? ParseOrgIdFromQueryString(string queryString)
+        {
+            foreach (var part in queryString.Split('&'))
+            {
+                var kv = part.Split('=');
+                if (kv.Length == 2 && kv[0] == "o" && !string.IsNullOrEmpty(kv[1]))
+                    return Uri.UnescapeDataString(kv[1]);
+            }
+            return null;
         }
     }
 }

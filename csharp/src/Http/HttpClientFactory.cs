@@ -114,7 +114,7 @@ namespace AdbcDrivers.Databricks.Http
 
             string? orgId = ParseOrgIdFromProperties(properties);
             if (!string.IsNullOrEmpty(orgId))
-                httpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", orgId);
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, orgId);
 
             return httpClient;
         }
@@ -152,7 +152,7 @@ namespace AdbcDrivers.Databricks.Http
 
             string? orgId = ParseOrgIdFromProperties(properties);
             if (!string.IsNullOrEmpty(orgId))
-                httpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", orgId);
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, orgId);
 
             return httpClient;
         }
@@ -166,12 +166,8 @@ namespace AdbcDrivers.Databricks.Http
                 int q = path.IndexOf('?');
                 if (q >= 0)
                 {
-                    foreach (var part in path.Substring(q + 1).Split('&'))
-                    {
-                        var kv = part.Split('=');
-                        if (kv.Length == 2 && kv[0] == "o" && !string.IsNullOrEmpty(kv[1]))
-                            return Uri.UnescapeDataString(kv[1]);
-                    }
+                    string? orgId = PropertyHelper.ParseOrgIdFromQueryString(path.Substring(q + 1));
+                    if (orgId != null) return orgId;
                 }
             }
 
@@ -179,12 +175,7 @@ namespace AdbcDrivers.Databricks.Http
                 && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri)
                 && !string.IsNullOrEmpty(parsedUri.Query))
             {
-                foreach (var part in parsedUri.Query.TrimStart('?').Split('&'))
-                {
-                    var kv = part.Split('=');
-                    if (kv.Length == 2 && kv[0] == "o" && !string.IsNullOrEmpty(kv[1]))
-                        return Uri.UnescapeDataString(kv[1]);
-                }
+                return PropertyHelper.ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
             }
 
             return null;
