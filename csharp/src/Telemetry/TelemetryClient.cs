@@ -197,6 +197,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Force flush all pending events immediately.
         /// </summary>
         /// <param name="ct">Cancellation token to cancel the flush operation.</param>
+        /// <param name="waitForSemaphore">
+        /// If true, waits up to 5 seconds for the semaphore (used in dispose/close paths to ensure
+        /// events are not lost). If false, returns immediately if another flush is in progress
+        /// (used in timer and enqueue paths to avoid blocking).
+        /// </param>
         /// <returns>A task that completes when all pending events have been flushed.</returns>
         /// <remarks>
         /// <para>
@@ -209,7 +214,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// driver functionality.
         /// </para>
         /// </remarks>
-        public async Task FlushAsync(CancellationToken ct = default)
+        public async Task FlushAsync(CancellationToken ct = default, bool waitForSemaphore = false)
         {
             // Allow flush during Active and Closing states, but not after Closed
             if (_state == StateClosed)
@@ -218,7 +223,19 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
 
             // Ensure only one flush runs at a time
-            if (!await _flushSemaphore.WaitAsync(0, ct).ConfigureAwait(false))
+            bool acquired;
+            if (waitForSemaphore)
+            {
+                // Wait up to 5 seconds for the semaphore (dispose/close path)
+                acquired = await _flushSemaphore.WaitAsync(5000, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                // Non-blocking attempt (timer/enqueue path)
+                acquired = await _flushSemaphore.WaitAsync(0, ct).ConfigureAwait(false);
+            }
+
+            if (!acquired)
             {
                 return;
             }
@@ -307,9 +324,10 @@ namespace AdbcDrivers.Databricks.Telemetry
 
                 // Flush remaining queued events before shutdown
                 // FlushAsync allows Closing state, so no need to toggle _state
+                // Use waitForSemaphore: true to ensure we wait for any in-flight flush to complete
                 try
                 {
-                    await FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                    await FlushAsync(CancellationToken.None, waitForSemaphore: true).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {

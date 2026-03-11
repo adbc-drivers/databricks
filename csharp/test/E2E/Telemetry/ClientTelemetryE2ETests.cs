@@ -1024,6 +1024,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 using (AdbcConnection connection = database.Connect(properties))
                 {
+                    // Verify telemetry was initialized
+                    var databricksConnection = (DatabricksConnection)connection;
+                    OutputHelper?.WriteLine($"TelemetrySession is {(databricksConnection.TelemetrySession != null ? "set" : "NULL")}");
+                    OutputHelper?.WriteLine($"TelemetryClient is {(databricksConnection.TelemetrySession?.TelemetryClient != null ? "set" : "NULL")}");
+                    Assert.NotNull(databricksConnection.TelemetrySession);
+                    Assert.NotNull(databricksConnection.TelemetrySession!.TelemetryClient);
+
                     using (AdbcStatement statement = connection.CreateStatement())
                     {
                         statement.SqlQuery = "SELECT 42 as answer, 'hello' as greeting";
@@ -1034,6 +1041,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 database.Dispose();
 
+                OutputHelper?.WriteLine($"ExportedLogs.Count = {capturingExporter.ExportedLogs.Count}, ExportCallCount = {capturingExporter.ExportCallCount}");
                 Assert.True(capturingExporter.ExportedLogs.Count > 0, "Expected at least one telemetry log");
 
                 // Find the statement telemetry log (has SqlDriverLog with SqlOperation)
@@ -1148,6 +1156,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 using (AdbcConnection connection = database.Connect(properties))
                 {
+                    // Verify telemetry was initialized
+                    var databricksConnection = (DatabricksConnection)connection;
+                    OutputHelper?.WriteLine($"TelemetrySession is {(databricksConnection.TelemetrySession != null ? "set" : "NULL")}");
+                    OutputHelper?.WriteLine($"TelemetryClient is {(databricksConnection.TelemetrySession?.TelemetryClient != null ? "set" : "NULL")}");
+                    Assert.NotNull(databricksConnection.TelemetrySession);
+                    Assert.NotNull(databricksConnection.TelemetrySession!.TelemetryClient);
+
                     try
                     {
                         using (AdbcStatement statement = connection.CreateStatement())
@@ -1164,6 +1179,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 }
 
                 database.Dispose();
+
+                OutputHelper?.WriteLine($"ExportedLogs.Count = {capturingExporter.ExportedLogs.Count}, ExportCallCount = {capturingExporter.ExportCallCount}");
 
                 Assert.True(capturingExporter.ExportedLogs.Count > 0, "Expected at least one telemetry log for error query");
 

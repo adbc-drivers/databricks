@@ -88,7 +88,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// driver functionality.
         /// </para>
         /// </remarks>
-        Task FlushAsync(CancellationToken ct = default);
+        Task FlushAsync(CancellationToken ct = default, bool waitForSemaphore = false);
 
         /// <summary>
         /// Gracefully close the client. Flushes all pending events before disposing resources.

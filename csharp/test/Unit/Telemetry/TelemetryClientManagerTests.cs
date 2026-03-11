@@ -46,7 +46,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 EnqueueCount++;
             }
 
-            public Task FlushAsync(CancellationToken ct = default)
+            public Task FlushAsync(CancellationToken ct = default, bool waitForSemaphore = false)
             {
                 FlushCount++;
                 return Task.CompletedTask;
