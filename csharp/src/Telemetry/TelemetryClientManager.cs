@@ -15,6 +15,7 @@
 */
 
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AdbcDrivers.Databricks.Telemetry
@@ -46,12 +47,18 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly Dictionary<string, TelemetryClientHolder> _clients = new Dictionary<string, TelemetryClientHolder>();
         private readonly object _lock = new object();
 
+        private static readonly AsyncLocal<ITelemetryExporter?> s_exporterOverride = new AsyncLocal<ITelemetryExporter?>();
+
         /// <summary>
-        /// Optional exporter override for testing. When set, newly created TelemetryClients
-        /// use this exporter instead of the default DatabricksTelemetryExporter pipeline.
+        /// Optional exporter override for testing. Uses AsyncLocal so the override is scoped
+        /// to the current async context and does not leak to concurrent test classes.
         /// Must be set before connections are opened and cleared after tests complete.
         /// </summary>
-        internal static ITelemetryExporter? ExporterOverride { get; set; }
+        internal static ITelemetryExporter? ExporterOverride
+        {
+            get => s_exporterOverride.Value;
+            set => s_exporterOverride.Value = value;
+        }
 
         /// <summary>
         /// Internal constructor. Public API uses GetInstance() for the singleton.
@@ -112,6 +119,14 @@ namespace AdbcDrivers.Databricks.Telemetry
                 throw new System.ArgumentNullException(nameof(config));
             }
 
+            // When ExporterOverride is set (testing), bypass the cache to ensure the test's
+            // capturing exporter is used even if another concurrent connection already created
+            // a client for this host with the real exporter.
+            if (ExporterOverride != null)
+            {
+                return new TelemetryClient(host, httpClient, isAuthenticated, config, ExporterOverride);
+            }
+
             lock (_lock)
             {
                 if (_clients.TryGetValue(host, out TelemetryClientHolder? existing))
@@ -120,7 +135,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     return existing.Client;
                 }
 
-                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config, ExporterOverride));
+                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config));
                 _clients[host] = holder;
                 return holder.Client;
             }
