@@ -184,12 +184,6 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 parameters.Add(DatabricksParameters.MaxBytesPerFetchRequest, testConfiguration.MaxBytesPerFetchRequest!);
             }
-
-            // Disable telemetry by default in tests to prevent parallel test classes from
-            // populating the TelemetryClientManager singleton and interfering with
-            // telemetry capture tests. Tests that need telemetry explicitly set it to "true".
-            parameters.Add(AdbcDrivers.Databricks.Telemetry.TelemetryConfiguration.PropertyKeyEnabled, "false");
-
             if (testConfiguration.HttpOptions != null)
             {
                 if (testConfiguration.HttpOptions.Tls != null)
