@@ -112,6 +112,14 @@ namespace AdbcDrivers.Databricks.Telemetry
                 throw new System.ArgumentNullException(nameof(config));
             }
 
+            // When ExporterOverride is set (testing), bypass the cache to ensure the test's
+            // capturing exporter is used even if another concurrent connection already created
+            // a client for this host with the real exporter.
+            if (ExporterOverride != null)
+            {
+                return new TelemetryClient(host, httpClient, isAuthenticated, config, ExporterOverride);
+            }
+
             lock (_lock)
             {
                 if (_clients.TryGetValue(host, out TelemetryClientHolder? existing))
