@@ -21,6 +21,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc.Extensions;
+using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Databricks
