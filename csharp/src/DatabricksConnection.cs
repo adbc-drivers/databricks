@@ -1065,7 +1065,7 @@ namespace AdbcDrivers.Databricks
                     // Step 1: Flush pending metrics (wait for any in-flight flush to complete)
                     try
                     {
-                        await _telemetryClient.FlushAsync(CancellationToken.None, waitForSemaphore: true).ConfigureAwait(false);
+                        await _telemetryClient.FlushAsync(CancellationToken.None).ConfigureAwait(false);
                         Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.flushed"));
                     }
                     catch (Exception ex)
