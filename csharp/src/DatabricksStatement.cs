@@ -262,6 +262,10 @@ namespace AdbcDrivers.Databricks
             {
                 TimestampAsArrow = true,
                 DecimalAsArrow = true,
+                // When false (default), complex types (ARRAY, MAP, STRUCT) are returned as JSON-encoded
+                // strings by the Thrift server. When true, the server returns native Arrow types.
+                // Note: Thrift ARRAY_TYPE responses do not embed element type info, so callers cannot
+                // reliably determine element types; returning strings is the safe default.
                 ComplexTypesAsArrow = enableComplexDatatypeSupport,
                 IntervalTypesAsArrow = false,
             };

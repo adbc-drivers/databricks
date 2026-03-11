@@ -32,7 +32,6 @@ using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tests;
 using AdbcDrivers.Tests.HiveServer2;
 using AdbcDrivers.Tests.HiveServer2.Common;
-using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Types;
 
 namespace AdbcDrivers.Databricks.Tests
@@ -60,15 +59,6 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         public override string Delimiter => "`";
-
-        /// <summary>
-        /// Returns true when the active connection is using the Statement Execution (REST/SEA) protocol.
-        /// In SEA mode with EnableComplexDatatypeSupport=true, complex types (ARRAY, MAP, STRUCT) are
-        /// returned as native Arrow types. With EnableComplexDatatypeSupport=false (the default), SEA
-        /// serializes them to JSON strings to match Thrift behavior.
-        /// In Thrift mode, complex types are always returned as JSON-encoded strings regardless of the flag.
-        /// </summary>
-        public bool IsSeaMode => Connection is StatementExecutionConnection;
 
         public override Dictionary<string, string> GetDriverParameters(DatabricksTestConfiguration testConfiguration)
         {
