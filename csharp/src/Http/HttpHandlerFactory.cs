@@ -336,13 +336,13 @@ namespace AdbcDrivers.Databricks.Http
             OAuthClientCredentialsProvider? tokenProvider = null;
             if (IsOAuthEnabled(config.Properties))
             {
+                // Note: x-databricks-org-id is intentionally NOT set on the auth client.
+                // Token requests go to the account-level OAuth endpoint (/oidc/v1/token),
+                // which is workspace-agnostic and does not require workspace routing.
                 authHttpClient = new HttpClient(authHandler)
                 {
                     Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes)
                 };
-                string? orgId = HttpClientFactory.ParseOrgIdFromProperties(config.Properties);
-                if (!string.IsNullOrEmpty(orgId))
-                    authHttpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", orgId);
 
                 // Pre-create the token provider so we can return it for sharing
                 if (GetOAuthGrantType(config.Properties) == DatabricksOAuthGrantType.ClientCredentials)
@@ -409,13 +409,13 @@ namespace AdbcDrivers.Databricks.Http
             if (IsOAuthEnabled(properties) && existingTokenProvider == null)
             {
                 HttpMessageHandler baseAuthHandler = HttpClientFactory.CreateHandler(properties);
+                // Note: x-databricks-org-id is intentionally NOT set on the auth client.
+                // Token requests go to the account-level OAuth endpoint (/oidc/v1/token),
+                // which is workspace-agnostic and does not require workspace routing.
                 authHttpClient = new HttpClient(baseAuthHandler)
                 {
                     Timeout = TimeSpan.FromSeconds(timeoutSeconds)
                 };
-                string? orgId = HttpClientFactory.ParseOrgIdFromProperties(properties);
-                if (!string.IsNullOrEmpty(orgId))
-                    authHttpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", orgId);
             }
 
             // Add auth handlers, reusing existing token provider if available
