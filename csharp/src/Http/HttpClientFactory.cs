@@ -19,6 +19,8 @@ using System.Collections.Generic;
 using System.Net.Http;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.Http
 {
@@ -110,6 +112,10 @@ namespace AdbcDrivers.Databricks.Http
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
                 UserAgentHelper.GetUserAgent(assemblyVersion, properties));
 
+            string? orgId = ParseOrgIdFromProperties(properties);
+            if (!string.IsNullOrEmpty(orgId))
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", orgId);
+
             return httpClient;
         }
 
@@ -144,7 +150,44 @@ namespace AdbcDrivers.Databricks.Http
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
                 UserAgentHelper.GetUserAgent(assemblyVersion, properties));
 
+            string? orgId = ParseOrgIdFromProperties(properties);
+            if (!string.IsNullOrEmpty(orgId))
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", orgId);
+
             return httpClient;
+        }
+
+        private static string? ParseOrgIdFromProperties(IReadOnlyDictionary<string, string>? properties)
+        {
+            if (properties == null) return null;
+
+            if (properties.TryGetValue(SparkParameters.Path, out string? path) && !string.IsNullOrEmpty(path))
+            {
+                int q = path.IndexOf('?');
+                if (q >= 0)
+                {
+                    foreach (var part in path.Substring(q + 1).Split('&'))
+                    {
+                        var kv = part.Split('=');
+                        if (kv.Length == 2 && kv[0] == "o" && !string.IsNullOrEmpty(kv[1]))
+                            return Uri.UnescapeDataString(kv[1]);
+                    }
+                }
+            }
+
+            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri)
+                && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri)
+                && !string.IsNullOrEmpty(parsedUri.Query))
+            {
+                foreach (var part in parsedUri.Query.TrimStart('?').Split('&'))
+                {
+                    var kv = part.Split('=');
+                    if (kv.Length == 2 && kv[0] == "o" && !string.IsNullOrEmpty(kv[1]))
+                        return Uri.UnescapeDataString(kv[1]);
+                }
+            }
+
+            return null;
         }
     }
 }

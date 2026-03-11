@@ -42,6 +42,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
     {
         private readonly IStatementExecutionClient _client;
         private readonly string _warehouseId;
+        private readonly string? _orgId;
         private string? _catalog;
         private readonly string? _schema;
         private readonly HttpClient _httpClient;
@@ -135,6 +136,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     path = parsedUri.AbsolutePath;
                 }
             }
+
+            // Extract org ID from ?o=yyy query parameter in path or URI
+            string? orgId = null;
+            if (!string.IsNullOrEmpty(path))
+            {
+                int queryIndex = path.IndexOf('?');
+                if (queryIndex >= 0)
+                {
+                    orgId = ParseOrgIdFromQueryString(path.Substring(queryIndex + 1));
+                    path = path.Substring(0, queryIndex); // strip query string before regex
+                }
+            }
+            // Fallback: check URI query string (e.g. when path was extracted from AbsolutePath)
+            if (orgId == null && parsedUri != null && !string.IsNullOrEmpty(parsedUri.Query))
+            {
+                orgId = ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
+            }
+            _orgId = orgId;
 
             // Try to get warehouse ID from explicit parameter first
             string? warehouseId = PropertyHelper.GetStringProperty(properties, DatabricksParameters.WarehouseId, string.Empty);
@@ -292,6 +311,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string userAgent = GetUserAgent(properties);
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
 
+            if (!string.IsNullOrEmpty(_orgId))
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation("x-databricks-org-id", _orgId);
+
             return httpClient;
         }
 
@@ -317,6 +339,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             throw new ArgumentException("Host not found in connection properties. Please provide a valid host using either 'hostName' or 'uri' property.");
+        }
+
+        /// <summary>
+        /// Extracts the value of the 'o' parameter from a URL query string.
+        /// </summary>
+        /// <param name="queryString">Query string without leading '?'.</param>
+        /// <returns>The org ID value, or null if not present or empty.</returns>
+        private static string? ParseOrgIdFromQueryString(string queryString)
+        {
+            foreach (var part in queryString.Split('&'))
+            {
+                var kv = part.Split('=');
+                if (kv.Length == 2 && kv[0] == "o" && !string.IsNullOrEmpty(kv[1]))
+                    return Uri.UnescapeDataString(kv[1]);
+            }
+            return null;
         }
 
         /// <summary>
