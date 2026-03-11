@@ -120,7 +120,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     return existing.Client;
                 }
 
-                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config, ExporterOverride));
+                TelemetryClientHolder holder = new TelemetryClientHolder(new TelemetryClient(host, httpClient, isAuthenticated, config));
                 _clients[host] = holder;
                 return holder.Client;
             }

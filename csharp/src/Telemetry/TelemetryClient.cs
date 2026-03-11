@@ -46,7 +46,14 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// </remarks>
     internal sealed class TelemetryClient : ITelemetryClient
     {
-        private readonly ITelemetryExporter _effectiveExporter;
+        private readonly ITelemetryExporter _defaultExporter;
+
+        /// <summary>
+        /// Returns the active exporter: the test override if set, otherwise the default pipeline.
+        /// This allows tests to inject a capturing exporter even when the client was created
+        /// before the override was set (per-host singleton concurrency).
+        /// </summary>
+        private ITelemetryExporter EffectiveExporter => TelemetryClientManager.ExporterOverride ?? _defaultExporter;
         private readonly ConcurrentQueue<TelemetryFrontendLog> _pendingLogs;
         private readonly int _batchSize;
         private readonly bool _enabled;
@@ -67,15 +74,13 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <param name="httpClient">The HTTP client to use for exporting telemetry.</param>
         /// <param name="isAuthenticated">Whether the connection is authenticated (determines telemetry endpoint).</param>
         /// <param name="configuration">The telemetry configuration.</param>
-        /// <param name="exporterOverride">Optional exporter override for testing.</param>
         /// <exception cref="ArgumentNullException">Thrown when host, httpClient, or configuration is null.</exception>
         /// <exception cref="ArgumentException">Thrown when host is empty or whitespace.</exception>
         public TelemetryClient(
             string host,
             System.Net.Http.HttpClient httpClient,
             bool isAuthenticated,
-            TelemetryConfiguration configuration,
-            ITelemetryExporter? exporterOverride = null)
+            TelemetryConfiguration configuration)
         {
             if (string.IsNullOrWhiteSpace(host))
             {
@@ -106,8 +111,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 // 2. CircuitBreakerTelemetryExporter (wraps exporter with circuit breaker protection)
                 var circuitBreakerExporter = new CircuitBreakerTelemetryExporter(databricksExporter, host);
 
-                // Use override exporter if provided (for testing), otherwise use circuit breaker exporter
-                _effectiveExporter = exporterOverride ?? (ITelemetryExporter)circuitBreakerExporter;
+                _defaultExporter = circuitBreakerExporter;
 
                 // Start periodic flush timer if interval is configured
                 if (configuration.FlushIntervalMs > 0)
@@ -255,7 +259,7 @@ namespace AdbcDrivers.Databricks.Telemetry
 
                 if (logsToFlush.Count > 0)
                 {
-                    await _effectiveExporter.ExportAsync(logsToFlush, linkedCts.Token).ConfigureAwait(false);
+                    await EffectiveExporter.ExportAsync(logsToFlush, linkedCts.Token).ConfigureAwait(false);
                 }
 
                 Activity.Current?.AddEvent(new ActivityEvent("telemetry.client.flush_completed"));
