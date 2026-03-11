@@ -213,7 +213,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("BINARY", "BINARY")]
         [InlineData("DATE", "DATE")]
         [InlineData("TIMESTAMP", "TIMESTAMP")]
-        [InlineData("TIMESTAMP_NTZ", "TIMESTAMP_NTZ")]
+        [InlineData("TIMESTAMP_NTZ", "TIMESTAMP")]
         [InlineData("DECIMAL(10,2)", "DECIMAL")]
         [InlineData("ARRAY<INT>", "ARRAY")]
         [InlineData("MAP<STRING,INT>", "MAP")]
