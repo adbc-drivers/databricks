@@ -384,6 +384,10 @@ namespace AdbcDrivers.Databricks
     public class DatabricksConstants
     {
         /// <summary>
+        /// HTTP header for passing the Databricks organization ID on REST requests.
+        /// </summary>
+        public const string OrgIdHeader = "x-databricks-org-id";
+        /// <summary>
         /// Default heartbeat interval in seconds for long-running operations.
         /// </summary>
         public const int DefaultOperationStatusPollingIntervalSeconds = 60;

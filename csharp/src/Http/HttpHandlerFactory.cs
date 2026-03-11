@@ -336,6 +336,9 @@ namespace AdbcDrivers.Databricks.Http
             OAuthClientCredentialsProvider? tokenProvider = null;
             if (IsOAuthEnabled(config.Properties))
             {
+                // Note: x-databricks-org-id is intentionally NOT set on the auth client.
+                // Token requests go to the account-level OAuth endpoint (/oidc/v1/token),
+                // which is workspace-agnostic and does not require workspace routing.
                 authHttpClient = new HttpClient(authHandler)
                 {
                     Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes)
@@ -402,10 +405,15 @@ namespace AdbcDrivers.Databricks.Http
             HttpMessageHandler baseHandler = HttpClientFactory.CreateHandler(properties);
 
             // Create auth HTTP client for OAuth if needed
+            // Always create when OAuth is enabled - even with an existing token provider,
+            // the auth handler chain requires an HTTP client for token refresh operations
             HttpClient? authHttpClient = null;
-            if (IsOAuthEnabled(properties) && existingTokenProvider == null)
+            if (IsOAuthEnabled(properties))
             {
                 HttpMessageHandler baseAuthHandler = HttpClientFactory.CreateHandler(properties);
+                // Note: x-databricks-org-id is intentionally NOT set on the auth client.
+                // Token requests go to the account-level OAuth endpoint (/oidc/v1/token),
+                // which is workspace-agnostic and does not require workspace routing.
                 authHttpClient = new HttpClient(baseAuthHandler)
                 {
                     Timeout = TimeSpan.FromSeconds(timeoutSeconds)
