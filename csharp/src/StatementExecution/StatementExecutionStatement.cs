@@ -482,7 +482,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // it here for now. Add it if a consumer requires it (PECO-2950).
                 var metadata = new Dictionary<string, string>
                 {
-                    ["Spark:DataType:SqlName"] = ColumnMetadataHelper.GetSparkSqlName(column.TypeName ?? string.Empty)
+                    ["Spark:DataType:SqlName"] = ColumnMetadataHelper.GetSparkSqlName(column.TypeText ?? column.TypeName ?? string.Empty)
                 };
                 fields.Add(new Field(column.Name, arrowType, true, metadata));
             }
