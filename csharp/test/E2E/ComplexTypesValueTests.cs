@@ -26,6 +26,7 @@ using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
+using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using AdbcDrivers.Tests.HiveServer2.Common;
 using Xunit;
