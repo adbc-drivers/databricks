@@ -134,11 +134,6 @@ namespace AdbcDrivers.Databricks.Telemetry
         public string? SessionId { get; internal set; }
 
         /// <summary>
-        /// Gets the authentication type used for the connection (e.g., "PAT", "OAuth-M2M").
-        /// </summary>
-        public string? AuthType { get; internal set; }
-
-        /// <summary>
         /// Gets the Databricks workspace ID.
         /// </summary>
         public long WorkspaceId { get; internal set; }

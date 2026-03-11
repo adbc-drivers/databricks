@@ -25,6 +25,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
@@ -56,6 +57,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private long _rowsRead;
         private long _currentChunkExpectedRows;
         private long _currentChunkRowsRead;
+
+        // Telemetry tracking
+        private long _totalBytesDownloaded = 0;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
@@ -167,8 +171,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                             await this.currentDownloadResult.DownloadCompletedTask;
 
+                            // Track bytes downloaded for telemetry
+                            _totalBytesDownloaded += this.currentDownloadResult.Size;
+
                             Activity.Current?.AddEvent("cloudfetch.reader_download_ready", [
-                                new("chunk_index", this.currentDownloadResult.ChunkIndex)
+                                new("chunk_index", this.currentDownloadResult.ChunkIndex),
+                                new("chunk_bytes", this.currentDownloadResult.Size)
                             ]);
 
                             // Create a new reader for the downloaded file
@@ -319,6 +327,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 this.downloadManager.Dispose();
                 this.downloadManager = null;
             }
+
+            // Add telemetry tags when reader completes
+            Activity.Current?.SetTag(StatementExecutionEvent.ResultBytesDownloaded, _totalBytesDownloaded);
+
             base.Dispose(disposing);
         }
     }

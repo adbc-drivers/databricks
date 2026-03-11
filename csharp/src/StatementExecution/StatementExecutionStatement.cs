@@ -405,8 +405,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             else
             {
-                // No inline data - return empty reader
-                return new EmptyArrowArrayStream();
+                // No data rows, but the manifest contains schema information.
+                // Preserve the schema so callers get correct column metadata even
+                // when the queried table is empty — following the same pattern as
+                // the JDBC driver where ResultManifest schema is always extracted
+                // independently of data presence.
+                Schema schema = TryGetSchemaFromManifest(response.Manifest) ?? new Schema.Builder().Build();
+                return new EmptyArrowArrayStream(schema);
             }
         }
 
@@ -442,12 +447,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Extracts the Arrow schema from the result manifest.
+        /// Throws <see cref="AdbcException"/> if the manifest contains no column definitions.
         /// </summary>
         private Schema GetSchemaFromManifest(ResultManifest manifest)
         {
+            return TryGetSchemaFromManifest(manifest)
+                ?? throw new AdbcException("Result manifest does not contain schema information");
+        }
+
+        /// <summary>
+        /// Tries to extract the Arrow schema from the result manifest.
+        /// Returns <c>null</c> when the manifest contains no column definitions,
+        /// allowing callers to decide on a fallback (e.g. empty schema for no-data results).
+        /// </summary>
+        private Schema? TryGetSchemaFromManifest(ResultManifest manifest)
+        {
             if (manifest.Schema == null || manifest.Schema.Columns == null || manifest.Schema.Columns.Count == 0)
             {
-                throw new AdbcException("Result manifest does not contain schema information");
+                return null;
             }
 
             var fields = new List<Field>();
@@ -613,10 +630,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Empty Arrow array stream for queries with no results.
+        /// Accepts an optional schema so that column metadata is preserved
+        /// even when the result contains zero rows (e.g. querying an empty table).
         /// </summary>
         private class EmptyArrowArrayStream : IArrowArrayStream
         {
-            public Schema Schema => new Schema.Builder().Build();
+            public EmptyArrowArrayStream(Schema? schema = null)
+            {
+                Schema = schema ?? new Schema.Builder().Build();
+            }
+
+            public Schema Schema { get; }
 
             public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
             {
