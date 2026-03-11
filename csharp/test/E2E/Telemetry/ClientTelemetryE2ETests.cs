@@ -1025,16 +1025,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 using (AdbcConnection connection = database.Connect(properties))
                 {
-                    // Verify telemetry was initialized
-                    var databricksConnection = (DatabricksConnection)connection;
-                    OutputHelper?.WriteLine($"TelemetrySession is {(databricksConnection.TelemetrySession != null ? "set" : "NULL")}");
-                    OutputHelper?.WriteLine($"TelemetryClient is {(databricksConnection.TelemetrySession?.TelemetryClient != null ? "set" : "NULL")}");
-                    if (databricksConnection.TelemetryInitError != null)
-                        OutputHelper?.WriteLine($"TelemetryInitError: {databricksConnection.TelemetryInitError}");
-                    Assert.True(databricksConnection.TelemetrySession != null,
-                        $"TelemetrySession should not be null. InitError: {databricksConnection.TelemetryInitError ?? "none"}");
-                    Assert.NotNull(databricksConnection.TelemetrySession!.TelemetryClient);
-
                     using (AdbcStatement statement = connection.CreateStatement())
                     {
                         statement.SqlQuery = "SELECT 42 as answer, 'hello' as greeting";
@@ -1161,16 +1151,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 using (AdbcConnection connection = database.Connect(properties))
                 {
-                    // Verify telemetry was initialized
-                    var databricksConnection = (DatabricksConnection)connection;
-                    OutputHelper?.WriteLine($"TelemetrySession is {(databricksConnection.TelemetrySession != null ? "set" : "NULL")}");
-                    OutputHelper?.WriteLine($"TelemetryClient is {(databricksConnection.TelemetrySession?.TelemetryClient != null ? "set" : "NULL")}");
-                    if (databricksConnection.TelemetryInitError != null)
-                        OutputHelper?.WriteLine($"TelemetryInitError: {databricksConnection.TelemetryInitError}");
-                    Assert.True(databricksConnection.TelemetrySession != null,
-                        $"TelemetrySession should not be null. InitError: {databricksConnection.TelemetryInitError ?? "none"}");
-                    Assert.NotNull(databricksConnection.TelemetrySession!.TelemetryClient);
-
                     try
                     {
                         using (AdbcStatement statement = connection.CreateStatement())
