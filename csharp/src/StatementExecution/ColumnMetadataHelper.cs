@@ -101,6 +101,30 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return upper;
         }
 
+        // Corrections applied on top of GetBaseTypeName to produce the exact names
+        // the Thrift server embeds in Spark:DataType:SqlName Arrow metadata.
+        private static readonly Dictionary<string, string> s_sparkSqlNameOverrides = new(StringComparer.OrdinalIgnoreCase)
+        {
+            { "INTEGER", "INT" },
+            { "REAL", "FLOAT" },
+        };
+
+        /// <summary>
+        /// Returns the Spark:DataType:SqlName value for Arrow field metadata.
+        /// Uses the same SqlTypeNameParser as GetBaseTypeName, then applies overrides
+        /// for INTEGER→INT and REAL→FLOAT. TIMESTAMP_NTZ collapses to TIMESTAMP
+        /// (matching the Thrift server and Power BI connector expectations).
+        /// </summary>
+        internal static string GetSparkSqlName(string typeName)
+        {
+            string baseName = GetBaseTypeName(typeName);
+
+            if (s_sparkSqlNameOverrides.TryGetValue(baseName, out string? overridden))
+                return overridden;
+
+            return baseName;
+        }
+
         internal static int? GetColumnSizeDefault(string typeName)
         {
             string baseName = GetBaseTypeName(typeName);

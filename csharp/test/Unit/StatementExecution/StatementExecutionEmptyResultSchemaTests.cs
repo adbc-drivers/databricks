@@ -212,7 +212,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // Assert: each field carries Spark:DataType:SqlName so that consumers like
             // the PowerBI connector's AdjustNativeTypes can map to the correct Power Query type.
             Assert.Equal(2, fields.Count);
-            Assert.Equal("INTEGER", fields[0].Metadata["Spark:DataType:SqlName"]);
+            Assert.Equal("INT", fields[0].Metadata["Spark:DataType:SqlName"]);
             Assert.Equal("STRING", fields[1].Metadata["Spark:DataType:SqlName"]);
         }
 
