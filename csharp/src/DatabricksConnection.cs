@@ -112,6 +112,7 @@ namespace AdbcDrivers.Databricks
         private ITelemetryClient? _telemetryClient;
         private string? _host;
         internal TelemetrySessionContext? TelemetrySession { get; private set; }
+        internal string? TelemetryInitError { get; private set; }
 
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
@@ -616,6 +617,7 @@ namespace AdbcDrivers.Databricks
                 // Only initialize telemetry if enabled
                 if (!telemetryConfig.Enabled)
                 {
+                    TelemetryInitError = "telemetry_disabled";
                     activity?.AddEvent(new ActivityEvent("telemetry.initialization.skipped",
                         tags: new ActivityTagsCollection { { "reason", "feature_flag_disabled" } }));
                     return;
@@ -625,6 +627,7 @@ namespace AdbcDrivers.Databricks
                 IReadOnlyList<string> validationErrors = telemetryConfig.Validate();
                 if (validationErrors.Count > 0)
                 {
+                    TelemetryInitError = $"validation_errors: {string.Join("; ", validationErrors)}";
                     activity?.AddEvent(new ActivityEvent("telemetry.initialization.failed",
                         tags: new ActivityTagsCollection
                         {
@@ -667,6 +670,7 @@ namespace AdbcDrivers.Databricks
             {
                 // Swallow all telemetry initialization exceptions per design requirement
                 // Telemetry failures must not impact connection behavior
+                TelemetryInitError = $"{ex.GetType().Name}: {ex.Message}";
                 activity?.AddEvent(new ActivityEvent("telemetry.initialization.error",
                     tags: new ActivityTagsCollection
                     {

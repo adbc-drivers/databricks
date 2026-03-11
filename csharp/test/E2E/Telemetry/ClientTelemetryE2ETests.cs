@@ -1028,7 +1028,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     var databricksConnection = (DatabricksConnection)connection;
                     OutputHelper?.WriteLine($"TelemetrySession is {(databricksConnection.TelemetrySession != null ? "set" : "NULL")}");
                     OutputHelper?.WriteLine($"TelemetryClient is {(databricksConnection.TelemetrySession?.TelemetryClient != null ? "set" : "NULL")}");
-                    Assert.NotNull(databricksConnection.TelemetrySession);
+                    if (databricksConnection.TelemetryInitError != null)
+                        OutputHelper?.WriteLine($"TelemetryInitError: {databricksConnection.TelemetryInitError}");
+                    Assert.True(databricksConnection.TelemetrySession != null,
+                        $"TelemetrySession should not be null. InitError: {databricksConnection.TelemetryInitError ?? "none"}");
                     Assert.NotNull(databricksConnection.TelemetrySession!.TelemetryClient);
 
                     using (AdbcStatement statement = connection.CreateStatement())
@@ -1160,7 +1163,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     var databricksConnection = (DatabricksConnection)connection;
                     OutputHelper?.WriteLine($"TelemetrySession is {(databricksConnection.TelemetrySession != null ? "set" : "NULL")}");
                     OutputHelper?.WriteLine($"TelemetryClient is {(databricksConnection.TelemetrySession?.TelemetryClient != null ? "set" : "NULL")}");
-                    Assert.NotNull(databricksConnection.TelemetrySession);
+                    if (databricksConnection.TelemetryInitError != null)
+                        OutputHelper?.WriteLine($"TelemetryInitError: {databricksConnection.TelemetryInitError}");
+                    Assert.True(databricksConnection.TelemetrySession != null,
+                        $"TelemetrySession should not be null. InitError: {databricksConnection.TelemetryInitError ?? "none"}");
                     Assert.NotNull(databricksConnection.TelemetrySession!.TelemetryClient);
 
                     try
