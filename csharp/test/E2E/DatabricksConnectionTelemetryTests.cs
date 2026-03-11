@@ -29,13 +29,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E
     /// Integration tests for DatabricksConnection telemetry lifecycle.
     /// Tests verify that telemetry is initialized, managed, and cleaned up correctly.
     /// </summary>
-    /// <remarks>
-    /// Placed in the "TelemetryCapture" collection to prevent parallel execution with
-    /// ClientTelemetryE2ETests. Both classes share the TelemetryClientManager singleton; running
-    /// them in parallel causes ExporterOverride to be missed on already-cached clients, producing
-    /// zero captured logs in assertion-based telemetry tests.
-    /// </remarks>
-    [Collection("TelemetryCapture")]
     public class DatabricksConnectionTelemetryTests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public DatabricksConnectionTelemetryTests(ITestOutputHelper? outputHelper)
