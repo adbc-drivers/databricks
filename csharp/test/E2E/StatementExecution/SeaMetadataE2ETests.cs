@@ -190,9 +190,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             using var sea = CreateSeaConnection();
             var thriftRows = await ReadMetadata(thrift, "GetTables", TestCatalog, TestSchema);
             var seaRows = await ReadMetadata(sea, "GetTables", TestCatalog, TestSchema);
-            // Allow ±2 difference: concurrent tests may create/drop tables between the two calls
-            Assert.True(Math.Abs(thriftRows.Count - seaRows.Count) <= 2,
-                $"Thrift ({thriftRows.Count}) and SEA ({seaRows.Count}) table counts differ by more than 2");
+            Assert.Equal(thriftRows.Count, seaRows.Count);
         }
 
         // --- GetColumnsExtended ---
