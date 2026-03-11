@@ -138,22 +138,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // Extract org ID from ?o=yyy query parameter in path or URI
-            string? orgId = null;
+            _orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
+
+            // Strip query string from path before warehouse regex matching
             if (!string.IsNullOrEmpty(path))
             {
                 int queryIndex = path.IndexOf('?');
                 if (queryIndex >= 0)
-                {
-                    orgId = PropertyHelper.ParseOrgIdFromQueryString(path.Substring(queryIndex + 1));
-                    path = path.Substring(0, queryIndex); // strip query string before regex
-                }
+                    path = path.Substring(0, queryIndex);
             }
-            // Fallback: check URI query string (e.g. when path was extracted from AbsolutePath)
-            if (orgId == null && parsedUri != null && !string.IsNullOrEmpty(parsedUri.Query))
-            {
-                orgId = PropertyHelper.ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
-            }
-            _orgId = orgId;
 
             // Try to get warehouse ID from explicit parameter first
             string? warehouseId = PropertyHelper.GetStringProperty(properties, DatabricksParameters.WarehouseId, string.Empty);

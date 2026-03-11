@@ -112,7 +112,7 @@ namespace AdbcDrivers.Databricks.Http
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
                 UserAgentHelper.GetUserAgent(assemblyVersion, properties));
 
-            string? orgId = ParseOrgIdFromProperties(properties);
+            string? orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
             if (!string.IsNullOrEmpty(orgId))
                 httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, orgId);
 
@@ -150,35 +150,12 @@ namespace AdbcDrivers.Databricks.Http
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
                 UserAgentHelper.GetUserAgent(assemblyVersion, properties));
 
-            string? orgId = ParseOrgIdFromProperties(properties);
+            string? orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
             if (!string.IsNullOrEmpty(orgId))
                 httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, orgId);
 
             return httpClient;
         }
 
-        private static string? ParseOrgIdFromProperties(IReadOnlyDictionary<string, string>? properties)
-        {
-            if (properties == null) return null;
-
-            if (properties.TryGetValue(SparkParameters.Path, out string? path) && !string.IsNullOrEmpty(path))
-            {
-                int q = path.IndexOf('?');
-                if (q >= 0)
-                {
-                    string? orgId = PropertyHelper.ParseOrgIdFromQueryString(path.Substring(q + 1));
-                    if (orgId != null) return orgId;
-                }
-            }
-
-            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri)
-                && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri)
-                && !string.IsNullOrEmpty(parsedUri.Query))
-            {
-                return PropertyHelper.ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
-            }
-
-            return null;
-        }
     }
 }
