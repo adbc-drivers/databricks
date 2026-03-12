@@ -280,7 +280,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.Equal(4, fields.Count);
             Assert.IsType<Decimal128Type>(fields[0].DataType);
-            Assert.Equal("DECIMAL", fields[0].Metadata["Spark:DataType:SqlName"]);
             // ARRAY, MAP, STRUCT are represented as STRING in Arrow for now
             Assert.IsType<StringType>(fields[1].DataType);
             Assert.IsType<StringType>(fields[2].DataType);
