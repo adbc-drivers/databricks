@@ -188,7 +188,8 @@ impl ClientCredentialsProvider {
         token_endpoint_override: Option<String>,
     ) -> Result<Self> {
         // Discover OIDC endpoints or use override
-        let (token_endpoint, auth_endpoint) = if let Some(token_endpoint) = token_endpoint_override {
+        let (token_endpoint, auth_endpoint) = if let Some(token_endpoint) = token_endpoint_override
+        {
             // Use override for token endpoint, still discover auth endpoint
             // (auth endpoint is not typically overridden for M2M since it's not used)
             let endpoints = OidcEndpoints::discover(host, &http_client).await?;

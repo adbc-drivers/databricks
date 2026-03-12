@@ -174,6 +174,7 @@ All files must have Apache 2.0 license headers:
 - Unit tests go in `#[cfg(test)] mod tests { }` at the bottom of each file
 - Integration tests go in `tests/` directory
 - Test names: `test_<function>_<scenario>`
+- E2E tests that require real Databricks connection should be marked with `#[ignore]`
 
 ### Error Handling
 
