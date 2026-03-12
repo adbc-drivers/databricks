@@ -21,16 +21,18 @@ on:
     paths:
       - '.github/workflows/e2e-tests.yml'
       - 'ci/scripts/**'
-      - 'csharp/src/**'
-      - 'csharp/test/**'
+      - 'csharp/**'
   pull_request:
     # Only runs on PRs from the repo itself, not forks
     paths:
       - '.github/workflows/e2e-tests.yml'
       - 'ci/scripts/**'
-      - 'csharp/src/**'
-      - 'csharp/test/**'
+      - 'csharp/**'
   merge_group:
+    paths:
+      - '.github/workflows/e2e-tests.yml'
+      - 'ci/scripts/**'
+      - 'csharp/**'
 
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
