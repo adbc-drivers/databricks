@@ -62,6 +62,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly int _pollingIntervalMs;
         private readonly bool _enablePKFK;
         private readonly bool _enableMultipleCatalogSupport;
+        private readonly bool _useDescTableExtended;
 
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
@@ -202,6 +203,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Connection feature flags — parse before catalog/schema loading that depends on them
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
+            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, false);
 
             // Session configuration
             // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
@@ -737,6 +739,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal bool EnablePKFK => _enablePKFK;
 
         internal bool EnableMultipleCatalogSupport => _enableMultipleCatalogSupport;
+
+        /// <summary>
+        /// Whether to use DESC TABLE EXTENDED AS JSON for GetColumnsExtended.
+        /// No server version check is needed for SEA — the flag alone gates the behaviour.
+        /// Default: false (falls back to GetColumns + GetPrimaryKeys + GetCrossReference).
+        /// </summary>
+        internal bool UseDescTableExtended => _useDescTableExtended;
 
         /// <summary>
         /// Resolves the effective catalog for metadata queries.

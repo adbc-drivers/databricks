@@ -1084,49 +1084,134 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
+                activity?.SetTag("use_desc_table_extended", _connection.UseDescTableExtended);
 
                 if (string.IsNullOrEmpty(_metadataTableName))
                     throw new ArgumentException("Table name is required for GetColumnsExtended");
 
-                // For building the qualified table name, use the user-specified catalog
-                // (normalized to null for SPARK) rather than EffectiveCatalog. This matches
-                // Thrift's BuildTableName which omits the catalog prefix when it's null/SPARK,
-                // letting the server resolve to its default catalog.
-                string? catalogForTableName = _connection.EnableMultipleCatalogSupport
-                    ? catalog
-                    : MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName);
+                if (_connection.UseDescTableExtended)
+                    return await GetColumnsExtendedViaDescTableAsync(catalog, cancellationToken).ConfigureAwait(false);
 
-                string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
-                    catalogForTableName, _metadataSchemaName, _metadataTableName);
+                // Fallback: combine GetColumns + GetPrimaryKeys + GetCrossReference,
+                // mirroring the Thrift base (HiveServer2Statement.GetColumnsExtendedAsync).
+                return await GetColumnsExtendedViaThreeCalls(cancellationToken).ConfigureAwait(false);
 
-                string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
-                activity?.SetTag("sql_query", query);
-                var batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
-
-                string? resultJson = null;
-                foreach (var batch in batches)
-                {
-                    if (batch.Length > 0)
-                    {
-                        resultJson = ((StringArray)batch.Column(0)).GetString(0);
-                        break;
-                    }
-                }
-
-                if (string.IsNullOrEmpty(resultJson))
-                    throw new FormatException($"Empty result from {query}");
-
-                var descResult = System.Text.Json.JsonSerializer.Deserialize<DescTableExtendedResult>(resultJson!);
-                if (descResult == null)
-                    throw new FormatException($"Failed to parse JSON result from {query}");
-
-                activity?.SetTag("result_columns", descResult.Columns?.Count ?? 0);
-                activity?.SetTag("result_pk_count", descResult.PrimaryKeys?.Count ?? 0);
-                activity?.SetTag("result_fk_count", descResult.ForeignKeys?.Count ?? 0);
-
-                return DatabricksStatement.CreateExtendedColumnsResult(
-                    MetadataSchemaFactory.CreateColumnMetadataSchema(), descResult);
             }, "GetColumnsExtended").ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// GetColumnsExtended via DESC TABLE EXTENDED AS JSON (single round-trip, full fidelity).
+        /// Only used when UseDescTableExtended=true.
+        /// </summary>
+        private async Task<QueryResult> GetColumnsExtendedViaDescTableAsync(string? catalog, CancellationToken cancellationToken)
+        {
+            // For building the qualified table name, use the user-specified catalog
+            // (normalized to null for SPARK) rather than EffectiveCatalog. This matches
+            // Thrift's BuildTableName which omits the catalog prefix when it's null/SPARK,
+            // letting the server resolve to its default catalog.
+            string? catalogForTableName = _connection.EnableMultipleCatalogSupport
+                ? catalog
+                : MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName);
+
+            string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
+                catalogForTableName, _metadataSchemaName, _metadataTableName);
+
+            string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+            var batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
+
+            string? resultJson = null;
+            foreach (var batch in batches)
+            {
+                if (batch.Length > 0)
+                {
+                    resultJson = ((StringArray)batch.Column(0)).GetString(0);
+                    break;
+                }
+            }
+
+            if (string.IsNullOrEmpty(resultJson))
+                throw new FormatException($"Empty result from {query}");
+
+            var descResult = System.Text.Json.JsonSerializer.Deserialize<DescTableExtendedResult>(resultJson!);
+            if (descResult == null)
+                throw new FormatException($"Failed to parse JSON result from {query}");
+
+            return DatabricksStatement.CreateExtendedColumnsResult(
+                MetadataSchemaFactory.CreateColumnMetadataSchema(), descResult);
+        }
+
+        /// <summary>
+        /// GetColumnsExtended fallback: calls GetColumns, GetPrimaryKeys, GetCrossReference
+        /// separately and merges the results — identical to the Thrift base implementation.
+        /// Used when UseDescTableExtended=false (the default).
+        /// </summary>
+        private async Task<QueryResult> GetColumnsExtendedViaThreeCalls(CancellationToken cancellationToken)
+        {
+            var columnsResult = await GetColumnsAsync(cancellationToken).ConfigureAwait(false);
+            if (columnsResult.Stream == null)
+                return columnsResult;
+
+            var pkResult = await GetPrimaryKeysAsync(cancellationToken).ConfigureAwait(false);
+
+            // Find FKs where the current table is the FK (child) side — null PK params to
+            // match any parent, mirroring Thrift's GetCrossReferenceAsForeignTableAsync.
+            var fkResult = await FetchCrossReferenceAsync(
+                pkCatalog: null, pkSchema: null, pkTable: null,
+                fkCatalog: _metadataCatalogName, fkSchema: _metadataSchemaName, fkTable: _metadataTableName,
+                cancellationToken).ConfigureAwait(false);
+
+            // Read all column batches into memory
+            int colNameIndex;
+            List<RecordBatch> columnsBatches;
+            int totalRows;
+            Schema columnsSchema;
+            StringArray columnNames;
+
+            using (var stream = columnsResult.Stream)
+            {
+                colNameIndex = stream.Schema.GetFieldIndex("COLUMN_NAME");
+                if (colNameIndex < 0)
+                    return columnsResult;
+
+                var batchResult = await ReadAllBatchesAsync(stream, cancellationToken).ConfigureAwait(false);
+                columnsBatches = batchResult.Batches;
+                columnsSchema = batchResult.Schema;
+                totalRows = batchResult.TotalRows;
+
+                if (columnsBatches.Count == 0)
+                    return CreateEmptyExtendedColumnsResult(columnsSchema);
+
+                List<ArrayData> colNameArrayDatas = columnsBatches
+                    .Select(b => b.Column(colNameIndex).Data).ToList();
+                ArrayData concatenated = ArrayDataConcatenator.Concatenate(colNameArrayDatas)!;
+                columnNames = (StringArray)ArrowArrayFactory.BuildArray(concatenated);
+            }
+
+            // Build combined schema + data starting from the base columns
+            var allFields = new List<Field>(columnsSchema.FieldsList);
+            var combinedData = new List<IArrowArray>();
+
+            for (int colIdx = 0; colIdx < columnsSchema.FieldsList.Count; colIdx++)
+            {
+                var arrays = columnsBatches.Select(b => b.Column(colIdx)).ToList();
+                var arrayDatas = arrays.Select(a => a.Data).ToList();
+                combinedData.Add(ArrowArrayFactory.BuildArray(ArrayDataConcatenator.Concatenate(arrayDatas)!));
+            }
+
+            // Merge PK data (keyed on COLUMN_NAME → PK_COLUMN_NAME)
+            await ProcessRelationshipDataSafe(
+                pkResult, PrimaryKeyPrefix, "COLUMN_NAME",
+                PrimaryKeyFields, columnNames, totalRows,
+                allFields, combinedData, cancellationToken).ConfigureAwait(false);
+
+            // Merge FK data (keyed on FKCOLUMN_NAME → FK_* fields)
+            await ProcessRelationshipDataSafe(
+                fkResult, ForeignKeyPrefix, "FKCOLUMN_NAME",
+                ForeignKeyFields, columnNames, totalRows,
+                allFields, combinedData, cancellationToken).ConfigureAwait(false);
+
+            var combinedSchema = new Schema(allFields, columnsSchema.Metadata);
+            return new QueryResult(totalRows, new HiveInfoArrowStream(combinedSchema, combinedData));
         }
 
         private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
@@ -1184,63 +1269,78 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
                 activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK))
-                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+                var result = await FetchCrossReferenceAsync(
+                    _metadataCatalogName, _metadataSchemaName, _metadataTableName,
+                    _metadataForeignCatalogName, _metadataForeignSchemaName, _metadataForeignTableName,
+                    cancellationToken).ConfigureAwait(false);
 
-                if (string.IsNullOrEmpty(_metadataForeignCatalogName) || string.IsNullOrEmpty(_metadataForeignSchemaName) ||
-                    string.IsNullOrEmpty(_metadataForeignTableName))
-                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-
-                string sql = new ShowForeignKeysCommand(
-                    _metadataForeignCatalogName!, _metadataForeignSchemaName!, _metadataForeignTableName!).Build();
-                activity?.SetTag("sql_query", sql);
-                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-
-                var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
-                int seq = 0;
-                foreach (var batch in batches)
-                {
-                    var pkCatalogArray = TryGetColumn<StringArray>(batch, "parentCatalogName");
-                    var pkSchemaArray = TryGetColumn<StringArray>(batch, "parentNamespace");
-                    var pkTableArray = TryGetColumn<StringArray>(batch, "parentTableName");
-                    var pkColArray = TryGetColumn<StringArray>(batch, "parentColName");
-                    var fkCatalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                    var fkSchemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                    var fkTableArray = TryGetColumn<StringArray>(batch, "tableName");
-                    var fkColArray = TryGetColumn<StringArray>(batch, "col_name");
-                    var fkNameArray = TryGetColumn<StringArray>(batch, "constraintName");
-                    var fkKeySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
-                    var fkUpdateRuleArray = TryGetColumn<Int32Array>(batch, "updateRule");
-                    var fkDeleteRuleArray = TryGetColumn<Int32Array>(batch, "deleteRule");
-                    var fkDeferrabilityArray = TryGetColumn<Int32Array>(batch, "deferrability");
-
-                    if (fkColArray == null) continue;
-
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (fkColArray.IsNull(i)) continue;
-                        refs.Add((
-                            pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : _metadataCatalogName ?? "",
-                            pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : _metadataSchemaName ?? "",
-                            pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : _metadataTableName ?? "",
-                            pkColArray != null && !pkColArray.IsNull(i) ? pkColArray.GetString(i) : "",
-                            fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : _metadataForeignCatalogName!,
-                            fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : _metadataForeignSchemaName!,
-                            fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : _metadataForeignTableName!,
-                            fkColArray.GetString(i),
-                            fkKeySeqArray != null && !fkKeySeqArray.IsNull(i) ? fkKeySeqArray.GetValue(i)!.Value : ++seq,
-                            fkUpdateRuleArray != null && !fkUpdateRuleArray.IsNull(i) ? fkUpdateRuleArray.GetValue(i)!.Value : 0,
-                            fkDeleteRuleArray != null && !fkDeleteRuleArray.IsNull(i) ? fkDeleteRuleArray.GetValue(i)!.Value : 0,
-                            fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : "",
-                            (string?)null,
-                            fkDeferrabilityArray != null && !fkDeferrabilityArray.IsNull(i) ? fkDeferrabilityArray.GetValue(i)!.Value : 5
-                        ));
-                    }
-                }
-
-                activity?.SetTag("result_count", refs.Count);
-                return MetadataSchemaFactory.BuildCrossReferenceResult(refs);
+                activity?.SetTag("result_count", result.RowCount);
+                return result;
             }, "GetCrossReference").ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Core cross-reference fetch with explicit params. Used by both GetCrossReferenceAsync
+        /// (user-facing, reads from statement fields) and GetColumnsExtendedViaThreeCalls
+        /// (passes current table as the FK side with null PK params to match any parent).
+        /// </summary>
+        private async Task<QueryResult> FetchCrossReferenceAsync(
+            string? pkCatalog, string? pkSchema, string? pkTable,
+            string? fkCatalog, string? fkSchema, string? fkTable,
+            CancellationToken cancellationToken)
+        {
+            if (MetadataUtilities.ShouldReturnEmptyPKFKResult(pkCatalog, fkCatalog, _connection.EnablePKFK))
+                return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+
+            if (string.IsNullOrEmpty(fkCatalog) || string.IsNullOrEmpty(fkSchema) || string.IsNullOrEmpty(fkTable))
+                return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+
+            string sql = new ShowForeignKeysCommand(fkCatalog!, fkSchema!, fkTable!).Build();
+            List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
+            int seq = 0;
+            foreach (var batch in batches)
+            {
+                var pkCatalogArray = TryGetColumn<StringArray>(batch, "parentCatalogName");
+                var pkSchemaArray = TryGetColumn<StringArray>(batch, "parentNamespace");
+                var pkTableArray = TryGetColumn<StringArray>(batch, "parentTableName");
+                var pkColArray = TryGetColumn<StringArray>(batch, "parentColName");
+                var fkCatalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                var fkSchemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                var fkTableArray = TryGetColumn<StringArray>(batch, "tableName");
+                var fkColArray = TryGetColumn<StringArray>(batch, "col_name");
+                var fkNameArray = TryGetColumn<StringArray>(batch, "constraintName");
+                var fkKeySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
+                var fkUpdateRuleArray = TryGetColumn<Int32Array>(batch, "updateRule");
+                var fkDeleteRuleArray = TryGetColumn<Int32Array>(batch, "deleteRule");
+                var fkDeferrabilityArray = TryGetColumn<Int32Array>(batch, "deferrability");
+
+                if (fkColArray == null) continue;
+
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (fkColArray.IsNull(i)) continue;
+                    refs.Add((
+                        pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : pkCatalog ?? "",
+                        pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : pkSchema ?? "",
+                        pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : pkTable ?? "",
+                        pkColArray != null && !pkColArray.IsNull(i) ? pkColArray.GetString(i) : "",
+                        fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : fkCatalog!,
+                        fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : fkSchema!,
+                        fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : fkTable!,
+                        fkColArray.GetString(i),
+                        fkKeySeqArray != null && !fkKeySeqArray.IsNull(i) ? fkKeySeqArray.GetValue(i)!.Value : ++seq,
+                        fkUpdateRuleArray != null && !fkUpdateRuleArray.IsNull(i) ? fkUpdateRuleArray.GetValue(i)!.Value : 0,
+                        fkDeleteRuleArray != null && !fkDeleteRuleArray.IsNull(i) ? fkDeleteRuleArray.GetValue(i)!.Value : 0,
+                        fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : "",
+                        (string?)null,
+                        fkDeferrabilityArray != null && !fkDeferrabilityArray.IsNull(i) ? fkDeferrabilityArray.GetValue(i)!.Value : 5
+                    ));
+                }
+            }
+
+            return MetadataSchemaFactory.BuildCrossReferenceResult(refs);
         }
 
         private static T? TryGetColumn<T>(RecordBatch batch, string name) where T : class, IArrowArray
@@ -1252,5 +1352,172 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // TracingStatement implementation
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
         public override string AssemblyName => "AdbcDrivers.Databricks";
+
+        // ─── Helpers for GetColumnsExtended fallback (mirrors HiveServer2Statement) ──
+
+        private const string PrimaryKeyPrefix = "PK_";
+        private const string ForeignKeyPrefix = "FK_";
+        private static readonly string[] PrimaryKeyFields = new[] { "COLUMN_NAME" };
+        private static readonly string[] ForeignKeyFields = new[] { "PKCOLUMN_NAME", "PKTABLE_CAT", "PKTABLE_SCHEM", "PKTABLE_NAME", "FKCOLUMN_NAME", "FK_NAME", "KEQ_SEQ" };
+
+        private static async Task<(List<RecordBatch> Batches, Schema Schema, int TotalRows)> ReadAllBatchesAsync(
+            IArrowArrayStream stream, CancellationToken cancellationToken)
+        {
+            var batches = new List<RecordBatch>();
+            int totalRows = 0;
+            Schema schema = stream.Schema;
+            while (true)
+            {
+                var batch = await stream.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                if (batch == null) break;
+                if (batch.Length > 0)
+                {
+                    batches.Add(batch);
+                    totalRows += batch.Length;
+                }
+            }
+            return (batches, schema, totalRows);
+        }
+
+        private static QueryResult CreateEmptyExtendedColumnsResult(Schema baseSchema)
+        {
+            var allFields = new List<Field>(baseSchema.FieldsList);
+            foreach (var field in PrimaryKeyFields)
+                allFields.Add(new Field(PrimaryKeyPrefix + field, StringType.Default, true));
+            foreach (var field in ForeignKeyFields)
+            {
+                IArrowType fieldType = field != "KEQ_SEQ" ? (IArrowType)StringType.Default : Int32Type.Default;
+                allFields.Add(new Field(ForeignKeyPrefix + field, fieldType, true));
+            }
+
+            var combinedSchema = new Schema(allFields, baseSchema.Metadata);
+            var combinedData = new List<IArrowArray>();
+            foreach (var field in allFields)
+            {
+                switch (field.DataType.TypeId)
+                {
+                    case ArrowTypeId.String:  combinedData.Add(new StringArray.Builder().Build());  break;
+                    case ArrowTypeId.Int8:    combinedData.Add(new Int8Array.Builder().Build());    break;
+                    case ArrowTypeId.Int16:   combinedData.Add(new Int16Array.Builder().Build());   break;
+                    case ArrowTypeId.Int32:   combinedData.Add(new Int32Array.Builder().Build());   break;
+                    case ArrowTypeId.Int64:   combinedData.Add(new Int64Array.Builder().Build());   break;
+                    default:
+                        throw AdbcException.NotImplemented(
+                            $"Data type '{field.DataType}' is not supported for empty extended columns result.");
+                }
+            }
+            return new QueryResult(0, new HiveInfoArrowStream(combinedSchema, combinedData));
+        }
+
+        private static async Task ProcessRelationshipDataSafe(
+            QueryResult result, string prefix, string relationColNameField,
+            string[] includeFields, StringArray colNames, int rowCount,
+            List<Field> allFields, List<IArrowArray> combinedData,
+            CancellationToken cancellationToken)
+        {
+            // STEP 1: Add relationship fields to schema
+            if (result.Stream != null)
+            {
+                var schema = result.Stream.Schema;
+                foreach (var fieldName in includeFields)
+                {
+                    int idx = schema.GetFieldIndex(fieldName);
+                    IArrowType arrowType = idx >= 0 ? schema.GetFieldByIndex(idx).DataType : (IArrowType)StringType.Default;
+                    allFields.Add(new Field(prefix + fieldName, arrowType, true));
+                }
+            }
+            else
+            {
+                foreach (var fieldName in includeFields)
+                    allFields.Add(new Field(prefix + fieldName, StringType.Default, true));
+            }
+
+            // STEP 2: Build lookup: fieldName → columnName → value
+            var relationData = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
+            if (result.Stream != null)
+            {
+                using var stream = result.Stream;
+                int keyColIndex = stream.Schema.GetFieldIndex(relationColNameField);
+                if (keyColIndex >= 0)
+                {
+                    while (true)
+                    {
+                        var batch = await stream.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                        if (batch == null) break;
+
+                        var fieldIndices = new Dictionary<string, int>();
+                        foreach (var fieldName in includeFields)
+                        {
+                            int idx = stream.Schema.GetFieldIndex(fieldName);
+                            if (idx >= 0) fieldIndices[fieldName] = idx;
+                        }
+
+                        for (int i = 0; i < batch.Length; i++)
+                        {
+                            var keyCol = (StringArray)batch.Column(keyColIndex);
+                            if (keyCol.IsNull(i)) continue;
+                            string keyValue = keyCol.GetString(i);
+                            if (string.IsNullOrEmpty(keyValue)) continue;
+
+                            foreach (var pair in fieldIndices)
+                            {
+                                if (!relationData.TryGetValue(pair.Key, out var fieldData))
+                                {
+                                    fieldData = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                                    relationData[pair.Key] = fieldData;
+                                }
+                                IArrowArray fieldArray = batch.Column(pair.Value);
+                                if (fieldArray is Int32Array int32Arr)
+                                    relationData[pair.Key][keyValue] = int32Arr.GetValue(i).GetValueOrDefault();
+                                else
+                                    relationData[pair.Key][keyValue] = ((StringArray)fieldArray).GetString(i)!;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // STEP 3: Build Arrow arrays aligned with colNames
+            foreach (var fieldName in includeFields)
+            {
+                var fieldData = relationData.ContainsKey(fieldName) ? relationData[fieldName] : null;
+                IArrowType arrowType = StringType.Default;
+                if (result.Stream != null)
+                {
+                    int fi = result.Stream.Schema.GetFieldIndex(fieldName);
+                    if (fi >= 0) arrowType = result.Stream.Schema.GetFieldByIndex(fi).DataType;
+                }
+
+                if (arrowType.TypeId == ArrowTypeId.Int32)
+                {
+                    var builder = new Int32Array.Builder();
+                    for (int i = 0; i < colNames.Length; i++)
+                    {
+                        string? colName = colNames.GetString(i);
+                        if (!string.IsNullOrEmpty(colName) && fieldData != null && fieldData.TryGetValue(colName!, out var val))
+                        {
+                            if (val is int iv) builder.Append(iv);
+                            else if (val is string sv && int.TryParse(sv, out int pv)) builder.Append(pv);
+                            else builder.AppendNull();
+                        }
+                        else builder.AppendNull();
+                    }
+                    combinedData.Add(builder.Build());
+                }
+                else
+                {
+                    var builder = new StringArray.Builder();
+                    for (int i = 0; i < colNames.Length; i++)
+                    {
+                        string? colName = colNames.GetString(i);
+                        string? value = null;
+                        if (!string.IsNullOrEmpty(colName) && fieldData != null && fieldData.TryGetValue(colName!, out var val))
+                            value = val as string;
+                        builder.Append(value);
+                    }
+                    combinedData.Add(builder.Build());
+                }
+            }
+        }
     }
 }

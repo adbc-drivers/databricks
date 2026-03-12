@@ -303,7 +303,8 @@ namespace AdbcDrivers.Databricks.Examples
             return new Dictionary<string, string>(config)
             {
                 { "adbc.databricks.protocol", "rest" },
-                { "adbc.databricks.enable_session_management", "true" }
+                { "adbc.databricks.enable_session_management", "true" },
+                { "adbc.databricks.use_desc_table_extended", "false" }
             };
         }
 
