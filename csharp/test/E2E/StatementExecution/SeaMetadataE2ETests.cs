@@ -56,10 +56,15 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             return db.Connect(new Dictionary<string, string>());
         }
 
-        private AdbcConnection CreateSeaConnection()
+        private AdbcConnection CreateSeaConnection(Dictionary<string, string>? extraParams = null)
         {
             var parameters = GetDriverParameters(TestConfiguration);
             parameters[DatabricksParameters.Protocol] = "rest";
+            if (extraParams != null)
+            {
+                foreach (var kvp in extraParams)
+                    parameters[kvp.Key] = kvp.Value;
+            }
             var driver = new DatabricksDriver();
             var db = driver.Open(parameters);
             return db.Connect(new Dictionary<string, string>());
@@ -243,6 +248,60 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             // Both should have 32 columns (24 base + 8 PK/FK)
             Assert.Equal(32, thriftRows[0].Count);
             Assert.Equal(32, seaRows[0].Count);
+        }
+
+        [SkippableFact]
+        public async Task SEA_GetColumnsExtended_FallbackAndDescTable_SameResults()
+        {
+            SkipIfNotConfigured();
+            using var seaFallback = CreateSeaConnection(new Dictionary<string, string>
+            {
+                { DatabricksParameters.UseDescTableExtended, "false" }
+            });
+            using var seaDescTable = CreateSeaConnection(new Dictionary<string, string>
+            {
+                { DatabricksParameters.UseDescTableExtended, "true" }
+            });
+            var fallbackRows = await ReadMetadata(seaFallback, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
+            var descTableRows = await ReadMetadata(seaDescTable, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
+
+            Assert.Equal(fallbackRows.Count, descTableRows.Count);
+            Assert.True(fallbackRows.Count > 0, "Should return at least one row");
+
+            // Both paths should have the same schema width (32 columns: 24 base + 8 PK/FK)
+            Assert.Equal(fallbackRows[0].Count, descTableRows[0].Count);
+
+            // All columns consumed by the Power BI connector must match between the two paths
+            var columnsToCompare = new[]
+            {
+                // Core column metadata (GetTableType, GetPowerQueryType)
+                "COLUMN_NAME",
+                "TYPE_NAME",
+                "BASE_TYPE_NAME",
+                "COLUMN_SIZE",
+                "DECIMAL_DIGITS",
+                "NULLABLE",
+                // Primary key (GetTableType, GetRelationships)
+                "PK_COLUMN_NAME",
+                // Foreign key relationship fields (GetRelationships)
+                "FK_FKCOLUMN_NAME",
+                "FK_PKTABLE_CAT",
+                "FK_PKTABLE_SCHEM",
+                "FK_PKTABLE_NAME",
+                "FK_PKCOLUMN_NAME",
+                "FK_FK_NAME",
+                "FK_KEQ_SEQ",
+            };
+
+            for (int i = 0; i < fallbackRows.Count; i++)
+            {
+                foreach (var col in columnsToCompare)
+                {
+                    Assert.True(fallbackRows[i].ContainsKey(col), $"Fallback row {i} missing column {col}");
+                    Assert.True(descTableRows[i].ContainsKey(col), $"DescTable row {i} missing column {col}");
+                    Assert.Equal(descTableRows[i][col], fallbackRows[i][col]);
+                }
+            }
         }
 
         // --- GetPrimaryKeys ---

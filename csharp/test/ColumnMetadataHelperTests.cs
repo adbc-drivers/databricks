@@ -75,6 +75,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("STRING", "STRING")]
         [InlineData("BOOLEAN", "BOOLEAN")]
         [InlineData("DOUBLE", "DOUBLE")]
+        [InlineData("", "")]
         public void GetBaseTypeName_ReturnsCorrectName(string typeName, string expectedBase)
         {
             Assert.Equal(expectedBase, ColumnMetadataHelper.GetBaseTypeName(typeName));
@@ -220,6 +221,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("STRUCT<a:INT>", "STRUCT")]
         [InlineData("INTERVAL DAY TO SECOND", "INTERVAL")]
         [InlineData("VARIANT", "VARIANT")]
+        [InlineData("", "")]
         public void GetSparkSqlName_ReturnsCorrectValues(string typeName, string expected)
         {
             Assert.Equal(expected, ColumnMetadataHelper.GetSparkSqlName(typeName));

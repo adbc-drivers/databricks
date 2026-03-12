@@ -127,6 +127,18 @@ impl Connection {
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
+
+    /// Returns a reference to the Databricks client.
+    #[cfg(feature = "metadata-ffi")]
+    pub(crate) fn client(&self) -> &Arc<dyn DatabricksClient> {
+        &self.client
+    }
+
+    /// Returns the tokio runtime handle.
+    #[cfg(feature = "metadata-ffi")]
+    pub(crate) fn runtime_handle(&self) -> &tokio::runtime::Handle {
+        self.runtime.handle()
+    }
 }
 
 impl Optionable for Connection {
