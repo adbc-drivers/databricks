@@ -565,11 +565,10 @@ impl DatabricksClient for SeaClient {
         column_pattern: Option<&str>,
     ) -> Result<ExecuteResult> {
         let sql = SqlCommandBuilder::new()
-            .with_catalog(Some(catalog))
             .with_schema_pattern(schema_pattern)
             .with_table_pattern(table_pattern)
             .with_column_pattern(column_pattern)
-            .build_show_columns()?;
+            .build_show_columns(catalog);
         debug!("list_columns: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await

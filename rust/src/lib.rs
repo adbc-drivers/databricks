@@ -104,6 +104,11 @@ pub use client::{DatabricksClient, DatabricksHttpClient, HttpClientConfig, SeaCl
 // Re-export configuration types
 pub use types::cloudfetch::CloudFetchConfig;
 
+// Metadata FFI — additional extern "C" functions for catalog metadata
+// when built with `cargo build --features metadata-ffi`
+#[cfg(feature = "metadata-ffi")]
+pub(crate) mod ffi;
+
 // FFI export — produces AdbcDatabricksInit and AdbcDriverInit symbols
 // when built with `cargo build --features ffi`
 #[cfg(feature = "ffi")]

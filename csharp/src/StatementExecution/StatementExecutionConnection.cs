@@ -212,6 +212,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (_enableMultipleCatalogSupport)
             {
                 properties.TryGetValue(AdbcOptions.Connection.CurrentCatalog, out _catalog);
+                // Match Thrift behavior: SPARK is a legacy alias — map it to null so the
+                // runtime falls back to the workspace default (typically hive_metastore).
+                _catalog = DatabricksConnection.HandleSparkCatalog(_catalog);
             }
             properties.TryGetValue(AdbcOptions.Connection.CurrentDbSchema, out _schema);
 
@@ -382,8 +385,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             SessionConfigs = sessionConfigs.Count > 0 ? sessionConfigs : null
                         };
 
-                        var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
-                        _sessionId = response.SessionId;
+                        try
+                        {
+                            var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
+                            _sessionId = response.SessionId;
+                        }
+                        catch (DatabricksException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new DatabricksException(
+                                $"Failed to connect to Databricks: {ex.GetBaseException().Message}",
+                                AdbcStatusCode.IOError,
+                                ex);
+                        }
 
                         // If user didn't specify a catalog, discover the server's default.
                         // In Thrift, the server returns this in OpenSessionResp.InitialNamespace.
@@ -424,6 +441,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 this); // Pass connection as TracingConnection for tracing support
         }
 
+        public override void SetOption(string key, string? value)
+        {
+            switch (key)
+            {
+                case AdbcOptions.Telemetry.TraceParent:
+                    SetTraceParent(string.IsNullOrWhiteSpace(value) ? null : value);
+                    return;
+            }
+
+            base.SetOption(key, value);
+        }
+
         public override IArrowArrayStream GetObjects(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
         {
             return this.TraceActivity(activity =>
@@ -433,6 +462,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("schema_pattern", schemaPattern ?? "(none)");
                 activity?.SetTag("table_pattern", tableNamePattern ?? "(none)");
                 activity?.SetTag("column_pattern", columnNamePattern ?? "(none)");
+
+                // Databricks identifiers are case-insensitive — lowercase patterns
+                // to match server behavior (same as DatabricksConnection/Thrift path).
+                catalogPattern = catalogPattern?.ToLower();
+                schemaPattern = schemaPattern?.ToLower();
+                tableNamePattern = tableNamePattern?.ToLower();
+                columnNamePattern = columnNamePattern?.ToLower();
 
                 using var cts = CreateMetadataTimeoutCts();
                 return GetObjectsResultBuilder.BuildGetObjectsResultAsync(
@@ -496,10 +532,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("table_name", tableName);
 
                 using var cts = CreateMetadataTimeoutCts();
-                string sql = new ShowColumnsCommand(
-                    ResolveEffectiveCatalog(catalog), dbSchema, tableName).Build();
-                activity?.SetTag("sql_query", sql);
-                var batches = ExecuteMetadataSql(sql, cts.Token);
+                // Pass catalog through with SPARK→null normalization, matching Thrift
+                // which sends catalog as-is to the server. ExecuteShowColumnsAsync
+                // handles null by iterating all catalogs.
+                string? resolvedCatalog = DatabricksConnection.HandleSparkCatalog(catalog);
+                var batches = ExecuteShowColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
+                    .GetAwaiter().GetResult();
 
                 var fields = new List<Field>();
                 foreach (var batch in batches)
@@ -559,7 +597,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
             var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
-            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog, databaseName
+            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
             bool showSchemasInAllCatalogs = catalogPattern == null;
 
@@ -571,8 +609,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 if (showSchemasInAllCatalogs)
                 {
-                    catalogArray = batch.Column(0) as StringArray;
-                    schemaArray = batch.Column(1) as StringArray;
+                    schemaArray = batch.Column(0) as StringArray;
+                    catalogArray = batch.Column(1) as StringArray;
                 }
                 else
                 {
@@ -634,8 +672,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            string sql = new ShowColumnsCommand(catalogPattern, schemaPattern, tablePattern, columnPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            var batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
 
             var tablePositions = new Dictionary<string, int>();
 
@@ -678,24 +715,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     {
                         ColumnMetadataHelper.PopulateTableInfoFromTypeName(
                             tableInfo, colName, colType, position, nullable);
-
-                        // Match Thrift GetObjects behavior: SparkConnection.SetPrecisionScaleAndTypeName
-                        // only sets Precision/Scale for DECIMAL, NUMERIC, CHAR, NCHAR, VARCHAR,
-                        // NVARCHAR, LONGVARCHAR, LONGNVARCHAR. All other types get null.
-                        int lastIdx = tableInfo.Precision.Count - 1;
-                        short typeCode = tableInfo.ColType[lastIdx];
-                        if (typeCode != (short)HiveServer2Connection.ColumnTypeId.DECIMAL
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NUMERIC
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.CHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NCHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.VARCHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NVARCHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.LONGVARCHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.LONGNVARCHAR)
-                        {
-                            tableInfo.Precision[lastIdx] = null;
-                            tableInfo.Scale[lastIdx] = null;
-                        }
                     }
                 }
             }
@@ -736,6 +755,49 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return ExecuteMetadataSqlAsync(sql, cancellationToken).GetAwaiter().GetResult();
         }
 
+        /// <summary>
+        /// Executes a SHOW COLUMNS command. When catalog is null, iterates over all catalogs
+        /// since SHOW COLUMNS IN ALL CATALOGS is not yet supported by the backend.
+        /// </summary>
+        internal async Task<List<RecordBatch>> ExecuteShowColumnsAsync(
+            string? catalog, string? schemaPattern, string? tablePattern, string? columnPattern,
+            CancellationToken cancellationToken)
+        {
+            if (catalog != null)
+            {
+                string sql = new ShowColumnsCommand(catalog, schemaPattern, tablePattern, columnPattern).Build();
+                return await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+
+            // SHOW COLUMNS IN ALL CATALOGS is not supported — iterate over each catalog.
+            // TODO: Remove this fallback when the backend supports SHOW COLUMNS IN ALL CATALOGS.
+            var allBatches = new List<RecordBatch>();
+            string catalogsSql = new ShowCatalogsCommand(null).Build();
+            var catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, cancellationToken).ConfigureAwait(false);
+
+            foreach (var batch in catalogBatches)
+            {
+                var catalogArray = batch.Column(0) as StringArray;
+                if (catalogArray == null) continue;
+                for (int i = 0; i < catalogArray.Length; i++)
+                {
+                    if (catalogArray.IsNull(i)) continue;
+                    string cat = catalogArray.GetString(i);
+                    string sql = new ShowColumnsCommand(cat, schemaPattern, tablePattern, columnPattern).Build();
+                    try
+                    {
+                        var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                        allBatches.AddRange(batches);
+                    }
+                    catch
+                    {
+                        // Skip catalogs we can't access (permission errors)
+                    }
+                }
+            }
+            return allBatches;
+        }
+
         internal bool EnablePKFK => _enablePKFK;
 
         internal bool EnableMultipleCatalogSupport => _enableMultipleCatalogSupport;
@@ -748,30 +810,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal bool UseDescTableExtended => _useDescTableExtended;
 
         /// <summary>
-        /// Resolves the effective catalog for metadata queries.
-        /// SEA SHOW commands require an explicit catalog name in the SQL string
-        /// (e.g., SHOW SCHEMAS IN `catalog`), unlike Thrift which treats null
-        /// as "use session default." So we must always resolve to a concrete value.
-        /// When EnableMultipleCatalogSupport is true: uses the provided catalog,
-        ///   falling back to the connection default catalog.
-        /// When EnableMultipleCatalogSupport is false: resolves via the session's
-        ///   current catalog (SELECT CURRENT_CATALOG()) since _catalog is null
-        ///   when the flag is false (matching Thrift behavior).
+        /// Returns the session's default catalog. Used by statements when
+        /// enableMultipleCatalogSupport=false and no catalog was specified.
         /// </summary>
-        internal string? ResolveEffectiveCatalog(string? requestedCatalog)
-        {
-            string? normalized = MetadataUtilities.NormalizeSparkCatalog(requestedCatalog);
-
-            if (_enableMultipleCatalogSupport)
-            {
-                return normalized ?? _catalog;
-            }
-
-            // flag=false: if user specified an explicit non-null catalog, it won't
-            // match the default — the statement layer should return empty.
-            // If null/SPARK, resolve via server query.
-            return normalized ?? GetCurrentCatalog();
-        }
+        internal string? GetSessionDefaultCatalog() => GetCurrentCatalog();
 
         /// <summary>
         /// Queries the server for the current catalog via SELECT CURRENT_CATALOG().

@@ -22,6 +22,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -403,7 +404,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 errorMessage = $"{errorMessage}. Response: {errorContent}";
             }
 
-            throw new DatabricksException(errorMessage);
+            var statusCode = response.StatusCode switch
+            {
+                System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
+                    => AdbcStatusCode.Unauthorized,
+                System.Net.HttpStatusCode.NotFound
+                    => AdbcStatusCode.NotFound,
+                System.Net.HttpStatusCode.Conflict
+                    => AdbcStatusCode.AlreadyExists,
+                System.Net.HttpStatusCode.BadRequest
+                    => AdbcStatusCode.InvalidArgument,
+                _ => AdbcStatusCode.IOError,
+            };
+            throw new DatabricksException(errorMessage, statusCode);
         }
     }
 }

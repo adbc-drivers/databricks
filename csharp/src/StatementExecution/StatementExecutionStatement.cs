@@ -124,6 +124,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+
+            // Match Thrift: statement starts with connection's default catalog.
+            // When enableMultipleCatalogSupport=true, this is the catalog from config (e.g. "main").
+            // When false, _catalog is null (not set from config), matching Thrift behavior.
+            _metadataCatalogName = catalog;
         }
 
         /// <summary>
@@ -187,6 +192,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 case DatabricksParameters.CanDecompressLz4:
                 case DatabricksParameters.MaxBytesPerFile:
                 case DatabricksParameters.MaxBytesPerFetchRequest:
+                    break;
+
+                case AdbcOptions.Telemetry.TraceParent:
+                    SetTraceParent(string.IsNullOrEmpty(value) ? null : value);
                     break;
 
                 default:
@@ -295,8 +304,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Get schema from reader
             var schema = reader.Schema;
 
-            // Return query result - use -1 if row count is not available
-            long rowCount = response.Manifest?.TotalRowCount ?? -1;
+            // Return query result - use 0 if row count is not available
+            long rowCount = response.Manifest?.TotalRowCount ?? 0;
             return new QueryResult(rowCount, reader);
         }
 
@@ -616,7 +625,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new AdbcException("Statement was closed before results could be retrieved");
             }
 
-            // For updates, we don't need to read the results - just return the row count
+            // For updates, we don't need to read the results - just return the row count.
             long rowCount = response.Manifest?.TotalRowCount ?? 0;
             return new UpdateResult(rowCount);
         }
@@ -792,7 +801,35 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Metadata command routing
 
-        private string? EffectiveCatalog => _connection.ResolveEffectiveCatalog(_metadataCatalogName);
+        /// <summary>
+        /// Resolves the catalog for metadata SQL commands.
+        /// Matches Thrift behavior:
+        ///   - SPARK → null (all catalogs)
+        ///   - Other values pass through as-is
+        ///   - null stays null
+        /// When enableMultipleCatalogSupport=false and result is null,
+        /// resolves to the session default catalog (SEA SQL requires an explicit
+        /// catalog for SHOW commands when not querying all catalogs).
+        /// </summary>
+        // TODO: Once the backend supports SHOW COLUMNS IN ALL CATALOGS, the
+        // ExecuteShowColumnsAsync iterate-all-catalogs fallback can be removed.
+        private string? EffectiveCatalog
+        {
+            get
+            {
+                // Normalize SPARK → null, same as Thrift's HandleSparkCatalog
+                string? catalog = DatabricksConnection.HandleSparkCatalog(_metadataCatalogName);
+
+                if (_connection.EnableMultipleCatalogSupport)
+                {
+                    // null means "all catalogs" (e.g. SHOW SCHEMAS IN ALL CATALOGS)
+                    return catalog;
+                }
+
+                // flag=false: null means use session default (SEA SQL needs explicit catalog)
+                return catalog ?? _connection.GetSessionDefaultCatalog();
+            }
+        }
 
         /// <summary>
         /// Escapes wildcard characters (_ and %) in metadata name parameters when
@@ -837,7 +874,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return new QueryResult(1, new HiveInfoArrowStream(catalogSchema, new IArrowArray[] { sparkBuilder.Build() }));
                 }
 
-                string sql = new ShowCatalogsCommand(EscapePatternWildcardsInName(_metadataCatalogName)).Build();
+                // GetCatalogs returns all catalogs — no filtering by pattern,
+                // matching Thrift behavior (Thrift RPC has no catalog filter for GetCatalogs).
+                string sql = new ShowCatalogsCommand(null).Build();
                 activity?.SetTag("sql_query", sql);
                 var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
@@ -883,7 +922,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("sql_query", sql);
                 var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
-                // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog_name, databaseName
+                // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
                 // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
                 bool showAllCatalogs = catalog == null;
 
@@ -897,8 +936,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                     if (showAllCatalogs)
                     {
-                        catalogArray = batch.Column(0) as StringArray;
-                        schemaArray = batch.Column(1) as StringArray;
+                        schemaArray = batch.Column(0) as StringArray;
+                        catalogArray = batch.Column(1) as StringArray;
                     }
                     else
                     {
@@ -1024,13 +1063,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return FlatColumnsResultBuilder.BuildFlatColumnsResult(
                         System.Array.Empty<(string, string, string, TableInfo)>());
 
-                string sql = new ShowColumnsCommand(
+                var batches = await _connection.ExecuteShowColumnsAsync(
                     catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName),
                     EscapePatternWildcardsInName(_metadataTableName),
-                    EscapePatternWildcardsInName(_metadataColumnName)).Build();
-                activity?.SetTag("sql_query", sql);
-                var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                    EscapePatternWildcardsInName(_metadataColumnName),
+                    cancellationToken).ConfigureAwait(false);
 
                 var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
 

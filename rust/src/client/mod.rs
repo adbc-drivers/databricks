@@ -203,7 +203,7 @@ pub trait DatabricksClient: Send + Sync + std::fmt::Debug {
     ) -> Result<ExecuteResult>;
 
     /// List columns for a specific catalog, optionally filtered by patterns.
-    /// Catalog is required — `SHOW COLUMNS IN ALL CATALOGS` is not yet available server-side.
+    /// Catalog is required — `SHOW COLUMNS IN ALL CATALOGS` is not supported.
     async fn list_columns(
         &self,
         session_id: &str,
