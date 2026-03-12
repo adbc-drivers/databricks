@@ -806,14 +806,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Queries the server for the current catalog via SELECT CURRENT_CATALOG().
-        /// </summary>
-        /// <summary>
         /// Returns the session's default catalog. Used by statements when
         /// enableMultipleCatalogSupport=false and no catalog was specified.
         /// </summary>
         internal string? GetSessionDefaultCatalog() => GetCurrentCatalog();
 
+        /// <summary>
+        /// Queries the server for the current catalog via SELECT CURRENT_CATALOG().
+        /// </summary>
         private string? GetCurrentCatalog()
         {
             var batches = ExecuteMetadataSql("SELECT CURRENT_CATALOG()");
