@@ -713,32 +713,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     {
                         ColumnMetadataHelper.PopulateTableInfoFromTypeName(
                             tableInfo, colName, colType, position, nullable);
-
-                        // For GetObjects, null out Precision and Scale for types where Thrift
-                        // returns null (see SparkConnection.SetPrecisionScaleAndTypeName):
-                        //   - Precision: only DECIMAL/NUMERIC and CHAR/VARCHAR retain it
-                        //   - Scale: only DECIMAL/NUMERIC retains it
-                        // Note: GetColumnSizeDefault/GetDecimalDigitsDefault return non-null for
-                        // all types (matching GetColumns server values), so we null them here
-                        // specifically for the GetObjects path.
-                        int lastIdx = tableInfo.Precision.Count - 1;
-                        short typeCode = tableInfo.ColType[lastIdx];
-                        bool isDecimalOrNumeric = typeCode == (short)HiveServer2Connection.ColumnTypeId.DECIMAL
-                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.NUMERIC;
-                        bool isCharType = typeCode == (short)HiveServer2Connection.ColumnTypeId.CHAR
-                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.NCHAR
-                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.VARCHAR
-                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.NVARCHAR
-                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.LONGVARCHAR
-                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.LONGNVARCHAR;
-                        if (!isDecimalOrNumeric && !isCharType)
-                        {
-                            tableInfo.Precision[lastIdx] = null;
-                        }
-                        if (!isDecimalOrNumeric)
-                        {
-                            tableInfo.Scale[lastIdx] = null;
-                        }
                     }
                 }
             }
