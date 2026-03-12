@@ -482,7 +482,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var fields = new List<Field>();
             foreach (var column in manifest.Schema.Columns)
             {
-                var arrowType = MapDatabricksTypeToArrowType(column.TypeName);
+                var typeName = column.TypeName ?? string.Empty;
+                var arrowType = MapDatabricksTypeToArrowType(typeName);
                 // Embed the SQL type name as Arrow field metadata so that consumers
                 // (e.g. the PowerBI connector's AdjustNativeTypes) can read it via
                 // the "Spark:DataType:SqlName" key — the same metadata the Databricks
@@ -494,7 +495,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // it here for now. Add it if a consumer requires it (PECO-2950).
                 var metadata = new Dictionary<string, string>
                 {
-                    ["Spark:DataType:SqlName"] = ColumnMetadataHelper.GetSparkSqlName(column.TypeName ?? string.Empty)
+                    ["Spark:DataType:SqlName"] = ColumnMetadataHelper.GetSparkSqlName(typeName)
                 };
                 fields.Add(new Field(column.Name, arrowType, true, metadata));
             }
