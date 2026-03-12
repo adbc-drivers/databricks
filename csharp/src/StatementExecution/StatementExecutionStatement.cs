@@ -812,9 +812,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// resolves to the session default catalog (SEA SQL requires an explicit
         /// catalog for SHOW commands when not querying all catalogs).
         /// </summary>
-        // TODO: Once the backend supports SHOW COLUMNS IN ALL CATALOGS, consider
-        // consolidating with StatementExecutionConnection.ResolveEffectiveCatalog
-        // so both statement and connection use the same catalog resolution logic.
+        // TODO: Once the backend supports SHOW COLUMNS IN ALL CATALOGS, the
+        // ExecuteShowColumnsAsync iterate-all-catalogs fallback can be removed.
         private string? EffectiveCatalog
         {
             get

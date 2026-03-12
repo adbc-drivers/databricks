@@ -532,10 +532,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("table_name", tableName);
 
                 using var cts = CreateMetadataTimeoutCts();
-                string sql = new ShowColumnsCommand(
-                    ResolveEffectiveCatalog(catalog), dbSchema, tableName).Build();
-                activity?.SetTag("sql_query", sql);
-                var batches = ExecuteMetadataSql(sql, cts.Token);
+                // Pass catalog through with SPARK→null normalization, matching Thrift
+                // which sends catalog as-is to the server. ExecuteShowColumnsAsync
+                // handles null by iterating all catalogs.
+                string? resolvedCatalog = DatabricksConnection.HandleSparkCatalog(catalog);
+                var batches = ExecuteShowColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
+                    .GetAwaiter().GetResult();
 
                 var fields = new List<Field>();
                 foreach (var batch in batches)
@@ -806,32 +808,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// Default: false (falls back to GetColumns + GetPrimaryKeys + GetCrossReference).
         /// </summary>
         internal bool UseDescTableExtended => _useDescTableExtended;
-
-        /// <summary>
-        /// Resolves the effective catalog for metadata queries.
-        /// SEA SHOW commands require an explicit catalog name in the SQL string
-        /// (e.g., SHOW SCHEMAS IN `catalog`), unlike Thrift which treats null
-        /// as "use session default." So we must always resolve to a concrete value.
-        /// When EnableMultipleCatalogSupport is true: uses the provided catalog,
-        ///   falling back to the connection default catalog.
-        /// When EnableMultipleCatalogSupport is false: resolves via the session's
-        ///   current catalog (SELECT CURRENT_CATALOG()) since _catalog is null
-        ///   when the flag is false (matching Thrift behavior).
-        /// </summary>
-        internal string? ResolveEffectiveCatalog(string? requestedCatalog)
-        {
-            string? normalized = MetadataUtilities.NormalizeSparkCatalog(requestedCatalog);
-
-            if (_enableMultipleCatalogSupport)
-            {
-                return normalized ?? _catalog;
-            }
-
-            // flag=false: if user specified an explicit non-null catalog, it won't
-            // match the default — the statement layer should return empty.
-            // If null/SPARK, resolve via server query.
-            return normalized ?? GetCurrentCatalog();
-        }
 
         /// <summary>
         /// Returns the session's default catalog. Used by statements when
