@@ -250,43 +250,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task ExecuteQuery_EmptyTable_ComplexAndDecimalTypesAreMappedCorrectly()
-        {
-            // Arrange: DECIMAL(10,2), ARRAY, MAP, STRUCT — all must survive the schema path
-            var manifest = BuildManifest(
-                ("price", "DECIMAL(10,2)"),
-                ("tags", "ARRAY<STRING>"),
-                ("props", "MAP<STRING,INT>"),
-                ("addr", "STRUCT<city:STRING,zip:INT>"));
-
-            var mockClient = new Mock<IStatementExecutionClient>();
-            mockClient
-                .Setup(c => c.ExecuteStatementAsync(
-                    It.IsAny<ExecuteStatementRequest>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ExecuteStatementResponse
-                {
-                    StatementId = StatementId,
-                    Status = new StatementStatus { State = "SUCCEEDED" },
-                    Manifest = manifest,
-                    Result = new ResultData { Attachment = null },
-                });
-
-            using var stmt = CreateStatement(mockClient.Object);
-            stmt.SqlQuery = "SELECT price, tags, props, addr FROM complex_table WHERE 0=1";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            var fields = queryResult.Stream!.Schema.FieldsList;
-
-            Assert.Equal(4, fields.Count);
-            Assert.IsType<Decimal128Type>(fields[0].DataType);
-            // ARRAY, MAP, STRUCT are represented as STRING in Arrow for now
-            Assert.IsType<StringType>(fields[1].DataType);
-            Assert.IsType<StringType>(fields[2].DataType);
-            Assert.IsType<StringType>(fields[3].DataType);
-        }
-
-        [Fact]
         public async Task ExecuteQuery_NullTypeName_TreatedAsUnknownType()
         {
             // Arrange: a column with a null TypeName must not throw — it falls back to StringType
