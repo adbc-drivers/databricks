@@ -713,10 +713,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         ColumnMetadataHelper.PopulateTableInfoFromTypeName(
                             tableInfo, colName, colType, position, nullable);
 
-                        // Match Thrift GetObjects behavior: SparkConnection.SetPrecisionScaleAndTypeName
-                        // sets Precision for DECIMAL, NUMERIC, CHAR, NCHAR, VARCHAR, NVARCHAR,
-                        // LONGVARCHAR, LONGNVARCHAR. Sets Scale only for DECIMAL/NUMERIC.
-                        // All other types get null for both.
+                        // For GetObjects, null out Precision and Scale for types where Thrift
+                        // returns null (see SparkConnection.SetPrecisionScaleAndTypeName):
+                        //   - Precision: only DECIMAL/NUMERIC and CHAR/VARCHAR retain it
+                        //   - Scale: only DECIMAL/NUMERIC retains it
+                        // Note: GetColumnSizeDefault/GetDecimalDigitsDefault return non-null for
+                        // all types (matching GetColumns server values), so we null them here
+                        // specifically for the GetObjects path.
                         int lastIdx = tableInfo.Precision.Count - 1;
                         short typeCode = tableInfo.ColType[lastIdx];
                         bool isDecimalOrNumeric = typeCode == (short)HiveServer2Connection.ColumnTypeId.DECIMAL
