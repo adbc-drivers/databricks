@@ -304,8 +304,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Get schema from reader
             var schema = reader.Schema;
 
-            // Return query result - use -1 if row count is not available
-            long rowCount = response.Manifest?.TotalRowCount ?? -1;
+            // Return query result - use 0 if row count is not available
+            long rowCount = response.Manifest?.TotalRowCount ?? 0;
             return new QueryResult(rowCount, reader);
         }
 
@@ -626,8 +626,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // For updates, we don't need to read the results - just return the row count.
-            // Default to -1 (unknown) when no manifest/row count, matching Thrift behavior for DDL.
-            long rowCount = response.Manifest?.TotalRowCount ?? -1;
+            long rowCount = response.Manifest?.TotalRowCount ?? 0;
             return new UpdateResult(rowCount);
         }
 
