@@ -376,6 +376,15 @@ namespace AdbcDrivers.Databricks
         /// Default value is 900 seconds (15 minutes) if not specified.
         /// </summary>
         public const string FeatureFlagCacheTtlSeconds = "adbc.databricks.feature_flag_cache_ttl_seconds";
+
+        /// <summary>
+        /// Whether to return complex types (ARRAY, MAP, STRUCT) as native Arrow types.
+        /// When false (default): complex types are serialized to JSON strings, matching legacy behavior.
+        /// When true: complex types are returned as native Arrow types (ListType, MapType, StructType).
+        /// This applies to both Thrift and SEA protocols, providing consistent behavior across protocols.
+        /// Default value is false if not specified.
+        /// </summary>
+        public const string EnableComplexDatatypeSupport = "adbc.databricks.enable_complex_datatype_support";
     }
 
     /// <summary>

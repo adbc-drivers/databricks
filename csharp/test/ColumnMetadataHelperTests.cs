@@ -75,6 +75,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("STRING", "STRING")]
         [InlineData("BOOLEAN", "BOOLEAN")]
         [InlineData("DOUBLE", "DOUBLE")]
+        [InlineData("", "")]
         public void GetBaseTypeName_ReturnsCorrectName(string typeName, string expectedBase)
         {
             Assert.Equal(expectedBase, ColumnMetadataHelper.GetBaseTypeName(typeName));
@@ -192,6 +193,38 @@ namespace AdbcDrivers.Databricks.Tests
         public void GetDataTypeCode_HandlesTrimAndCase(string typeName, short expectedCode)
         {
             Assert.Equal(expectedCode, ColumnMetadataHelper.GetDataTypeCode(typeName));
+        }
+
+        [Theory]
+        [InlineData("INT", "INT")]
+        [InlineData("INTEGER", "INT")]
+        [InlineData("BYTE", "TINYINT")]
+        [InlineData("SHORT", "SMALLINT")]
+        [InlineData("LONG", "BIGINT")]
+        [InlineData("REAL", "FLOAT")]
+        [InlineData("TINYINT", "TINYINT")]
+        [InlineData("SMALLINT", "SMALLINT")]
+        [InlineData("BIGINT", "BIGINT")]
+        [InlineData("FLOAT", "FLOAT")]
+        [InlineData("DOUBLE", "DOUBLE")]
+        [InlineData("BOOLEAN", "BOOLEAN")]
+        [InlineData("STRING", "STRING")]
+        [InlineData("VARCHAR", "VARCHAR")]
+        [InlineData("CHAR", "CHAR")]
+        [InlineData("BINARY", "BINARY")]
+        [InlineData("DATE", "DATE")]
+        [InlineData("TIMESTAMP", "TIMESTAMP")]
+        [InlineData("TIMESTAMP_NTZ", "TIMESTAMP")]
+        [InlineData("DECIMAL(10,2)", "DECIMAL")]
+        [InlineData("ARRAY<INT>", "ARRAY")]
+        [InlineData("MAP<STRING,INT>", "MAP")]
+        [InlineData("STRUCT<a:INT>", "STRUCT")]
+        [InlineData("INTERVAL DAY TO SECOND", "INTERVAL")]
+        [InlineData("VARIANT", "VARIANT")]
+        [InlineData("", "")]
+        public void GetSparkSqlName_ReturnsCorrectValues(string typeName, string expected)
+        {
+            Assert.Equal(expected, ColumnMetadataHelper.GetSparkSqlName(typeName));
         }
     }
 }

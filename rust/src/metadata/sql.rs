@@ -17,9 +17,6 @@
 //! Builds SHOW SQL commands based on the Databricks SQL dialect, matching
 //! the patterns used by the JDBC driver (`CommandConstants.java`).
 
-use crate::error::{DatabricksErrorHelper, Result};
-use driverbase::error::ErrorHelper;
-
 /// Builds SQL commands for metadata queries.
 ///
 /// Uses a builder pattern to set optional filters before generating the SQL.
@@ -150,14 +147,11 @@ impl SqlCommandBuilder {
         sql
     }
 
-    /// Build SHOW COLUMNS command. Requires a catalog — `SHOW COLUMNS IN ALL CATALOGS`
-    /// is not yet available server-side.
-    pub fn build_show_columns(&self) -> Result<String> {
-        let catalog = self.catalog.as_ref().ok_or_else(|| {
-            DatabricksErrorHelper::invalid_argument()
-                .message("catalog is required for SHOW COLUMNS (ALL CATALOGS not yet supported)")
-        })?;
-
+    /// Build SHOW COLUMNS command.
+    ///
+    /// Catalog is a required parameter (not taken from builder state) because
+    /// `SHOW COLUMNS IN ALL CATALOGS` is not supported by Databricks.
+    pub fn build_show_columns(&self, catalog: &str) -> String {
         let mut sql = format!(
             "SHOW COLUMNS IN CATALOG {}",
             Self::escape_identifier(catalog)
@@ -175,7 +169,7 @@ impl SqlCommandBuilder {
             sql.push_str(&format!(" LIKE '{}'", pattern));
         }
 
-        Ok(sql)
+        sql
     }
 
     pub fn build_show_primary_keys(catalog: &str, schema: &str, table: &str) -> String {
@@ -281,29 +275,18 @@ mod tests {
     }
 
     #[test]
-    fn test_show_columns_requires_catalog() {
-        let result = SqlCommandBuilder::new().build_show_columns();
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_show_columns_with_catalog() {
-        let sql = SqlCommandBuilder::new()
-            .with_catalog(Some("main"))
-            .build_show_columns()
-            .unwrap();
+        let sql = SqlCommandBuilder::new().build_show_columns("main");
         assert_eq!(sql, "SHOW COLUMNS IN CATALOG `main`");
     }
 
     #[test]
     fn test_show_columns_with_all_patterns() {
         let sql = SqlCommandBuilder::new()
-            .with_catalog(Some("main"))
             .with_schema_pattern(Some("default"))
             .with_table_pattern(Some("my_table"))
             .with_column_pattern(Some("id%"))
-            .build_show_columns()
-            .unwrap();
+            .build_show_columns("main");
         assert_eq!(
             sql,
             "SHOW COLUMNS IN CATALOG `main` SCHEMA LIKE 'default' TABLE LIKE 'my.table' LIKE 'id*'"

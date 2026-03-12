@@ -62,6 +62,7 @@ namespace AdbcDrivers.Databricks
         private bool enableMultipleCatalogSupport;
         private bool enablePKFK;
         private bool runAsyncInThrift;
+        private bool enableComplexDatatypeSupport;
         private Dictionary<string, string>? confOverlay;
         internal string? StatementId { get; set; }
 
@@ -90,6 +91,7 @@ namespace AdbcDrivers.Databricks
             enablePKFK = connection.EnablePKFK;
 
             runAsyncInThrift = connection.RunAsyncInThrift;
+            enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
 
             // Override the Apache base default (500ms) with Databricks-specific poll interval (100ms)
             if (!connection.Properties.ContainsKey(ApacheParameters.PollTimeMilliseconds))
@@ -260,11 +262,11 @@ namespace AdbcDrivers.Databricks
             {
                 TimestampAsArrow = true,
                 DecimalAsArrow = true,
-
-                // set to false so they return as string
-                // otherwise, they return as ARRAY_TYPE but you can't determine
-                // the object type of the items in the array
-                ComplexTypesAsArrow = false,
+                // When false (default), complex types (ARRAY, MAP, STRUCT) are returned as JSON-encoded
+                // strings by the Thrift server. When true, the server returns native Arrow types.
+                // Note: Thrift ARRAY_TYPE responses do not embed element type info, so callers cannot
+                // reliably determine element types; returning strings is the safe default.
+                ComplexTypesAsArrow = enableComplexDatatypeSupport,
                 IntervalTypesAsArrow = false,
             };
 
