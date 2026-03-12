@@ -29,10 +29,6 @@ on:
       - 'ci/scripts/**'
       - 'csharp/**'
   merge_group:
-    paths:
-      - '.github/workflows/e2e-tests.yml'
-      - 'ci/scripts/**'
-      - 'csharp/**'
 
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
@@ -48,9 +44,31 @@ jobs:
     steps:
       - run: echo "Approved"
 
+  # merge_group only: check if relevant files changed before running expensive E2E tests.
+  check-changes:
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.changed.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: changed
+        run: |
+          CHANGED=$(git diff --name-only "${{ github.event.merge_group.base_sha }}" "${{ github.event.merge_group.head_sha }}")
+          if echo "$CHANGED" | grep -qE "^(csharp/|ci/scripts/|\.github/workflows/e2e-tests\.yml)"; then
+            echo "changed=true" >> $GITHUB_OUTPUT && echo "✅ Relevant files changed"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT && echo "⏭️ No relevant files changed, skipping E2E tests"
+          fi
+
   run-e2e-tests:
-    needs: [approval-gate]
-    if: always() && (needs.approval-gate.result == 'success' || needs.approval-gate.result == 'skipped')
+    needs: [approval-gate, check-changes]
+    if: |
+      always() &&
+      (needs.approval-gate.result == 'success' || needs.approval-gate.result == 'skipped') &&
+      (needs.check-changes.result == 'skipped' || needs.check-changes.outputs.should-run == 'true')
     runs-on: ubuntu-latest
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
