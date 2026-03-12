@@ -668,8 +668,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            string sql = new ShowColumnsCommand(catalogPattern, schemaPattern, tablePattern, columnPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            var batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
 
             var tablePositions = new Dictionary<string, int>();
 
@@ -776,6 +775,49 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal List<RecordBatch> ExecuteMetadataSql(string sql, CancellationToken cancellationToken = default)
         {
             return ExecuteMetadataSqlAsync(sql, cancellationToken).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Executes a SHOW COLUMNS command. When catalog is null, iterates over all catalogs
+        /// since SHOW COLUMNS IN ALL CATALOGS is not yet supported by the backend.
+        /// </summary>
+        internal async Task<List<RecordBatch>> ExecuteShowColumnsAsync(
+            string? catalog, string? schemaPattern, string? tablePattern, string? columnPattern,
+            CancellationToken cancellationToken)
+        {
+            if (catalog != null)
+            {
+                string sql = new ShowColumnsCommand(catalog, schemaPattern, tablePattern, columnPattern).Build();
+                return await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+
+            // SHOW COLUMNS IN ALL CATALOGS is not supported — iterate over each catalog.
+            // TODO: Remove this fallback when the backend supports SHOW COLUMNS IN ALL CATALOGS.
+            var allBatches = new List<RecordBatch>();
+            string catalogsSql = new ShowCatalogsCommand(null).Build();
+            var catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, cancellationToken).ConfigureAwait(false);
+
+            foreach (var batch in catalogBatches)
+            {
+                var catalogArray = batch.Column(0) as StringArray;
+                if (catalogArray == null) continue;
+                for (int i = 0; i < catalogArray.Length; i++)
+                {
+                    if (catalogArray.IsNull(i)) continue;
+                    string cat = catalogArray.GetString(i);
+                    string sql = new ShowColumnsCommand(cat, schemaPattern, tablePattern, columnPattern).Build();
+                    try
+                    {
+                        var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                        allBatches.AddRange(batches);
+                    }
+                    catch
+                    {
+                        // Skip catalogs we can't access (permission errors)
+                    }
+                }
+            }
+            return allBatches;
         }
 
         internal bool EnablePKFK => _enablePKFK;
