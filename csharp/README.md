@@ -45,7 +45,7 @@ var database = driver.Open(new Dictionary<string, string>
     ["uri"] = "https://your-workspace.cloud.databricks.com/sql/1.0/warehouses/your-warehouse-id",
     ["adbc.spark.auth_type"] = "oauth",
     ["adbc.databricks.oauth.grant_type"] = "access_token",
-    ["adbc.spark.oauth.access_token"] = "your-personal-access-token"
+    ["adbc.spark.access_token"] = "your-personal-access-token"
 });
 
 // Execute query
@@ -148,7 +148,7 @@ var config = new Dictionary<string, string>
     ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
     ["adbc.spark.auth_type"] = "oauth",
     ["adbc.databricks.oauth.grant_type"] = "access_token",
-    ["adbc.spark.oauth.access_token"] = "your-personal-access-token"
+    ["adbc.spark.access_token"] = "your-personal-access-token"
 };
 ```
 
@@ -176,7 +176,7 @@ var config = new Dictionary<string, string>
 | `adbc.databricks.oauth.client_id` | OAuth client ID for credentials flow | |
 | `adbc.databricks.oauth.client_secret` | OAuth client secret for credentials flow | |
 | `adbc.databricks.oauth.scope` | OAuth scope for credentials flow | `sql` |
-| `adbc.spark.oauth.access_token` | Personal access token (for `access_token` grant type) | |
+| `adbc.spark.access_token` | Personal access token (for `access_token` grant type) | |
 | `adbc.databricks.token_renew_limit` | Minutes before expiration to renew token (0 disables) | `0` |
 | `adbc.databricks.identity_federation_client_id` | Service principal client ID for workload identity | |
 
@@ -198,9 +198,10 @@ var config = new Dictionary<string, string>
 | `password` | Password for basic authentication | |
 | `adbc.spark.connect_timeout_ms` | Session establishment timeout | `30000` |
 | `adbc.apache.statement.query_timeout_s` | Query execution timeout | `60` |
-| `adbc.apache.connection.polltime_ms` | Query status polling interval | `500` (Databricks: `100`) |
+| `adbc.apache.statement.polltime_ms` | Query status polling interval | `500` (Databricks: `100`) |
 | `adbc.apache.statement.batch_size` | Max rows per batch request | `50000` (Databricks: `2000000`) |
 | `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` |
+| `adbc.spark.user_agent_entry` | Additional user agent string appended to driver user agent | |
 
 **Note:** Either `uri` or the combination of `adbc.spark.host` + `adbc.spark.path` is required.
 
@@ -223,6 +224,10 @@ var config = new Dictionary<string, string>
 | `adbc.spark.temporarily_unavailable_retry_timeout` | Max retry time for 4xx/5xx errors (seconds) | `900` |
 | `adbc.databricks.rate_limit_retry` | Retry on HTTP 429 (rate limit) responses | `true` |
 | `adbc.databricks.rate_limit_retry_timeout` | Max retry time for rate limits (seconds) | `120` |
+| `adbc.databricks.query_tags` | Key-value tags attached to queries (e.g. `key1=val1,key2=val2`) | |
+| `adbc.databricks.feature_flag_cache_enabled` | Fetch and apply server-side feature flags | `true` |
+| `adbc.databricks.feature_flag_timeout_seconds` | Timeout for feature flag fetch requests | `10` |
+| `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` |
 
 **Performance Notes:**
 - Databricks default `batch_size` is `2000000` (vs Spark's `50000`) - optimized for CloudFetch's 1024MB limit
@@ -289,7 +294,7 @@ var config = new Dictionary<string, string>
     ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
     ["adbc.spark.auth_type"] = "oauth",
     ["adbc.databricks.oauth.grant_type"] = "access_token",
-    ["adbc.spark.oauth.access_token"] = "your-token",
+    ["adbc.spark.access_token"] = "your-token",
     ["adbc.databricks.protocol"] = "rest",
     ["adbc.databricks.warehouse_id"] = "your-warehouse-id",
     ["adbc.databricks.rest.result_disposition"] = "inline_or_external_links"
@@ -305,6 +310,7 @@ var config = new Dictionary<string, string>
 | `adbc.http_options.tls.allow_self_signed` | Accept self-signed certificates | `false` |
 | `adbc.http_options.tls.allow_hostname_mismatch` | Allow hostname mismatches | `false` |
 | `adbc.http_options.tls.trusted_certificate_path` | Custom CA certificate path | |
+| `adbc.http_options.tls.revocation_mode` | Certificate revocation check: `0` (none), `1` (online), `2` (offline) | `0` |
 
 #### Using mitmproxy for Debugging
 
@@ -316,7 +322,7 @@ var config = new Dictionary<string, string>
     ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
     ["adbc.spark.auth_type"] = "oauth",
     ["adbc.databricks.oauth.grant_type"] = "access_token",
-    ["adbc.spark.oauth.access_token"] = "your-token",
+    ["adbc.spark.access_token"] = "your-token",
 
     // Configure to trust mitmproxy's certificate
     ["adbc.http_options.tls.trusted_certificate_path"] = "/path/to/mitmproxy-ca-cert.pem",
@@ -328,8 +334,38 @@ var config = new Dictionary<string, string>
 **Steps:**
 1. Install and start mitmproxy: `mitmproxy -p 8080`
 2. Export mitmproxy's CA certificate from `~/.mitmproxy/mitmproxy-ca-cert.pem`
-3. Configure your system to route traffic through the proxy (e.g., set HTTP_PROXY environment variable)
+3. Configure the proxy settings (see below) or set the `HTTP_PROXY` environment variable
 4. Use `trusted_certificate_path` to trust mitmproxy's certificate, or disable validation for testing
+
+### Proxy Configuration
+
+The driver supports HTTP proxy configuration for enterprise network environments.
+
+| Property | Description | Default |
+|----------|-------------|---------|
+| `adbc.proxy_options.use_proxy` | Enable proxy | `false` |
+| `adbc.proxy_options.proxy_host` | Proxy hostname | |
+| `adbc.proxy_options.proxy_port` | Proxy port | |
+| `adbc.proxy_options.proxy_uid` | Proxy username | |
+| `adbc.proxy_options.proxy_pwd` | Proxy password | |
+| `adbc.proxy_options.proxy_auth` | Proxy authentication type | |
+| `adbc.proxy_options.proxy_ignore_list` | Comma-separated hosts to bypass proxy | |
+
+**Example:**
+```csharp
+var config = new Dictionary<string, string>
+{
+    ["uri"] = "https://workspace.databricks.com/sql/1.0/warehouses/...",
+    ["adbc.spark.auth_type"] = "oauth",
+    ["adbc.databricks.oauth.grant_type"] = "access_token",
+    ["adbc.spark.access_token"] = "your-token",
+    ["adbc.proxy_options.use_proxy"] = "true",
+    ["adbc.proxy_options.proxy_host"] = "proxy.corp.example.com",
+    ["adbc.proxy_options.proxy_port"] = "8080",
+    // For mitmproxy debugging, also trust the proxy certificate:
+    ["adbc.http_options.tls.trusted_certificate_path"] = "/path/to/mitmproxy-ca-cert.pem"
+};
+```
 
 ### Data Type Support
 

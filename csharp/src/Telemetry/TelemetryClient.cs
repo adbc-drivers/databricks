@@ -307,6 +307,7 @@ namespace AdbcDrivers.Databricks.Telemetry
 
                 // Flush remaining queued events before shutdown
                 // FlushAsync allows Closing state, so no need to toggle _state
+                // Flush remaining queued events before shutdown
                 try
                 {
                     await FlushAsync(CancellationToken.None).ConfigureAwait(false);

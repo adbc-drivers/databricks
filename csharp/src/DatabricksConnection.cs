@@ -70,6 +70,7 @@ namespace AdbcDrivers.Databricks
         private bool _enableMultipleCatalogSupport = true;
         private bool _enablePKFK = true;
         private bool _runAsyncInThrift = true;
+        private bool _enableComplexDatatypeSupport = false;
 
         // DirectQuery configuration
         private const long DefaultDirectResultMaxBytes = 10 * 1024 * 1024; // 10MB for direct query results size limit
@@ -195,6 +196,7 @@ namespace AdbcDrivers.Databricks
             _canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.CanDecompressLz4, _canDecompressLz4);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseDescTableExtended, _useDescTableExtended);
             _runAsyncInThrift = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableRunAsyncInThriftOp, _runAsyncInThrift);
+            _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableComplexDatatypeSupport, _enableComplexDatatypeSupport);
 
             if (Properties.ContainsKey(DatabricksParameters.MaxBytesPerFile))
             {
@@ -369,6 +371,11 @@ namespace AdbcDrivers.Databricks
         /// Enable RunAsync flag in Thrift Operation
         /// </summary>
         public bool RunAsyncInThrift => _runAsyncInThrift;
+
+        /// <summary>
+        /// Whether to return complex types as native Arrow types (true) or JSON strings (false).
+        /// </summary>
+        internal bool EnableComplexDatatypeSupport => _enableComplexDatatypeSupport;
 
         /// <summary>
         /// Gets a value indicating whether to retry requests that receive retryable responses (408, 502, 503, 504) .
@@ -1058,7 +1065,7 @@ namespace AdbcDrivers.Databricks
                     Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.started",
                         tags: new ActivityTagsCollection { { "host", _host } }));
 
-                    // Step 1: Flush pending metrics
+                    // Step 1: Flush pending metrics (wait for any in-flight flush to complete)
                     try
                     {
                         await _telemetryClient.FlushAsync(CancellationToken.None).ConfigureAwait(false);

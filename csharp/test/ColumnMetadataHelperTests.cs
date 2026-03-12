@@ -193,5 +193,36 @@ namespace AdbcDrivers.Databricks.Tests
         {
             Assert.Equal(expectedCode, ColumnMetadataHelper.GetDataTypeCode(typeName));
         }
+
+        [Theory]
+        [InlineData("INT", "INT")]
+        [InlineData("INTEGER", "INT")]
+        [InlineData("BYTE", "TINYINT")]
+        [InlineData("SHORT", "SMALLINT")]
+        [InlineData("LONG", "BIGINT")]
+        [InlineData("REAL", "FLOAT")]
+        [InlineData("TINYINT", "TINYINT")]
+        [InlineData("SMALLINT", "SMALLINT")]
+        [InlineData("BIGINT", "BIGINT")]
+        [InlineData("FLOAT", "FLOAT")]
+        [InlineData("DOUBLE", "DOUBLE")]
+        [InlineData("BOOLEAN", "BOOLEAN")]
+        [InlineData("STRING", "STRING")]
+        [InlineData("VARCHAR", "VARCHAR")]
+        [InlineData("CHAR", "CHAR")]
+        [InlineData("BINARY", "BINARY")]
+        [InlineData("DATE", "DATE")]
+        [InlineData("TIMESTAMP", "TIMESTAMP")]
+        [InlineData("TIMESTAMP_NTZ", "TIMESTAMP")]
+        [InlineData("DECIMAL(10,2)", "DECIMAL")]
+        [InlineData("ARRAY<INT>", "ARRAY")]
+        [InlineData("MAP<STRING,INT>", "MAP")]
+        [InlineData("STRUCT<a:INT>", "STRUCT")]
+        [InlineData("INTERVAL DAY TO SECOND", "INTERVAL")]
+        [InlineData("VARIANT", "VARIANT")]
+        public void GetSparkSqlName_ReturnsCorrectValues(string typeName, string expected)
+        {
+            Assert.Equal(expected, ColumnMetadataHelper.GetSparkSqlName(typeName));
+        }
     }
 }
