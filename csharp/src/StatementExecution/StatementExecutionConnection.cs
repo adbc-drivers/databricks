@@ -197,6 +197,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (_enableMultipleCatalogSupport)
             {
                 properties.TryGetValue(AdbcOptions.Connection.CurrentCatalog, out _catalog);
+                // Match Thrift behavior: SPARK is a legacy alias — map it to null so the
+                // runtime falls back to the workspace default (typically hive_metastore).
+                _catalog = DatabricksConnection.HandleSparkCatalog(_catalog);
             }
             properties.TryGetValue(AdbcOptions.Connection.CurrentDbSchema, out _schema);
 
@@ -363,8 +366,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             SessionConfigs = sessionConfigs.Count > 0 ? sessionConfigs : null
                         };
 
-                        var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
-                        _sessionId = response.SessionId;
+                        try
+                        {
+                            var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
+                            _sessionId = response.SessionId;
+                        }
+                        catch (DatabricksException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new DatabricksException(
+                                $"Failed to connect to Databricks: {ex.GetBaseException().Message}",
+                                AdbcStatusCode.IOError,
+                                ex);
+                        }
 
                         // If user didn't specify a catalog, discover the server's default.
                         // In Thrift, the server returns this in OpenSessionResp.InitialNamespace.
@@ -405,6 +422,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 this); // Pass connection as TracingConnection for tracing support
         }
 
+        public override void SetOption(string key, string? value)
+        {
+            switch (key)
+            {
+                case AdbcOptions.Telemetry.TraceParent:
+                    SetTraceParent(string.IsNullOrWhiteSpace(value) ? null : value);
+                    return;
+            }
+
+            base.SetOption(key, value);
+        }
+
         public override IArrowArrayStream GetObjects(GetObjectsDepth depth, string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, string? columnNamePattern)
         {
             return this.TraceActivity(activity =>
@@ -414,6 +443,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("schema_pattern", schemaPattern ?? "(none)");
                 activity?.SetTag("table_pattern", tableNamePattern ?? "(none)");
                 activity?.SetTag("column_pattern", columnNamePattern ?? "(none)");
+
+                // Databricks identifiers are case-insensitive — lowercase patterns
+                // to match server behavior (same as DatabricksConnection/Thrift path).
+                catalogPattern = catalogPattern?.ToLower();
+                schemaPattern = schemaPattern?.ToLower();
+                tableNamePattern = tableNamePattern?.ToLower();
+                columnNamePattern = columnNamePattern?.ToLower();
 
                 using var cts = CreateMetadataTimeoutCts();
                 return GetObjectsResultBuilder.BuildGetObjectsResultAsync(
@@ -540,7 +576,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
             var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
 
-            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: catalog, databaseName
+            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
             bool showSchemasInAllCatalogs = catalogPattern == null;
 
@@ -552,8 +588,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 if (showSchemasInAllCatalogs)
                 {
-                    catalogArray = batch.Column(0) as StringArray;
-                    schemaArray = batch.Column(1) as StringArray;
+                    schemaArray = batch.Column(0) as StringArray;
+                    catalogArray = batch.Column(1) as StringArray;
                 }
                 else
                 {
@@ -661,20 +697,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             tableInfo, colName, colType, position, nullable);
 
                         // Match Thrift GetObjects behavior: SparkConnection.SetPrecisionScaleAndTypeName
-                        // only sets Precision/Scale for DECIMAL, NUMERIC, CHAR, NCHAR, VARCHAR,
-                        // NVARCHAR, LONGVARCHAR, LONGNVARCHAR. All other types get null.
+                        // sets Precision for DECIMAL, NUMERIC, CHAR, NCHAR, VARCHAR, NVARCHAR,
+                        // LONGVARCHAR, LONGNVARCHAR. Sets Scale only for DECIMAL/NUMERIC.
+                        // All other types get null for both.
                         int lastIdx = tableInfo.Precision.Count - 1;
                         short typeCode = tableInfo.ColType[lastIdx];
-                        if (typeCode != (short)HiveServer2Connection.ColumnTypeId.DECIMAL
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NUMERIC
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.CHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NCHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.VARCHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.NVARCHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.LONGVARCHAR
-                            && typeCode != (short)HiveServer2Connection.ColumnTypeId.LONGNVARCHAR)
+                        bool isDecimalOrNumeric = typeCode == (short)HiveServer2Connection.ColumnTypeId.DECIMAL
+                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.NUMERIC;
+                        bool isCharType = typeCode == (short)HiveServer2Connection.ColumnTypeId.CHAR
+                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.NCHAR
+                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.VARCHAR
+                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.NVARCHAR
+                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.LONGVARCHAR
+                            || typeCode == (short)HiveServer2Connection.ColumnTypeId.LONGNVARCHAR;
+                        if (!isDecimalOrNumeric && !isCharType)
                         {
                             tableInfo.Precision[lastIdx] = null;
+                        }
+                        if (!isDecimalOrNumeric)
+                        {
                             tableInfo.Scale[lastIdx] = null;
                         }
                     }
@@ -750,6 +791,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// Queries the server for the current catalog via SELECT CURRENT_CATALOG().
         /// </summary>
+        /// <summary>
+        /// Returns the session's default catalog. Used by statements when
+        /// enableMultipleCatalogSupport=false and no catalog was specified.
+        /// </summary>
+        internal string? GetSessionDefaultCatalog() => GetCurrentCatalog();
+
         private string? GetCurrentCatalog()
         {
             var batches = ExecuteMetadataSql("SELECT CURRENT_CATALOG()");
