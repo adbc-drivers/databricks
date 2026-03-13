@@ -95,6 +95,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         public bool IsCompressed { get; set; }
 
+        /// <summary>
+        /// Gets or sets the number of times the HTTP request was retried.
+        /// </summary>
+        public int RetryCount { get; set; }
+
         // ── Timing (all derived from single Stopwatch) ──
 
         /// <summary>
@@ -243,7 +248,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             {
                 StatementType = StatementType,
                 IsCompressed = IsCompressed,
-                ExecutionResult = ResultFormat
+                ExecutionResult = ResultFormat,
+                RetryCount = RetryCount
             };
 
             // Add chunk details if present
