@@ -199,6 +199,16 @@ namespace AdbcDrivers.Databricks
             {
                 ctx.RecordResultsConsumed();
 
+                // Extract retry count from Activity if available
+                if (Activity.Current != null)
+                {
+                    var retryCountTag = Activity.Current.GetTagItem("http.retry.total_attempts");
+                    if (retryCountTag is int retryCount)
+                    {
+                        ctx.RetryCount = retryCount;
+                    }
+                }
+
                 // Extract chunk metrics if this was a CloudFetch query
                 // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped)
                 ChunkMetrics? metrics = null;
