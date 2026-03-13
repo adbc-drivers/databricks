@@ -712,7 +712,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Disposes the statement and cancels/closes any active statement.
-        /// Emits any pending telemetry.
+        /// Emits any pending telemetry with chunk details if CloudFetch was used.
         /// </summary>
         public override void Dispose()
         {
@@ -720,6 +720,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (_pendingTelemetryContext != null)
             {
                 // Emit telemetry now that results have been consumed
+                // Pass the reader to extract CloudFetch chunk metrics if applicable
                 TelemetryHelper.EmitTelemetry(_pendingTelemetryContext, _connection.TelemetrySession, _lastQueryResult?.Stream);
                 _pendingTelemetryContext = null;
                 _lastQueryResult = null;
