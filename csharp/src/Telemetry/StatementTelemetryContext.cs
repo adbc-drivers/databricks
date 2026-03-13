@@ -100,6 +100,12 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         public int RetryCount { get; set; }
 
+        /// <summary>
+        /// Gets or sets whether this is an internal call (e.g., USE SCHEMA from SetSchema()).
+        /// Internal calls are driver-generated operations, not user-initiated queries.
+        /// </summary>
+        public bool IsInternalCall { get; set; }
+
         // ── Timing (all derived from single Stopwatch) ──
 
         /// <summary>
@@ -283,7 +289,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     NOperationStatusCalls = PollCount ?? 0,
                     OperationStatusLatencyMillis = PollLatencyMs ?? 0,
                     OperationType = OperationType,
-                    IsInternalCall = false
+                    IsInternalCall = IsInternalCall
                 };
             }
             else
@@ -292,7 +298,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 sqlEvent.OperationDetail = new OperationDetail
                 {
                     OperationType = OperationType,
-                    IsInternalCall = false
+                    IsInternalCall = IsInternalCall
                 };
             }
 

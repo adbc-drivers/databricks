@@ -889,6 +889,7 @@ namespace AdbcDrivers.Databricks
         {
             using var statement = new DatabricksStatement(this);
             statement.SqlQuery = $"USE {schemaName}";
+            statement.IsInternalCall = true; // Mark as internal driver operation
             await statement.ExecuteUpdateAsync();
         }
 
