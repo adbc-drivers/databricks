@@ -146,6 +146,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     statement.Dispose();
                 }
 
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
                 // Wait for telemetry to be emitted
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
 
@@ -191,6 +195,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     statement.Dispose();
                 }
 
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
+                // Small delay to ensure async flush completes
+                await Task.Delay(500);
+
                 // Wait for telemetry to be emitted
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
 
@@ -234,6 +245,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     using var reader = result.Stream;
                     statement.Dispose();
                 }
+
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
+                // Small delay to ensure async flush completes
+                await Task.Delay(500);
 
                 // Wait for telemetry to be emitted
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
@@ -294,6 +312,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     statement.Dispose();
                 }
 
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
+                // Small delay to ensure async flush completes
+                await Task.Delay(500);
+
                 // Wait for telemetry to be emitted
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
 
@@ -337,6 +362,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     using var reader = result.Stream;
                     statement.Dispose();
                 }
+
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
+                // Small delay to ensure async flush completes
+                await Task.Delay(500);
 
                 // Wait for telemetry to be emitted
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
@@ -386,6 +418,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     statement.Dispose();
                 }
 
+                // Dispose connection to trigger telemetry flush before checking first query
+                connection.Dispose();
+                connection = null;
+
                 // Wait for telemetry to be emitted
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
 
@@ -413,8 +449,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"✓ Exit criterion 5: operation_latency_ms = {protoLog.OperationLatencyMs}ms");
 
                 // Exit criterion 4: Error telemetry works for SEA failures
-                // Reset exporter for error test
+                // Reset exporter for error test and create new connection
                 exporter.Reset();
+                (connection, exporter) = CreateRestConnectionWithCapturingTelemetry();
 
                 using (var statement = connection.CreateStatement())
                 {
@@ -433,6 +470,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                     statement.Dispose();
                 }
+
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
 
                 // Wait for telemetry
                 var errorLogs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);

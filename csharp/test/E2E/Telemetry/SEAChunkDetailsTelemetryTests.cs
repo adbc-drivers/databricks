@@ -152,6 +152,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     statement.Dispose();
                 }
 
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
                 // Wait for telemetry to be emitted
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 10000);
 
@@ -278,6 +282,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     statement.Dispose();
                 }
 
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
+                // Small delay to ensure async flush completes
+                await Task.Delay(500);
+
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 10000);
 
                 Assert.NotEmpty(logs);
@@ -331,6 +342,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     statement.Dispose();
                 }
 
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
+                // Small delay to ensure async flush completes
+                await Task.Delay(500);
+
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 10000);
 
                 Assert.NotEmpty(logs);
@@ -383,6 +401,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                     statement.Dispose();
                 }
+
+                // Dispose connection to trigger telemetry flush
+                connection.Dispose();
+                connection = null;
+
+                // Small delay to ensure async flush completes
+                await Task.Delay(500);
 
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 10000);
 
