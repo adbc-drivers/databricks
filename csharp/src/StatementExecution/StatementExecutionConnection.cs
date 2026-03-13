@@ -20,7 +20,9 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.HiveServer2.Spark;
@@ -76,6 +78,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Authentication support
         private readonly string? _identityFederationClientId;
+
+        // Telemetry fields
+        private ITelemetryClient? _telemetryClient;
+        private string? _host;
+        private OAuthClientCredentialsProvider? _oauthTokenProvider;
+        internal TelemetrySessionContext? TelemetrySession { get; private set; }
 
         /// <summary>
         /// Creates a new Statement Execution connection with internally managed HTTP client.
@@ -198,6 +206,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     "Host name is required. Please provide it via 'hostName' parameter or via 'uri' parameter.",
                     nameof(properties));
             }
+            _host = hostName; // Store host for telemetry initialization
             string baseUrl = $"https://{hostName}";
 
             // Connection feature flags — parse before catalog/schema loading that depends on them
@@ -300,9 +309,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 AddThriftErrorHandler = false
             };
 
-            var result = HttpHandlerFactory.CreateHandlers(config);
+            var handlerResult = HttpHandlerFactory.CreateHandlersWithTokenProvider(config);
 
-            var httpClient = new HttpClient(result)
+            // Store OAuth token provider for telemetry initialization
+            _oauthTokenProvider = handlerResult.TokenProvider;
+
+            var httpClient = new HttpClient(handlerResult.Handler)
             {
                 Timeout = TimeSpan.FromMinutes(timeoutMinutes)
             };
@@ -409,12 +421,59 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         {
                             _catalog = GetCurrentCatalog();
                         }
+
+                        // Initialize telemetry after successful session creation
+                        InitializeTelemetry();
                     }
                 }
                 finally
                 {
                     _sessionLock.Release();
                 }
+            }
+        }
+
+        /// <summary>
+        /// Initializes telemetry client based on feature flag.
+        /// All exceptions are swallowed to ensure telemetry failures don't impact connection.
+        /// </summary>
+        private void InitializeTelemetry()
+        {
+            // Use TelemetryHelper to initialize telemetry
+            // Note: For SEA (REST API), we don't have a Thrift TSessionHandle or TOpenSessionResp,
+            // so we pass null for those parameters. The session ID will be populated from _sessionId.
+            TelemetrySession = TelemetryHelper.InitializeTelemetry(
+                _properties,
+                _host!,
+                AssemblyVersion,
+                sessionHandle: null,
+                openSessionResp: null,
+                _oauthTokenProvider,
+                Telemetry.Proto.DriverMode.Types.Type.Sea,
+                enableDirectResults: false,  // SEA doesn't use Thrift DirectResults
+                useDescTableExtended: false, // SEA doesn't use DESC TABLE EXTENDED
+                activity: System.Diagnostics.Activity.Current);
+
+            // Override session_id to use REST session ID instead of Thrift session GUID
+            if (TelemetrySession != null && !string.IsNullOrEmpty(_sessionId))
+            {
+                // The TelemetryHelper returns null session_id for SEA since there's no Thrift sessionHandle
+                // We need to manually set it from the REST session ID
+                TelemetrySession = new TelemetrySessionContext
+                {
+                    SessionId = _sessionId,
+                    WorkspaceId = TelemetrySession.WorkspaceId,
+                    TelemetryClient = TelemetrySession.TelemetryClient,
+                    SystemConfiguration = TelemetrySession.SystemConfiguration,
+                    DriverConnectionParams = TelemetrySession.DriverConnectionParams,
+                    AuthType = TelemetrySession.AuthType
+                };
+            }
+
+            // Update telemetry client reference for disposal
+            if (TelemetrySession != null)
+            {
+                _telemetryClient = TelemetrySession.TelemetryClient;
             }
         }
 
@@ -869,6 +928,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("session_id", _sessionId);
                 activity?.SetTag("warehouse_id", _warehouseId);
 
+                // Clean up telemetry client
+                // This is synchronous because Dispose() cannot be async
+                // We use GetAwaiter().GetResult() to block, which is acceptable in Dispose
+                DisposeTelemetryAsync().GetAwaiter().GetResult();
+
                 if (_sessionId != null)
                 {
                     try
@@ -901,6 +965,72 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 _sessionLock.Dispose();
             });
+        }
+
+        /// <summary>
+        /// Disposes telemetry client asynchronously.
+        /// Follows the graceful shutdown sequence: flush → release client → release feature flags.
+        /// All exceptions are swallowed per telemetry design requirement.
+        /// </summary>
+        private async Task DisposeTelemetryAsync()
+        {
+            try
+            {
+                if (_telemetryClient != null && !string.IsNullOrEmpty(_host))
+                {
+                    System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.dispose.started",
+                        tags: new System.Diagnostics.ActivityTagsCollection { { "host", _host } }));
+
+                    // Step 1: Flush pending metrics
+                    try
+                    {
+                        await _telemetryClient.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                        System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.dispose.flushed"));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Swallow flush exceptions
+                        System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.dispose.flush_error",
+                            tags: new System.Diagnostics.ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
+
+                    // Step 2: Release telemetry client from manager
+                    try
+                    {
+                        await TelemetryClientManager.GetInstance()
+                            .ReleaseClientAsync(_host)
+                            .ConfigureAwait(false);
+                        System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.dispose.client_released"));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Swallow release exceptions
+                        System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.dispose.release_error",
+                            tags: new System.Diagnostics.ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
+
+                    _telemetryClient = null;
+                    System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.dispose.completed"));
+                }
+            }
+            catch (Exception ex)
+            {
+                // Swallow all telemetry disposal exceptions per design requirement
+                System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.dispose.unexpected_error",
+                    tags: new System.Diagnostics.ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+            }
         }
 
         // TracingConnection provides IActivityTracer implementation
