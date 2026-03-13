@@ -12,18 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Authentication mechanisms for the Databricks ADBC driver.
+//! OAuth 2.0 authentication for Databricks.
+//!
+//! This module provides OAuth 2.0 authentication support including:
+//! - Token lifecycle management and refresh logic
+//! - M2M (Machine-to-Machine) client credentials flow
+//! - U2M (User-to-Machine) authorization code + PKCE flow
+//! - OIDC endpoint discovery
+//! - File-based token caching
 
-pub mod oauth;
-pub mod pat;
+pub mod cache;
+pub mod oidc;
+pub mod token;
+pub(crate) mod token_store;
 
-pub use pat::PersonalAccessToken;
-
-use crate::error::Result;
-use std::fmt::Debug;
-
-/// Trait for authentication providers.
-pub trait AuthProvider: Send + Sync + Debug {
-    /// Returns the authorization header value for HTTP requests.
-    fn get_auth_header(&self) -> Result<String>;
-}
+// Re-export the main types
+pub use oidc::OidcEndpoints;
+pub use token::OAuthToken;

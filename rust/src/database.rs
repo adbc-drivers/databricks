@@ -390,14 +390,15 @@ impl adbc_core::Database for Database {
                 .to_adbc()
         })?;
 
+        // Create HTTP client (without auth provider - two-phase initialization)
+        let http_client =
+            Arc::new(DatabricksHttpClient::new(self.http_config.clone()).map_err(|e| e.to_adbc())?);
+
         // Create auth provider
         let auth_provider = Arc::new(PersonalAccessToken::new(access_token.clone()));
 
-        // Create HTTP client
-        let http_client = Arc::new(
-            DatabricksHttpClient::new(self.http_config.clone(), auth_provider)
-                .map_err(|e| e.to_adbc())?,
-        );
+        // Set auth provider on HTTP client (phase 2)
+        http_client.set_auth_provider(auth_provider);
 
         // Create tokio runtime for async operations
         let runtime = tokio::runtime::Runtime::new().map_err(|e| {

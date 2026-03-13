@@ -178,13 +178,56 @@ impl SeaClient {
             match current_response.status.state {
                 StatementState::Succeeded => return Ok(current_response),
                 StatementState::Failed => {
-                    let error_msg = current_response
-                        .status
-                        .error
-                        .as_ref()
+                    let service_error = current_response.status.error.as_ref();
+                    let error_msg = service_error
                         .and_then(|e| e.message.clone())
                         .unwrap_or_else(|| "Unknown error".to_string());
-                    return Err(DatabricksErrorHelper::io().message(error_msg));
+
+                    // Create error with message
+                    let mut error = DatabricksErrorHelper::io().message(&error_msg);
+
+                    // Try to set SQLSTATE from server error in order of preference:
+                    // 1. sql_state field if present
+                    // 2. Extract from error message (server includes "SQLSTATE: XXXXX")
+                    // 3. Map from error_code
+                    if let Some(err) = service_error {
+                        let mut sqlstate_set = false;
+
+                        // Check if server provides sql_state field
+                        if let Some(ref sql_state) = err.sql_state {
+                            if sql_state.len() == 5 {
+                                if let Some(sqlstate) =
+                                    crate::error::sqlstate_str_to_array(sql_state)
+                                {
+                                    error = error.sqlstate(sqlstate);
+                                    sqlstate_set = true;
+                                }
+                            }
+                        }
+
+                        // If not, try to extract from error message
+                        if !sqlstate_set {
+                            if let Some(sqlstate) =
+                                crate::error::extract_sqlstate_from_message(&error_msg)
+                            {
+                                error = error.sqlstate(sqlstate);
+                                sqlstate_set = true;
+                            }
+                        }
+
+                        // If still no SQLSTATE, map from error_code
+                        if !sqlstate_set {
+                            if let Some(ref code) = err.error_code {
+                                if let Some(sqlstate) =
+                                    crate::error::map_error_code_to_sqlstate(code)
+                                {
+                                    error = error.sqlstate(sqlstate);
+                                }
+                            }
+                        }
+                    }
+
+                    return Err(error);
                 }
                 StatementState::Canceled => {
                     return Err(
@@ -591,9 +634,9 @@ mod tests {
     use crate::client::HttpClientConfig;
 
     fn create_test_client() -> SeaClient {
+        let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
-        let http_client =
-            Arc::new(DatabricksHttpClient::new(HttpClientConfig::default(), auth).unwrap());
+        http_client.set_auth_provider(auth);
         SeaClient::new(
             http_client,
             "https://test.databricks.com",
@@ -610,9 +653,9 @@ mod tests {
 
     #[test]
     fn test_base_url_strips_trailing_slash() {
+        let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
-        let http_client =
-            Arc::new(DatabricksHttpClient::new(HttpClientConfig::default(), auth).unwrap());
+        http_client.set_auth_provider(auth);
         let client = SeaClient::new(
             http_client,
             "https://test.databricks.com/",
