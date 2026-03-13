@@ -70,7 +70,6 @@ namespace AdbcDrivers.Databricks
         private bool _enableMultipleCatalogSupport = true;
         private bool _enablePKFK = true;
         private bool _runAsyncInThrift = true;
-        private bool _enableComplexDatatypeSupport = false;
 
         // DirectQuery configuration
         private const long DefaultDirectResultMaxBytes = 10 * 1024 * 1024; // 10MB for direct query results size limit
@@ -197,7 +196,6 @@ namespace AdbcDrivers.Databricks
             _canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.CanDecompressLz4, _canDecompressLz4);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseDescTableExtended, _useDescTableExtended);
             _runAsyncInThrift = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableRunAsyncInThriftOp, _runAsyncInThrift);
-            _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableComplexDatatypeSupport, _enableComplexDatatypeSupport);
 
             if (Properties.ContainsKey(DatabricksParameters.MaxBytesPerFile))
             {
@@ -372,11 +370,6 @@ namespace AdbcDrivers.Databricks
         /// Enable RunAsync flag in Thrift Operation
         /// </summary>
         public bool RunAsyncInThrift => _runAsyncInThrift;
-
-        /// <summary>
-        /// Whether to return complex types as native Arrow types (true) or JSON strings (false).
-        /// </summary>
-        internal bool EnableComplexDatatypeSupport => _enableComplexDatatypeSupport;
 
         /// <summary>
         /// Gets a value indicating whether to retry requests that receive retryable responses (408, 502, 503, 504) .
@@ -655,19 +648,51 @@ namespace AdbcDrivers.Databricks
                     true, // unauthed failure will be report separately
                     telemetryConfig);
 
-                // Extract workspace ID from server configuration or connection properties
-                // Note: workspace_id may be 0 if not available (e.g., for SQL warehouses without orgId in config)
-                long workspaceId = 0;
+                // Extract workspace ID from server configuration
+                // DEBUG: Log ALL available information from the connection
+                Console.WriteLine("=== DEBUG: ALL Connection Information ===");
+                Console.WriteLine($"  Host: {_host}");
+                Console.WriteLine($"  SessionHandle: {SessionHandle?.SessionId?.Guid != null}");
+                if (_openSessionResp != null)
+                {
+                    Console.WriteLine($"  ServerProtocolVersion: {_openSessionResp.ServerProtocolVersion}");
+                    Console.WriteLine($"  Status: {_openSessionResp.Status?.StatusCode}");
+                    Console.WriteLine($"  __isset fields:");
+                    Console.WriteLine($"    configuration: {_openSessionResp.__isset.configuration}");
+                    Console.WriteLine($"    getInfos: {_openSessionResp.__isset.getInfos}");
+                    Console.WriteLine($"    initialNamespace: {_openSessionResp.__isset.initialNamespace}");
+                    Console.WriteLine($"    sessionHandle: {_openSessionResp.__isset.sessionHandle}");
+                    Console.WriteLine($"    canUseMultipleCatalogs: {_openSessionResp.__isset.canUseMultipleCatalogs}");
+                }
+                Console.WriteLine("=== END ALL Connection Information ===");
 
-                // Strategy 1: Try to extract from server configuration (for clusters)
+                long workspaceId = 0;
                 if (_openSessionResp?.__isset.configuration == true && _openSessionResp.Configuration != null)
                 {
+                    // DEBUG: Log all available configuration keys
+                    Console.WriteLine("=== DEBUG: OpenSessionResp Configuration Keys ===");
+                    Console.WriteLine($"Total configuration keys: {_openSessionResp.Configuration.Count}");
+                    foreach (var kvp in _openSessionResp.Configuration.OrderBy(k => k.Key))
+                    {
+                        Console.WriteLine($"  [{kvp.Key}] = [{kvp.Value}]");
+                    }
+                    Console.WriteLine("=== END Configuration Keys ===");
+                    
+                    // Also log via activity event
+                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.debug",
+                        tags: new ActivityTagsCollection 
+                        { 
+                            { "configuration_count", _openSessionResp.Configuration.Count },
+                            { "has_orgId_key", _openSessionResp.Configuration.ContainsKey("spark.databricks.clusterUsageTags.orgId") },
+                            { "all_keys", string.Join(", ", _openSessionResp.Configuration.Keys.OrderBy(k => k)) }
+                        }));
+
                     if (_openSessionResp.Configuration.TryGetValue("spark.databricks.clusterUsageTags.orgId", out string? orgIdStr))
                     {
                         if (long.TryParse(orgIdStr, out long parsedOrgId))
                         {
                             workspaceId = parsedOrgId;
-                            activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.extracted_from_config",
+                            activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.extracted",
                                 tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
                         }
                         else
@@ -676,29 +701,124 @@ namespace AdbcDrivers.Databricks
                                 tags: new ActivityTagsCollection { { "orgId_value", orgIdStr } }));
                         }
                     }
+                    else
+                    {
+                        activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.not_found",
+                            tags: new ActivityTagsCollection { { "reason", "spark.databricks.clusterUsageTags.orgId not in server configuration" } }));
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("=== DEBUG: _openSessionResp.Configuration is NULL or not set ===");
+                    Console.WriteLine($"  _openSessionResp is null: {_openSessionResp == null}");
+                    if (_openSessionResp != null)
+                    {
+                        Console.WriteLine($"  __isset.configuration: {_openSessionResp.__isset.configuration}");
+                        Console.WriteLine($"  Configuration is null: {_openSessionResp.Configuration == null}");
+                        Console.WriteLine($"  __isset.getInfos: {_openSessionResp.__isset.getInfos}");
+                        Console.WriteLine($"  GetInfos is null: {_openSessionResp.GetInfos == null}");
+                        if (_openSessionResp.__isset.getInfos && _openSessionResp.GetInfos != null)
+                        {
+                            Console.WriteLine($"  GetInfos count: {_openSessionResp.GetInfos.Count}");
+                            foreach (var info in _openSessionResp.GetInfos)
+                            {
+                                Console.WriteLine($"    GetInfo: {info}");
+                            }
+                        }
+                    }
+                    Console.WriteLine("=== END DEBUG ===");
                 }
 
-                // Strategy 2: Check connection property as fallback
-                if (workspaceId == 0 && Properties.TryGetValue("adbc.databricks.workspace_id", out string? workspaceIdProp))
+
+                // DEBUG: Try to extract workspace ID from hostname as fallback
+                if (workspaceId == 0 && !string.IsNullOrEmpty(_host))
                 {
-                    if (long.TryParse(workspaceIdProp, out long propWorkspaceId))
+                    Console.WriteLine($"=== DEBUG: Attempting to extract workspace ID from hostname: {_host} ===");
+                    // Databricks hostname pattern: <workspace-id>.cloud.databricks.com or similar
+                    // Also check for adb-<workspace-id>.<random>.azuredatabricks.net (Azure)
+                    var hostParts = _host.Split('.');
+                    if (hostParts.Length > 0)
                     {
-                        workspaceId = propWorkspaceId;
-                        activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.from_property",
-                            tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
+                        Console.WriteLine($"  First host part: {hostParts[0]}");
+                        // Try to parse first part as workspace ID
+                        if (long.TryParse(hostParts[0], out long parsedWorkspaceId))
+                        {
+                            workspaceId = parsedWorkspaceId;
+                            Console.WriteLine($"  Extracted workspace ID from hostname: {workspaceId}");
+                        }
+                        // Try Azure pattern: adb-<workspace-id>.<random>.azuredatabricks.net
+                        else if (hostParts[0].StartsWith("adb-"))
+                        {
+                            var adbPart = hostParts[0].Substring(4); // Remove "adb-" prefix
+                            Console.WriteLine($"  Azure pattern detected, extracted: {adbPart}");
+                            if (long.TryParse(adbPart, out long azureWorkspaceId))
+                            {
+                                workspaceId = azureWorkspaceId;
+                                Console.WriteLine($"  Extracted workspace ID from Azure hostname: {workspaceId}");
+                            }
+                        }
+                    }
+                    Console.WriteLine("=== END hostname extraction ===");
+                }
+
+
+                // Try to extract workspace ID via Databricks REST API (synchronous)
+                if (workspaceId == 0 && !string.IsNullOrEmpty(_host))
+                {
+                    try
+                    {
+                        Console.WriteLine("=== DEBUG: Attempting to extract workspace ID via REST API ===");
+                        using (var httpClient = new HttpClient())
+                        {
+                            httpClient.BaseAddress = new Uri($"https://{_host}");
+                            httpClient.Timeout = TimeSpan.FromSeconds(5);
+                            
+                            // Add authorization header
+                            if (Properties.TryGetValue(DatabricksParameters.AccessToken, out string? token) && !string.IsNullOrEmpty(token))
+                            {
+                                httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                            }
+                            
+                            // Try to get workspace info from /api/2.0/workspace/get-status (checking root)
+                            var response = httpClient.GetAsync("/api/2.0/preview/scim/v2/Me").Result;
+                            Console.WriteLine($"  API Response Status: {response.StatusCode}");
+                            
+                            if (response.IsSuccessStatusCode)
+                            {
+                                var responseContent = response.Content.ReadAsStringAsync().Result;
+                                Console.WriteLine($"  API Response: {responseContent}");
+                                
+                                // Try to parse workspace ID from response
+                                // Try different response formats
+                                var match = System.Text.RegularExpressions.Regex.Match(responseContent, @"""workspaceId""\s*:\s*(\d+)");
+                                if (!match.Success)
+                                {
+                                    match = System.Text.RegularExpressions.Regex.Match(responseContent, @"""workspace_id""\s*:\s*(\d+)");
+                                }
+                                if (!match.Success)
+                                {
+                                    match = System.Text.RegularExpressions.Regex.Match(responseContent, @"""organizationId""\s*:\s*(\d+)");
+                                }
+                                if (!match.Success)
+                                {
+                                    // Print response for debugging
+                                    Console.WriteLine($"  Could not extract workspace ID. Response keys: {responseContent.Substring(0, Math.Min(200, responseContent.Length))}");
+                                }
+                                if (match.Success && long.TryParse(match.Groups[1].Value, out long apiWorkspaceId))
+                                {
+                                    workspaceId = apiWorkspaceId;
+                                    Console.WriteLine($"  Extracted workspace ID from API: {workspaceId}");
+                                }
+                            }
+                        }
+                        Console.WriteLine("=== END REST API extraction ===");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"=== REST API extraction failed: {ex.Message} ===");
                     }
                 }
 
-                // Log if workspace ID could not be determined
-                if (workspaceId == 0)
-                {
-                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.unavailable",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "reason", "Not available in server config or connection properties" },
-                            { "workaround", "Set adbc.databricks.workspace_id connection property if needed" }
-                        }));
-                }
 
                 // Create session-level telemetry context for V3 direct-object pipeline
                 TelemetrySession = new TelemetrySessionContext
@@ -1161,7 +1281,7 @@ namespace AdbcDrivers.Databricks
                     Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.started",
                         tags: new ActivityTagsCollection { { "host", _host } }));
 
-                    // Step 1: Flush pending metrics (wait for any in-flight flush to complete)
+                    // Step 1: Flush pending metrics
                     try
                     {
                         await _telemetryClient.FlushAsync(CancellationToken.None).ConfigureAwait(false);
