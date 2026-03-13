@@ -176,6 +176,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _isDisposed = true;
         }
 
+        /// <inheritdoc />
+        public ChunkMetrics GetChunkMetrics()
+        {
+            return _downloader.GetChunkMetrics();
+        }
+
         private void ThrowIfDisposed()
         {
             if (_isDisposed)
