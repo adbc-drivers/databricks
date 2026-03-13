@@ -431,6 +431,246 @@ namespace AdbcDrivers.Databricks
 
         protected override string DriverName => DatabricksDriverName;
 
+        /// <summary>
+        /// Overrides GetObjects to emit telemetry with appropriate operation type based on depth.
+        /// </summary>
+        public override IArrowArrayStream GetObjects(
+            GetObjectsDepth depth,
+            string? catalogPattern,
+            string? dbSchemaPattern,
+            string? tableNamePattern,
+            IReadOnlyList<string>? tableTypes,
+            string? columnNamePattern)
+        {
+            return this.TraceActivity(activity =>
+            {
+                // Determine operation type based on depth
+                Telemetry.Proto.Operation.Types.Type operationType = depth switch
+                {
+                    GetObjectsDepth.Catalogs => Telemetry.Proto.Operation.Types.Type.ListCatalogs,
+                    GetObjectsDepth.DbSchemas => Telemetry.Proto.Operation.Types.Type.ListSchemas,
+                    GetObjectsDepth.Tables => Telemetry.Proto.Operation.Types.Type.ListTables,
+                    GetObjectsDepth.All => Telemetry.Proto.Operation.Types.Type.ListColumns,
+                    _ => Telemetry.Proto.Operation.Types.Type.Unspecified
+                };
+
+                // Create telemetry context for this metadata operation
+                StatementTelemetryContext? telemetryContext = null;
+                try
+                {
+                    if (TelemetrySession?.TelemetryClient != null)
+                    {
+                        telemetryContext = new StatementTelemetryContext(TelemetrySession)
+                        {
+                            StatementType = Telemetry.Proto.Statement.Types.Type.Metadata,
+                            OperationType = operationType,
+                            ResultFormat = Telemetry.Proto.ExecutionResult.Types.Format.InlineArrow,
+                            IsCompressed = false
+                        };
+
+                        activity?.SetTag("telemetry.operation_type", operationType.ToString());
+                        activity?.SetTag("telemetry.statement_type", "METADATA");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Swallow telemetry errors per design requirement
+                    activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.context_creation.error",
+                        tags: new System.Diagnostics.ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
+
+                IArrowArrayStream result;
+                try
+                {
+                    // Call base implementation to get the actual results
+                    result = base.GetObjects(depth, catalogPattern, dbSchemaPattern, tableNamePattern, tableTypes, columnNamePattern);
+
+                    // Record success
+                    if (telemetryContext != null)
+                    {
+                        try
+                        {
+                            telemetryContext.RecordFirstBatchReady();
+                        }
+                        catch
+                        {
+                            // Swallow telemetry errors
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Record error in telemetry
+                    if (telemetryContext != null)
+                    {
+                        try
+                        {
+                            telemetryContext.HasError = true;
+                            telemetryContext.ErrorName = ex.GetType().Name;
+                            telemetryContext.ErrorMessage = ex.Message;
+                        }
+                        catch
+                        {
+                            // Swallow telemetry errors
+                        }
+                    }
+                    throw;
+                }
+                finally
+                {
+                    // Emit telemetry
+                    if (telemetryContext != null)
+                    {
+                        try
+                        {
+                            telemetryContext.RecordResultsConsumed();
+                            var telemetryLog = telemetryContext.BuildTelemetryLog();
+
+                            var frontendLog = new Telemetry.Models.TelemetryFrontendLog
+                            {
+                                WorkspaceId = telemetryContext.WorkspaceId,
+                                FrontendLogEventId = Guid.NewGuid().ToString(),
+                                Entry = new Telemetry.Models.FrontendLogEntry
+                                {
+                                    SqlDriverLog = telemetryLog
+                                }
+                            };
+
+                            TelemetrySession?.TelemetryClient?.Enqueue(frontendLog);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Swallow telemetry errors per design requirement
+                            activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.emit.error",
+                                tags: new System.Diagnostics.ActivityTagsCollection
+                                {
+                                    { "error.type", ex.GetType().Name },
+                                    { "error.message", ex.Message }
+                                }));
+                        }
+                    }
+                }
+
+                return result;
+            });
+        }
+
+        /// <summary>
+        /// Overrides GetTableTypes to emit telemetry with LIST_TABLE_TYPES operation type.
+        /// </summary>
+        public override IArrowArrayStream GetTableTypes()
+        {
+            return this.TraceActivity(activity =>
+            {
+                // Create telemetry context for this metadata operation
+                StatementTelemetryContext? telemetryContext = null;
+                try
+                {
+                    if (TelemetrySession?.TelemetryClient != null)
+                    {
+                        telemetryContext = new StatementTelemetryContext(TelemetrySession)
+                        {
+                            StatementType = Telemetry.Proto.Statement.Types.Type.Metadata,
+                            OperationType = Telemetry.Proto.Operation.Types.Type.ListTableTypes,
+                            ResultFormat = Telemetry.Proto.ExecutionResult.Types.Format.InlineArrow,
+                            IsCompressed = false
+                        };
+
+                        activity?.SetTag("telemetry.operation_type", "LIST_TABLE_TYPES");
+                        activity?.SetTag("telemetry.statement_type", "METADATA");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Swallow telemetry errors per design requirement
+                    activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.context_creation.error",
+                        tags: new System.Diagnostics.ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
+
+                IArrowArrayStream result;
+                try
+                {
+                    // Call base implementation to get the actual results
+                    result = base.GetTableTypes();
+
+                    // Record success
+                    if (telemetryContext != null)
+                    {
+                        try
+                        {
+                            telemetryContext.RecordFirstBatchReady();
+                        }
+                        catch
+                        {
+                            // Swallow telemetry errors
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Record error in telemetry
+                    if (telemetryContext != null)
+                    {
+                        try
+                        {
+                            telemetryContext.HasError = true;
+                            telemetryContext.ErrorName = ex.GetType().Name;
+                            telemetryContext.ErrorMessage = ex.Message;
+                        }
+                        catch
+                        {
+                            // Swallow telemetry errors
+                        }
+                    }
+                    throw;
+                }
+                finally
+                {
+                    // Emit telemetry
+                    if (telemetryContext != null)
+                    {
+                        try
+                        {
+                            telemetryContext.RecordResultsConsumed();
+                            var telemetryLog = telemetryContext.BuildTelemetryLog();
+
+                            var frontendLog = new Telemetry.Models.TelemetryFrontendLog
+                            {
+                                WorkspaceId = telemetryContext.WorkspaceId,
+                                FrontendLogEventId = Guid.NewGuid().ToString(),
+                                Entry = new Telemetry.Models.FrontendLogEntry
+                                {
+                                    SqlDriverLog = telemetryLog
+                                }
+                            };
+
+                            TelemetrySession?.TelemetryClient?.Enqueue(frontendLog);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Swallow telemetry errors per design requirement
+                            activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.emit.error",
+                                tags: new System.Diagnostics.ActivityTagsCollection
+                                {
+                                    { "error.type", ex.GetType().Name },
+                                    { "error.message", ex.Message }
+                                }));
+                        }
+                    }
+                }
+
+                return result;
+            });
+        }
+
         internal override IArrowArrayStream NewReader<T>(T statement, Schema schema, IResponse response, TGetResultSetMetadataResp? metadataResp = null)
         {
             bool isLz4Compressed = false;
