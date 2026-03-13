@@ -863,261 +863,29 @@ namespace AdbcDrivers.Databricks
         /// <param name="activity">Optional activity for tracing telemetry initialization.</param>
         private void InitializeTelemetry(Activity? activity = null)
         {
-            try
+            // Extract host for telemetry
+            _host = GetHost();
+
+            // Use TelemetryHelper to initialize telemetry
+            TelemetrySession = TelemetryHelper.InitializeTelemetry(
+                Properties,
+                _host,
+                s_assemblyVersion,
+                SessionHandle,
+                _openSessionResp,
+                _oauthTokenProvider,
+                Telemetry.Proto.DriverMode.Types.Type.Thrift,
+                _enableDirectResults,
+                _useDescTableExtended,
+                activity);
+
+            // Update telemetry client reference for disposal
+            if (TelemetrySession != null)
             {
-                // Extract host for telemetry
-                _host = GetHost();
-
-                // Parse telemetry configuration from connection properties
-                // Properties already contains merged feature flags from connection construction
-                TelemetryConfiguration telemetryConfig = TelemetryConfiguration.FromProperties(Properties);
-
-                // Only initialize telemetry if enabled
-                if (!telemetryConfig.Enabled)
-                {
-                    activity?.AddEvent(new ActivityEvent("telemetry.initialization.skipped",
-                        tags: new ActivityTagsCollection { { "reason", "feature_flag_disabled" } }));
-                    return;
-                }
-
-                // Validate configuration
-                IReadOnlyList<string> validationErrors = telemetryConfig.Validate();
-                if (validationErrors.Count > 0)
-                {
-                    activity?.AddEvent(new ActivityEvent("telemetry.initialization.failed",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "reason", "invalid_configuration" },
-                            { "errors", string.Join("; ", validationErrors) }
-                        }));
-                    return;
-                }
-
-                // Create HTTP client for telemetry export, reusing the connection's OAuth token provider
-                HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties, _host, s_assemblyVersion, _oauthTokenProvider);
-
-                // Get or create telemetry client from manager (per-host singleton)
-                _telemetryClient = TelemetryClientManager.GetInstance().GetOrCreateClient(
-                    _host,
-                    telemetryHttpClient,
-                    true, // unauthed failure will be report separately
-                    telemetryConfig);
-
-                // Extract workspace ID from server configuration or connection properties
-                // Note: workspace_id may be 0 if not available (e.g., for SQL warehouses without orgId in config)
-                long workspaceId = 0;
-
-                // Strategy 1: Try to extract from server configuration (for clusters)
-                if (_openSessionResp?.__isset.configuration == true && _openSessionResp.Configuration != null)
-                {
-                    if (_openSessionResp.Configuration.TryGetValue("spark.databricks.clusterUsageTags.orgId", out string? orgIdStr))
-                    {
-                        if (long.TryParse(orgIdStr, out long parsedOrgId))
-                        {
-                            workspaceId = parsedOrgId;
-                            activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.extracted_from_config",
-                                tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
-                        }
-                        else
-                        {
-                            activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.parse_failed",
-                                tags: new ActivityTagsCollection { { "orgId_value", orgIdStr } }));
-                        }
-                    }
-                }
-
-                // Strategy 2: Check connection property as fallback
-                if (workspaceId == 0 && Properties.TryGetValue("adbc.databricks.workspace_id", out string? workspaceIdProp))
-                {
-                    if (long.TryParse(workspaceIdProp, out long propWorkspaceId))
-                    {
-                        workspaceId = propWorkspaceId;
-                        activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.from_property",
-                            tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
-                    }
-                }
-
-                // Log if workspace ID could not be determined
-                if (workspaceId == 0)
-                {
-                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.unavailable",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "reason", "Not available in server config or connection properties" },
-                            { "workaround", "Set adbc.databricks.workspace_id connection property if needed" }
-                        }));
-                }
-
-                // Create session-level telemetry context for V3 direct-object pipeline
-                TelemetrySession = new TelemetrySessionContext
-                {
-                    SessionId = SessionHandle?.SessionId?.Guid != null
-                        ? new Guid(SessionHandle.SessionId.Guid).ToString()
-                        : null,
-                    WorkspaceId = workspaceId,
-
-                    TelemetryClient = _telemetryClient,
-                    SystemConfiguration = BuildSystemConfiguration(),
-                    DriverConnectionParams = BuildDriverConnectionParams(true),
-                    AuthType = DetermineAuthType()
-                };
-
-                activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "host", _host },
-                        { "batch_size", telemetryConfig.BatchSize },
-                        { "flush_interval_ms", telemetryConfig.FlushIntervalMs }
-                    }));
-            }
-            catch (Exception ex)
-            {
-                // Swallow all telemetry initialization exceptions per design requirement
-                // Telemetry failures must not impact connection behavior
-                activity?.AddEvent(new ActivityEvent("telemetry.initialization.error",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "error.type", ex.GetType().Name },
-                        { "error.message", ex.Message }
-                    }));
+                _telemetryClient = TelemetrySession.TelemetryClient;
             }
         }
 
-        private Telemetry.Proto.DriverSystemConfiguration BuildSystemConfiguration()
-        {
-            var osVersion = System.Environment.OSVersion;
-            var processName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
-            return new Telemetry.Proto.DriverSystemConfiguration
-            {
-                DriverVersion = s_assemblyVersion,
-                DriverName = "Databricks ADBC Driver",
-                OsName = osVersion.Platform.ToString(),
-                OsVersion = osVersion.Version.ToString(),
-                OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
-                RuntimeName = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
-                RuntimeVersion = System.Environment.Version.ToString(),
-                RuntimeVendor = "Microsoft",
-                LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
-                CharSetEncoding = System.Text.Encoding.Default.WebName,
-                ProcessName = processName,
-                ClientAppName = GetClientAppName(processName)
-            };
-        }
-
-        private string GetClientAppName(string processName)
-        {
-            // Check connection property first, fall back to process name
-            Properties.TryGetValue("adbc.databricks.client_app_name", out string? appName);
-            return appName ?? processName;
-        }
-
-        private Telemetry.Proto.DriverConnectionParameters BuildDriverConnectionParams(bool isAuthenticated)
-        {
-            Properties.TryGetValue("adbc.spark.http_path", out string? httpPath);
-
-            // Determine auth mechanism
-            var authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Unspecified;
-            var authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.Unspecified;
-
-            Properties.TryGetValue(SparkParameters.AuthType, out string? authType);
-            Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
-
-            if (!string.IsNullOrEmpty(grantType) &&
-                grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
-            {
-                authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Oauth;
-                authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.ClientCredentials;
-            }
-            else if (isAuthenticated)
-            {
-                authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Pat;
-                authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
-            }
-
-            return new Telemetry.Proto.DriverConnectionParameters
-            {
-                HttpPath = httpPath ?? "",
-                Mode = Telemetry.Proto.DriverMode.Types.Type.Thrift,
-                HostInfo = new Telemetry.Proto.HostDetails
-                {
-                    HostUrl = $"https://{_host}:443",
-                    Port = 0
-                },
-                AuthMech = authMech,
-                AuthFlow = authFlow,
-                EnableArrow = true, // Always true for ADBC driver
-                RowsFetchedPerBlock = GetBatchSize(),
-                SocketTimeout = GetSocketTimeout(),
-                EnableDirectResults = _enableDirectResults,
-                EnableComplexDatatypeSupport = _useDescTableExtended,
-                AutoCommit = true, // ADBC always uses auto-commit (implicit commits)
-            };
-        }
-
-        /// <summary>
-        /// Gets the batch size from connection properties.
-        /// </summary>
-        /// <returns>The batch size value.</returns>
-        private int GetBatchSize()
-        {
-            const int DefaultBatchSize = 50000; // HiveServer2Connection.BatchSizeDefault
-            if (Properties.TryGetValue(ApacheParameters.BatchSize, out string? batchSizeStr) &&
-                int.TryParse(batchSizeStr, out int batchSize))
-            {
-                return batchSize;
-            }
-            return DefaultBatchSize;
-        }
-
-        /// <summary>
-        /// Gets the socket timeout from connection properties.
-        /// </summary>
-        /// <returns>The socket timeout value in milliseconds.</returns>
-        private int GetSocketTimeout()
-        {
-            const int DefaultConnectTimeoutMs = 30000; // Default from HiveServer2
-            if (Properties.TryGetValue(SparkParameters.ConnectTimeoutMilliseconds, out string? timeoutStr) &&
-                int.TryParse(timeoutStr, out int timeout))
-            {
-                return timeout;
-            }
-            return DefaultConnectTimeoutMs;
-        }
-
-        /// <summary>
-        /// Determines the auth_type string based on connection properties.
-        /// Mapping: PAT -> 'pat', OAuth client_credentials -> 'oauth-m2m', OAuth browser -> 'oauth-u2m', Other -> 'other'
-        /// </summary>
-        /// <returns>The auth_type string value.</returns>
-        private string DetermineAuthType()
-        {
-            // Check for OAuth grant type first
-            Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
-
-            if (!string.IsNullOrEmpty(grantType))
-            {
-                if (grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
-                {
-                    // OAuth M2M (machine-to-machine) - client credentials flow
-                    return "oauth-m2m";
-                }
-                else if (grantType == DatabricksConstants.OAuthGrantTypes.AccessToken)
-                {
-                    // OAuth U2M (user-to-machine) - browser-based flow with access token
-                    return "oauth-u2m";
-                }
-            }
-
-            // Check for PAT (Personal Access Token)
-            Properties.TryGetValue(SparkParameters.Token, out string? token);
-            if (!string.IsNullOrEmpty(token))
-            {
-                return "pat";
-            }
-
-            // Default to 'other' for unknown or unspecified auth types
-            return "other";
-        }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
         // in case the server version is too old.
