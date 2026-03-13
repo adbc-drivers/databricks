@@ -231,7 +231,8 @@ namespace AdbcDrivers.Databricks.Telemetry
                 SessionId = SessionId ?? string.Empty,
                 SqlStatementId = StatementId ?? string.Empty,
                 SystemConfiguration = SystemConfiguration,
-                DriverConnectionParams = DriverConnectionParams
+                DriverConnectionParams = DriverConnectionParams,
+                AuthType = _sessionContext.AuthType ?? string.Empty
             };
 
             // Set operation latency (total elapsed time)

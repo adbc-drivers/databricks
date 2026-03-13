@@ -672,7 +672,8 @@ namespace AdbcDrivers.Databricks
                         : null,
                     TelemetryClient = _telemetryClient,
                     SystemConfiguration = BuildSystemConfiguration(),
-                    DriverConnectionParams = BuildDriverConnectionParams(true)
+                    DriverConnectionParams = BuildDriverConnectionParams(true),
+                    AuthType = DetermineAuthType()
                 };
 
                 activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
@@ -758,6 +759,41 @@ namespace AdbcDrivers.Databricks
                 AuthMech = authMech,
                 AuthFlow = authFlow,
             };
+        }
+
+        /// <summary>
+        /// Determines the auth_type string based on connection properties.
+        /// Mapping: PAT -> 'pat', OAuth client_credentials -> 'oauth-m2m', OAuth browser -> 'oauth-u2m', Other -> 'other'
+        /// </summary>
+        /// <returns>The auth_type string value.</returns>
+        private string DetermineAuthType()
+        {
+            // Check for OAuth grant type first
+            Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
+
+            if (!string.IsNullOrEmpty(grantType))
+            {
+                if (grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
+                {
+                    // OAuth M2M (machine-to-machine) - client credentials flow
+                    return "oauth-m2m";
+                }
+                else if (grantType == DatabricksConstants.OAuthGrantTypes.AccessToken)
+                {
+                    // OAuth U2M (user-to-machine) - browser-based flow with access token
+                    return "oauth-u2m";
+                }
+            }
+
+            // Check for PAT (Personal Access Token)
+            Properties.TryGetValue(SparkParameters.Token, out string? token);
+            if (!string.IsNullOrEmpty(token))
+            {
+                return "pat";
+            }
+
+            // Default to 'other' for unknown or unspecified auth types
+            return "other";
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
