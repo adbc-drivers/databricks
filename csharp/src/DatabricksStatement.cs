@@ -69,6 +69,7 @@ namespace AdbcDrivers.Databricks
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
+        private StatementTelemetryContext? _pendingTelemetryContext; // Telemetry context pending emission on Dispose
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -143,10 +144,17 @@ namespace AdbcDrivers.Databricks
                 QueryResult result = base.ExecuteQuery();
                 _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
+                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
-            catch (Exception ex) { RecordError(ctx, ex); throw; }
-            finally { EmitTelemetry(ctx); }
+            catch (Exception ex)
+            {
+                RecordError(ctx, ex);
+                // Emit telemetry immediately on error (won't reach Dispose)
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null; // Clear to avoid double emission
+                throw;
+            }
         }
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
@@ -159,10 +167,17 @@ namespace AdbcDrivers.Databricks
                 QueryResult result = await base.ExecuteQueryAsync();
                 _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
+                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
-            catch (Exception ex) { RecordError(ctx, ex); throw; }
-            finally { EmitTelemetry(ctx); }
+            catch (Exception ex)
+            {
+                RecordError(ctx, ex);
+                // Emit telemetry immediately on error (won't reach Dispose)
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null; // Clear to avoid double emission
+                throw;
+            }
         }
 
         public override UpdateResult ExecuteUpdate()
@@ -174,10 +189,17 @@ namespace AdbcDrivers.Databricks
             {
                 UpdateResult result = base.ExecuteUpdate();
                 RecordSuccess(ctx);
+                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
-            catch (Exception ex) { RecordError(ctx, ex); throw; }
-            finally { EmitTelemetry(ctx); }
+            catch (Exception ex)
+            {
+                RecordError(ctx, ex);
+                // Emit telemetry immediately on error (won't reach Dispose)
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null; // Clear to avoid double emission
+                throw;
+            }
         }
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
@@ -189,10 +211,17 @@ namespace AdbcDrivers.Databricks
             {
                 UpdateResult result = await base.ExecuteUpdateAsync();
                 RecordSuccess(ctx);
+                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
-            catch (Exception ex) { RecordError(ctx, ex); throw; }
-            finally { EmitTelemetry(ctx); }
+            catch (Exception ex)
+            {
+                RecordError(ctx, ex);
+                // Emit telemetry immediately on error (won't reach Dispose)
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null; // Clear to avoid double emission
+                throw;
+            }
         }
 
         private void EmitTelemetry(StatementTelemetryContext ctx)
@@ -1162,6 +1191,23 @@ namespace AdbcDrivers.Databricks
             };
 
             return new QueryResult(descResult.Columns.Count, new HiveInfoArrowStream(combinedSchema, combinedData));
+        }
+
+        /// <summary>
+        /// Disposes the statement and emits any pending telemetry.
+        /// Telemetry emission is deferred to Dispose() to ensure ChunkDetails are populated
+        /// after CloudFetch results are consumed.
+        /// </summary>
+        /// <param name="disposing">True if disposing managed resources.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && _pendingTelemetryContext != null)
+            {
+                // Emit telemetry now that results have been consumed
+                EmitTelemetry(_pendingTelemetryContext);
+                _pendingTelemetryContext = null;
+            }
+            base.Dispose(disposing);
         }
     }
 }
