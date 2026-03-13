@@ -534,6 +534,10 @@ namespace AdbcDrivers.Databricks
                             {
                                 WorkspaceId = telemetryContext.WorkspaceId,
                                 FrontendLogEventId = Guid.NewGuid().ToString(),
+                                Context = new Telemetry.Models.FrontendLogContext
+                                {
+                                    TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                                },
                                 Entry = new Telemetry.Models.FrontendLogEntry
                                 {
                                     SqlDriverLog = telemetryLog
@@ -646,6 +650,10 @@ namespace AdbcDrivers.Databricks
                             {
                                 WorkspaceId = telemetryContext.WorkspaceId,
                                 FrontendLogEventId = Guid.NewGuid().ToString(),
+                                Context = new Telemetry.Models.FrontendLogContext
+                                {
+                                    TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                                },
                                 Entry = new Telemetry.Models.FrontendLogEntry
                                 {
                                     SqlDriverLog = telemetryLog
@@ -978,6 +986,7 @@ namespace AdbcDrivers.Databricks
         private Telemetry.Proto.DriverSystemConfiguration BuildSystemConfiguration()
         {
             var osVersion = System.Environment.OSVersion;
+            var processName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
             return new Telemetry.Proto.DriverSystemConfiguration
             {
                 DriverVersion = s_assemblyVersion,
@@ -990,16 +999,16 @@ namespace AdbcDrivers.Databricks
                 RuntimeVendor = "Microsoft",
                 LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
                 CharSetEncoding = System.Text.Encoding.Default.WebName,
-                ProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName,
-                ClientAppName = GetClientAppName()
+                ProcessName = processName,
+                ClientAppName = GetClientAppName(processName)
             };
         }
 
-        private string GetClientAppName()
+        private string GetClientAppName(string processName)
         {
             // Check connection property first, fall back to process name
             Properties.TryGetValue("adbc.databricks.client_app_name", out string? appName);
-            return appName ?? Process.GetCurrentProcess().ProcessName;
+            return appName ?? processName;
         }
 
         private Telemetry.Proto.DriverConnectionParameters BuildDriverConnectionParams(bool isAuthenticated)

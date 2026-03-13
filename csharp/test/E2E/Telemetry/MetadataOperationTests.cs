@@ -60,7 +60,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     columnNamePattern: null);
 
                 // Consume the stream
-                while (stream.ReadNextRecordBatchAsync().Result != null) { }
+                while (await stream.ReadNextRecordBatchAsync() != null) { }
 
                 // Wait for telemetry events
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 5000);
@@ -113,7 +113,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     columnNamePattern: null);
 
                 // Consume the stream
-                while (stream.ReadNextRecordBatchAsync().Result != null) { }
+                while (await stream.ReadNextRecordBatchAsync() != null) { }
 
                 // Wait for telemetry events
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 5000);
@@ -166,7 +166,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     columnNamePattern: null);
 
                 // Consume the stream
-                while (stream.ReadNextRecordBatchAsync().Result != null) { }
+                while (await stream.ReadNextRecordBatchAsync() != null) { }
 
                 // Wait for telemetry events
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 5000);
@@ -219,7 +219,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     columnNamePattern: null);
 
                 // Consume the stream
-                while (stream.ReadNextRecordBatchAsync().Result != null) { }
+                while (await stream.ReadNextRecordBatchAsync() != null) { }
 
                 // Wait for telemetry events
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 5000);
@@ -266,7 +266,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 using var stream = connection.GetTableTypes();
 
                 // Consume the stream
-                while (stream.ReadNextRecordBatchAsync().Result != null) { }
+                while (await stream.ReadNextRecordBatchAsync() != null) { }
 
                 // Wait for telemetry events
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 5000);
@@ -331,7 +331,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                         columnNamePattern: null);
 
                     // Consume the stream
-                    while (stream.ReadNextRecordBatchAsync().Result != null) { }
+                    while (await stream.ReadNextRecordBatchAsync() != null) { }
 
                     // Flush telemetry
                     if (connection is DatabricksConnection dbConn && dbConn.TelemetrySession?.TelemetryClient != null)
