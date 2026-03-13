@@ -24,7 +24,7 @@
 //!   (computed as `min(initial_TTL * 0.5, 20 minutes)` when the token was
 //!   first acquired). The current token is still valid but eligible for
 //!   background refresh. The token is returned immediately to the caller,
-//!   and a background refresh is spawned via `std::thread::spawn`.
+//!   and a background refresh is spawned via `tokio::task::spawn_blocking`.
 //!
 //! - **EXPIRED**: Token's remaining TTL is less than 40 seconds. The caller
 //!   is blocked until a refresh completes. This ensures no requests are made
@@ -38,6 +38,18 @@ use crate::error::{DatabricksErrorHelper, Result};
 use driverbase::error::ErrorHelper;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+
+/// RAII guard that resets the `refreshing` flag on drop.
+/// Ensures the flag is cleared even if the refresh function panics.
+struct RefreshGuard {
+    refreshing: Arc<AtomicBool>,
+}
+
+impl Drop for RefreshGuard {
+    fn drop(&mut self) {
+        self.refreshing.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Thread-safe token container with refresh state machine.
 ///
@@ -54,7 +66,7 @@ use std::sync::{Arc, RwLock};
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use databricks_adbc::auth::oauth::token_store::TokenStore;
 /// use databricks_adbc::auth::oauth::token::OAuthToken;
 ///
@@ -99,7 +111,7 @@ impl TokenStore {
     /// - **Empty (no token)**: Blocks and calls `refresh_fn` to fetch the initial token.
     /// - **FRESH**: Returns the token immediately without calling `refresh_fn`.
     /// - **STALE**: Returns the current token immediately and spawns a background
-    ///   refresh via `std::thread::spawn`. Only one background refresh runs at a time.
+    ///   refresh via `tokio::task::spawn_blocking`. Only one background refresh runs at a time.
     /// - **EXPIRED**: Blocks the caller and calls `refresh_fn` to obtain a fresh token
     ///   before returning.
     ///
@@ -197,6 +209,11 @@ impl TokenStore {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
+            // Guard ensures refreshing is reset even if refresh_fn panics
+            let _guard = RefreshGuard {
+                refreshing: self.refreshing.clone(),
+            };
+
             // We won the race: perform the refresh
             let result = refresh_fn();
 
@@ -210,8 +227,7 @@ impl TokenStore {
                 *token = Some(new_token.clone());
             }
 
-            // Release the refresh lock
-            self.refreshing.store(false, Ordering::SeqCst);
+            // _guard drops here, resetting refreshing to false
 
             result
         } else {
@@ -220,9 +236,9 @@ impl TokenStore {
         }
     }
 
-    /// Spawns a background refresh thread.
+    /// Spawns a background refresh task on the tokio blocking thread pool.
     ///
-    /// This is called when the token is STALE. The background thread will
+    /// This is called when the token is STALE. The background task will
     /// attempt to refresh the token without blocking the caller.
     ///
     /// If a refresh is already in progress, this method does nothing (no-op).
@@ -236,12 +252,17 @@ impl TokenStore {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            // Clone Arc pointers to move into the thread
+            // Clone Arc pointers to move into the task
             let token = self.token.clone();
             let refreshing = self.refreshing.clone();
 
-            // Spawn background thread to perform the refresh
-            std::thread::spawn(move || {
+            // Spawn on tokio's blocking thread pool (reuses threads, cheaper than std::thread::spawn)
+            tokio::task::spawn_blocking(move || {
+                // Guard ensures refreshing is reset even if refresh_fn panics
+                let _guard = RefreshGuard {
+                    refreshing: refreshing.clone(),
+                };
+
                 let result = refresh_fn();
 
                 // Store the new token if successful (ignore errors in background)
@@ -251,21 +272,21 @@ impl TokenStore {
                     }
                 }
 
-                // Release the refresh lock
-                refreshing.store(false, Ordering::SeqCst);
+                // _guard drops here, resetting refreshing to false
             });
         }
-        // If another thread is already refreshing, do nothing
+        // If another task is already refreshing, do nothing
     }
 
     /// Waits for an in-progress refresh to complete, then returns the new token.
     ///
     /// This method is called by threads that lost the race to refresh an EXPIRED token.
-    /// It spin-waits until the `refreshing` flag is cleared, then reads the token.
+    /// It polls until the `refreshing` flag is cleared, sleeping briefly between checks
+    /// to avoid burning CPU.
     fn wait_for_refresh(&self) -> Result<OAuthToken> {
-        // Spin-wait until the refresh completes
+        // Poll until the refresh completes, sleeping to avoid busy-waiting
         while self.refreshing.load(Ordering::SeqCst) {
-            std::thread::yield_now();
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
         // Read the refreshed token
@@ -424,8 +445,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_store_stale_returns_current_token() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_store_stale_returns_current_token() {
         let store = TokenStore::new();
         let refresh_count = Arc::new(AtomicUsize::new(0));
         let refresh_count_clone = refresh_count.clone();

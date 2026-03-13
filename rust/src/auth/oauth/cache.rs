@@ -164,11 +164,17 @@ impl TokenCache {
             }
         };
 
-        // Create cache directory if it doesn't exist
+        // Create cache directory if it doesn't exist, with 700 permissions (owner only)
         if let Some(parent) = cache_path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
                 tracing::warn!("Failed to create cache directory {:?}: {}", parent, e);
                 return;
+            }
+            // Tighten directory permissions to 700 (owner read/write/execute only)
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
             }
         }
 

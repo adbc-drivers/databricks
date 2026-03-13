@@ -68,7 +68,9 @@ thiserror = "2"
 arrow = { version = "57", optional = true, default-features = false, features = ["ffi"] }
 
 # OAuth dependencies
+oauth2 = "5"         # OAuth 2.0 protocol operations (PKCE, token exchange, client credentials)
 sha2 = "0.10"        # SHA-256 for token cache key generation
+open = "5"           # Browser launch for interactive OAuth flows
 dirs = "5"           # Cross-platform config directory (~/.config/)
 
 [dev-dependencies]

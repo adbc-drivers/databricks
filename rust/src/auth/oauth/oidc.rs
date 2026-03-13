@@ -96,7 +96,8 @@ impl OidcEndpoints {
     /// # }
     /// ```
     pub async fn discover(host: &str, http_client: &Arc<DatabricksHttpClient>) -> Result<Self> {
-        // Construct the well-known endpoint URL
+        // Construct the well-known endpoint URL (strip trailing slash to avoid double-slash)
+        let host = host.trim_end_matches('/');
         let discovery_url = format!("{}/oidc/.well-known/oauth-authorization-server", host);
 
         // Build the HTTP request
