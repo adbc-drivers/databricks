@@ -306,5 +306,21 @@ namespace AdbcDrivers.Databricks.Reader
 
             return DatabricksConstants.DefaultOperationStatusRequestTimeoutSeconds;
         }
+
+        /// <summary>
+        /// Gets the aggregated chunk metrics from the active CloudFetchReader, if available.
+        /// Returns null if the active reader is not a CloudFetchReader (e.g., using inline results).
+        /// </summary>
+        /// <returns>A ChunkMetrics object if using CloudFetch, null otherwise.</returns>
+        public ChunkMetrics? GetChunkMetrics()
+        {
+            if (_activeReader is CloudFetchReader cloudFetchReader)
+            {
+                return cloudFetchReader.GetChunkMetrics();
+            }
+
+            // Not using CloudFetch or reader not initialized yet
+            return null;
+        }
     }
 }
