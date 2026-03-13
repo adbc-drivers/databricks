@@ -21,10 +21,15 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.Databricks.Telemetry.Proto;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 
 namespace AdbcDrivers.Databricks.Telemetry
 {
@@ -32,6 +37,7 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// Static helper class for shared telemetry logic.
     /// Provides reusable methods for building telemetry configuration and initializing telemetry
     /// across different connection types (DatabricksConnection and StatementExecutionConnection).
+    /// Also provides statement-level telemetry methods shared by both DatabricksStatement and StatementExecutionStatement.
     /// </summary>
     internal static class TelemetryHelper
     {
@@ -350,6 +356,153 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
 
             return workspaceId;
+        }
+
+        /// <summary>
+        /// Creates a statement telemetry context for tracking a single statement execution.
+        /// </summary>
+        /// <param name="session">The session-level telemetry context.</param>
+        /// <param name="statementType">The type of statement (QUERY, UPDATE, METADATA, etc.).</param>
+        /// <param name="operationType">The type of operation (EXECUTE_STATEMENT, EXECUTE_STATEMENT_ASYNC, etc.).</param>
+        /// <param name="isCompressed">Whether results are compressed.</param>
+        /// <param name="isInternalCall">Whether this is an internal call (driver-generated operation).</param>
+        /// <returns>A new StatementTelemetryContext, or null if telemetry is disabled.</returns>
+        public static StatementTelemetryContext? CreateTelemetryContext(
+            TelemetrySessionContext? session,
+            Telemetry.Proto.Statement.Types.Type statementType,
+            OperationType operationType,
+            bool isCompressed,
+            bool isInternalCall = false)
+        {
+            if (session?.TelemetryClient == null)
+                return null;
+
+            var ctx = new StatementTelemetryContext(session);
+            ctx.StatementType = statementType;
+            ctx.OperationType = operationType;
+            ctx.IsCompressed = isCompressed;
+            ctx.IsInternalCall = isInternalCall;
+            return ctx;
+        }
+
+        /// <summary>
+        /// Records a successful statement execution.
+        /// </summary>
+        /// <param name="ctx">The statement telemetry context.</param>
+        /// <param name="statementId">The statement ID from the server.</param>
+        /// <param name="resultFormat">The result format (INLINE_ARROW, EXTERNAL_LINKS, etc.).</param>
+        public static void RecordSuccess(
+            StatementTelemetryContext ctx,
+            string? statementId,
+            ExecutionResultFormat resultFormat)
+        {
+            ctx.RecordFirstBatchReady();
+            ctx.ResultFormat = resultFormat;
+            ctx.StatementId = statementId;
+        }
+
+        /// <summary>
+        /// Records an error during statement execution.
+        /// </summary>
+        /// <param name="ctx">The statement telemetry context.</param>
+        /// <param name="ex">The exception that occurred.</param>
+        public static void RecordError(StatementTelemetryContext ctx, Exception ex)
+        {
+            ctx.HasError = true;
+            ctx.ErrorName = ex.GetType().Name;
+            ctx.ErrorMessage = ex.Message;
+        }
+
+        /// <summary>
+        /// Emits telemetry for a completed statement execution.
+        /// Extracts chunk metrics from CloudFetch reader if applicable and builds the telemetry log.
+        /// All exceptions are swallowed to ensure telemetry failures don't impact driver operations.
+        /// </summary>
+        /// <param name="ctx">The statement telemetry context.</param>
+        /// <param name="session">The session-level telemetry context.</param>
+        /// <param name="reader">Optional reader to extract chunk metrics from (if CloudFetch).</param>
+        public static void EmitTelemetry(
+            StatementTelemetryContext ctx,
+            TelemetrySessionContext? session,
+            IArrowArrayStream? reader = null)
+        {
+            try
+            {
+                ctx.RecordResultsConsumed();
+
+                // Extract retry count from Activity if available
+                if (Activity.Current != null)
+                {
+                    var retryCountTag = Activity.Current.GetTagItem("http.retry.total_attempts");
+                    if (retryCountTag is int retryCount)
+                    {
+                        ctx.RetryCount = retryCount;
+                    }
+                }
+
+                // Extract chunk metrics if this was a CloudFetch query
+                if (reader != null)
+                {
+                    ChunkMetrics? metrics = ExtractChunkMetrics(reader);
+                    if (metrics != null)
+                    {
+                        ctx.SetChunkDetails(
+                            metrics.TotalChunksPresent,
+                            metrics.TotalChunksIterated,
+                            metrics.InitialChunkLatencyMs,
+                            metrics.SlowestChunkLatencyMs,
+                            metrics.SumChunksDownloadTimeMs);
+                    }
+                }
+
+                OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
+
+                var frontendLog = new TelemetryFrontendLog
+                {
+                    WorkspaceId = ctx.WorkspaceId,
+                    FrontendLogEventId = Guid.NewGuid().ToString(),
+                    Context = new FrontendLogContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    },
+                    Entry = new FrontendLogEntry
+                    {
+                        SqlDriverLog = telemetryLog
+                    }
+                };
+
+                session?.TelemetryClient?.Enqueue(frontendLog);
+            }
+            catch
+            {
+                // Telemetry must never impact driver operations
+            }
+        }
+
+        /// <summary>
+        /// Extracts chunk metrics from a CloudFetch reader.
+        /// Handles both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped).
+        /// </summary>
+        /// <param name="reader">The Arrow array stream reader.</param>
+        /// <returns>ChunkMetrics if available, or null.</returns>
+        private static ChunkMetrics? ExtractChunkMetrics(IArrowArrayStream reader)
+        {
+            try
+            {
+                if (reader is CloudFetchReader cfReader)
+                {
+                    return cfReader.GetChunkMetrics();
+                }
+                else if (reader is Reader.DatabricksCompositeReader compositeReader)
+                {
+                    return compositeReader.GetChunkMetrics();
+                }
+            }
+            catch
+            {
+                // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
+            }
+            return null;
         }
     }
 }
