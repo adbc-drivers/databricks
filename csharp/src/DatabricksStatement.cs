@@ -27,6 +27,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.Result;
 using AdbcDrivers.Databricks.Telemetry;
@@ -199,22 +200,40 @@ namespace AdbcDrivers.Databricks
                 ctx.RecordResultsConsumed();
 
                 // Extract chunk metrics if this was a CloudFetch query
+                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped)
+                ChunkMetrics? metrics = null;
                 if (_lastQueryResult?.Stream is CloudFetchReader cfReader)
                 {
                     try
                     {
-                        var metrics = cfReader.GetChunkMetrics();
-                        ctx.SetChunkDetails(
-                            metrics.TotalChunksPresent,
-                            metrics.TotalChunksIterated,
-                            metrics.InitialChunkLatencyMs,
-                            metrics.SlowestChunkLatencyMs,
-                            metrics.SumChunksDownloadTimeMs);
+                        metrics = cfReader.GetChunkMetrics();
                     }
                     catch
                     {
                         // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
                     }
+                }
+                else if (_lastQueryResult?.Stream is DatabricksCompositeReader compositeReader)
+                {
+                    try
+                    {
+                        metrics = compositeReader.GetChunkMetrics();
+                    }
+                    catch
+                    {
+                        // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
+                    }
+                }
+
+                // Set chunk details if we have metrics
+                if (metrics != null)
+                {
+                    ctx.SetChunkDetails(
+                        metrics.TotalChunksPresent,
+                        metrics.TotalChunksIterated,
+                        metrics.InitialChunkLatencyMs,
+                        metrics.SlowestChunkLatencyMs,
+                        metrics.SumChunksDownloadTimeMs);
                 }
 
                 OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
