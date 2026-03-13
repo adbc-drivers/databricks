@@ -24,6 +24,7 @@ on:
       - 'csharp/**'
   pull_request:
     # Only runs on PRs from the repo itself, not forks
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - '.github/workflows/e2e-tests.yml'
       - 'ci/scripts/**'
@@ -53,8 +54,12 @@ jobs:
         id: gate
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # Tests run in merge queue only — auto-pass on PR so it can enter the queue
-            echo "run=false" >> $GITHUB_OUTPUT && echo "⏭️ PR event — E2E tests run in merge queue"
+            if [[ "${{ github.event.action }}" == "labeled" ]] && [[ "${{ github.event.label.name }}" == "e2e-test" ]]; then
+              echo "run=true" >> $GITHUB_OUTPUT && echo "✅ e2e-test label added — running E2E tests"
+            else
+              # Auto-pass on PR so it can enter the queue; tests run in merge queue
+              echo "run=false" >> $GITHUB_OUTPUT && echo "⏭️ PR event — E2E tests run in merge queue"
+            fi
           elif [[ "${{ github.event_name }}" == "merge_group" ]]; then
             CHANGED=$(git diff --name-only "${{ github.event.merge_group.base_sha }}" "${{ github.event.merge_group.head_sha }}")
             if echo "$CHANGED" | grep -qE "^(csharp/|ci/scripts/|\.github/workflows/e2e-tests\.yml)"; then
