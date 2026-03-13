@@ -14,9 +14,11 @@
 
 //! Authentication mechanisms for the Databricks ADBC driver.
 
+pub mod config;
 pub mod oauth;
 pub mod pat;
 
+pub use config::{AuthConfig, AuthType};
 pub use pat::PersonalAccessToken;
 
 use crate::error::Result;

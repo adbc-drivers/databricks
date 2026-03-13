@@ -14,6 +14,7 @@
 
 //! Database implementation for the Databricks ADBC driver.
 
+use crate::auth::config::{AuthConfig, AuthType};
 use crate::auth::PersonalAccessToken;
 use crate::client::{
     DatabricksClient, DatabricksClientConfig, DatabricksHttpClient, HttpClientConfig, SeaClient,
@@ -29,66 +30,6 @@ use adbc_core::Optionable;
 use driverbase::error::ErrorHelper;
 use std::sync::Arc;
 use std::time::Duration;
-
-/// Authentication mechanism -- top-level selector.
-/// Config values match the ODBC driver's AuthMech numeric codes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum AuthMechanism {
-    /// Personal access token (no OAuth). Config value: 0
-    Pat = 0,
-    /// OAuth 2.0 -- requires AuthFlow to select the specific flow. Config value: 11
-    OAuth = 11,
-}
-
-impl TryFrom<i64> for AuthMechanism {
-    type Error = crate::error::Error;
-
-    fn try_from(value: i64) -> std::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(AuthMechanism::Pat),
-            11 => Ok(AuthMechanism::OAuth),
-            _ => Err(DatabricksErrorHelper::invalid_argument()
-                .message(format!(
-                    "Invalid auth mechanism value: {}. Valid values are 0 (PAT) or 11 (OAuth)",
-                    value
-                ))
-                .into()),
-        }
-    }
-}
-
-/// OAuth authentication flow -- selects the specific OAuth grant type.
-/// Config values match the ODBC driver's Auth_Flow numeric codes.
-/// Only applicable when AuthMechanism is OAuth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum AuthFlow {
-    /// Use a pre-obtained OAuth access token directly. Config value: 0
-    TokenPassthrough = 0,
-    /// M2M: client credentials grant for service principals. Config value: 1
-    ClientCredentials = 1,
-    /// U2M: browser-based authorization code + PKCE. Config value: 2
-    Browser = 2,
-}
-
-impl TryFrom<i64> for AuthFlow {
-    type Error = crate::error::Error;
-
-    fn try_from(value: i64) -> std::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(AuthFlow::TokenPassthrough),
-            1 => Ok(AuthFlow::ClientCredentials),
-            2 => Ok(AuthFlow::Browser),
-            _ => Err(DatabricksErrorHelper::invalid_argument()
-                .message(format!(
-                    "Invalid auth flow value: {}. Valid values are 0 (token passthrough), 1 (client credentials), or 2 (browser)",
-                    value
-                ))
-                .into()),
-        }
-    }
-}
 
 /// Represents a database instance that holds connection configuration.
 ///
@@ -114,14 +55,8 @@ pub struct Database {
     log_level: Option<String>,
     log_file: Option<String>,
 
-    // OAuth configuration
-    auth_mechanism: Option<AuthMechanism>,
-    auth_flow: Option<AuthFlow>,
-    auth_client_id: Option<String>,
-    auth_client_secret: Option<String>,
-    auth_scopes: Option<String>,
-    auth_token_endpoint: Option<String>,
-    auth_redirect_port: Option<u16>,
+    // Authentication configuration
+    auth_config: AuthConfig,
 }
 
 impl Database {
@@ -326,18 +261,10 @@ impl Optionable for Database {
                     }
                 }
 
-                // OAuth configuration options
-                "databricks.auth.mechanism" => {
-                    if let Some(v) = Self::parse_int_option(&value) {
-                        self.auth_mechanism = Some(AuthMechanism::try_from(v)?);
-                        Ok(())
-                    } else {
-                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
-                    }
-                }
-                "databricks.auth.flow" => {
-                    if let Some(v) = Self::parse_int_option(&value) {
-                        self.auth_flow = Some(AuthFlow::try_from(v)?);
+                // Authentication configuration options
+                "databricks.auth.type" => {
+                    if let OptionValue::String(v) = value {
+                        self.auth_config.auth_type = Some(AuthType::try_from(v.as_str())?);
                         Ok(())
                     } else {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
@@ -345,7 +272,7 @@ impl Optionable for Database {
                 }
                 "databricks.auth.client_id" => {
                     if let OptionValue::String(v) = value {
-                        self.auth_client_id = Some(v);
+                        self.auth_config.client_id = Some(v);
                         Ok(())
                     } else {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
@@ -353,7 +280,7 @@ impl Optionable for Database {
                 }
                 "databricks.auth.client_secret" => {
                     if let OptionValue::String(v) = value {
-                        self.auth_client_secret = Some(v);
+                        self.auth_config.client_secret = Some(v);
                         Ok(())
                     } else {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
@@ -361,7 +288,7 @@ impl Optionable for Database {
                 }
                 "databricks.auth.scopes" => {
                     if let OptionValue::String(v) = value {
-                        self.auth_scopes = Some(v);
+                        self.auth_config.scopes = Some(v);
                         Ok(())
                     } else {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
@@ -369,7 +296,7 @@ impl Optionable for Database {
                 }
                 "databricks.auth.token_endpoint" => {
                     if let OptionValue::String(v) = value {
-                        self.auth_token_endpoint = Some(v);
+                        self.auth_config.token_endpoint = Some(v);
                         Ok(())
                     } else {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
@@ -377,7 +304,7 @@ impl Optionable for Database {
                 }
                 "databricks.auth.redirect_port" => {
                     if let Some(v) = Self::parse_int_option(&value) {
-                        if v < 0 || v > 65535 {
+                        if !(0..=65535).contains(&v) {
                             return Err(DatabricksErrorHelper::invalid_argument()
                                 .message(format!(
                                     "Invalid redirect port: {}. Port must be between 0 and 65535",
@@ -385,7 +312,7 @@ impl Optionable for Database {
                                 ))
                                 .to_adbc());
                         }
-                        self.auth_redirect_port = Some(v as u16);
+                        self.auth_config.redirect_port = Some(v as u16);
                         Ok(())
                     } else {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
@@ -457,23 +384,36 @@ impl Optionable for Database {
                         .message("option 'databricks.log_file' is not set")
                         .to_adbc()
                 }),
-                "databricks.auth.client_id" => self.auth_client_id.clone().ok_or_else(|| {
-                    DatabricksErrorHelper::invalid_state()
-                        .message("option 'databricks.auth.client_id' is not set")
-                        .to_adbc()
-                }),
-                "databricks.auth.client_secret" => self.auth_client_secret.clone().ok_or_else(|| {
-                    DatabricksErrorHelper::invalid_state()
-                        .message("option 'databricks.auth.client_secret' is not set")
-                        .to_adbc()
-                }),
-                "databricks.auth.scopes" => self.auth_scopes.clone().ok_or_else(|| {
+                "databricks.auth.type" => self
+                    .auth_config
+                    .auth_type
+                    .ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_state()
+                            .message("option 'databricks.auth.type' is not set")
+                            .to_adbc()
+                    })
+                    .map(|t| t.to_string()),
+                "databricks.auth.client_id" => {
+                    self.auth_config.client_id.clone().ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_state()
+                            .message("option 'databricks.auth.client_id' is not set")
+                            .to_adbc()
+                    })
+                }
+                "databricks.auth.client_secret" => {
+                    self.auth_config.client_secret.clone().ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_state()
+                            .message("option 'databricks.auth.client_secret' is not set")
+                            .to_adbc()
+                    })
+                }
+                "databricks.auth.scopes" => self.auth_config.scopes.clone().ok_or_else(|| {
                     DatabricksErrorHelper::invalid_state()
                         .message("option 'databricks.auth.scopes' is not set")
                         .to_adbc()
                 }),
                 "databricks.auth.token_endpoint" => {
-                    self.auth_token_endpoint.clone().ok_or_else(|| {
+                    self.auth_config.token_endpoint.clone().ok_or_else(|| {
                         DatabricksErrorHelper::invalid_state()
                             .message("option 'databricks.auth.token_endpoint' is not set")
                             .to_adbc()
@@ -501,24 +441,9 @@ impl Optionable for Database {
                 "databricks.cloudfetch.max_retries" => {
                     Ok(self.cloudfetch_config.max_retries as i64)
                 }
-                "databricks.auth.mechanism" => self
-                    .auth_mechanism
-                    .ok_or_else(|| {
-                        DatabricksErrorHelper::invalid_state()
-                            .message("option 'databricks.auth.mechanism' is not set")
-                            .to_adbc()
-                    })
-                    .map(|m| m as i64),
-                "databricks.auth.flow" => self
-                    .auth_flow
-                    .ok_or_else(|| {
-                        DatabricksErrorHelper::invalid_state()
-                            .message("option 'databricks.auth.flow' is not set")
-                            .to_adbc()
-                    })
-                    .map(|f| f as i64),
                 "databricks.auth.redirect_port" => self
-                    .auth_redirect_port
+                    .auth_config
+                    .redirect_port
                     .ok_or_else(|| {
                         DatabricksErrorHelper::invalid_state()
                             .message("option 'databricks.auth.redirect_port' is not set")
@@ -565,18 +490,26 @@ impl adbc_core::Database for Database {
                 .message("warehouse_id not set (set via databricks.http_path or databricks.warehouse_id)")
                 .to_adbc()
         })?;
-        let access_token = self.access_token.as_ref().ok_or_else(|| {
-            DatabricksErrorHelper::invalid_argument()
-                .message("access_token not set")
-                .to_adbc()
-        })?;
+
+        // Validate auth configuration
+        self.auth_config
+            .validate(&self.access_token)
+            .map_err(|e| e.to_adbc())?;
+
+        // Get access_token if needed (for PAT or TokenPassthrough)
+        let access_token = self.access_token.as_ref();
 
         // Create HTTP client (without auth provider - two-phase initialization)
         let http_client =
             Arc::new(DatabricksHttpClient::new(self.http_config.clone()).map_err(|e| e.to_adbc())?);
 
-        // Create auth provider
-        let auth_provider = Arc::new(PersonalAccessToken::new(access_token.clone()));
+        // Create auth provider based on mechanism
+        // For now, only PAT is implemented, OAuth providers will be added later
+        let auth_provider = Arc::new(PersonalAccessToken::new(
+            access_token
+                .expect("access_token should be validated above")
+                .clone(),
+        ));
 
         // Set auth provider on HTTP client (phase 2)
         http_client.set_auth_provider(auth_provider);
@@ -774,156 +707,55 @@ mod tests {
             .is_err());
     }
 
-    #[test]
-    fn test_set_auth_mechanism_valid() {
-        // Test valid PAT value (0)
-        let mechanism = AuthMechanism::try_from(0).unwrap();
-        assert_eq!(mechanism, AuthMechanism::Pat);
-        assert_eq!(mechanism as u8, 0);
-
-        // Test valid OAuth value (11)
-        let mechanism = AuthMechanism::try_from(11).unwrap();
-        assert_eq!(mechanism, AuthMechanism::OAuth);
-        assert_eq!(mechanism as u8, 11);
-    }
+    // Note: AuthType enum tests are in auth::config::tests
 
     #[test]
-    fn test_set_auth_mechanism_invalid() {
-        // Test invalid values
-        assert!(AuthMechanism::try_from(1).is_err());
-        assert!(AuthMechanism::try_from(10).is_err());
-        assert!(AuthMechanism::try_from(12).is_err());
-        assert!(AuthMechanism::try_from(-1).is_err());
-        assert!(AuthMechanism::try_from(100).is_err());
-    }
-
-    #[test]
-    fn test_set_auth_flow_valid() {
-        // Test valid TokenPassthrough value (0)
-        let flow = AuthFlow::try_from(0).unwrap();
-        assert_eq!(flow, AuthFlow::TokenPassthrough);
-        assert_eq!(flow as u8, 0);
-
-        // Test valid ClientCredentials value (1)
-        let flow = AuthFlow::try_from(1).unwrap();
-        assert_eq!(flow, AuthFlow::ClientCredentials);
-        assert_eq!(flow as u8, 1);
-
-        // Test valid Browser value (2)
-        let flow = AuthFlow::try_from(2).unwrap();
-        assert_eq!(flow, AuthFlow::Browser);
-        assert_eq!(flow as u8, 2);
-    }
-
-    #[test]
-    fn test_set_auth_flow_invalid() {
-        // Test invalid values
-        assert!(AuthFlow::try_from(3).is_err());
-        assert!(AuthFlow::try_from(-1).is_err());
-        assert!(AuthFlow::try_from(10).is_err());
-        assert!(AuthFlow::try_from(100).is_err());
-    }
-
-    #[test]
-    fn test_database_set_auth_mechanism_option() {
+    fn test_database_set_auth_type_option() {
         let mut db = Database::new();
 
-        // Test valid PAT value (0)
         db.set_option(
-            OptionDatabase::Other("databricks.auth.mechanism".into()),
-            OptionValue::String("0".into()),
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("access_token".into()),
         )
         .unwrap();
-        assert_eq!(db.auth_mechanism, Some(AuthMechanism::Pat));
+        assert_eq!(db.auth_config.auth_type, Some(AuthType::AccessToken));
 
-        // Test valid OAuth value (11)
         db.set_option(
-            OptionDatabase::Other("databricks.auth.mechanism".into()),
-            OptionValue::String("11".into()),
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("oauth_m2m".into()),
         )
         .unwrap();
-        assert_eq!(db.auth_mechanism, Some(AuthMechanism::OAuth));
+        assert_eq!(db.auth_config.auth_type, Some(AuthType::OAuthM2m));
 
-        // Test with OptionValue::Int
         db.set_option(
-            OptionDatabase::Other("databricks.auth.mechanism".into()),
-            OptionValue::Int(0),
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("oauth_u2m".into()),
         )
         .unwrap();
-        assert_eq!(db.auth_mechanism, Some(AuthMechanism::Pat));
-    }
+        assert_eq!(db.auth_config.auth_type, Some(AuthType::OAuthU2m));
 
-    #[test]
-    fn test_database_set_auth_mechanism_invalid() {
-        let mut db = Database::new();
-
-        // Test invalid integer value
-        let result = db.set_option(
-            OptionDatabase::Other("databricks.auth.mechanism".into()),
-            OptionValue::String("99".into()),
+        // Verify get_option_string round-trip
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other("databricks.auth.type".into()))
+                .unwrap(),
+            "oauth_u2m"
         );
-        assert!(result.is_err());
+    }
 
-        // Test invalid non-integer string
+    #[test]
+    fn test_database_set_auth_type_invalid() {
+        let mut db = Database::new();
+
         let result = db.set_option(
-            OptionDatabase::Other("databricks.auth.mechanism".into()),
+            OptionDatabase::Other("databricks.auth.type".into()),
             OptionValue::String("invalid".into()),
         );
         assert!(result.is_err());
-    }
 
-    #[test]
-    fn test_database_set_auth_flow_option() {
-        let mut db = Database::new();
-
-        // Test TokenPassthrough (0)
-        db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::String("0".into()),
-        )
-        .unwrap();
-        assert_eq!(db.auth_flow, Some(AuthFlow::TokenPassthrough));
-
-        // Test ClientCredentials (1)
-        db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::String("1".into()),
-        )
-        .unwrap();
-        assert_eq!(db.auth_flow, Some(AuthFlow::ClientCredentials));
-
-        // Test Browser (2)
-        db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::String("2".into()),
-        )
-        .unwrap();
-        assert_eq!(db.auth_flow, Some(AuthFlow::Browser));
-
-        // Test with OptionValue::Int
-        db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::Int(1),
-        )
-        .unwrap();
-        assert_eq!(db.auth_flow, Some(AuthFlow::ClientCredentials));
-    }
-
-    #[test]
-    fn test_database_set_auth_flow_invalid() {
-        let mut db = Database::new();
-
-        // Test invalid integer value
+        // Non-string should fail
         let result = db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::String("5".into()),
-        );
-        assert!(result.is_err());
-
-        // Test invalid non-integer string
-        let result = db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::String("browser".into()),
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::Int(0),
         );
         assert!(result.is_err());
     }
@@ -937,7 +769,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(db.auth_client_id, Some("test-client-id".to_string()));
+        assert_eq!(db.auth_config.client_id, Some("test-client-id".to_string()));
         assert_eq!(
             db.get_option_string(OptionDatabase::Other("databricks.auth.client_id".into()))
                 .unwrap(),
@@ -954,10 +786,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(db.auth_client_secret, Some("test-secret".to_string()));
         assert_eq!(
-            db.get_option_string(OptionDatabase::Other("databricks.auth.client_secret".into()))
-                .unwrap(),
+            db.auth_config.client_secret,
+            Some("test-secret".to_string())
+        );
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other(
+                "databricks.auth.client_secret".into()
+            ))
+            .unwrap(),
             "test-secret"
         );
     }
@@ -972,7 +809,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            db.auth_scopes,
+            db.auth_config.scopes,
             Some("all-apis offline_access".to_string())
         );
         assert_eq!(
@@ -992,7 +829,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            db.auth_token_endpoint,
+            db.auth_config.token_endpoint,
             Some("https://example.com/token".to_string())
         );
         assert_eq!(
@@ -1014,10 +851,12 @@ mod tests {
             OptionValue::String("8020".into()),
         )
         .unwrap();
-        assert_eq!(db.auth_redirect_port, Some(8020));
+        assert_eq!(db.auth_config.redirect_port, Some(8020));
         assert_eq!(
-            db.get_option_int(OptionDatabase::Other("databricks.auth.redirect_port".into()))
-                .unwrap(),
+            db.get_option_int(OptionDatabase::Other(
+                "databricks.auth.redirect_port".into()
+            ))
+            .unwrap(),
             8020
         );
 
@@ -1027,7 +866,7 @@ mod tests {
             OptionValue::Int(9000),
         )
         .unwrap();
-        assert_eq!(db.auth_redirect_port, Some(9000));
+        assert_eq!(db.auth_config.redirect_port, Some(9000));
 
         // Test port 0 (OS-assigned)
         db.set_option(
@@ -1035,7 +874,7 @@ mod tests {
             OptionValue::Int(0),
         )
         .unwrap();
-        assert_eq!(db.auth_redirect_port, Some(0));
+        assert_eq!(db.auth_config.redirect_port, Some(0));
 
         // Test max port
         db.set_option(
@@ -1043,7 +882,7 @@ mod tests {
             OptionValue::Int(65535),
         )
         .unwrap();
-        assert_eq!(db.auth_redirect_port, Some(65535));
+        assert_eq!(db.auth_config.redirect_port, Some(65535));
     }
 
     #[test]
@@ -1110,95 +949,154 @@ mod tests {
         let db = Database::new();
 
         assert!(db
+            .get_option_string(OptionDatabase::Other("databricks.auth.type".into()))
+            .is_err());
+        assert!(db
             .get_option_string(OptionDatabase::Other("databricks.auth.client_id".into()))
             .is_err());
         assert!(db
-            .get_option_string(OptionDatabase::Other("databricks.auth.client_secret".into()))
+            .get_option_string(OptionDatabase::Other(
+                "databricks.auth.client_secret".into()
+            ))
             .is_err());
         assert!(db
             .get_option_string(OptionDatabase::Other("databricks.auth.scopes".into()))
             .is_err());
         assert!(db
-            .get_option_string(OptionDatabase::Other("databricks.auth.token_endpoint".into()))
+            .get_option_string(OptionDatabase::Other(
+                "databricks.auth.token_endpoint".into()
+            ))
             .is_err());
         assert!(db
-            .get_option_int(OptionDatabase::Other("databricks.auth.mechanism".into()))
-            .is_err());
-        assert!(db
-            .get_option_int(OptionDatabase::Other("databricks.auth.flow".into()))
-            .is_err());
-        assert!(db
-            .get_option_int(OptionDatabase::Other("databricks.auth.redirect_port".into()))
+            .get_option_int(OptionDatabase::Other(
+                "databricks.auth.redirect_port".into()
+            ))
             .is_err());
     }
 
+    // Config validation tests for new_connection()
+
     #[test]
-    fn test_database_get_auth_mechanism_as_int() {
+    fn test_new_connection_missing_auth_type() {
+        use adbc_core::Database as _;
+
         let mut db = Database::new();
-
-        // Set PAT mechanism
         db.set_option(
-            OptionDatabase::Other("databricks.auth.mechanism".into()),
-            OptionValue::Int(0),
+            OptionDatabase::Uri,
+            OptionValue::String("https://example.databricks.com".into()),
         )
         .unwrap();
-        assert_eq!(
-            db.get_option_int(OptionDatabase::Other("databricks.auth.mechanism".into()))
-                .unwrap(),
-            0
-        );
-
-        // Set OAuth mechanism
         db.set_option(
-            OptionDatabase::Other("databricks.auth.mechanism".into()),
-            OptionValue::Int(11),
+            OptionDatabase::Other("databricks.warehouse_id".into()),
+            OptionValue::String("test123".into()),
         )
         .unwrap();
-        assert_eq!(
-            db.get_option_int(OptionDatabase::Other("databricks.auth.mechanism".into()))
-                .unwrap(),
-            11
+
+        let result = db.new_connection();
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("databricks.auth.type is required"),
+            "Expected error message about missing auth type, got: {}",
+            err_msg
         );
     }
 
     #[test]
-    fn test_database_get_auth_flow_as_int() {
+    fn test_new_connection_oauth_m2m_missing_client_id() {
+        use adbc_core::Database as _;
+
         let mut db = Database::new();
-
-        // Set TokenPassthrough flow
         db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::Int(0),
+            OptionDatabase::Uri,
+            OptionValue::String("https://example.databricks.com".into()),
         )
         .unwrap();
-        assert_eq!(
-            db.get_option_int(OptionDatabase::Other("databricks.auth.flow".into()))
-                .unwrap(),
-            0
+        db.set_option(
+            OptionDatabase::Other("databricks.warehouse_id".into()),
+            OptionValue::String("test123".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("oauth_m2m".into()),
+        )
+        .unwrap();
+
+        let result = db.new_connection();
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("databricks.auth.client_id is required"),
+            "Expected error message about missing client_id, got: {}",
+            err_msg
         );
+    }
 
-        // Set ClientCredentials flow
+    #[test]
+    fn test_new_connection_oauth_m2m_missing_secret() {
+        use adbc_core::Database as _;
+
+        let mut db = Database::new();
         db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::Int(1),
+            OptionDatabase::Uri,
+            OptionValue::String("https://example.databricks.com".into()),
         )
         .unwrap();
-        assert_eq!(
-            db.get_option_int(OptionDatabase::Other("databricks.auth.flow".into()))
-                .unwrap(),
-            1
+        db.set_option(
+            OptionDatabase::Other("databricks.warehouse_id".into()),
+            OptionValue::String("test123".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("oauth_m2m".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.client_id".into()),
+            OptionValue::String("test-client-id".into()),
+        )
+        .unwrap();
+
+        let result = db.new_connection();
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("databricks.auth.client_secret is required"),
+            "Expected error message about missing client_secret, got: {}",
+            err_msg
         );
+    }
 
-        // Set Browser flow
+    #[test]
+    fn test_new_connection_access_token_missing_token() {
+        use adbc_core::Database as _;
+
+        let mut db = Database::new();
         db.set_option(
-            OptionDatabase::Other("databricks.auth.flow".into()),
-            OptionValue::Int(2),
+            OptionDatabase::Uri,
+            OptionValue::String("https://example.databricks.com".into()),
         )
         .unwrap();
-        assert_eq!(
-            db.get_option_int(OptionDatabase::Other("databricks.auth.flow".into()))
-                .unwrap(),
-            2
+        db.set_option(
+            OptionDatabase::Other("databricks.warehouse_id".into()),
+            OptionValue::String("test123".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("access_token".into()),
+        )
+        .unwrap();
+
+        let result = db.new_connection();
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("databricks.access_token is required"),
+            "Expected error message about missing access_token, got: {}",
+            err_msg
         );
     }
 }
