@@ -2872,7 +2872,7 @@ This **direct object telemetry design (V3)** provides a simple approach to colle
 
 Baseline tests validate:
 - ✅ session_id population
-- ✅ sql_statement_id population  
+- ✅ sql_statement_id population
 - ✅ operation_latency_ms > 0
 - ✅ system_configuration fields (driver_version, driver_name, os_name, runtime_name)
 - ✅ driver_connection_params.mode is set
@@ -2910,13 +2910,13 @@ try
     statement.SqlQuery = "SELECT 1";
     var result = statement.ExecuteQuery();
     using var reader = result.Stream;
-    
+
     statement.Dispose();
 
     // Wait for and validate telemetry
     var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
     var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-    
+
     Assert.False(string.IsNullOrEmpty(protoLog.SessionId));
     // ... more assertions
 }
