@@ -61,7 +61,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 var result = statement.ExecuteQuery(); using var reader = result.Stream;
 
                 // Dispose the reader to trigger telemetry emission
-                
+
                 statement.Dispose();
 
                 // Wait for telemetry to be captured
@@ -101,7 +101,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT 1 AS test_value";
                 var result = statement.ExecuteQuery(); using var reader = result.Stream;
 
-                
+
                 statement.Dispose();
 
                 // Wait for telemetry
@@ -141,7 +141,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT 1";
                 var result = statement.ExecuteQuery(); using var reader = result.Stream;
 
-                
+
                 statement.Dispose();
 
                 // Wait for telemetry
@@ -181,7 +181,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT 1";
                 var result = statement.ExecuteQuery(); using var reader = result.Stream;
 
-                
+
                 statement.Dispose();
 
                 // Wait for telemetry
@@ -232,7 +232,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT 1";
                 var result = statement.ExecuteQuery(); using var reader = result.Stream;
 
-                
+
                 statement.Dispose();
 
                 // Wait for telemetry
@@ -279,7 +279,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT 1 AS test_value";
                 var result = statement.ExecuteQuery(); using var reader = result.Stream;
 
-                
+
                 statement.Dispose();
 
                 // Wait for telemetry
@@ -338,7 +338,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     using var statement = connection.CreateStatement();
                     statement.SqlQuery = $"SELECT {i + 1}";
                     var result = statement.ExecuteQuery(); using var reader = result.Stream;
-                    
+
                     statement.Dispose();
                 }
 
@@ -405,7 +405,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT 1";
                 var result = statement.ExecuteQuery(); using var reader = result.Stream;
 
-                
+
                 statement.Dispose();
 
                 // Wait a bit to ensure no telemetry is emitted
