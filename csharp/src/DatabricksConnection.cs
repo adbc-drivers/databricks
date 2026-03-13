@@ -796,7 +796,43 @@ namespace AdbcDrivers.Databricks
                 },
                 AuthMech = authMech,
                 AuthFlow = authFlow,
+                EnableArrow = true, // Always true for ADBC driver
+                RowsFetchedPerBlock = GetBatchSize(),
+                SocketTimeout = GetSocketTimeout(),
+                EnableDirectResults = _enableDirectResults,
+                EnableComplexDatatypeSupport = _useDescTableExtended,
+                AutoCommit = true, // ADBC always uses auto-commit (implicit commits)
             };
+        }
+
+        /// <summary>
+        /// Gets the batch size from connection properties.
+        /// </summary>
+        /// <returns>The batch size value.</returns>
+        private int GetBatchSize()
+        {
+            const int DefaultBatchSize = 50000; // HiveServer2Connection.BatchSizeDefault
+            if (Properties.TryGetValue(ApacheParameters.BatchSize, out string? batchSizeStr) &&
+                int.TryParse(batchSizeStr, out int batchSize))
+            {
+                return batchSize;
+            }
+            return DefaultBatchSize;
+        }
+
+        /// <summary>
+        /// Gets the socket timeout from connection properties.
+        /// </summary>
+        /// <returns>The socket timeout value in milliseconds.</returns>
+        private int GetSocketTimeout()
+        {
+            const int DefaultConnectTimeoutMs = 30000; // Default from HiveServer2
+            if (Properties.TryGetValue(SparkParameters.ConnectTimeoutMilliseconds, out string? timeoutStr) &&
+                int.TryParse(timeoutStr, out int timeout))
+            {
+                return timeout;
+            }
+            return DefaultConnectTimeoutMs;
         }
 
         /// <summary>
