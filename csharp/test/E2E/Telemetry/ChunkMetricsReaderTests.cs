@@ -21,6 +21,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
+using Apache.Arrow.Ipc;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -47,6 +48,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public async Task Reader_GetChunkMetrics_ReturnsNonNull()
         {
             AdbcConnection? connection = null;
+            Apache.Arrow.Ipc.IArrowArrayStream? reader = null;
 
             try
             {
@@ -67,7 +69,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT * FROM range(1000000)";
 
                 var result = statement.ExecuteQuery();
-                var reader = result.Stream;
+                reader = result.Stream;
 
                 // Consume at least one batch to ensure chunks are downloaded
                 var batch = await reader.ReadNextRecordBatchAsync();
@@ -87,11 +89,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 Assert.NotNull(chunkMetrics);
                 OutputHelper?.WriteLine($"ChunkMetrics retrieved successfully from reader");
-
-                reader?.Dispose();
             }
             finally
             {
+                reader?.Dispose();
                 connection?.Dispose();
             }
         }
@@ -104,6 +105,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public async Task Reader_GetChunkMetrics_MatchesDownloaderValues()
         {
             AdbcConnection? connection = null;
+            Apache.Arrow.Ipc.IArrowArrayStream? reader = null;
 
             try
             {
@@ -121,7 +123,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT * FROM range(1000000)";
 
                 var result = statement.ExecuteQuery();
-                var reader = result.Stream;
+                reader = result.Stream;
 
                 // Consume several batches to ensure multiple chunks are processed
                 int batchCount = 0;
@@ -166,11 +168,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"  InitialChunkLatencyMs: {initialChunkLatencyMs}");
                 OutputHelper?.WriteLine($"  SlowestChunkLatencyMs: {slowestChunkLatencyMs}");
                 OutputHelper?.WriteLine($"  SumChunksDownloadTimeMs: {sumChunksDownloadTimeMs}");
-
-                reader?.Dispose();
             }
             finally
             {
+                reader?.Dispose();
                 connection?.Dispose();
             }
         }
@@ -183,6 +184,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public async Task Reader_GetChunkMetrics_AvailableAfterBatchConsumption()
         {
             AdbcConnection? connection = null;
+            Apache.Arrow.Ipc.IArrowArrayStream? reader = null;
 
             try
             {
@@ -200,7 +202,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT * FROM range(1000000)";
 
                 var result = statement.ExecuteQuery();
-                var reader = result.Stream;
+                reader = result.Stream;
 
                 // Act - Consume all batches
                 int totalBatches = 0;
@@ -235,11 +237,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"Metrics available after full consumption:");
                 OutputHelper?.WriteLine($"  TotalChunksPresent: {totalChunksPresent}");
                 OutputHelper?.WriteLine($"  TotalChunksIterated: {totalChunksIterated}");
-
-                reader?.Dispose();
             }
             finally
             {
+                reader?.Dispose();
                 connection?.Dispose();
             }
         }
@@ -253,6 +254,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public async Task Reader_GetChunkMetrics_ReflectsPartialConsumption()
         {
             AdbcConnection? connection = null;
+            Apache.Arrow.Ipc.IArrowArrayStream? reader = null;
 
             try
             {
@@ -270,7 +272,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT * FROM range(2000000)"; // Large enough to ensure multiple chunks
 
                 var result = statement.ExecuteQuery();
-                var reader = result.Stream;
+                reader = result.Stream;
 
                 // Act - Consume only a few batches, not all
                 int batchesToConsume = 3;
@@ -306,11 +308,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 OutputHelper?.WriteLine($"  Batches consumed: {batchCount}");
                 OutputHelper?.WriteLine($"  TotalChunksPresent: {totalChunksPresent}");
                 OutputHelper?.WriteLine($"  TotalChunksIterated: {totalChunksIterated}");
-
-                reader?.Dispose();
             }
             finally
             {
+                reader?.Dispose();
                 connection?.Dispose();
             }
         }
@@ -323,6 +324,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public async Task Reader_GetChunkMetrics_ConsistentAcrossMultipleCalls()
         {
             AdbcConnection? connection = null;
+            Apache.Arrow.Ipc.IArrowArrayStream? reader = null;
 
             try
             {
@@ -338,7 +340,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 statement.SqlQuery = "SELECT * FROM range(1000000)";
 
                 var result = statement.ExecuteQuery();
-                var reader = result.Stream;
+                reader = result.Stream;
 
                 // Consume some batches
                 var batch = await reader.ReadNextRecordBatchAsync();
@@ -367,11 +369,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 Assert.Equal(iterated1, iterated2);
 
                 OutputHelper?.WriteLine("Metrics are consistent across multiple calls");
-
-                reader?.Dispose();
             }
             finally
             {
+                reader?.Dispose();
                 connection?.Dispose();
             }
         }

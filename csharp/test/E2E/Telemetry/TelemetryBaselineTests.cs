@@ -456,25 +456,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Wait for telemetry
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 10000);
 
-                if (logs.Count > 0)
-                {
-                    var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+                Skip.If(logs.Count == 0, "No telemetry captured for error case - skipping assertion");
 
-                    // Error info should be populated
-                    Assert.NotNull(protoLog.ErrorInfo);
-                    Assert.False(string.IsNullOrEmpty(protoLog.ErrorInfo.ErrorName), "error_name should be populated");
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
 
-                    // Operation latency should still be positive (time spent before error)
-                    Assert.True(protoLog.OperationLatencyMs > 0, "operation_latency_ms should be > 0 even on error");
+                // Error info should be populated
+                Assert.NotNull(protoLog.ErrorInfo);
+                Assert.False(string.IsNullOrEmpty(protoLog.ErrorInfo.ErrorName), "error_name should be populated");
 
-                    OutputHelper?.WriteLine("✓ error_info populated:");
-                    OutputHelper?.WriteLine($"  - error_name: {protoLog.ErrorInfo.ErrorName}");
-                    OutputHelper?.WriteLine($"  - operation_latency_ms: {protoLog.OperationLatencyMs}");
-                }
-                else
-                {
-                    OutputHelper?.WriteLine("⚠ No telemetry captured for error case (may be expected behavior)");
-                }
+                // Operation latency should still be positive (time spent before error)
+                Assert.True(protoLog.OperationLatencyMs > 0, "operation_latency_ms should be > 0 even on error");
+
+                OutputHelper?.WriteLine("✓ error_info populated:");
+                OutputHelper?.WriteLine($"  - error_name: {protoLog.ErrorInfo.ErrorName}");
+                OutputHelper?.WriteLine($"  - operation_latency_ms: {protoLog.OperationLatencyMs}");
             }
             finally
             {
@@ -517,28 +512,23 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Wait for telemetry
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1, timeoutMs: 10000);
 
-                if (logs.Count > 0)
-                {
-                    var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+                Skip.If(logs.Count == 0, "No telemetry captured for UPDATE statement - skipping assertion");
 
-                    // Basic fields should be populated
-                    Assert.False(string.IsNullOrEmpty(protoLog.SessionId), "session_id should be populated");
-                    Assert.True(protoLog.OperationLatencyMs > 0, "operation_latency_ms should be > 0");
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
 
-                    // SQL operation should be present
-                    Assert.NotNull(protoLog.SqlOperation);
+                // Basic fields should be populated
+                Assert.False(string.IsNullOrEmpty(protoLog.SessionId), "session_id should be populated");
+                Assert.True(protoLog.OperationLatencyMs > 0, "operation_latency_ms should be > 0");
 
-                    // Statement type should be UPDATE
-                    Assert.Equal(ProtoStatement.Types.Type.Update, protoLog.SqlOperation.StatementType);
+                // SQL operation should be present
+                Assert.NotNull(protoLog.SqlOperation);
 
-                    OutputHelper?.WriteLine("✓ UPDATE statement telemetry populated:");
-                    OutputHelper?.WriteLine($"  - statement_type: {protoLog.SqlOperation.StatementType}");
-                    OutputHelper?.WriteLine($"  - operation_latency_ms: {protoLog.OperationLatencyMs}");
-                }
-                else
-                {
-                    OutputHelper?.WriteLine("⚠ No telemetry captured for UPDATE statement");
-                }
+                // Statement type should be UPDATE
+                Assert.Equal(ProtoStatement.Types.Type.Update, protoLog.SqlOperation.StatementType);
+
+                OutputHelper?.WriteLine("✓ UPDATE statement telemetry populated:");
+                OutputHelper?.WriteLine($"  - statement_type: {protoLog.SqlOperation.StatementType}");
+                OutputHelper?.WriteLine($"  - operation_latency_ms: {protoLog.OperationLatencyMs}");
             }
             finally
             {

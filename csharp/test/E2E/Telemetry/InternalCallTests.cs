@@ -86,8 +86,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     return protoLog.SqlOperation?.OperationDetail != null;
                 }).ToList();
 
-                // If there are multiple operations, check if any are internal
+                // Check if any operations are marked as internal
                 // Internal operations would have been from SetSchema()
+                bool foundInternalCall = false;
                 foreach (var log in useSchemaLogs)
                 {
                     var protoLog = TelemetryTestHelpers.GetProtoLog(log);
@@ -97,10 +98,18 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     {
                         OutputHelper?.WriteLine($"Found operation: StatementType={protoLog.SqlOperation.StatementType}, " +
                                               $"IsInternalCall={opDetail.IsInternalCall}");
+                        if (opDetail.IsInternalCall)
+                        {
+                            foundInternalCall = true;
+                        }
                     }
                 }
 
-                OutputHelper?.WriteLine($"✓ Captured {logs.Count} telemetry event(s)");
+                // Assert that at least one log entry has IsInternalCall set to true
+                Assert.True(foundInternalCall,
+                    "Expected at least one telemetry log entry with IsInternalCall == true from the internal USE SCHEMA operation");
+
+                OutputHelper?.WriteLine($"✓ Captured {logs.Count} telemetry event(s), found internal call: {foundInternalCall}");
             }
             finally
             {
