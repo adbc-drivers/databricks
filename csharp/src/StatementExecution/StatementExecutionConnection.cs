@@ -734,16 +734,28 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         internal async Task<List<RecordBatch>> ExecuteMetadataSqlAsync(string sql, CancellationToken cancellationToken = default)
         {
+            // Ensure metadata SQL always has a timeout to prevent infinite polling.
+            // The caller (e.g. GetObjects) may already supply a timeout token, but if
+            // the token is CancellationToken.None (e.g. when called from
+            // ExecuteMetadataCommandAsync → GetTablesAsync via ExecuteQuery()), the
+            // inner statement would have _queryTimeoutSeconds=0 and poll forever.
+            // Link the caller's token with a metadata timeout as a safety net.
+            using var metadataTimeoutCts = CreateMetadataTimeoutCts();
+            using var linkedCts = cancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, metadataTimeoutCts.Token)
+                : null;
+            var effectiveToken = linkedCts?.Token ?? metadataTimeoutCts.Token;
+
             var batches = new List<RecordBatch>();
             using var stmt = (StatementExecutionStatement)CreateStatement();
             stmt.SqlQuery = sql;
-            var result = await stmt.ExecuteQueryAsync(cancellationToken, isMetadataExecution: true).ConfigureAwait(false);
+            var result = await stmt.ExecuteQueryAsync(effectiveToken, isMetadataExecution: true).ConfigureAwait(false);
             using var stream = result.Stream;
             if (stream == null) return batches;
             while (true)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var batch = await stream.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                effectiveToken.ThrowIfCancellationRequested();
+                var batch = await stream.ReadNextRecordBatchAsync(effectiveToken).ConfigureAwait(false);
                 if (batch == null) break;
                 batches.Add(batch);
             }
