@@ -708,10 +708,19 @@ namespace AdbcDrivers.Databricks
                 OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
                 RuntimeName = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
                 RuntimeVersion = System.Environment.Version.ToString(),
+                RuntimeVendor = "Microsoft",
                 LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
                 CharSetEncoding = System.Text.Encoding.Default.WebName,
-                ProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName
+                ProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName,
+                ClientAppName = GetClientAppName()
             };
+        }
+
+        private string GetClientAppName()
+        {
+            // Check connection property first, fall back to process name
+            Properties.TryGetValue("adbc.databricks.client_app_name", out string? appName);
+            return appName ?? Process.GetCurrentProcess().ProcessName;
         }
 
         private Telemetry.Proto.DriverConnectionParameters BuildDriverConnectionParams(bool isAuthenticated)
