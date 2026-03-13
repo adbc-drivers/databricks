@@ -312,6 +312,22 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             return chunkTrimmedBatch;
         }
 
+        /// <summary>
+        /// Gets the aggregated chunk metrics for this CloudFetch reader.
+        /// Returns metrics from the download manager, which tracks all chunk downloads.
+        /// </summary>
+        /// <returns>A ChunkMetrics object containing aggregated metrics.</returns>
+        public ChunkMetrics GetChunkMetrics()
+        {
+            if (downloadManager == null)
+            {
+                // Return empty metrics if download manager is null (shouldn't happen in normal flow)
+                return new ChunkMetrics();
+            }
+
+            return downloadManager.GetChunkMetrics();
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (this.currentReader != null)

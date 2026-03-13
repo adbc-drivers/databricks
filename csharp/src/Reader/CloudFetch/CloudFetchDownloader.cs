@@ -65,6 +65,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private Exception? _error;
         private readonly object _errorLock = new object();
 
+        // Chunk metrics aggregation
+        private int _totalChunksPresent = 0;
+        private int _totalChunksIterated = 0;
+        private long _initialChunkLatencyMs = 0;
+        private long _slowestChunkLatencyMs = 0;
+        private long _sumChunksDownloadTimeMs = 0;
+        private readonly object _metricsLock = new object();
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class.
         /// </summary>
@@ -333,6 +341,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                         // This is a real file, count it
                         totalFiles++;
+                        IncrementTotalChunksPresent();
 
                         // Check if the URL is expired or about to expire
                         if (downloadResult.IsExpiredOrExpiringSoon(_urlExpirationBufferSeconds))
@@ -742,15 +751,19 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 // Stop the stopwatch and log download completion
                 stopwatch.Stop();
-                double throughputMBps = (actualSize / 1024.0 / 1024.0) / (stopwatch.ElapsedMilliseconds / 1000.0);
+                long downloadTimeMs = stopwatch.ElapsedMilliseconds;
+                double throughputMBps = (actualSize / 1024.0 / 1024.0) / (downloadTimeMs / 1000.0);
                 activity?.AddEvent("cloudfetch.download_complete", [
                     new("offset", downloadResult.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("actual_size_bytes", actualSize),
                     new("actual_size_kb", actualSize / 1024.0),
-                    new("latency_ms", stopwatch.ElapsedMilliseconds),
+                    new("latency_ms", downloadTimeMs),
                     new("throughput_mbps", throughputMBps)
                 ]);
+
+                // Record chunk metrics
+                RecordChunkMetrics(downloadTimeMs);
 
                 // Set the download as completed with the original size
                 downloadResult.SetCompleted(dataStream, size);
@@ -797,6 +810,67 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 // If URL parsing fails, return a generic identifier
                 return "cloud-storage-url";
+            }
+        }
+
+        /// <summary>
+        /// Records chunk download metrics for telemetry aggregation.
+        /// Thread-safe for concurrent downloads.
+        /// </summary>
+        /// <param name="downloadTimeMs">The time taken to download this chunk in milliseconds.</param>
+        private void RecordChunkMetrics(long downloadTimeMs)
+        {
+            lock (_metricsLock)
+            {
+                // Track total chunks iterated
+                _totalChunksIterated++;
+
+                // Record initial chunk latency (first successful download)
+                if (_initialChunkLatencyMs == 0)
+                {
+                    _initialChunkLatencyMs = downloadTimeMs;
+                }
+
+                // Track slowest chunk
+                if (downloadTimeMs > _slowestChunkLatencyMs)
+                {
+                    _slowestChunkLatencyMs = downloadTimeMs;
+                }
+
+                // Sum all download times
+                _sumChunksDownloadTimeMs += downloadTimeMs;
+            }
+        }
+
+        /// <summary>
+        /// Increments the total chunks present count.
+        /// Called when a new download is queued.
+        /// </summary>
+        private void IncrementTotalChunksPresent()
+        {
+            lock (_metricsLock)
+            {
+                _totalChunksPresent++;
+            }
+        }
+
+        /// <summary>
+        /// Gets the aggregated chunk metrics for this downloader.
+        /// Returns a snapshot of current metrics that can be safely passed to telemetry.
+        /// </summary>
+        /// <returns>A ChunkMetrics object containing aggregated metrics.</returns>
+        public ChunkMetrics GetChunkMetrics()
+        {
+            lock (_metricsLock)
+            {
+                return new ChunkMetrics
+                {
+                    TotalChunksPresent = _totalChunksPresent,
+                    TotalChunksIterated = _totalChunksIterated,
+                    InitialChunkLatencyMs = _initialChunkLatencyMs,
+                    SlowestChunkLatencyMs = _slowestChunkLatencyMs,
+                    SumChunksDownloadTimeMs = _sumChunksDownloadTimeMs
+                };
             }
         }
     }

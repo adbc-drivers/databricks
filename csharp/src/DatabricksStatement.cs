@@ -27,6 +27,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.Result;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
@@ -65,6 +66,7 @@ namespace AdbcDrivers.Databricks
         private bool enableComplexDatatypeSupport;
         private Dictionary<string, string>? confOverlay;
         internal string? StatementId { get; set; }
+        private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -136,6 +138,7 @@ namespace AdbcDrivers.Databricks
             try
             {
                 QueryResult result = base.ExecuteQuery();
+                _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
                 return result;
             }
@@ -151,6 +154,7 @@ namespace AdbcDrivers.Databricks
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
+                _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
                 return result;
             }
@@ -193,6 +197,26 @@ namespace AdbcDrivers.Databricks
             try
             {
                 ctx.RecordResultsConsumed();
+
+                // Extract chunk metrics if this was a CloudFetch query
+                if (_lastQueryResult?.Stream is CloudFetchReader cfReader)
+                {
+                    try
+                    {
+                        var metrics = cfReader.GetChunkMetrics();
+                        ctx.SetChunkDetails(
+                            metrics.TotalChunksPresent,
+                            metrics.TotalChunksIterated,
+                            metrics.InitialChunkLatencyMs,
+                            metrics.SlowestChunkLatencyMs,
+                            metrics.SumChunksDownloadTimeMs);
+                    }
+                    catch
+                    {
+                        // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
+                    }
+                }
+
                 OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
 
                 var frontendLog = new TelemetryFrontendLog
