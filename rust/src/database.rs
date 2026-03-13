@@ -15,7 +15,7 @@
 //! Database implementation for the Databricks ADBC driver.
 
 use crate::auth::config::{AuthConfig, AuthType};
-use crate::auth::PersonalAccessToken;
+use crate::auth::{AuthProvider, AuthorizationCodeProvider, PersonalAccessToken};
 use crate::client::{
     DatabricksClient, DatabricksClientConfig, DatabricksHttpClient, HttpClientConfig, SeaClient,
 };
@@ -492,34 +492,73 @@ impl adbc_core::Database for Database {
         })?;
 
         // Validate auth configuration
-        self.auth_config
+        let auth_type = self
+            .auth_config
             .validate(&self.access_token)
             .map_err(|e| e.to_adbc())?;
 
-        // Get access_token if needed (for PAT or TokenPassthrough)
+        // Get access_token if needed (for AccessToken type)
         let access_token = self.access_token.as_ref();
 
         // Create HTTP client (without auth provider - two-phase initialization)
         let http_client =
             Arc::new(DatabricksHttpClient::new(self.http_config.clone()).map_err(|e| e.to_adbc())?);
 
-        // Create auth provider based on mechanism
-        // For now, only PAT is implemented, OAuth providers will be added later
-        let auth_provider = Arc::new(PersonalAccessToken::new(
-            access_token
-                .expect("access_token should be validated above")
-                .clone(),
-        ));
-
-        // Set auth provider on HTTP client (phase 2)
-        http_client.set_auth_provider(auth_provider);
-
-        // Create tokio runtime for async operations
+        // Create tokio runtime for async operations (needed before auth provider creation for U2M)
         let runtime = tokio::runtime::Runtime::new().map_err(|e| {
             DatabricksErrorHelper::io()
                 .message(format!("Failed to create async runtime: {}", e))
                 .to_adbc()
         })?;
+
+        // Create auth provider based on auth type
+        let auth_provider: Arc<dyn AuthProvider> = match auth_type {
+            AuthType::AccessToken => Arc::new(PersonalAccessToken::new(
+                access_token
+                    .expect("access_token should be validated above")
+                    .clone(),
+            )),
+            AuthType::OAuthM2m => {
+                // Client credentials flow not yet implemented
+                return Err(DatabricksErrorHelper::invalid_state()
+                    .message("Client credentials flow (M2M) not yet implemented")
+                    .to_adbc());
+            }
+            AuthType::OAuthU2m => {
+                // U2M flow - create AuthorizationCodeProvider
+                let client_id = self
+                    .auth_config
+                    .client_id
+                    .as_deref()
+                    .unwrap_or("databricks-cli");
+                let scopes_str = self
+                    .auth_config
+                    .scopes
+                    .as_deref()
+                    .unwrap_or("all-apis offline_access");
+                let scopes: Vec<String> = scopes_str.split_whitespace().map(String::from).collect();
+                let redirect_port = self.auth_config.redirect_port.unwrap_or(8020);
+                let callback_timeout = Duration::from_secs(120); // 2 minutes default
+
+                // Create the provider (async operation - needs runtime)
+                let provider = runtime
+                    .block_on(AuthorizationCodeProvider::new_with_full_config(
+                        host,
+                        client_id,
+                        http_client.clone(),
+                        scopes,
+                        redirect_port,
+                        callback_timeout,
+                        self.auth_config.token_endpoint.clone(),
+                    ))
+                    .map_err(|e| e.to_adbc())?;
+
+                Arc::new(provider)
+            }
+        };
+
+        // Set auth provider on HTTP client (phase 2)
+        http_client.set_auth_provider(auth_provider);
 
         // Two-step initialization required because ResultReaderFactory needs
         // Arc<dyn DatabricksClient>, which requires wrapping SeaClient in Arc first.
@@ -1098,5 +1137,89 @@ mod tests {
             "Expected error message about missing access_token, got: {}",
             err_msg
         );
+    }
+
+    // U2M (OAuth) configuration tests
+
+    #[test]
+    fn test_database_oauth_u2m_config_with_defaults() {
+        let mut db = Database::new();
+        db.set_option(
+            OptionDatabase::Uri,
+            OptionValue::String("https://example.databricks.com".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.warehouse_id".into()),
+            OptionValue::String("test123".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("oauth_u2m".into()),
+        )
+        .unwrap();
+
+        assert_eq!(db.auth_config.auth_type, Some(AuthType::OAuthU2m));
+        assert_eq!(db.auth_config.client_id, None); // Will use default "databricks-cli"
+        assert_eq!(db.auth_config.scopes, None); // Will use default "all-apis offline_access"
+        assert_eq!(db.auth_config.redirect_port, None); // Will use default 8020
+    }
+
+    #[test]
+    fn test_database_oauth_u2m_config_with_overrides() {
+        let mut db = Database::new();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("oauth_u2m".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.client_id".into()),
+            OptionValue::String("custom-client-id".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.scopes".into()),
+            OptionValue::String("custom-scope other-scope".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.redirect_port".into()),
+            OptionValue::Int(9000),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.auth.token_endpoint".into()),
+            OptionValue::String("https://custom.endpoint/token".into()),
+        )
+        .unwrap();
+
+        assert_eq!(db.auth_config.auth_type, Some(AuthType::OAuthU2m));
+        assert_eq!(
+            db.auth_config.client_id,
+            Some("custom-client-id".to_string())
+        );
+        assert_eq!(
+            db.auth_config.scopes,
+            Some("custom-scope other-scope".to_string())
+        );
+        assert_eq!(db.auth_config.redirect_port, Some(9000));
+        assert_eq!(
+            db.auth_config.token_endpoint,
+            Some("https://custom.endpoint/token".to_string())
+        );
+    }
+
+    #[test]
+    fn test_database_oauth_u2m_validation_passes() {
+        let config = AuthConfig {
+            auth_type: Some(AuthType::OAuthU2m),
+            ..Default::default()
+        };
+        // U2M doesn't require client_id, scopes, etc. (all have defaults)
+        let result = config.validate(&None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthType::OAuthU2m);
     }
 }
