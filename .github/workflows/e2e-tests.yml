@@ -24,11 +24,9 @@ on:
       - 'csharp/**'
   pull_request:
     # Only runs on PRs from the repo itself, not forks
+    # No paths filter — the gate step below auto-passes on PR events
+    # unless the e2e-test label is explicitly added
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - '.github/workflows/e2e-tests.yml'
-      - 'ci/scripts/**'
-      - 'csharp/**'
   merge_group:
 
 concurrency:
