@@ -68,6 +68,7 @@ namespace AdbcDrivers.Databricks
         private Dictionary<string, string>? confOverlay;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
+        internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -112,6 +113,7 @@ namespace AdbcDrivers.Databricks
             ctx.OperationType = OperationType.ExecuteStatement;
             ctx.StatementType = statementType;
             ctx.IsCompressed = canDecompressLz4;
+            ctx.IsInternalCall = IsInternalCall;
             return ctx;
         }
 
