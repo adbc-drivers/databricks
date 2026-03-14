@@ -199,7 +199,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     break;
 
                 default:
-                    base.SetOption(key, value);
+                    // Silently drop unrecognized options for compatibility with clients
+                    // that may set options not yet supported by this driver.
                     break;
             }
         }
