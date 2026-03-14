@@ -79,6 +79,30 @@ func detectGeometryColumns(schema *arrow.Schema) []int {
 	return indices
 }
 
+// buildGeoArrowSchemaWithoutCRS creates a geoarrow.wkb schema without CRS
+// metadata. Used eagerly so the schema is available before the first Next().
+func buildGeoArrowSchemaWithoutCRS(schema *arrow.Schema, geoIndices []int) *arrow.Schema {
+	fields := schema.Fields()
+	newFields := make([]arrow.Field, len(fields))
+	copy(newFields, fields)
+
+	for _, idx := range geoIndices {
+		f := fields[idx]
+		newFields[idx] = arrow.Field{
+			Name:     f.Name,
+			Type:     arrow.BinaryTypes.Binary,
+			Nullable: f.Nullable,
+			Metadata: arrow.MetadataFrom(map[string]string{
+				"ARROW:extension:name":     "geoarrow.wkb",
+				"ARROW:extension:metadata": "",
+			}),
+		}
+	}
+
+	meta := schema.Metadata()
+	return arrow.NewSchema(newFields, &meta)
+}
+
 // buildGeoArrowSchema creates a new schema with geometry Struct fields replaced
 // by Binary fields with geoarrow.wkb extension metadata. The SRID from the
 // first record batch is used to populate the CRS in the extension metadata.
@@ -236,13 +260,17 @@ func newIPCReaderAdapter(ctx context.Context, rows driver.Rows, useArrowNativeGe
 		}
 	}
 
-	// When Arrow-native geospatial is enabled, detect geometry Struct columns.
-	// Schema transformation is deferred to the first Next() call so we can
-	// read the SRID from the first record batch.
+	// When Arrow-native geospatial is enabled, detect geometry Struct columns
+	// and build a geoarrow.wkb schema. The schema must be available before
+	// the first Next() call since consumers (e.g. adbc_scanner) read it
+	// upfront to create table columns. We build the schema eagerly with
+	// empty CRS metadata, then enrich it with the SRID from the first
+	// record batch when available.
 	if useArrowNativeGeospatial {
 		adapter.geoColumnIndices = detectGeometryColumns(adapter.schema)
 		if len(adapter.geoColumnIndices) > 0 {
 			adapter.rawSchema = adapter.schema
+			adapter.schema = buildGeoArrowSchemaWithoutCRS(adapter.rawSchema, adapter.geoColumnIndices)
 		}
 	}
 
@@ -284,14 +312,15 @@ func (r *ipcReaderAdapter) Schema() *arrow.Schema {
 	return r.schema
 }
 
-// handleGeoRecord builds the geoarrow schema on the first batch (to read SRID),
+// handleGeoRecord enriches the geoarrow schema with CRS from the first batch,
 // then transforms the record to flatten geometry struct columns.
 func (r *ipcReaderAdapter) handleGeoRecord(rec arrow.RecordBatch) arrow.RecordBatch {
 	if len(r.geoColumnIndices) == 0 {
 		return rec
 	}
 
-	// Build the geoarrow schema lazily from the first record batch
+	// On the first record batch, rebuild the schema with SRID-based CRS
+	// from the actual data. This replaces the initial empty-CRS schema.
 	if !r.geoSchemaBuilt {
 		r.schema = buildGeoArrowSchema(r.rawSchema, r.geoColumnIndices, rec)
 		r.geoSchemaBuilt = true
