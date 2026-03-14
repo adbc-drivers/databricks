@@ -45,12 +45,14 @@ type ipcReaderAdapter struct {
 	currentReader *ipc.Reader
 	currentRecord arrow.RecordBatch
 	schema        *arrow.Schema
+	rawSchema     *arrow.Schema // original schema before geoarrow transform
 	closed        bool
 	refCount      int64
 	err           error
 
 	// geoarrow conversion: indices of geometry struct columns to flatten
 	geoColumnIndices []int
+	geoSchemaBuilt   bool // whether geoarrow schema has been built from first batch
 }
 
 // isGeometryStruct checks if a field is a Databricks geometry struct:
@@ -66,37 +68,58 @@ func isGeometryStruct(field arrow.Field) bool {
 		f1.Name == "wkb" && f1.Type.ID() == arrow.BINARY
 }
 
-// transformSchemaForGeoArrow converts geometry Struct fields to Binary with
-// geoarrow.wkb extension metadata. Returns the new schema and indices of
-// geometry columns that need record-level flattening.
-func transformSchemaForGeoArrow(schema *arrow.Schema) (*arrow.Schema, []int) {
+// detectGeometryColumns finds geometry Struct columns in the schema.
+func detectGeometryColumns(schema *arrow.Schema) []int {
+	var indices []int
+	for i, f := range schema.Fields() {
+		if isGeometryStruct(f) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+// buildGeoArrowSchema creates a new schema with geometry Struct fields replaced
+// by Binary fields with geoarrow.wkb extension metadata. The SRID from the
+// first record batch is used to populate the CRS in the extension metadata.
+func buildGeoArrowSchema(schema *arrow.Schema, geoIndices []int, rec arrow.RecordBatch) *arrow.Schema {
 	fields := schema.Fields()
 	newFields := make([]arrow.Field, len(fields))
-	var geoIndices []int
+	copy(newFields, fields)
 
-	for i, f := range fields {
-		if isGeometryStruct(f) {
-			geoIndices = append(geoIndices, i)
-			newFields[i] = arrow.Field{
-				Name:     f.Name,
-				Type:     arrow.BinaryTypes.Binary,
-				Nullable: f.Nullable,
-				Metadata: arrow.MetadataFrom(map[string]string{
-					"ARROW:extension:name":     "geoarrow.wkb",
-					"ARROW:extension:metadata": "",
-				}),
+	for _, idx := range geoIndices {
+		f := fields[idx]
+
+		// Read SRID from first non-null row of this geometry column
+		srid := 0
+		structArr := rec.Column(idx).(*array.Struct)
+		sridArr := structArr.Field(0)
+		for row := 0; row < sridArr.Len(); row++ {
+			if !sridArr.IsNull(row) {
+				srid = int(sridArr.(*array.Int32).Value(row))
+				break
 			}
-		} else {
-			newFields[i] = f
+		}
+
+		// Build geoarrow.wkb extension metadata with CRS from SRID
+		extMeta := ""
+		if srid != 0 {
+			extMeta = fmt.Sprintf(`{"crs":{"type":"projjson","properties":{"name":"EPSG:%d"},"id":{"authority":"EPSG","code":%d}}}`, srid, srid)
+		}
+
+		newFields[idx] = arrow.Field{
+			Name:     f.Name,
+			Type:     arrow.BinaryTypes.Binary,
+			Nullable: f.Nullable,
+			Metadata: arrow.MetadataFrom(map[string]string{
+				"ARROW:extension:name":     "geoarrow.wkb",
+				"ARROW:extension:metadata": extMeta,
+			}),
 		}
 	}
 
-	if len(geoIndices) == 0 {
-		return schema, nil
-	}
-
 	meta := schema.Metadata()
-	return arrow.NewSchema(newFields, &meta), geoIndices
+	return arrow.NewSchema(newFields, &meta)
 }
 
 // transformRecordForGeoArrow extracts the wkb child from geometry struct
@@ -213,10 +236,14 @@ func newIPCReaderAdapter(ctx context.Context, rows driver.Rows, useArrowNativeGe
 		}
 	}
 
-	// When Arrow-native geospatial is enabled, convert geometry Struct columns
-	// to geoarrow.wkb Binary columns for native geometry passthrough
+	// When Arrow-native geospatial is enabled, detect geometry Struct columns.
+	// Schema transformation is deferred to the first Next() call so we can
+	// read the SRID from the first record batch.
 	if useArrowNativeGeospatial {
-		adapter.schema, adapter.geoColumnIndices = transformSchemaForGeoArrow(adapter.schema)
+		adapter.geoColumnIndices = detectGeometryColumns(adapter.schema)
+		if len(adapter.geoColumnIndices) > 0 {
+			adapter.rawSchema = adapter.schema
+		}
 	}
 
 	return adapter, nil
@@ -257,6 +284,22 @@ func (r *ipcReaderAdapter) Schema() *arrow.Schema {
 	return r.schema
 }
 
+// handleGeoRecord builds the geoarrow schema on the first batch (to read SRID),
+// then transforms the record to flatten geometry struct columns.
+func (r *ipcReaderAdapter) handleGeoRecord(rec arrow.RecordBatch) arrow.RecordBatch {
+	if len(r.geoColumnIndices) == 0 {
+		return rec
+	}
+
+	// Build the geoarrow schema lazily from the first record batch
+	if !r.geoSchemaBuilt {
+		r.schema = buildGeoArrowSchema(r.rawSchema, r.geoColumnIndices, rec)
+		r.geoSchemaBuilt = true
+	}
+
+	return transformRecordForGeoArrow(rec, r.schema, r.geoColumnIndices)
+}
+
 func (r *ipcReaderAdapter) Next() bool {
 	if r.closed || r.err != nil {
 		return false
@@ -271,7 +314,7 @@ func (r *ipcReaderAdapter) Next() bool {
 	// Try to get next record from current reader
 	if r.currentReader != nil && r.currentReader.Next() {
 		rec := r.currentReader.RecordBatch()
-		r.currentRecord = transformRecordForGeoArrow(rec, r.schema, r.geoColumnIndices)
+		r.currentRecord = r.handleGeoRecord(rec)
 		r.currentRecord.Retain()
 		return true
 	}
@@ -288,7 +331,7 @@ func (r *ipcReaderAdapter) Next() bool {
 	// Try again with new reader
 	if r.currentReader != nil && r.currentReader.Next() {
 		rec := r.currentReader.RecordBatch()
-		r.currentRecord = transformRecordForGeoArrow(rec, r.schema, r.geoColumnIndices)
+		r.currentRecord = r.handleGeoRecord(rec)
 		r.currentRecord.Retain()
 		return true
 	}
