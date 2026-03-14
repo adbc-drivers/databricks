@@ -390,6 +390,8 @@ namespace AdbcDrivers.Databricks
                     {
                         // Silently drop unrecognized options for compatibility with clients
                         // that may set options not yet supported by this driver.
+                        Activity.Current?.AddEvent(new ActivityEvent("statement.set_option.unrecognized",
+                            tags: new ActivityTagsCollection { { "key", key } }));
                     }
                     break;
             }

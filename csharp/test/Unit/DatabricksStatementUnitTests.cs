@@ -126,5 +126,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var confOverlay = GetConfOverlay(statement);
             Assert.Null(confOverlay);
         }
+
+        /// <summary>
+        /// Tests that unrecognized options are silently dropped instead of throwing (PECO-2952).
+        /// </summary>
+        [Fact]
+        public void SetOption_UnrecognizedKey_DoesNotThrow()
+        {
+            using var statement = CreateStatement();
+            statement.SetOption("adbc.databricks.unknown_future_option", "some_value");
+        }
     }
 }

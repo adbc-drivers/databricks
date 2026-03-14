@@ -31,12 +31,12 @@ using Xunit;
 namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
     /// <summary>
-    /// Unit tests verifying that unrecognized options are silently dropped by SetOption
-    /// instead of throwing exceptions (PECO-2952).
+    /// Unit tests verifying that unrecognized options are silently dropped by
+    /// StatementExecutionStatement.SetOption instead of throwing exceptions (PECO-2952).
     /// </summary>
     public class StatementSetOptionTests
     {
-        private static StatementExecutionStatement CreateSeaStatement()
+        private static StatementExecutionStatement CreateStatement()
         {
             var properties = new Dictionary<string, string>
             {
@@ -76,28 +76,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 connection: connection);
         }
 
-        private static DatabricksStatement CreateThriftStatement()
-        {
-            var properties = new Dictionary<string, string>
-            {
-                { SparkParameters.HostName, "test.databricks.com" },
-                { SparkParameters.Token, "token" },
-            };
-            var connection = new DatabricksConnection(properties);
-            return new DatabricksStatement(connection);
-        }
-
         [Fact]
-        public void SeaStatement_SetOption_UnrecognizedKey_DoesNotThrow()
+        public void SetOption_UnrecognizedKey_DoesNotThrow()
         {
-            var statement = CreateSeaStatement();
-            statement.SetOption("adbc.databricks.unknown_future_option", "some_value");
-        }
-
-        [Fact]
-        public void ThriftStatement_SetOption_UnrecognizedKey_DoesNotThrow()
-        {
-            var statement = CreateThriftStatement();
+            var statement = CreateStatement();
             statement.SetOption("adbc.databricks.unknown_future_option", "some_value");
         }
     }
