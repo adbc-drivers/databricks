@@ -48,10 +48,96 @@ type ipcReaderAdapter struct {
 	closed        bool
 	refCount      int64
 	err           error
+
+	// geoarrow conversion: indices of geometry struct columns to flatten
+	geoColumnIndices []int
+}
+
+// isGeometryStruct checks if a field is a Databricks geometry struct:
+// Struct<srid: Int32, wkb: Binary>
+func isGeometryStruct(field arrow.Field) bool {
+	st, ok := field.Type.(*arrow.StructType)
+	if !ok || st.NumFields() != 2 {
+		return false
+	}
+	f0 := st.Field(0)
+	f1 := st.Field(1)
+	return f0.Name == "srid" && f0.Type.ID() == arrow.INT32 &&
+		f1.Name == "wkb" && f1.Type.ID() == arrow.BINARY
+}
+
+// transformSchemaForGeoArrow converts geometry Struct fields to Binary with
+// geoarrow.wkb extension metadata. Returns the new schema and indices of
+// geometry columns that need record-level flattening.
+func transformSchemaForGeoArrow(schema *arrow.Schema) (*arrow.Schema, []int) {
+	fields := schema.Fields()
+	newFields := make([]arrow.Field, len(fields))
+	var geoIndices []int
+
+	for i, f := range fields {
+		if isGeometryStruct(f) {
+			geoIndices = append(geoIndices, i)
+			newFields[i] = arrow.Field{
+				Name:     f.Name,
+				Type:     arrow.BinaryTypes.Binary,
+				Nullable: f.Nullable,
+				Metadata: arrow.MetadataFrom(map[string]string{
+					"ARROW:extension:name":     "geoarrow.wkb",
+					"ARROW:extension:metadata": "",
+				}),
+			}
+		} else {
+			newFields[i] = f
+		}
+	}
+
+	if len(geoIndices) == 0 {
+		return schema, nil
+	}
+
+	meta := schema.Metadata()
+	return arrow.NewSchema(newFields, &meta), geoIndices
+}
+
+// transformRecordForGeoArrow extracts the wkb child from geometry struct
+// columns and builds a new record with flat Binary columns.
+func transformRecordForGeoArrow(rec arrow.RecordBatch, schema *arrow.Schema, geoIndices []int) arrow.RecordBatch {
+	if len(geoIndices) == 0 {
+		return rec
+	}
+
+	geoSet := make(map[int]bool, len(geoIndices))
+	for _, idx := range geoIndices {
+		geoSet[idx] = true
+	}
+
+	cols := make([]arrow.Array, rec.NumCols())
+	for i := 0; i < int(rec.NumCols()); i++ {
+		if geoSet[i] {
+			// Extract the "wkb" field (index 1) from the struct array
+			structArr := rec.Column(i).(*array.Struct)
+			wkbArr := structArr.Field(1)
+			wkbArr.Retain()
+			cols[i] = wkbArr
+		} else {
+			col := rec.Column(i)
+			col.Retain()
+			cols[i] = col
+		}
+	}
+
+	newRec := array.NewRecord(schema, cols, rec.NumRows())
+
+	// Release our references to the columns
+	for _, col := range cols {
+		col.Release()
+	}
+
+	return newRec
 }
 
 // newIPCReaderAdapter creates a RecordReader using direct IPC stream access
-func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordReader, error) {
+func newIPCReaderAdapter(ctx context.Context, rows driver.Rows, useArrowNativeGeospatial bool) (array.RecordReader, error) {
 	ipcRows, ok := rows.(dbsqlrows.Rows)
 	if !ok {
 		return nil, adbc.Error{
@@ -127,6 +213,12 @@ func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordRea
 		}
 	}
 
+	// When Arrow-native geospatial is enabled, convert geometry Struct columns
+	// to geoarrow.wkb Binary columns for native geometry passthrough
+	if useArrowNativeGeospatial {
+		adapter.schema, adapter.geoColumnIndices = transformSchemaForGeoArrow(adapter.schema)
+	}
+
 	return adapter, nil
 }
 
@@ -178,7 +270,8 @@ func (r *ipcReaderAdapter) Next() bool {
 
 	// Try to get next record from current reader
 	if r.currentReader != nil && r.currentReader.Next() {
-		r.currentRecord = r.currentReader.RecordBatch()
+		rec := r.currentReader.RecordBatch()
+		r.currentRecord = transformRecordForGeoArrow(rec, r.schema, r.geoColumnIndices)
 		r.currentRecord.Retain()
 		return true
 	}
@@ -194,7 +287,8 @@ func (r *ipcReaderAdapter) Next() bool {
 
 	// Try again with new reader
 	if r.currentReader != nil && r.currentReader.Next() {
-		r.currentRecord = r.currentReader.RecordBatch()
+		rec := r.currentReader.RecordBatch()
+		r.currentRecord = transformRecordForGeoArrow(rec, r.schema, r.geoColumnIndices)
 		r.currentRecord.Retain()
 		return true
 	}

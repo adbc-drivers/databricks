@@ -261,10 +261,11 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 	}
 
 	conn := &connectionImpl{
-		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
-		catalog:            d.catalog,
-		dbSchema:           d.schema,
-		conn:               c,
+		ConnectionImplBase:      driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
+		catalog:                 d.catalog,
+		dbSchema:                d.schema,
+		conn:                    c,
+		useArrowNativeGeospatial: d.useArrowNativeGeospatial,
 	}
 
 	return driverbase.NewConnectionBuilder(conn).
