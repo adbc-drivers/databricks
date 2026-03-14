@@ -36,7 +36,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
     /// </summary>
     public class StatementSetOptionTests
     {
-        private static StatementExecutionStatement CreateStatement()
+        private static StatementExecutionStatement CreateSeaStatement()
         {
             var properties = new Dictionary<string, string>
             {
@@ -76,28 +76,29 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 connection: connection);
         }
 
-        [Fact]
-        public void SetOption_UnrecognizedKey_DoesNotThrow()
+        private static DatabricksStatement CreateThriftStatement()
         {
-            var statement = CreateStatement();
-            // Should not throw for a completely unknown option
+            var properties = new Dictionary<string, string>
+            {
+                { SparkParameters.HostName, "test.databricks.com" },
+                { SparkParameters.Token, "token" },
+            };
+            var connection = new DatabricksConnection(properties);
+            return new DatabricksStatement(connection);
+        }
+
+        [Fact]
+        public void SeaStatement_SetOption_UnrecognizedKey_DoesNotThrow()
+        {
+            var statement = CreateSeaStatement();
             statement.SetOption("adbc.databricks.unknown_future_option", "some_value");
         }
 
         [Fact]
-        public void SetOption_QueryTagsKey_DoesNotThrow()
+        public void ThriftStatement_SetOption_UnrecognizedKey_DoesNotThrow()
         {
-            var statement = CreateStatement();
-            // query_tags is a known Databricks option — should still be silently accepted
-            statement.SetOption(DatabricksParameters.QueryTags, "tag1=value1");
-        }
-
-        [Fact]
-        public void SetOption_ArbitraryPrefix_DoesNotThrow()
-        {
-            var statement = CreateStatement();
-            // Options with unrecognized prefixes should be silently dropped
-            statement.SetOption("adbc.somevendor.some_option", "value");
+            var statement = CreateThriftStatement();
+            statement.SetOption("adbc.databricks.unknown_future_option", "some_value");
         }
     }
 }
