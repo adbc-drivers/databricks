@@ -36,7 +36,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
     /// </summary>
     public class StatementSetOptionTests
     {
-        private static StatementExecutionStatement CreateStatement()
+        [Fact]
+        public void SetOption_UnrecognizedKey_DoesNotThrow()
         {
             var properties = new Dictionary<string, string>
             {
@@ -55,10 +56,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     Content = new StringContent(
                         JsonSerializer.Serialize(new { session_id = "s1" }))
                 });
-            var httpClient = new HttpClient(handlerMock.Object);
 
-            var connection = new StatementExecutionConnection(properties, httpClient);
-            return new StatementExecutionStatement(
+            using var httpClient = new HttpClient(handlerMock.Object);
+            using var connection = new StatementExecutionConnection(properties, httpClient);
+            using var statement = new StatementExecutionStatement(
                 client: Mock.Of<IStatementExecutionClient>(),
                 sessionId: "session-1",
                 warehouseId: "wh-1",
@@ -74,12 +75,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 lz4BufferPool: System.Buffers.ArrayPool<byte>.Shared,
                 httpClient: httpClient,
                 connection: connection);
-        }
 
-        [Fact]
-        public void SetOption_UnrecognizedKey_DoesNotThrow()
-        {
-            var statement = CreateStatement();
             statement.SetOption("adbc.databricks.unknown_future_option", "some_value");
         }
     }
