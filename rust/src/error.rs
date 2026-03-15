@@ -74,50 +74,6 @@ pub fn sqlstate_str_to_array(sqlstate_str: &str) -> Option<[std::os::raw::c_char
     ])
 }
 
-/// Map Databricks server error codes to ANSI SQL SQLSTATE codes.
-///
-/// This function converts Databricks-specific error codes (e.g., PARSE_SYNTAX_ERROR,
-/// TABLE_OR_VIEW_NOT_FOUND) into standardized 5-character SQLSTATE codes as defined
-/// by the SQL standard and ODBC specification.
-///
-/// Returns a 5-byte array suitable for the ADBC error sqlstate field, or `None`
-/// if the error code is not recognized.
-pub fn map_error_code_to_sqlstate(error_code: &str) -> Option<[std::os::raw::c_char; 5]> {
-    let sqlstate_str = match error_code {
-        // Syntax errors - SQLSTATE 42601
-        "PARSE_SYNTAX_ERROR" => "42601",
-
-        // Table/view not found - SQLSTATE 42S02
-        "TABLE_OR_VIEW_NOT_FOUND" => "42S02",
-
-        // Column not found - SQLSTATE 42S22
-        "COLUMN_NOT_FOUND" | "UNRESOLVED_COLUMN" => "42S22",
-
-        // Division by zero - SQLSTATE 22012
-        "DIVIDE_BY_ZERO" => "22012",
-
-        // Invalid argument/data - SQLSTATE 22023
-        "INVALID_PARAMETER_VALUE" | "INVALID_ARGUMENT" => "22023",
-
-        // Data type mismatch - SQLSTATE 42804
-        "DATATYPE_MISMATCH" => "42804",
-
-        // Duplicate key - SQLSTATE 23000
-        "DUPLICATE_KEY" => "23000",
-
-        // Access denied - SQLSTATE 42000
-        "PERMISSION_DENIED" | "ACCESS_DENIED" => "42000",
-
-        // Numeric value out of range - SQLSTATE 22003
-        "NUMERIC_VALUE_OUT_OF_RANGE" | "ARITHMETIC_OVERFLOW" => "22003",
-
-        // Unknown/unmapped error codes return None
-        _ => return None,
-    };
-
-    sqlstate_str_to_array(sqlstate_str)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,68 +102,6 @@ mod tests {
         let adbc_error = error.to_adbc();
         assert_eq!(adbc_error.status, adbc_core::error::Status::NotImplemented);
         assert!(adbc_error.message.contains("Databricks"));
-    }
-
-    #[test]
-    fn test_map_error_code_to_sqlstate() {
-        use super::map_error_code_to_sqlstate;
-
-        // Test syntax error mapping
-        let sqlstate = map_error_code_to_sqlstate("PARSE_SYNTAX_ERROR").unwrap();
-        assert_eq!(
-            std::str::from_utf8(unsafe {
-                std::slice::from_raw_parts(sqlstate.as_ptr() as *const u8, 5)
-            })
-            .unwrap(),
-            "42601"
-        );
-
-        // Test table not found mapping
-        let sqlstate = map_error_code_to_sqlstate("TABLE_OR_VIEW_NOT_FOUND").unwrap();
-        assert_eq!(
-            std::str::from_utf8(unsafe {
-                std::slice::from_raw_parts(sqlstate.as_ptr() as *const u8, 5)
-            })
-            .unwrap(),
-            "42S02"
-        );
-
-        // Test column not found mapping
-        let sqlstate = map_error_code_to_sqlstate("COLUMN_NOT_FOUND").unwrap();
-        assert_eq!(
-            std::str::from_utf8(unsafe {
-                std::slice::from_raw_parts(sqlstate.as_ptr() as *const u8, 5)
-            })
-            .unwrap(),
-            "42S22"
-        );
-
-        // Test unmapped error code returns None
-        assert!(map_error_code_to_sqlstate("UNKNOWN_ERROR_CODE").is_none());
-    }
-
-    #[test]
-    fn test_error_with_sqlstate() {
-        use super::map_error_code_to_sqlstate;
-
-        let sqlstate = map_error_code_to_sqlstate("PARSE_SYNTAX_ERROR").unwrap();
-        let error = DatabricksErrorHelper::invalid_argument()
-            .message("syntax error near 'SELECT'")
-            .sqlstate(sqlstate);
-
-        let adbc_error = error.to_adbc();
-        assert_eq!(
-            adbc_error.status,
-            adbc_core::error::Status::InvalidArguments
-        );
-        assert!(adbc_error.message.contains("syntax error"));
-
-        // Verify SQLSTATE is set correctly
-        let sqlstate_str = std::str::from_utf8(unsafe {
-            std::slice::from_raw_parts(adbc_error.sqlstate.as_ptr() as *const u8, 5)
-        })
-        .unwrap();
-        assert_eq!(sqlstate_str, "42601");
     }
 
     #[test]
