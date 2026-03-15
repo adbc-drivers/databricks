@@ -56,6 +56,7 @@ namespace AdbcDrivers.Databricks.Reader
 
         private IOperationStatusPoller? operationStatusPoller;
         private bool _disposed;
+        private bool _operationClosed;
         private readonly HttpClient _httpClient;
 
         /// <summary>
@@ -196,6 +197,13 @@ namespace AdbcDrivers.Databricks.Reader
 
         public override async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
         {
+            // If we already closed the operation (previous call returned null), return null
+            // immediately to avoid re-initializing a reader on a closed operation.
+            if (_operationClosed)
+            {
+                return null;
+            }
+
             return await this.TraceActivityAsync(async activity =>
             {
                 if (_activeReader != null)
@@ -204,11 +212,17 @@ namespace AdbcDrivers.Databricks.Reader
                 }
 
                 var result = await ReadNextRecordBatchInternalAsync(cancellationToken, activity);
-                // Stop the poller when we've reached the end of results
                 if (result == null)
                 {
                     activity?.AddEvent("composite_reader.end_of_results");
                     StopOperationStatusPoller();
+
+                    // Close the server-side operation immediately when results are exhausted.
+                    // Without this, the server command stays open until Dispose() is called.
+                    // Power BI's M engine has no deterministic disposal — it relies on GC,
+                    // which leaves commands open for ~22 min (CommandInactivityTimeout),
+                    // blocking warehouse autostop.
+                    CloseOperationBestEffort(activity);
                 }
                 else
                 {
@@ -218,6 +232,16 @@ namespace AdbcDrivers.Databricks.Reader
                 }
                 return result;
             });
+        }
+
+        /// <summary>
+        /// Destructor ensures server-side operations are cleaned up if Dispose() is never called.
+        /// This is a safety net for environments like Power BI's M engine where IDisposable
+        /// resources may be garbage-collected without explicit disposal.
+        /// </summary>
+        ~DatabricksCompositeReader()
+        {
+            Dispose(disposing: false);
         }
 
         protected override void Dispose(bool disposing)
@@ -237,22 +261,36 @@ namespace AdbcDrivers.Databricks.Reader
                         {
                             activity?.AddEvent("composite_reader.disposing");
                             StopOperationStatusPoller();
-                            if (_activeReader == null)
+
+                            // If the operation was already closed (e.g., on result exhaustion),
+                            // skip the close to avoid sending a duplicate TCloseOperationReq.
+                            if (!_operationClosed)
                             {
-                                activity?.AddEvent("composite_reader.close_operation_no_reader");
-                                _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
-                                    .ConfigureAwait(false).GetAwaiter().GetResult();
-                            }
-                            else
-                            {
-                                activity?.AddEvent("composite_reader.disposing_active_reader", [
-                                    new("reader_type", _activeReader.GetType().Name)
-                                ]);
-                                // Note: Have the contained reader close the operation to avoid duplicate calls.
-                                _activeReader.Dispose();
-                                _activeReader = null;
+                                if (_activeReader == null)
+                                {
+                                    activity?.AddEvent("composite_reader.close_operation_no_reader");
+                                    _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
+                                        .ConfigureAwait(false).GetAwaiter().GetResult();
+                                }
+                                else
+                                {
+                                    activity?.AddEvent("composite_reader.disposing_active_reader", [
+                                        new("reader_type", _activeReader.GetType().Name)
+                                    ]);
+                                    // Note: Have the contained reader close the operation to avoid duplicate calls.
+                                    _activeReader.Dispose();
+                                    _activeReader = null;
+                                }
+                                _operationClosed = true;
                             }
                             activity?.AddEvent("composite_reader.disposed");
+                        }
+                        else
+                        {
+                            // Called from finalizer (disposing: false).
+                            // Best-effort cleanup: stop the poller and attempt to close the operation.
+                            // Managed objects may already be finalized, so catch all exceptions.
+                            CloseOperationBestEffort(activity: null);
                         }
                     }
                 }
@@ -262,6 +300,47 @@ namespace AdbcDrivers.Databricks.Reader
                     _disposed = true;
                 }
             }, activityName: nameof(DatabricksCompositeReader) + "." + nameof(Dispose));
+        }
+
+        /// <summary>
+        /// Closes the server-side operation on a best-effort basis, catching all exceptions.
+        /// Used when results are exhausted or from the finalizer — must never throw.
+        /// </summary>
+        private void CloseOperationBestEffort(Activity? activity)
+        {
+            if (_operationClosed)
+            {
+                return;
+            }
+
+            try
+            {
+                StopOperationStatusPoller();
+
+                if (_activeReader != null)
+                {
+                    activity?.AddEvent("composite_reader.auto_close_active_reader", [
+                        new("reader_type", _activeReader.GetType().Name)
+                    ]);
+                    _activeReader.Dispose();
+                    _activeReader = null;
+                }
+                else
+                {
+                    activity?.AddEvent("composite_reader.auto_close_no_reader");
+                    _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
+                        .ConfigureAwait(false).GetAwaiter().GetResult();
+                }
+
+                _operationClosed = true;
+            }
+            catch (Exception)
+            {
+                // Best-effort: the close may fail if the connection is already dead
+                // (e.g., called from finalizer after managed objects are finalized).
+                // The server will eventually clean up via CommandInactivityTimeout.
+                _operationClosed = true;
+            }
         }
 
         private void StopOperationStatusPoller()
