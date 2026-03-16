@@ -128,7 +128,7 @@ func buildGeoArrowSchema(schema *arrow.Schema, geoIndices []int, rec arrow.Recor
 		// Build geoarrow.wkb extension metadata with CRS from SRID
 		extMeta := ""
 		if srid != 0 {
-			extMeta = fmt.Sprintf(`{"crs":{"type":"projjson","properties":{"name":"EPSG:%d"},"id":{"authority":"EPSG","code":%d}}}`, srid, srid)
+			extMeta = fmt.Sprintf(`{"crs":"EPSG:%d"}`, srid, srid)
 		}
 
 		newFields[idx] = arrow.Field{
