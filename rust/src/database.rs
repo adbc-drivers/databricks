@@ -224,10 +224,25 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "databricks.cloudfetch.chunk_ready_timeout_ms" => {
+                "databricks.cloudfetch.max_refresh_retries" => {
                     if let Some(v) = Self::parse_int_option(&value) {
-                        self.cloudfetch_config.chunk_ready_timeout =
-                            Some(Duration::from_millis(v as u64));
+                        self.cloudfetch_config.max_refresh_retries = v as u32;
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.cloudfetch.num_download_workers" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.cloudfetch_config.num_download_workers = v as usize;
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.cloudfetch.url_expiration_buffer_secs" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.cloudfetch_config.url_expiration_buffer_secs = v as u32;
                         Ok(())
                     } else {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
@@ -346,6 +361,15 @@ impl Optionable for Database {
                 }
                 "databricks.cloudfetch.max_retries" => {
                     Ok(self.cloudfetch_config.max_retries as i64)
+                }
+                "databricks.cloudfetch.max_refresh_retries" => {
+                    Ok(self.cloudfetch_config.max_refresh_retries as i64)
+                }
+                "databricks.cloudfetch.num_download_workers" => {
+                    Ok(self.cloudfetch_config.num_download_workers as i64)
+                }
+                "databricks.cloudfetch.url_expiration_buffer_secs" => {
+                    Ok(self.cloudfetch_config.url_expiration_buffer_secs as i64)
                 }
                 _ => Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
             },
@@ -538,6 +562,110 @@ mod tests {
         assert!(db.cloudfetch_config.enabled);
         assert_eq!(db.cloudfetch_config.max_chunks_in_memory, 8);
         assert_eq!(db.cloudfetch_config.speed_threshold_mbps, 0.5);
+    }
+
+    #[test]
+    fn test_database_cloudfetch_new_config_fields() {
+        let mut db = Database::new();
+
+        // Set new config fields
+        db.set_option(
+            OptionDatabase::Other("databricks.cloudfetch.max_refresh_retries".into()),
+            OptionValue::String("5".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.cloudfetch.num_download_workers".into()),
+            OptionValue::String("6".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.cloudfetch.url_expiration_buffer_secs".into()),
+            OptionValue::String("120".into()),
+        )
+        .unwrap();
+
+        // Verify via direct field access
+        assert_eq!(db.cloudfetch_config.max_refresh_retries, 5);
+        assert_eq!(db.cloudfetch_config.num_download_workers, 6);
+        assert_eq!(db.cloudfetch_config.url_expiration_buffer_secs, 120);
+
+        // Verify via get_option_int
+        assert_eq!(
+            db.get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.max_refresh_retries".into()
+            ))
+            .unwrap(),
+            5
+        );
+        assert_eq!(
+            db.get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.num_download_workers".into()
+            ))
+            .unwrap(),
+            6
+        );
+        assert_eq!(
+            db.get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.url_expiration_buffer_secs".into()
+            ))
+            .unwrap(),
+            120
+        );
+    }
+
+    #[test]
+    fn test_database_cloudfetch_new_config_fields_with_int_value() {
+        let mut db = Database::new();
+
+        // Set via OptionValue::Int
+        db.set_option(
+            OptionDatabase::Other("databricks.cloudfetch.max_refresh_retries".into()),
+            OptionValue::Int(7),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.cloudfetch.num_download_workers".into()),
+            OptionValue::Int(4),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.cloudfetch.url_expiration_buffer_secs".into()),
+            OptionValue::Int(90),
+        )
+        .unwrap();
+
+        assert_eq!(db.cloudfetch_config.max_refresh_retries, 7);
+        assert_eq!(db.cloudfetch_config.num_download_workers, 4);
+        assert_eq!(db.cloudfetch_config.url_expiration_buffer_secs, 90);
+    }
+
+    #[test]
+    fn test_database_cloudfetch_new_config_defaults() {
+        let db = Database::new();
+
+        // Verify defaults via get_option_int
+        assert_eq!(
+            db.get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.max_refresh_retries".into()
+            ))
+            .unwrap(),
+            3
+        );
+        assert_eq!(
+            db.get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.num_download_workers".into()
+            ))
+            .unwrap(),
+            3
+        );
+        assert_eq!(
+            db.get_option_int(OptionDatabase::Other(
+                "databricks.cloudfetch.url_expiration_buffer_secs".into()
+            ))
+            .unwrap(),
+            60
+        );
     }
 
     #[test]
