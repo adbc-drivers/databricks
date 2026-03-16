@@ -22,7 +22,7 @@ require (
 	github.com/apache/arrow-adbc/go/adbc v1.9.0
 	github.com/apache/arrow-go/v18 v18.5.0
 	github.com/databricks/databricks-sql-go v1.9.0
-	github.com/rs/zerolog v1.28.0
+	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.11.1
 )
 
