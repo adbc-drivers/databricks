@@ -189,7 +189,6 @@ impl SeaClient {
                     // Try to set SQLSTATE from server error in order of preference:
                     // 1. sql_state field if present
                     // 2. Extract from error message (server includes "SQLSTATE: XXXXX")
-                    // 3. Map from error_code
                     if let Some(err) = service_error {
                         let mut sqlstate_set = false;
 
@@ -211,18 +210,6 @@ impl SeaClient {
                                 crate::error::extract_sqlstate_from_message(&error_msg)
                             {
                                 error = error.sqlstate(sqlstate);
-                                sqlstate_set = true;
-                            }
-                        }
-
-                        // If still no SQLSTATE, map from error_code
-                        if !sqlstate_set {
-                            if let Some(ref code) = err.error_code {
-                                if let Some(sqlstate) =
-                                    crate::error::map_error_code_to_sqlstate(code)
-                                {
-                                    error = error.sqlstate(sqlstate);
-                                }
                             }
                         }
                     }

@@ -86,11 +86,14 @@ impl Database {
     }
 
     /// Extract warehouse ID from HTTP path if provided.
-    /// Format: /sql/1.0/warehouses/{warehouse_id}
+    /// Supports both `/sql/1.0/warehouses/{id}` and `/sql/1.0/endpoints/{id}`
+    /// formats (they are equivalent on the server side).
     fn extract_warehouse_id(http_path: &str) -> Option<String> {
         http_path
             .strip_prefix("/sql/1.0/warehouses/")
             .or_else(|| http_path.strip_prefix("sql/1.0/warehouses/"))
+            .or_else(|| http_path.strip_prefix("/sql/1.0/endpoints/"))
+            .or_else(|| http_path.strip_prefix("sql/1.0/endpoints/"))
             .map(|s| s.trim_end_matches('/').to_string())
     }
 
@@ -650,6 +653,20 @@ mod tests {
             Some("abc123".to_string())
         );
         assert_eq!(Database::extract_warehouse_id("/other/path"), None);
+
+        // /sql/1.0/endpoints/ format (Simba-compatible)
+        assert_eq!(
+            Database::extract_warehouse_id("/sql/1.0/endpoints/abc123"),
+            Some("abc123".to_string())
+        );
+        assert_eq!(
+            Database::extract_warehouse_id("sql/1.0/endpoints/abc123"),
+            Some("abc123".to_string())
+        );
+        assert_eq!(
+            Database::extract_warehouse_id("/sql/1.0/endpoints/abc123/"),
+            Some("abc123".to_string())
+        );
     }
 
     #[test]
