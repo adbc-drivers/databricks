@@ -111,6 +111,8 @@ pub struct AuthorizationCodeProvider {
     callback_port: u16,
     /// Callback timeout
     callback_timeout: Duration,
+    /// Whether to open browser automatically (set to false in tests)
+    open_browser: bool,
 }
 
 impl AuthorizationCodeProvider {
@@ -179,8 +181,36 @@ impl AuthorizationCodeProvider {
         callback_port: u16,
         callback_timeout: Duration,
     ) -> Result<Self> {
-        // Discover OIDC endpoints
+        Self::new_with_full_config(
+            host,
+            client_id,
+            http_client,
+            scopes,
+            callback_port,
+            callback_timeout,
+            None, // No token_endpoint override
+        )
+        .await
+    }
+
+    /// Creates a new U2M provider with full configuration including optional token endpoint override.
+    ///
+    /// This is used by Database when a custom token endpoint is configured.
+    /// Most users should use `new()` or `new_with_config()` which use OIDC discovery.
+    pub async fn new_with_full_config(
+        host: &str,
+        client_id: &str,
+        http_client: Arc<DatabricksHttpClient>,
+        scopes: Vec<String>,
+        callback_port: u16,
+        callback_timeout: Duration,
+        token_endpoint_override: Option<String>,
+    ) -> Result<Self> {
+        // Discover OIDC endpoints (unless token_endpoint is overridden, we still need auth endpoint)
         let endpoints = OidcEndpoints::discover(host, &http_client).await?;
+
+        // Use override if provided, otherwise use discovered endpoint
+        let token_endpoint = token_endpoint_override.unwrap_or(endpoints.token_endpoint);
 
         // Create token store
         let token_store = TokenStore::new();
@@ -206,14 +236,26 @@ impl AuthorizationCodeProvider {
         Ok(Self {
             host: host.to_string(),
             client_id: client_id.to_string(),
-            token_endpoint: endpoints.token_endpoint,
+            token_endpoint,
             auth_endpoint: endpoints.authorization_endpoint,
             token_store,
             http_client,
             scopes,
             callback_port,
             callback_timeout,
+            open_browser: true,
         })
+    }
+}
+
+impl AuthorizationCodeProvider {
+    /// Disables automatic browser opening during the U2M flow.
+    ///
+    /// This is primarily useful for testing scenarios where the browser
+    /// flow fallback should not launch a real browser.
+    #[doc(hidden)]
+    pub fn suppress_browser(&mut self) {
+        self.open_browser = false;
     }
 }
 
@@ -246,6 +288,7 @@ impl AuthProvider for AuthorizationCodeProvider {
         let scopes = self.scopes.clone();
         let callback_port = self.callback_port;
         let callback_timeout = self.callback_timeout;
+        let open_browser = self.open_browser;
         let http_client = self.http_client.clone();
 
         // Get or refresh token via TokenStore
@@ -366,10 +409,14 @@ impl AuthProvider for AuthorizationCodeProvider {
 
                     let (auth_url, csrf_state) = auth_url_builder.url();
 
-                    // Launch browser
-                    tracing::info!("Opening browser for OAuth authorization: {}", auth_url);
-                    if let Err(e) = open::that(auth_url.as_str()) {
-                        tracing::warn!("Failed to automatically open browser: {}. Please manually navigate to: {}", e, auth_url);
+                    // Launch browser (unless suppressed for testing)
+                    if open_browser {
+                        tracing::info!("Opening browser for OAuth authorization: {}", auth_url);
+                        if let Err(e) = open::that(auth_url.as_str()) {
+                            tracing::warn!("Failed to automatically open browser: {}. Please manually navigate to: {}", e, auth_url);
+                        }
+                    } else {
+                        tracing::debug!("Browser opening suppressed, authorization URL: {}", auth_url);
                     }
 
                     // Wait for callback
@@ -438,12 +485,10 @@ mod tests {
     async fn mock_oidc_discovery(mock_server: &MockServer) {
         Mock::given(method("GET"))
             .and(path("/oidc/.well-known/oauth-authorization-server"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
-                    "token_endpoint": format!("{}/oidc/v1/token", mock_server.uri()),
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authorization_endpoint": format!("{}/oidc/v1/authorize", mock_server.uri()),
+                "token_endpoint": format!("{}/oidc/v1/token", mock_server.uri()),
+            })))
             .mount(mock_server)
             .await;
     }
@@ -457,15 +502,13 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/oidc/v1/token"))
             .and(body_string_contains("grant_type=refresh_token"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({
-                    "access_token": "refreshed-access-token",
-                    "token_type": "Bearer",
-                    "expires_in": 3600,
-                    "refresh_token": "new-refresh-token",
-                    "scope": "all-apis offline_access"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "refreshed-access-token",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "new-refresh-token",
+                "scope": "all-apis offline_access"
+            })))
             .expect(1)
             .mount(&mock_server)
             .await;
@@ -572,12 +615,10 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/oidc/v1/token"))
             .and(body_string_contains("grant_type=refresh_token"))
-            .respond_with(
-                ResponseTemplate::new(400).set_body_json(&serde_json::json!({
-                    "error": "invalid_grant",
-                    "error_description": "Refresh token expired"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "Refresh token expired"
+            })))
             .expect(1)
             .mount(&mock_server)
             .await;
@@ -607,17 +648,18 @@ mod tests {
             &cached_token,
         );
 
-        // Create provider
-        let provider = AuthorizationCodeProvider::new_with_config(
+        // Create provider with browser opening suppressed
+        let mut provider = AuthorizationCodeProvider::new_with_config(
             &mock_server.uri(),
             "test-client-id",
             http_client,
             vec!["all-apis".to_string(), "offline_access".to_string()],
-            8021,                   // Different port to avoid conflicts
+            0,                      // Use port 0 to avoid conflicts
             Duration::from_secs(5), // Short timeout for test
         )
         .await
         .expect("Failed to create provider");
+        provider.suppress_browser();
 
         // Wait to ensure token expires
         tokio::time::sleep(Duration::from_secs(2)).await;

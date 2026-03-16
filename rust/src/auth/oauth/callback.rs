@@ -33,80 +33,20 @@ use tokio::sync::oneshot;
 /// HTML response sent to the browser after successful callback.
 const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 <html>
-<head>
-    <title>Authentication Successful</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f5f5f5;
-        }
-        .message {
-            text-align: center;
-            padding: 2rem;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #2e7d32;
-            margin: 0 0 1rem 0;
-        }
-        p {
-            color: #666;
-            margin: 0;
-        }
-    </style>
-</head>
+<head><title>Authentication Successful</title></head>
 <body>
-    <div class="message">
-        <h1>✓ Authentication Successful</h1>
-        <p>You can close this tab and return to your application.</p>
-    </div>
+<h1>Authentication Successful</h1>
+<p>You can close this tab and return to your application.</p>
 </body>
 </html>"#;
 
 /// HTML response sent to the browser when an error occurs.
 const ERROR_HTML: &str = r#"<!DOCTYPE html>
 <html>
-<head>
-    <title>Authentication Error</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f5f5f5;
-        }
-        .message {
-            text-align: center;
-            padding: 2rem;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #c62828;
-            margin: 0 0 1rem 0;
-        }
-        p {
-            color: #666;
-            margin: 0;
-        }
-    </style>
-</head>
+<head><title>Authentication Error</title></head>
 <body>
-    <div class="message">
-        <h1>✗ Authentication Error</h1>
-        <p>An error occurred during authentication. You can close this tab and try again.</p>
-    </div>
+<h1>Authentication Error</h1>
+<p>An error occurred during authentication. You can close this tab and try again.</p>
 </body>
 </html>"#;
 
@@ -155,6 +95,15 @@ pub struct CallbackServer {
     result_rx: Option<oneshot::Receiver<CallbackResult>>,
     /// Handle to the server task.
     server_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for CallbackServer {
+    fn drop(&mut self) {
+        // Abort the server task if it's still running (e.g., wait_for_code was never called)
+        if let Some(handle) = self.server_handle.take() {
+            handle.abort();
+        }
+    }
 }
 
 impl CallbackServer {
@@ -496,7 +445,7 @@ mod tests {
 
             // Read the response
             let mut response = vec![0u8; 4096];
-            stream.read(&mut response).await.ok();
+            let _ = stream.read(&mut response).await;
         });
 
         // Wait for callback
@@ -533,7 +482,7 @@ mod tests {
             stream.flush().await.ok();
 
             let mut response = vec![0u8; 4096];
-            stream.read(&mut response).await.ok();
+            let _ = stream.read(&mut response).await;
         });
 
         // Wait for callback - should fail due to state mismatch
@@ -668,9 +617,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_redirect_uri_format() {
-        let server = CallbackServer::new(8020)
+        // Use port 0 to let the OS assign an available port, avoiding conflicts
+        let server = CallbackServer::new(0)
             .await
             .expect("Failed to create server");
-        assert_eq!(server.redirect_uri(), "http://localhost:8020/callback");
+        let uri = server.redirect_uri();
+        assert!(
+            uri.starts_with("http://localhost:"),
+            "Expected URI starting with http://localhost:, got: {}",
+            uri
+        );
+        // Verify the port is a valid non-zero number
+        let port: u16 = uri
+            .strip_prefix("http://localhost:")
+            .unwrap()
+            .strip_suffix("/callback")
+            .unwrap_or_else(|| uri.strip_prefix("http://localhost:").unwrap())
+            .parse()
+            .unwrap();
+        assert!(port > 0, "Expected a non-zero port, got: {}", port);
     }
 }
