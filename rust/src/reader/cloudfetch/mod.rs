@@ -23,9 +23,13 @@
 pub mod arrow_parser;
 pub mod chunk_downloader;
 pub mod link_fetcher;
+pub mod pipeline_types;
+pub mod scheduler;
 pub mod streaming_provider;
 
 pub use arrow_parser::parse_arrow_ipc;
 pub use chunk_downloader::ChunkDownloader;
 pub use link_fetcher::{ChunkLinkFetcher, SeaChunkLinkFetcher};
+pub use pipeline_types::{create_chunk_pair, ChunkDownloadTask, ChunkHandle};
+pub use scheduler::{spawn_scheduler, SchedulerChannels};
 pub use streaming_provider::StreamingCloudFetchProvider;
