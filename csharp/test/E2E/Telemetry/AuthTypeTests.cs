@@ -93,10 +93,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
-        /// Tests that auth_type is set to 'oauth-m2m' when using OAuth client_credentials flow.
+        /// Tests that auth_type is set to 'oauth-client_credentials' when using OAuth client_credentials flow.
         /// </summary>
         [SkippableFact]
-        public async Task AuthType_OAuthClientCredentials_SetsToOAuthM2M()
+        public async Task AuthType_OAuthClientCredentials_SetsToOAuthClientCredentials()
         {
             CapturingTelemetryExporter exporter = null!;
             AdbcConnection? connection = null;
@@ -135,9 +135,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
 
-                // Assert auth_type is set to "oauth-m2m"
+                // Assert auth_type is set to "oauth-client_credentials"
                 Assert.NotNull(protoLog);
-                Assert.Equal("oauth-m2m", protoLog.AuthType);
+                Assert.Equal("oauth-client_credentials", protoLog.AuthType);
 
                 OutputHelper?.WriteLine($"✓ auth_type correctly set to: {protoLog.AuthType}");
             }
@@ -149,10 +149,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
-        /// Tests that auth_type is set to 'oauth-u2m' when using OAuth access_token flow.
+        /// Tests that auth_type is set to 'oauth-access_token' when using OAuth access_token flow.
         /// </summary>
         [SkippableFact]
-        public async Task AuthType_OAuthAccessToken_SetsToOAuthU2M()
+        public async Task AuthType_OAuthAccessToken_SetsToOAuthAccessToken()
         {
             CapturingTelemetryExporter exporter = null!;
             AdbcConnection? connection = null;
@@ -192,9 +192,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
 
-                // Assert auth_type is set to "oauth-u2m"
+                // Assert auth_type is set to "oauth-access_token"
                 Assert.NotNull(protoLog);
-                Assert.Equal("oauth-u2m", protoLog.AuthType);
+                Assert.Equal("oauth-access_token", protoLog.AuthType);
 
                 OutputHelper?.WriteLine($"✓ auth_type correctly set to: {protoLog.AuthType}");
             }
@@ -297,7 +297,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 Assert.False(string.IsNullOrEmpty(protoLog.AuthType), "auth_type should never be null or empty");
 
                 // Assert it's one of the expected values
-                var validAuthTypes = new[] { "pat", "oauth-m2m", "oauth-u2m", "other" };
+                var validAuthTypes = new[] { "pat", "oauth-client_credentials", "oauth-access_token", "other" };
                 Assert.Contains(protoLog.AuthType, validAuthTypes);
 
                 OutputHelper?.WriteLine($"✓ auth_type populated with valid value: {protoLog.AuthType}");

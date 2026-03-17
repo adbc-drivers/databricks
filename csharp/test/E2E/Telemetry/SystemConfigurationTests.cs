@@ -80,10 +80,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
-        /// Tests that client_app_name is populated from connection property when provided.
+        /// Tests that client_app_name is always set to the process name.
         /// </summary>
         [SkippableFact]
-        public async Task SystemConfig_ClientAppName_FromConnectionProperty()
+        public async Task SystemConfig_ClientAppName_IsProcessName()
         {
             CapturingTelemetryExporter exporter = null!;
             AdbcConnection? connection = null;
@@ -91,55 +91,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-
-                // Set custom client app name via connection property
-                string customAppName = "MyCustomApp-E2ETest";
-                properties["adbc.databricks.client_app_name"] = customAppName;
-
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
-
-                // Execute a simple query to trigger telemetry
-                using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT 1 AS test_value";
-                var result = statement.ExecuteQuery();
-                using var reader = result.Stream;
-
-                statement.Dispose();
-
-                // Wait for telemetry to be captured
-                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
-                TelemetryTestHelpers.AssertLogCount(logs, 1);
-
-                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-
-                // Assert client_app_name matches the custom value from connection property
-                Assert.NotNull(protoLog.SystemConfiguration);
-                Assert.Equal(customAppName, protoLog.SystemConfiguration.ClientAppName);
-
-                OutputHelper?.WriteLine($"✓ client_app_name from property: {protoLog.SystemConfiguration.ClientAppName}");
-            }
-            finally
-            {
-                connection?.Dispose();
-                TelemetryTestHelpers.ClearExporterOverride();
-            }
-        }
-
-        /// <summary>
-        /// Tests that client_app_name defaults to process name when connection property is not provided.
-        /// </summary>
-        [SkippableFact]
-        public async Task SystemConfig_ClientAppName_DefaultsToProcessName()
-        {
-            CapturingTelemetryExporter exporter = null!;
-            AdbcConnection? connection = null;
-
-            try
-            {
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-
-                // DO NOT set client_app_name property - should default to process name
-                properties.Remove("adbc.databricks.client_app_name");
 
                 (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
 
