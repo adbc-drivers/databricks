@@ -67,6 +67,7 @@ impl Drop for RefreshGuard {
 /// # Example
 ///
 /// ```rust,ignore
+/// // This is a private internal module - example shown for documentation only
 /// use databricks_adbc::auth::oauth::token_store::TokenStore;
 /// use databricks_adbc::auth::oauth::token::OAuthToken;
 ///
@@ -84,7 +85,7 @@ impl Drop for RefreshGuard {
 ///     ))
 /// })?;
 /// ```
-#[allow(dead_code)] // Used in Phase 2 (M2M) and Phase 3 (U2M)
+
 #[derive(Debug)]
 pub(crate) struct TokenStore {
     /// The current token, protected by a read-write lock.
@@ -94,7 +95,6 @@ pub(crate) struct TokenStore {
     refreshing: Arc<AtomicBool>,
 }
 
-#[allow(dead_code)] // Used in Phase 2 (M2M) and Phase 3 (U2M)
 impl TokenStore {
     /// Creates a new empty token store.
     pub fn new() -> Self {
@@ -304,7 +304,6 @@ impl TokenStore {
 }
 
 /// Internal enum representing the token's current state.
-#[allow(dead_code)] // Used internally by TokenStore
 #[derive(Debug)]
 enum TokenState {
     /// No token is present in the store.

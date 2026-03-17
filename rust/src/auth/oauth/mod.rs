@@ -22,10 +22,16 @@
 //! - File-based token caching
 
 pub mod cache;
+pub mod callback;
+pub mod m2m;
 pub mod oidc;
 pub mod token;
 pub(crate) mod token_store;
+pub mod u2m;
 
 // Re-export the main types
+pub use callback::CallbackServer;
+pub use m2m::ClientCredentialsProvider;
 pub use oidc::OidcEndpoints;
 pub use token::OAuthToken;
+pub use u2m::AuthorizationCodeProvider;
