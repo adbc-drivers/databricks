@@ -22,7 +22,7 @@ pub mod cloudfetch;
 pub mod sea;
 
 // Re-export commonly used types
-pub use cloudfetch::{ChunkEntry, ChunkState, CloudFetchConfig, CloudFetchLink};
+pub use cloudfetch::{CloudFetchConfig, CloudFetchLink};
 pub use sea::{
     ChunkInfo, ColumnInfo, CompressionCodec, ExecuteParams, ExecuteStatementRequest, ExternalLink,
     ResultData, ResultManifest, ResultSchema, ServiceError, StatementExecutionResponse,
