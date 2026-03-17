@@ -23,12 +23,10 @@ on:
       - 'ci/scripts/**'
       - 'csharp/**'
   pull_request:
-    # Only runs on PRs from the repo itself, not forks
+    # No paths filter — workflow must always fire so the gate step can post
+    # the auto-pass check for non-csharp PRs. Path-based gating is handled
+    # in the gate step below (same pattern as trigger-integration-tests.yml).
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - '.github/workflows/e2e-tests.yml'
-      - 'ci/scripts/**'
-      - 'csharp/**'
   merge_group:
 
 concurrency:
