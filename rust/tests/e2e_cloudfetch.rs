@@ -458,7 +458,6 @@ async fn test_cloudfetch_url_expiry_triggers_refetch_and_continues() {
         config,
         link_fetcher,
         downloader,
-        tokio::runtime::Handle::current(),
     );
 
     // --- Consume all batches ---
