@@ -25,11 +25,6 @@ use driverbase::error::ErrorHelper;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Safety buffer (in seconds) before link expiration.
-/// Links are considered expired this many seconds before their actual expiration time
-/// to avoid race conditions during download.
-pub const LINK_EXPIRY_BUFFER_SECS: i64 = 30;
-
 /// Default timeout (in seconds) for waiting for a chunk to be ready.
 /// Used as a fallback when `chunk_ready_timeout` is not configured.
 pub const DEFAULT_CHUNK_READY_TIMEOUT_SECS: u64 = 30;
@@ -43,10 +38,14 @@ pub struct CloudFetchConfig {
     pub max_chunks_in_memory: usize,
     /// Maximum number of retry attempts for failed downloads.
     pub max_retries: u32,
+    /// Maximum number of URL refresh attempts before terminal error.
+    pub max_refresh_retries: u32,
     /// Delay between retry attempts.
     pub retry_delay: Duration,
-    /// Timeout for waiting for a chunk to be ready.
-    pub chunk_ready_timeout: Option<Duration>,
+    /// Number of parallel download worker tasks.
+    pub num_download_workers: usize,
+    /// Seconds before expiry to trigger proactive refresh.
+    pub url_expiration_buffer_secs: u32,
     /// Log warning if download speed falls below this threshold (MB/s).
     pub speed_threshold_mbps: f64,
     /// Whether CloudFetch is enabled.
@@ -58,11 +57,18 @@ impl Default for CloudFetchConfig {
         Self {
             // Match JDBC default: prefetch 128 chunks ahead of consumer
             link_prefetch_window: 128,
-            // Match JDBC default: cloudFetchThreadPoolSize = 16
-            max_chunks_in_memory: 16,
-            max_retries: 5,
-            retry_delay: Duration::from_millis(1500),
-            chunk_ready_timeout: Some(Duration::from_secs(30)),
+            // Match C# default: 200 MB ÷ 20 MB max chunk size = 10
+            max_chunks_in_memory: 10,
+            // Match C# default: MaxRetries = 3
+            max_retries: 3,
+            // Match C# default: MaxUrlRefreshAttempts = 3
+            max_refresh_retries: 3,
+            // Match C# default: RetryDelayMs = 500
+            retry_delay: Duration::from_millis(500),
+            // Match C# default: ParallelDownloads = 3
+            num_download_workers: 3,
+            // Match C# default: UrlExpirationBufferSeconds = 60
+            url_expiration_buffer_secs: 60,
             speed_threshold_mbps: 0.1,
             enabled: true,
         }
@@ -97,10 +103,10 @@ pub struct CloudFetchLink {
 impl CloudFetchLink {
     /// Check if link is expired (with safety buffer).
     ///
-    /// Uses `LINK_EXPIRY_BUFFER_SECS` as a safety margin to avoid race conditions
-    /// where a link expires during download.
-    pub fn is_expired(&self) -> bool {
-        Utc::now() + chrono::Duration::seconds(LINK_EXPIRY_BUFFER_SECS) >= self.expiration
+    /// # Arguments
+    /// * `buffer_secs` - Safety margin in seconds to avoid race conditions where a link expires during download.
+    pub fn is_expired(&self, buffer_secs: u32) -> bool {
+        Utc::now() + chrono::Duration::seconds(buffer_secs as i64) >= self.expiration
     }
 
     /// Convert from SEA API response type.
@@ -200,8 +206,12 @@ mod tests {
     fn test_cloudfetch_config_default() {
         let config = CloudFetchConfig::default();
         assert_eq!(config.link_prefetch_window, 128); // Matches JDBC default
-        assert_eq!(config.max_chunks_in_memory, 16); // Matches JDBC cloudFetchThreadPoolSize
-        assert_eq!(config.max_retries, 5);
+        assert_eq!(config.max_chunks_in_memory, 10); // Matches C# default (200 MB ÷ 20 MB)
+        assert_eq!(config.max_retries, 3); // Matches C# MaxRetries
+        assert_eq!(config.max_refresh_retries, 3); // Matches C# MaxUrlRefreshAttempts
+        assert_eq!(config.retry_delay, Duration::from_millis(500)); // Matches C# RetryDelayMs
+        assert_eq!(config.num_download_workers, 3); // Matches C# ParallelDownloads
+        assert_eq!(config.url_expiration_buffer_secs, 60); // Matches C# UrlExpirationBufferSeconds
         assert!(config.enabled);
     }
 
@@ -261,7 +271,7 @@ mod tests {
         };
 
         let link = CloudFetchLink::from_external_link(&external).unwrap();
-        assert!(link.is_expired());
+        assert!(link.is_expired(60)); // Use default buffer
     }
 
     #[test]
@@ -278,7 +288,7 @@ mod tests {
         };
 
         let link = CloudFetchLink::from_external_link(&external).unwrap();
-        assert!(!link.is_expired());
+        assert!(!link.is_expired(60)); // Use default buffer
     }
 
     #[test]
