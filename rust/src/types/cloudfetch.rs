@@ -130,7 +130,6 @@ impl CloudFetchLink {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +222,4 @@ mod tests {
         let link = CloudFetchLink::from_external_link(&external).unwrap();
         assert!(!link.is_expired(60)); // Use default buffer
     }
-
 }

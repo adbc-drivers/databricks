@@ -23,9 +23,42 @@
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
 use crate::reader::cloudfetch::link_fetcher::ChunkLinkFetcher;
-use crate::types::cloudfetch::{
-    ChunkEntry, ChunkState, CloudFetchConfig, DEFAULT_CHUNK_READY_TIMEOUT_SECS,
-};
+use crate::types::cloudfetch::{CloudFetchConfig, DEFAULT_CHUNK_READY_TIMEOUT_SECS};
+
+// TODO(Phase 2): Remove legacy DashMap-based implementation
+// Temporary: ChunkEntry and ChunkState have been removed from types.rs but this file
+// still references them in the DashMap-based code. The full channel-based rewrite
+// will happen in Phase 2 (scheduler/workers) and Phase 3 (provider integration).
+#[allow(dead_code)]
+#[derive(Clone)]
+struct ChunkEntry {
+    link: Option<crate::types::cloudfetch::CloudFetchLink>,
+    state: ChunkState,
+    batches: Option<Vec<RecordBatch>>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+enum ChunkState {
+    UrlFetched,
+    Downloading,
+    Downloaded,
+    DownloadFailed(String),
+    DownloadRetry,
+    ProcessingFailed(String),
+    Cancelled,
+}
+
+#[allow(dead_code)]
+impl ChunkEntry {
+    fn with_link(link: crate::types::cloudfetch::CloudFetchLink) -> Self {
+        Self {
+            link: Some(link),
+            state: ChunkState::UrlFetched,
+            batches: None,
+        }
+    }
+}
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use dashmap::DashMap;
