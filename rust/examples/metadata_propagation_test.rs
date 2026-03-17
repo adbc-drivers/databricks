@@ -105,9 +105,27 @@ fn main() {
             CAST(0 AS DECIMAL(38,0)) as dec_38_0
         "#,
         &[
-            ("dec_10_2", "DECIMAL", "DECIMAL(10,2)", Some("10"), Some("2")),
-            ("dec_18_5", "DECIMAL", "DECIMAL(18,5)", Some("18"), Some("5")),
-            ("dec_38_0", "DECIMAL", "DECIMAL(38,0)", Some("38"), Some("0")),
+            (
+                "dec_10_2",
+                "DECIMAL",
+                "DECIMAL(10,2)",
+                Some("10"),
+                Some("2"),
+            ),
+            (
+                "dec_18_5",
+                "DECIMAL",
+                "DECIMAL(18,5)",
+                Some("18"),
+                Some("5"),
+            ),
+            (
+                "dec_38_0",
+                "DECIMAL",
+                "DECIMAL(38,0)",
+                Some("38"),
+                Some("0"),
+            ),
         ],
     );
 
@@ -137,7 +155,13 @@ fn main() {
         &[
             ("array_col", "ARRAY", "ARRAY<INT>", None, None),
             ("map_col", "MAP", "MAP<STRING, INT>", None, None),
-            ("struct_col", "STRUCT", "STRUCT<x: INT NOT NULL, y: STRING NOT NULL>", None, None),
+            (
+                "struct_col",
+                "STRUCT",
+                "STRUCT<x: INT NOT NULL, y: STRING NOT NULL>",
+                None,
+                None,
+            ),
         ],
     );
 
@@ -158,14 +182,11 @@ fn main() {
     }
 }
 
+/// Expected column metadata: (field_name, type_name, type_text, precision, scale)
+type ExpectedColumn<'a> = (&'a str, &'a str, &'a str, Option<&'a str>, Option<&'a str>);
+
 /// Run a query and verify that the Arrow field metadata matches expectations.
-///
-/// Each expected entry is: (field_name, type_name, type_text, precision, scale)
-fn run_test(
-    conn: &mut impl ConnectionTrait,
-    sql: &str,
-    expected: &[(&str, &str, &str, Option<&str>, Option<&str>)],
-) -> bool {
+fn run_test(conn: &mut impl ConnectionTrait, sql: &str, expected: &[ExpectedColumn<'_>]) -> bool {
     let mut stmt = conn.new_statement().expect("Failed to create statement");
     stmt.set_sql_query(sql).expect("Failed to set query");
     let reader = stmt.execute().expect("Failed to execute query");
@@ -203,10 +224,16 @@ fn run_test(
         if !ok {
             all_ok = false;
             if !name_ok {
-                println!("         expected type_name={exp_type_name}, got {:?}", got_name);
+                println!(
+                    "         expected type_name={exp_type_name}, got {:?}",
+                    got_name
+                );
             }
             if !text_ok {
-                println!("         expected type_text={exp_type_text}, got {:?}", got_text);
+                println!(
+                    "         expected type_text={exp_type_text}, got {:?}",
+                    got_text
+                );
             }
             if !prec_ok {
                 println!(

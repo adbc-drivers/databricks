@@ -421,14 +421,21 @@ impl ResultReaderAdapter {
     /// server-provided type_name, type_text, precision, scale, etc. through the
     /// Arrow C Data Interface FFI boundary.
     fn augment_schema_with_manifest(schema: &SchemaRef, manifest: &ResultManifest) -> SchemaRef {
-        let columns = &manifest.schema.columns;
+        use std::collections::HashMap;
+
+        let col_by_pos: HashMap<usize, &crate::types::sea::ColumnInfo> = manifest
+            .schema
+            .columns
+            .iter()
+            .filter_map(|c| usize::try_from(c.position).ok().map(|pos| (pos, c)))
+            .collect();
 
         let new_fields: Vec<Field> = schema
             .fields()
             .iter()
             .enumerate()
             .map(|(i, field)| {
-                let col_info = columns.iter().find(|c| c.position as usize == i);
+                let col_info = col_by_pos.get(&i).copied();
 
                 match col_info {
                     Some(info) => {
