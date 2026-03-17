@@ -261,7 +261,6 @@ impl ResultReaderFactory {
             self.config.clone(),
             link_fetcher,
             chunk_downloader,
-            self.runtime_handle.clone(),
         );
 
         Ok(Box::new(CloudFetchResultReader::new(
