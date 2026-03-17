@@ -28,7 +28,7 @@ namespace AdbcDrivers.Databricks.Tests.Reader.CloudFetch
         public void Constructor_DefaultMaxMemory_Is200MB()
         {
             var manager = new CloudFetchMemoryBufferManager();
-            Assert.Equal(200 * 1024L * 1024L, manager.MaxMemory);
+            Assert.Equal(CloudFetchConfiguration.DefaultMemoryBufferSizeMB * 1024L * 1024L, manager.MaxMemory);
             Assert.Equal(0, manager.UsedMemory);
         }
 

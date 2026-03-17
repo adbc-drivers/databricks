@@ -1,3 +1,4 @@
+// test: dummy change to verify SEA path triggers REST integration tests (PECO-2945)
 /*
 * Copyright (c) 2025 ADBC Drivers Contributors
 *
@@ -21,6 +22,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -220,6 +222,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 Content = content
             };
 
+            if (request.IsMetadata)
+            {
+                httpRequest.Headers.TryAddWithoutValidation("x-databricks-sea-can-run-fully-sync", "true");
+            }
+
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
@@ -397,7 +404,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 errorMessage = $"{errorMessage}. Response: {errorContent}";
             }
 
-            throw new DatabricksException(errorMessage);
+            var statusCode = response.StatusCode switch
+            {
+                System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
+                    => AdbcStatusCode.Unauthorized,
+                System.Net.HttpStatusCode.NotFound
+                    => AdbcStatusCode.NotFound,
+                System.Net.HttpStatusCode.Conflict
+                    => AdbcStatusCode.AlreadyExists,
+                System.Net.HttpStatusCode.BadRequest
+                    => AdbcStatusCode.InvalidArgument,
+                _ => AdbcStatusCode.IOError,
+            };
+            throw new DatabricksException(errorMessage, statusCode);
         }
     }
 }

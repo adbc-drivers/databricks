@@ -418,7 +418,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public async Task FeatureFlagContext_BackgroundRefreshError_SetsActivityStatusToError()
         {
             // Arrange
-            var backgroundActivities = new List<(string Name, ActivityStatusCode Status, List<ActivityEvent> Events)>();
+            var backgroundActivities = new System.Collections.Concurrent.ConcurrentBag<(string Name, ActivityStatusCode Status, List<ActivityEvent> Events)>();
 
             var listener = new ActivityListener
             {

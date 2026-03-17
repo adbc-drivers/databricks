@@ -64,14 +64,25 @@ async-trait = "0.1"
 # Error handling
 thiserror = "2"
 
+# Arrow C Data Interface for metadata FFI
+arrow = { version = "57", optional = true, default-features = false, features = ["ffi"] }
+
+# OAuth dependencies
+oauth2 = "5"         # OAuth 2.0 protocol operations (PKCE, token exchange, client credentials)
+sha2 = "0.10"        # SHA-256 for token cache key generation
+open = "5"           # Browser launch for interactive OAuth flows
+dirs = "5"           # Cross-platform config directory (~/.config/)
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"
 adbc_driver_manager = "0.22"
+tempfile = "3"
 
 [features]
 default = []
 ffi = ["adbc_ffi"]
+metadata-ffi = ["ffi", "dep:arrow"]
 
 [lib]
 name = "databricks_adbc"

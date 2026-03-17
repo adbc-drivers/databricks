@@ -153,9 +153,9 @@ mod tests {
 
     #[test]
     fn test_chunk_downloader_creation() {
+        let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
-        let http_client =
-            Arc::new(DatabricksHttpClient::new(HttpClientConfig::default(), auth).unwrap());
+        http_client.set_auth_provider(auth);
         let downloader = ChunkDownloader::new(http_client, CompressionCodec::None, 0.1);
 
         assert_eq!(downloader.speed_threshold_mbps, 0.1);

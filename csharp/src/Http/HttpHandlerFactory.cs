@@ -166,14 +166,15 @@ namespace AdbcDrivers.Databricks.Http
         /// <param name="properties">Connection properties.</param>
         /// <param name="host">The Databricks host.</param>
         /// <param name="authHttpClient">HTTP client for auth operations (required for OAuth).</param>
-        /// <param name="identityFederationClientId">Identity federation client ID (optional).</param>
+        /// <param name="existingTokenProvider">Optional existing OAuthClientCredentialsProvider to reuse for token caching.</param>
         /// <returns>Handler with auth handlers added, or the original handler if no auth is configured.</returns>
         /// <exception cref="ArgumentException">Thrown when OAuth is configured but required credentials are missing.</exception>
         private static HttpMessageHandler AddAuthHandlers(
             HttpMessageHandler handler,
             IReadOnlyDictionary<string, string> properties,
             string host,
-            HttpClient? authHttpClient)
+            HttpClient? authHttpClient,
+            OAuthClientCredentialsProvider? existingTokenProvider = null)
         {
             // Get identity federation client ID
             properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId);
@@ -198,7 +199,7 @@ namespace AdbcDrivers.Databricks.Http
 
                 if (grantType == DatabricksOAuthGrantType.ClientCredentials)
                 {
-                    var tokenProvider = CreateOAuthClientCredentialsProvider(properties, authHttpClient, host);
+                    var tokenProvider = existingTokenProvider ?? CreateOAuthClientCredentialsProvider(properties, authHttpClient, host);
                     if (tokenProvider == null)
                     {
                         throw new ArgumentException(
@@ -273,6 +274,15 @@ namespace AdbcDrivers.Databricks.Http
         }
 
         /// <summary>
+        /// Result of creating HTTP handlers, including the handler chain and any shared token provider.
+        /// </summary>
+        internal class HandlerCreationResult
+        {
+            public HttpMessageHandler Handler { get; set; } = null!;
+            public OAuthClientCredentialsProvider? TokenProvider { get; set; }
+        }
+
+        /// <summary>
         /// Creates HTTP handlers with OAuth and other delegating handlers.
         ///
         /// Handler chain order (outermost to innermost):
@@ -283,7 +293,7 @@ namespace AdbcDrivers.Databricks.Http
         /// 5. TracingDelegatingHandler - propagates W3C trace context (closest to network)
         /// 6. Base HTTP handler - actual network communication
         /// </summary>
-        public static HttpMessageHandler CreateHandlers(HandlerConfig config)
+        public static HandlerCreationResult CreateHandlersWithTokenProvider(HandlerConfig config)
         {
             HttpMessageHandler handler = config.BaseHandler;
             HttpMessageHandler authHandler = config.BaseAuthHandler;
@@ -321,24 +331,48 @@ namespace AdbcDrivers.Databricks.Http
                 authHandler = new ThriftErrorMessageHandler(authHandler);
             }
 
-            // Create auth HTTP client for OAuth if needed
+            // Create auth HTTP client and token provider for OAuth if needed
             HttpClient? authHttpClient = null;
+            OAuthClientCredentialsProvider? tokenProvider = null;
             if (IsOAuthEnabled(config.Properties))
             {
+                // Note: x-databricks-org-id is intentionally NOT set on the auth client.
+                // Token requests go to the account-level OAuth endpoint (/oidc/v1/token),
+                // which is workspace-agnostic and does not require workspace routing.
                 authHttpClient = new HttpClient(authHandler)
                 {
                     Timeout = TimeSpan.FromMinutes(config.TimeoutMinutes)
                 };
+
+                // Pre-create the token provider so we can return it for sharing
+                if (GetOAuthGrantType(config.Properties) == DatabricksOAuthGrantType.ClientCredentials)
+                {
+                    tokenProvider = CreateOAuthClientCredentialsProvider(config.Properties, authHttpClient, config.Host);
+                }
             }
 
-            // Add auth handlers
+            // Add auth handlers, passing the pre-created token provider
             handler = AddAuthHandlers(
                 handler,
                 config.Properties,
                 config.Host,
-                authHttpClient);
+                authHttpClient,
+                tokenProvider);
 
-            return handler;
+            return new HandlerCreationResult
+            {
+                Handler = handler,
+                TokenProvider = tokenProvider
+            };
+        }
+
+        /// <summary>
+        /// Creates HTTP handlers with OAuth and other delegating handlers.
+        /// Convenience method that returns only the handler (without the token provider).
+        /// </summary>
+        public static HttpMessageHandler CreateHandlers(HandlerConfig config)
+        {
+            return CreateHandlersWithTokenProvider(config).Handler;
         }
 
         /// <summary>
@@ -360,31 +394,39 @@ namespace AdbcDrivers.Databricks.Http
         /// <param name="properties">Connection properties containing configuration.</param>
         /// <param name="host">The Databricks host (without protocol).</param>
         /// <param name="timeoutSeconds">HTTP client timeout in seconds.</param>
+        /// <param name="existingTokenProvider">Optional existing OAuthClientCredentialsProvider to reuse for token caching.</param>
         /// <returns>Configured HttpMessageHandler.</returns>
         public static HttpMessageHandler CreateFeatureFlagHandler(
             IReadOnlyDictionary<string, string> properties,
             string host,
-            int timeoutSeconds)
+            int timeoutSeconds,
+            OAuthClientCredentialsProvider? existingTokenProvider = null)
         {
             HttpMessageHandler baseHandler = HttpClientFactory.CreateHandler(properties);
 
             // Create auth HTTP client for OAuth if needed
+            // Always create when OAuth is enabled - even with an existing token provider,
+            // the auth handler chain requires an HTTP client for token refresh operations
             HttpClient? authHttpClient = null;
             if (IsOAuthEnabled(properties))
             {
                 HttpMessageHandler baseAuthHandler = HttpClientFactory.CreateHandler(properties);
+                // Note: x-databricks-org-id is intentionally NOT set on the auth client.
+                // Token requests go to the account-level OAuth endpoint (/oidc/v1/token),
+                // which is workspace-agnostic and does not require workspace routing.
                 authHttpClient = new HttpClient(baseAuthHandler)
                 {
                     Timeout = TimeSpan.FromSeconds(timeoutSeconds)
                 };
             }
 
-            // Add auth handlers
+            // Add auth handlers, reusing existing token provider if available
             return AddAuthHandlers(
                 baseHandler,
                 properties,
                 host,
-                authHttpClient);
+                authHttpClient,
+                existingTokenProvider);
         }
     }
 }

@@ -167,6 +167,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         public string? OnWaitTimeout { get; set; }
 
         /// <summary>
+        /// Client-side flag indicating this is a metadata operation.
+        /// Not serialized to JSON — used to add the x-databricks-sea-can-run-fully-sync header.
+        /// </summary>
+        [JsonIgnore]
+        public bool IsMetadata { get; set; }
+
+        /// <summary>
         /// Maximum number of rows to return.
         /// </summary>
         [JsonPropertyName("row_limit")]

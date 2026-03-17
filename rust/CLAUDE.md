@@ -31,20 +31,24 @@ When implementing features, reference these drivers for behavior and API design.
 ## Build Commands
 
 ```bash
-cargo build           # Build the library
-cargo test            # Run all tests
-cargo fmt             # Format code
-cargo clippy -- -D warnings  # Lint with warnings as errors
+cargo build                                    # Build the library
+cargo test                                     # Run ALL tests (unit, integration, doc tests)
+cargo +stable fmt --all                        # Format code (CI uses stable toolchain)
+cargo clippy --all-targets -- -D warnings      # Lint with warnings as errors (--all-targets catches test code)
 ```
 
 ## Pre-commit Checklist
 
 Before committing or pushing, always run these checks:
 ```bash
-cargo fmt             # Format code (CI will reject unformatted code)
-cargo clippy -- -D warnings  # Lint
-cargo test            # Run all tests
+cargo +stable fmt --all                        # Format (CI uses stable, not nightly)
+cargo clippy --all-targets -- -D warnings      # Lint (--all-targets includes test code)
+cargo test                                     # Run ALL tests — do NOT use --lib --tests (skips doc tests)
 ```
+
+**Important:** `cargo test` (no filters) matches what CI runs. Using `--lib --tests` skips doc tests,
+which CI will catch. Doc examples on `pub(crate)` types must use `` ```rust,ignore `` (not `no_run`,
+which still compiles and will fail on private imports).
 
 ## Pull Requests
 
@@ -56,6 +60,22 @@ gh auth status              # check which accounts are available
 gh auth switch --user <personal-account>
 gh pr create --repo adbc-drivers/databricks
 ```
+
+### PR Title Format
+
+PR titles must follow [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/):
+```
+type(scope): description
+```
+- **Scope must be a real file or directory in the repo** (e.g., `rust`, `csharp`, `.github`). Invalid scopes like `rust/oauth` will be rejected by CI.
+- **No JIRA prefixes** — the `Check PR` CI job validates the title format and rejects prefixes like `[PECOBLR-1234]`.
+- Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `ci`
+
+### Adding Cargo Dependencies
+
+When adding new dependencies to `Cargo.toml`, check if transitive deps introduce licenses not in `rust/about.toml`.
+CI runs `cargo-about` during the `Generate Packages` step and will fail on unapproved licenses. Add any new
+permissive licenses (e.g., `MPL-2.0`, `CDLA-Permissive-2.0`) to the `accepted` list in `about.toml`.
 
 ## Architecture
 
@@ -118,8 +138,9 @@ pub trait AuthProvider: Send + Sync + Debug {
 }
 ```
 
-- `PersonalAccessToken`: Returns `Bearer {token}` - fully implemented
-- `OAuthCredentials`: Needs token fetch/refresh logic - stub only
+- `PersonalAccessToken`: Returns `Bearer {token}` for PAT auth
+- `ClientCredentialsProvider` (M2M): Client credentials grant with token lifecycle management
+- `AuthorizationCodeProvider` (U2M): Authorization code + PKCE flow with browser-based login and disk caching
 
 ### Arrow Integration
 
@@ -130,37 +151,28 @@ use arrow_schema::Schema;
 use arrow_array::RecordBatch;
 ```
 
-## Implementation Status
-
-### Implemented (working)
-- [x] Project structure and module organization
-- [x] Error types
-- [x] Driver/Database/Connection/Statement scaffolding
-- [x] PAT authentication
-- [x] CloudFetch configuration types
-- [x] ResultSet with RecordBatch iteration
-- [x] Telemetry collector structure
-
-### Not Yet Implemented (stubs)
-- [ ] OAuth token fetching and refresh
-- [ ] HTTP client actual requests (reqwest/hyper integration)
-- [ ] Statement execution (SQL API calls)
-- [ ] CloudFetch downloads from cloud storage
-- [ ] Arrow IPC parsing from CloudFetch responses
-- [ ] Connection session management
-- [ ] Telemetry reporting
-
 ## Coding Conventions
 
 ### File Headers
 
-All files must have Apache 2.0 license headers:
+All files must have Apache 2.0 license headers. CI runs Apache RAT to enforce this.
 
+Rust files:
 ```rust
 // Copyright (c) 2025 ADBC Drivers Contributors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // ...
+```
+
+Markdown files (HTML comment format):
+```html
+<!--
+  Copyright (c) 2025 ADBC Drivers Contributors
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  ...
+-->
 ```
 
 ### Documentation
@@ -174,6 +186,8 @@ All files must have Apache 2.0 license headers:
 - Unit tests go in `#[cfg(test)] mod tests { }` at the bottom of each file
 - Integration tests go in `tests/` directory
 - Test names: `test_<function>_<scenario>`
+- E2E tests requiring a real Databricks connection must be marked with `#[ignore]`
+- Always run `cargo test` (no filters) locally before pushing — matches CI and catches doc test failures
 
 ### Error Handling
 
