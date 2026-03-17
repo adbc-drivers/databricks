@@ -188,7 +188,8 @@ impl ClientCredentialsProvider {
         token_endpoint_override: Option<String>,
     ) -> Result<Self> {
         // Discover OIDC endpoints or use override
-        let (token_endpoint, auth_endpoint) = if let Some(token_endpoint) = token_endpoint_override {
+        let (token_endpoint, auth_endpoint) = if let Some(token_endpoint) = token_endpoint_override
+        {
             // Use override for token endpoint, still discover auth endpoint
             // (auth endpoint is not typically overridden for M2M since it's not used)
             let endpoints = OidcEndpoints::discover(host, &http_client).await?;
@@ -565,22 +566,28 @@ mod tests {
             .expect("Failed to create provider"),
         );
 
-        // Spawn multiple concurrent tasks trying to get auth header
+        // Spawn multiple OS threads (not tokio tasks) to test concurrency.
+        // get_auth_header() is sync and uses block_in_place + block_on internally,
+        // which would deadlock if called from multiple tokio tasks on the same runtime.
+        // Each thread enters the tokio runtime context via Handle::enter().
+        let handle = tokio::runtime::Handle::current();
         let mut handles = vec![];
         for _ in 0..10 {
             let provider = provider.clone();
-            let handle = tokio::spawn(async move {
+            let handle = handle.clone();
+            let thread = std::thread::spawn(move || {
+                let _guard = handle.enter();
                 provider
                     .get_auth_header()
                     .expect("Failed to get auth header")
             });
-            handles.push(handle);
+            handles.push(thread);
         }
 
-        // Wait for all tasks and collect results
+        // Wait for all threads and collect results
         let mut results = vec![];
         for handle in handles {
-            results.push(handle.await.expect("Task panicked"));
+            results.push(handle.join().expect("Thread panicked"));
         }
 
         // All should get the same token

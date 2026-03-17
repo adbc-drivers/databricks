@@ -518,26 +518,33 @@ impl adbc_core::Database for Database {
         let auth_provider: Arc<dyn AuthProvider> = match auth_type {
             AuthType::AccessToken => Arc::new(PersonalAccessToken::new(
                 access_token
-                    .expect("access_token should be validated above")
+                    .ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_argument()
+                            .message(
+                                "databricks.access_token is required for auth type 'access_token'",
+                            )
+                            .to_adbc()
+                    })?
                     .clone(),
             )),
             AuthType::OAuthM2m => {
                 // Client credentials flow (M2M) - create ClientCredentialsProvider
-                let client_id = self
-                    .auth_config
-                    .client_id
-                    .as_ref()
-                    .expect("client_id should be validated above");
-                let client_secret = self
-                    .auth_config
-                    .client_secret
-                    .as_ref()
-                    .expect("client_secret should be validated above");
+                let client_id = self.auth_config.client_id.as_ref().ok_or_else(|| {
+                    DatabricksErrorHelper::invalid_argument()
+                        .message("databricks.auth.client_id is required for auth type 'oauth_m2m'")
+                        .to_adbc()
+                })?;
+                let client_secret = self.auth_config.client_secret.as_ref().ok_or_else(|| {
+                    DatabricksErrorHelper::invalid_argument()
+                        .message(
+                            "databricks.auth.client_secret is required for auth type 'oauth_m2m'",
+                        )
+                        .to_adbc()
+                })?;
 
                 // Default scope for M2M is "all-apis" (no offline_access since M2M has no refresh token)
                 let scopes_str = self.auth_config.scopes.as_deref().unwrap_or("all-apis");
-                let scopes: Vec<String> =
-                    scopes_str.split_whitespace().map(String::from).collect();
+                let scopes: Vec<String> = scopes_str.split_whitespace().map(String::from).collect();
 
                 let provider = runtime
                     .block_on(
@@ -1288,7 +1295,10 @@ mod tests {
 
         assert_eq!(db.auth_config.auth_type, Some(AuthType::OAuthM2m));
         assert_eq!(db.auth_config.client_id, Some("test-client-id".to_string()));
-        assert_eq!(db.auth_config.client_secret, Some("test-secret".to_string()));
+        assert_eq!(
+            db.auth_config.client_secret,
+            Some("test-secret".to_string())
+        );
     }
 
     #[test]

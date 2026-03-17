@@ -681,8 +681,27 @@ Tests in `client/http.rs` `#[cfg(test)]` verifying the `OnceLock`-based auth pro
 
 ### End-to-End Tests
 
-- `test_m2m_end_to_end` -- real Databricks workspace with service principal credentials (requires env vars, `#[ignore]` by default)
-- `test_u2m_end_to_end` -- manual test only (`#[ignore]`), requires interactive browser
+End-to-end tests in `tests/oauth_e2e.rs` verify the complete OAuth implementation against real Databricks workspaces:
+
+**M2M (Service Principal) Test:**
+- `test_m2m_end_to_end` -- Connects to real Databricks workspace using service principal credentials
+- Requires environment variables: `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET`, `DATABRICKS_WAREHOUSE_ID`
+- Marked with `#[ignore]` to prevent running in CI by default
+- Verifies: (1) Database config with mechanism=11, flow=1, (2) OIDC discovery, (3) Client credentials token exchange, (4) Connection creation, (5) Query execution (SELECT 1), (6) Result validation
+- Run with: `cargo test --test oauth_e2e test_m2m_end_to_end -- --ignored --nocapture`
+
+**U2M (Browser-Based) Test:**
+- `test_u2m_end_to_end` -- Manual test requiring interactive browser authentication
+- Requires environment variables: `DATABRICKS_HOST`, `DATABRICKS_WAREHOUSE_ID`, `DATABRICKS_CLIENT_ID` (optional, defaults to "databricks-cli")
+- Always marked with `#[ignore]` (manual test only)
+- Verifies: (1) Database config with mechanism=11, flow=2, (2) OIDC discovery, (3) Token cache check, (4) Browser launch (if needed), (5) Authorization code exchange, (6) Connection creation, (7) Query execution (SELECT 1), (8) Result validation, (9) Token caching to disk
+- Run with: `cargo test --test oauth_e2e test_u2m_end_to_end -- --ignored --nocapture`
+- Note: Will launch default web browser for user to complete authentication
+
+**Configuration Validation Test:**
+- `test_oauth_config_validation` -- Verifies proper error messages for missing/invalid OAuth configuration
+- Runs in standard test suite (not ignored)
+- Tests: missing auth.flow when mechanism=OAuth, missing client_secret for M2M, invalid mechanism/flow values
 
 ---
 

@@ -251,16 +251,17 @@ async fn test_u2m_refresh_token_expired_fallback() {
         &expired_token,
     );
 
-    let provider = AuthorizationCodeProvider::new_with_config(
+    let mut provider = AuthorizationCodeProvider::new_with_config(
         &mock_server.uri(),
         "test-client-id-expired",
         http_client,
         vec!["all-apis".to_string(), "offline_access".to_string()],
-        8022,
+        0,                      // Use port 0 to avoid conflicts
         Duration::from_secs(5), // Short timeout for test
     )
     .await
     .expect("Failed to create provider");
+    provider.suppress_browser(); // Don't open a real browser in tests
 
     // Wait for token to expire
     tokio::time::sleep(Duration::from_secs(2)).await;
