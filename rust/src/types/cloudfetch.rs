@@ -19,7 +19,6 @@
 
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::types::sea::ExternalLink;
-use arrow_array::RecordBatch;
 use chrono::{DateTime, Utc};
 use driverbase::error::ErrorHelper;
 use std::collections::HashMap;
@@ -131,72 +130,6 @@ impl CloudFetchLink {
     }
 }
 
-/// State of a chunk in the download pipeline.
-///
-/// State transitions:
-/// ```text
-///   Pending -> UrlFetched (link available)
-///   UrlFetched -> Downloading (download started)
-///   Downloading -> Downloaded (success)
-///   Downloading -> DownloadFailed (error)
-///   DownloadFailed -> DownloadRetry (retrying)
-///   DownloadRetry -> Downloading (retry started)
-///   Downloaded -> ProcessingFailed (Arrow parse error)
-///   Downloaded -> Released (consumed by client)
-///   * -> Cancelled (user cancellation)
-/// ```
-#[derive(Debug, Clone)]
-pub enum ChunkState {
-    /// Initial state, no link yet.
-    Pending,
-    /// Link available, not yet downloading.
-    UrlFetched,
-    /// Download in progress.
-    Downloading,
-    /// Downloaded successfully.
-    Downloaded,
-    /// Download failed (will retry).
-    DownloadFailed(String),
-    /// Retrying after failure.
-    DownloadRetry,
-    /// Arrow parse failed (terminal).
-    ProcessingFailed(String),
-    /// Cancelled by user (terminal).
-    Cancelled,
-    /// Memory released (terminal).
-    Released,
-}
-
-/// Entry for a chunk in the chunks map.
-#[derive(Clone)]
-pub struct ChunkEntry {
-    /// Link for this chunk (set when state is UrlFetched or later).
-    pub link: Option<CloudFetchLink>,
-    /// Current state of this chunk.
-    pub state: ChunkState,
-    /// Parsed record batches (populated when state is Downloaded).
-    pub batches: Option<Vec<RecordBatch>>,
-}
-
-impl ChunkEntry {
-    /// Create a new pending entry with no link.
-    pub fn pending() -> Self {
-        Self {
-            link: None,
-            state: ChunkState::Pending,
-            batches: None,
-        }
-    }
-
-    /// Create a new entry with a fetched link.
-    pub fn with_link(link: CloudFetchLink) -> Self {
-        Self {
-            link: Some(link),
-            state: ChunkState::UrlFetched,
-            batches: None,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -291,31 +224,4 @@ mod tests {
         assert!(!link.is_expired(60)); // Use default buffer
     }
 
-    #[test]
-    fn test_chunk_entry_pending() {
-        let entry = ChunkEntry::pending();
-        assert!(entry.link.is_none());
-        assert!(entry.batches.is_none());
-        assert!(matches!(entry.state, ChunkState::Pending));
-    }
-
-    #[test]
-    fn test_chunk_entry_with_link() {
-        let external = ExternalLink {
-            external_link: "https://storage.example.com/chunk0".to_string(),
-            expiration: "2099-01-01T12:00:00Z".to_string(),
-            chunk_index: 0,
-            row_offset: 0,
-            row_count: 1000,
-            byte_count: 50000,
-            http_headers: None,
-            next_chunk_index: None,
-        };
-        let link = CloudFetchLink::from_external_link(&external).unwrap();
-        let entry = ChunkEntry::with_link(link);
-
-        assert!(entry.link.is_some());
-        assert!(entry.batches.is_none());
-        assert!(matches!(entry.state, ChunkState::UrlFetched));
-    }
 }
