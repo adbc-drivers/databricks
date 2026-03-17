@@ -213,7 +213,187 @@ impl ChunkLinkFetcher for Expiry403LinkFetcher {
 }
 
 // ===========================================================================
-// SCENARIO 1: CloudFetch multi-chunk sequential order and completeness
+// INTEGRATION TEST 1: End-to-end sequential consumption (wiremock)
+//
+// Test that all chunks are downloaded and read in order through the full
+// pipeline with realistic HTTP mocking.
+// ===========================================================================
+
+#[tokio::test]
+async fn test_end_to_end_sequential_consumption() {
+    // This test verifies the full pipeline with multiple chunks served via wiremock
+    let total_chunks = 10;
+    let rows_per_chunk = 50;
+    let server = MockServer::start().await;
+
+    // Set up mock responses for all chunks
+    for i in 0..total_chunks {
+        let batch = create_test_batch(i, rows_per_chunk);
+        let ipc_data = create_arrow_ipc(&[batch]);
+
+        Mock::given(method("GET"))
+            .and(path(format!("/chunk/{}", i)))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(ipc_data))
+            .mount(&server)
+            .await;
+    }
+
+    // Create mock link fetcher
+    #[derive(Debug)]
+    struct SimpleChunkLinkFetcher {
+        base_url: String,
+        total_chunks: i64,
+        rows_per_chunk: usize,
+    }
+
+    impl SimpleChunkLinkFetcher {
+        fn new(base_url: &str, total_chunks: i64, rows_per_chunk: usize) -> Self {
+            Self {
+                base_url: base_url.to_string(),
+                total_chunks,
+                rows_per_chunk,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChunkLinkFetcher for SimpleChunkLinkFetcher {
+        async fn fetch_links(
+            &self,
+            start_chunk_index: i64,
+            _start_row_offset: i64,
+        ) -> databricks_adbc::error::Result<ChunkLinkFetchResult> {
+            if start_chunk_index >= self.total_chunks {
+                return Ok(ChunkLinkFetchResult::end_of_stream());
+            }
+
+            // Return batch of 3 links at a time
+            let end = (start_chunk_index + 3).min(self.total_chunks);
+            let links: Vec<CloudFetchLink> = (start_chunk_index..end)
+                .map(|i| CloudFetchLink {
+                    url: format!("{}/chunk/{}", self.base_url, i),
+                    chunk_index: i,
+                    row_offset: i * self.rows_per_chunk as i64,
+                    row_count: self.rows_per_chunk as i64,
+                    byte_count: 5000,
+                    expiration: chrono::Utc::now() + chrono::Duration::hours(1),
+                    http_headers: HashMap::new(),
+                    next_chunk_index: if i + 1 < self.total_chunks {
+                        Some(i + 1)
+                    } else {
+                        None
+                    },
+                })
+                .collect();
+
+            let has_more = end < self.total_chunks;
+            Ok(ChunkLinkFetchResult {
+                links,
+                has_more,
+                next_chunk_index: if has_more { Some(end) } else { None },
+                next_row_offset: None,
+            })
+        }
+
+        async fn refetch_link(
+            &self,
+            chunk_index: i64,
+            _row_offset: i64,
+        ) -> databricks_adbc::error::Result<CloudFetchLink> {
+            Ok(CloudFetchLink {
+                url: format!("{}/chunk/{}", self.base_url, chunk_index),
+                chunk_index,
+                row_offset: chunk_index * self.rows_per_chunk as i64,
+                row_count: self.rows_per_chunk as i64,
+                byte_count: 5000,
+                expiration: chrono::Utc::now() + chrono::Duration::hours(1),
+                http_headers: HashMap::new(),
+                next_chunk_index: if chunk_index + 1 < self.total_chunks {
+                    Some(chunk_index + 1)
+                } else {
+                    None
+                },
+            })
+        }
+    }
+
+    let fetcher: Arc<dyn ChunkLinkFetcher> =
+        Arc::new(SimpleChunkLinkFetcher::new(&server.uri(), total_chunks, rows_per_chunk));
+    let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
+    let downloader = Arc::new(ChunkDownloader::new(
+        http_client,
+        CompressionCodec::None,
+        0.1,
+    ));
+
+    let config = CloudFetchConfig {
+        max_chunks_in_memory: 4,
+        num_download_workers: 3,
+        max_retries: 3,
+        max_refresh_retries: 3,
+        retry_delay: Duration::from_millis(10),
+        ..CloudFetchConfig::default()
+    };
+
+    let provider = StreamingCloudFetchProvider::new(config, fetcher, downloader);
+
+    // Consume all batches and verify ordering
+    let mut chunk_ids_seen = Vec::new();
+    let mut total_rows: usize = 0;
+
+    while let Some(batch) = provider.next_batch().await.expect("Should not error") {
+        let id_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("First column should be Int32");
+        let first_id = id_col.value(0);
+        let chunk_index = first_id / 1000;
+        chunk_ids_seen.push(chunk_index);
+        total_rows += batch.num_rows();
+
+        assert_eq!(
+            batch.num_rows(),
+            rows_per_chunk,
+            "Each chunk should have {} rows",
+            rows_per_chunk
+        );
+    }
+
+    // Assertions
+    assert_eq!(
+        chunk_ids_seen.len(),
+        total_chunks as usize,
+        "Should receive all {} chunks",
+        total_chunks
+    );
+
+    // Verify sequential order
+    for i in 0..total_chunks {
+        assert_eq!(
+            chunk_ids_seen[i as usize], i as i32,
+            "Chunk {} should be at position {}",
+            i, i
+        );
+    }
+
+    assert_eq!(
+        total_rows,
+        (total_chunks as usize) * rows_per_chunk,
+        "Total rows should be {} × {} = {}",
+        total_chunks,
+        rows_per_chunk,
+        (total_chunks as usize) * rows_per_chunk
+    );
+
+    println!(
+        "✓ end_to_end_sequential_consumption: {} chunks, {} rows, all in order",
+        total_chunks, total_rows
+    );
+}
+
+// ===========================================================================
+// REAL DATABRICKS TEST: CloudFetch multi-chunk sequential order and completeness
 //
 // A CloudFetch query returning multiple chunks downloads all chunks in correct
 // sequential order and all rows are returned without data loss or reordering.
@@ -221,7 +401,7 @@ impl ChunkLinkFetcher for Expiry403LinkFetcher {
 
 #[test]
 #[ignore]
-fn test_cloudfetch_multichunk_sequential_order_and_completeness() {
+fn test_cloudfetch_multichunk_sequential_order_and_completeness_real() {
     // Initialize tracing for debug visibility
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -384,15 +564,14 @@ fn test_cloudfetch_multichunk_sequential_order_and_completeness() {
 }
 
 // ===========================================================================
-// SCENARIO 2: Presigned URL expiry triggers automatic refresh via refetch_link
+// INTEGRATION TEST 2: End-to-end 401 recovery (wiremock)
 //
-// A CloudFetch query where presigned URLs expire mid-stream triggers automatic
-// URL refresh via refetch_link and continues downloading without error
-// propagation to the consumer.
+// Test that presigned URL expiry (401/403) mid-stream triggers refetch_link
+// and the pipeline continues successfully.
 // ===========================================================================
 
 #[tokio::test]
-async fn test_cloudfetch_url_expiry_triggers_refetch_and_continues() {
+async fn test_end_to_end_401_recovery() {
     // This test uses wiremock to simulate a real CloudFetch pipeline where
     // some chunk URLs return 403 (Forbidden), triggering the driver's
     // refetch_link mechanism to get fresh URLs and retry.
@@ -509,19 +688,213 @@ async fn test_cloudfetch_url_expiry_triggers_refetch_and_continues() {
         refetch_count
     );
 
-    println!("\n✓ All chunks downloaded successfully after 403 → refetch_link → retry");
-    println!("  refetch_link called {} times", refetch_count);
+    println!(
+        "✓ end_to_end_401_recovery: {} chunks, refetch_link called {} times",
+        total_chunks, refetch_count
+    );
 }
 
 // ===========================================================================
-// SCENARIO 3: Cancellation during active multi-chunk CloudFetch download
+// INTEGRATION TEST 3: End-to-end cancellation mid-stream (wiremock)
+//
+// Test that cancellation during active downloads terminates cleanly without
+// deadlock, panic, or resource leak.
+// ===========================================================================
+
+#[tokio::test]
+async fn test_end_to_end_cancellation_mid_stream() {
+    // This test verifies that cancellation works correctly by:
+    // 1. Starting downloads with slow mock responses
+    // 2. Canceling mid-stream
+    // 3. Verifying clean shutdown without deadlock
+
+    let total_chunks = 20;
+    let rows_per_chunk = 50;
+    let server = MockServer::start().await;
+
+    // Set up mock responses with delays to simulate slow downloads
+    for i in 0..total_chunks {
+        let batch = create_test_batch(i, rows_per_chunk);
+        let ipc_data = create_arrow_ipc(&[batch]);
+
+        Mock::given(method("GET"))
+            .and(path(format!("/chunk/{}", i)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(ipc_data)
+                    .set_delay(Duration::from_millis(100)), // Slow response to allow cancellation
+            )
+            .mount(&server)
+            .await;
+    }
+
+    // Create mock link fetcher
+    #[derive(Debug)]
+    struct SimpleCancelLinkFetcher {
+        base_url: String,
+        total_chunks: i64,
+        rows_per_chunk: usize,
+    }
+
+    impl SimpleCancelLinkFetcher {
+        fn new(base_url: &str, total_chunks: i64, rows_per_chunk: usize) -> Self {
+            Self {
+                base_url: base_url.to_string(),
+                total_chunks,
+                rows_per_chunk,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChunkLinkFetcher for SimpleCancelLinkFetcher {
+        async fn fetch_links(
+            &self,
+            start_chunk_index: i64,
+            _start_row_offset: i64,
+        ) -> databricks_adbc::error::Result<ChunkLinkFetchResult> {
+            if start_chunk_index >= self.total_chunks {
+                return Ok(ChunkLinkFetchResult::end_of_stream());
+            }
+
+            // Return batch of 5 links at a time
+            let end = (start_chunk_index + 5).min(self.total_chunks);
+            let links: Vec<CloudFetchLink> = (start_chunk_index..end)
+                .map(|i| CloudFetchLink {
+                    url: format!("{}/chunk/{}", self.base_url, i),
+                    chunk_index: i,
+                    row_offset: i * self.rows_per_chunk as i64,
+                    row_count: self.rows_per_chunk as i64,
+                    byte_count: 5000,
+                    expiration: chrono::Utc::now() + chrono::Duration::hours(1),
+                    http_headers: HashMap::new(),
+                    next_chunk_index: if i + 1 < self.total_chunks {
+                        Some(i + 1)
+                    } else {
+                        None
+                    },
+                })
+                .collect();
+
+            let has_more = end < self.total_chunks;
+            Ok(ChunkLinkFetchResult {
+                links,
+                has_more,
+                next_chunk_index: if has_more { Some(end) } else { None },
+                next_row_offset: None,
+            })
+        }
+
+        async fn refetch_link(
+            &self,
+            chunk_index: i64,
+            _row_offset: i64,
+        ) -> databricks_adbc::error::Result<CloudFetchLink> {
+            Ok(CloudFetchLink {
+                url: format!("{}/chunk/{}", self.base_url, chunk_index),
+                chunk_index,
+                row_offset: chunk_index * self.rows_per_chunk as i64,
+                row_count: self.rows_per_chunk as i64,
+                byte_count: 5000,
+                expiration: chrono::Utc::now() + chrono::Duration::hours(1),
+                http_headers: HashMap::new(),
+                next_chunk_index: if chunk_index + 1 < self.total_chunks {
+                    Some(chunk_index + 1)
+                } else {
+                    None
+                },
+            })
+        }
+    }
+
+    let fetcher: Arc<dyn ChunkLinkFetcher> =
+        Arc::new(SimpleCancelLinkFetcher::new(&server.uri(), total_chunks, rows_per_chunk));
+    let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
+    let downloader = Arc::new(ChunkDownloader::new(
+        http_client,
+        CompressionCodec::None,
+        0.1,
+    ));
+
+    let config = CloudFetchConfig {
+        max_chunks_in_memory: 4,
+        num_download_workers: 3,
+        max_retries: 3,
+        max_refresh_retries: 3,
+        retry_delay: Duration::from_millis(10),
+        ..CloudFetchConfig::default()
+    };
+
+    let provider = StreamingCloudFetchProvider::new(config, fetcher, downloader);
+
+    // Read a few batches then cancel
+    let provider_ref = Arc::clone(&provider);
+
+    let consume_handle = tokio::spawn(async move {
+        let mut count = 0;
+        while let Some(_batch) = provider_ref.next_batch().await.ok().flatten() {
+            count += 1;
+            if count >= 3 {
+                break;
+            }
+        }
+        count
+    });
+
+    // Read a few batches
+    let batches_read = consume_handle.await.expect("Consume task should not panic");
+    assert!(
+        batches_read >= 3,
+        "Should have read at least 3 batches before cancel"
+    );
+
+    // Cancel the provider
+    let cancel_start = Instant::now();
+    provider.cancel();
+
+    // Try to read another batch - should fail or return None quickly
+    let _result = tokio::time::timeout(
+        Duration::from_secs(2),
+        provider.next_batch()
+    ).await;
+
+    let cancel_duration = cancel_start.elapsed();
+
+    // Verify cancellation was fast
+    assert!(
+        cancel_duration < Duration::from_secs(2),
+        "Cancellation took {:.2}s, expected < 2s",
+        cancel_duration.as_secs_f64()
+    );
+
+    // Drop the provider - should complete quickly
+    let drop_start = Instant::now();
+    drop(provider);
+    let drop_duration = drop_start.elapsed();
+
+    assert!(
+        drop_duration < Duration::from_secs(1),
+        "Drop took {:.2}s, expected < 1s. Possible deadlock.",
+        drop_duration.as_secs_f64()
+    );
+
+    println!(
+        "✓ end_to_end_cancellation_mid_stream: read {} batches, cancel in {:.2}s, drop in {:.2}s",
+        batches_read,
+        cancel_duration.as_secs_f64(),
+        drop_duration.as_secs_f64()
+    );
+}
+
+// ===========================================================================
+// REAL DATABRICKS TEST: Cancellation during active multi-chunk CloudFetch download
 //             terminates cleanly within 5 seconds with no deadlock, panic,
 //             or resource leak.
 // ===========================================================================
 
 #[test]
 #[ignore]
-fn test_cloudfetch_cancellation_terminates_cleanly() {
+fn test_cloudfetch_cancellation_terminates_cleanly_real() {
     // Initialize tracing for debug visibility
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)

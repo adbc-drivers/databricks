@@ -435,8 +435,19 @@ All 9 unit tests have been implemented and are passing (1 test is ignored due to
 - `src/reader/cloudfetch/worker_tests.rs` - Worker component tests
 - `src/reader/cloudfetch/consumer_tests.rs` - Consumer component tests (comprehensive coverage beyond the 9 core tests)
 
-### Integration Tests
+### Integration Tests (Implemented)
 
-- `end_to_end_sequential_consumption` — all chunks downloaded and read in order
-- `end_to_end_cancellation_mid_stream` — cancel during active download, no deadlock or panic
-- `end_to_end_401_recovery` — presigned URL expires mid-stream, driver refetches and continues
+All 3 integration tests have been implemented using wiremock for HTTP mocking and are passing:
+
+- ✅ `test_end_to_end_sequential_consumption` — all chunks downloaded and read in order (10 chunks, 50 rows each, verified sequential order and completeness via wiremock)
+- ✅ `test_end_to_end_cancellation_mid_stream` — cancel during active download, no deadlock or panic (20 chunks with slow responses, verified clean shutdown < 2s)
+- ✅ `test_end_to_end_401_recovery` — presigned URL expires mid-stream, driver refetches and continues (5 chunks, chunks 1 and 3 return 403 on first attempt, verified refetch_link called and all data received)
+
+**Test File:** `tests/e2e_cloudfetch.rs`
+
+All integration tests use wiremock to simulate realistic HTTP scenarios without requiring a real Databricks workspace. The tests verify:
+- Full pipeline functionality with scheduler, workers, and consumer
+- Sequential ordering is maintained even when downloads complete out of order
+- URL expiry triggers automatic refetch_link without consumer-visible errors
+- Cancellation terminates all tasks cleanly without deadlock or panic
+- Clean resource cleanup on provider drop
