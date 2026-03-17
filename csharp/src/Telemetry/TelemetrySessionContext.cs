@@ -165,7 +165,7 @@ namespace AdbcDrivers.Databricks.Telemetry
 
         /// <summary>
         /// Gets the authentication type for this connection.
-        /// Examples: "pat", "oauth-m2m", "oauth-u2m", "other"
+        /// Examples: "pat", "oauth-client_credentials", "oauth-access_token", "other"
         /// </summary>
         public string? AuthType { get; internal set; }
     }

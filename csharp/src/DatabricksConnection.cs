@@ -442,19 +442,38 @@ namespace AdbcDrivers.Databricks
             IReadOnlyList<string>? tableTypes,
             string? columnNamePattern)
         {
+            var operationType = depth switch
+            {
+                GetObjectsDepth.Catalogs => Telemetry.Proto.Operation.Types.Type.ListCatalogs,
+                GetObjectsDepth.DbSchemas => Telemetry.Proto.Operation.Types.Type.ListSchemas,
+                GetObjectsDepth.Tables => Telemetry.Proto.Operation.Types.Type.ListTables,
+                GetObjectsDepth.All => Telemetry.Proto.Operation.Types.Type.ListColumns,
+                _ => Telemetry.Proto.Operation.Types.Type.Unspecified
+            };
+
+            return ExecuteWithMetadataTelemetry(
+                operationType,
+                () => base.GetObjects(depth, catalogPattern, dbSchemaPattern, tableNamePattern, tableTypes, columnNamePattern));
+        }
+
+        /// <summary>
+        /// Overrides GetTableTypes to emit telemetry with LIST_TABLE_TYPES operation type.
+        /// </summary>
+        public override IArrowArrayStream GetTableTypes()
+        {
+            return ExecuteWithMetadataTelemetry(
+                Telemetry.Proto.Operation.Types.Type.ListTableTypes,
+                () => base.GetTableTypes());
+        }
+
+        /// <summary>
+        /// Executes a metadata operation with telemetry instrumentation.
+        /// Metadata operations don't track batch/consumption timing since results are returned inline.
+        /// </summary>
+        private T ExecuteWithMetadataTelemetry<T>(Telemetry.Proto.Operation.Types.Type operationType, Func<T> operation)
+        {
             return this.TraceActivity(activity =>
             {
-                // Determine operation type based on depth
-                Telemetry.Proto.Operation.Types.Type operationType = depth switch
-                {
-                    GetObjectsDepth.Catalogs => Telemetry.Proto.Operation.Types.Type.ListCatalogs,
-                    GetObjectsDepth.DbSchemas => Telemetry.Proto.Operation.Types.Type.ListSchemas,
-                    GetObjectsDepth.Tables => Telemetry.Proto.Operation.Types.Type.ListTables,
-                    GetObjectsDepth.All => Telemetry.Proto.Operation.Types.Type.ListColumns,
-                    _ => Telemetry.Proto.Operation.Types.Type.Unspecified
-                };
-
-                // Create telemetry context for this metadata operation
                 StatementTelemetryContext? telemetryContext = null;
                 try
                 {
@@ -474,7 +493,6 @@ namespace AdbcDrivers.Databricks
                 }
                 catch (Exception ex)
                 {
-                    // Swallow telemetry errors per design requirement
                     activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.context_creation.error",
                         tags: new System.Diagnostics.ActivityTagsCollection
                         {
@@ -483,28 +501,13 @@ namespace AdbcDrivers.Databricks
                         }));
                 }
 
-                IArrowArrayStream result;
+                T result;
                 try
                 {
-                    // Call base implementation to get the actual results
-                    result = base.GetObjects(depth, catalogPattern, dbSchemaPattern, tableNamePattern, tableTypes, columnNamePattern);
-
-                    // Record success
-                    if (telemetryContext != null)
-                    {
-                        try
-                        {
-                            telemetryContext.RecordFirstBatchReady();
-                        }
-                        catch
-                        {
-                            // Swallow telemetry errors
-                        }
-                    }
+                    result = operation();
                 }
                 catch (Exception ex)
                 {
-                    // Record error in telemetry
                     if (telemetryContext != null)
                     {
                         try
@@ -522,12 +525,10 @@ namespace AdbcDrivers.Databricks
                 }
                 finally
                 {
-                    // Emit telemetry
                     if (telemetryContext != null)
                     {
                         try
                         {
-                            telemetryContext.RecordResultsConsumed();
                             var telemetryLog = telemetryContext.BuildTelemetryLog();
 
                             var frontendLog = new Telemetry.Models.TelemetryFrontendLog
@@ -548,123 +549,6 @@ namespace AdbcDrivers.Databricks
                         }
                         catch (Exception ex)
                         {
-                            // Swallow telemetry errors per design requirement
-                            activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.emit.error",
-                                tags: new System.Diagnostics.ActivityTagsCollection
-                                {
-                                    { "error.type", ex.GetType().Name },
-                                    { "error.message", ex.Message }
-                                }));
-                        }
-                    }
-                }
-
-                return result;
-            });
-        }
-
-        /// <summary>
-        /// Overrides GetTableTypes to emit telemetry with LIST_TABLE_TYPES operation type.
-        /// </summary>
-        public override IArrowArrayStream GetTableTypes()
-        {
-            return this.TraceActivity(activity =>
-            {
-                // Create telemetry context for this metadata operation
-                StatementTelemetryContext? telemetryContext = null;
-                try
-                {
-                    if (TelemetrySession?.TelemetryClient != null)
-                    {
-                        telemetryContext = new StatementTelemetryContext(TelemetrySession)
-                        {
-                            StatementType = Telemetry.Proto.Statement.Types.Type.Metadata,
-                            OperationType = Telemetry.Proto.Operation.Types.Type.ListTableTypes,
-                            ResultFormat = Telemetry.Proto.ExecutionResult.Types.Format.InlineArrow,
-                            IsCompressed = false
-                        };
-
-                        activity?.SetTag("telemetry.operation_type", "LIST_TABLE_TYPES");
-                        activity?.SetTag("telemetry.statement_type", "METADATA");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Swallow telemetry errors per design requirement
-                    activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.context_creation.error",
-                        tags: new System.Diagnostics.ActivityTagsCollection
-                        {
-                            { "error.type", ex.GetType().Name },
-                            { "error.message", ex.Message }
-                        }));
-                }
-
-                IArrowArrayStream result;
-                try
-                {
-                    // Call base implementation to get the actual results
-                    result = base.GetTableTypes();
-
-                    // Record success
-                    if (telemetryContext != null)
-                    {
-                        try
-                        {
-                            telemetryContext.RecordFirstBatchReady();
-                        }
-                        catch
-                        {
-                            // Swallow telemetry errors
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Record error in telemetry
-                    if (telemetryContext != null)
-                    {
-                        try
-                        {
-                            telemetryContext.HasError = true;
-                            telemetryContext.ErrorName = ex.GetType().Name;
-                            telemetryContext.ErrorMessage = ex.Message;
-                        }
-                        catch
-                        {
-                            // Swallow telemetry errors
-                        }
-                    }
-                    throw;
-                }
-                finally
-                {
-                    // Emit telemetry
-                    if (telemetryContext != null)
-                    {
-                        try
-                        {
-                            telemetryContext.RecordResultsConsumed();
-                            var telemetryLog = telemetryContext.BuildTelemetryLog();
-
-                            var frontendLog = new Telemetry.Models.TelemetryFrontendLog
-                            {
-                                WorkspaceId = telemetryContext.WorkspaceId,
-                                FrontendLogEventId = Guid.NewGuid().ToString(),
-                                Context = new Telemetry.Models.FrontendLogContext
-                                {
-                                    TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                                },
-                                Entry = new Telemetry.Models.FrontendLogEntry
-                                {
-                                    SqlDriverLog = telemetryLog
-                                }
-                            };
-
-                            TelemetrySession?.TelemetryClient?.Enqueue(frontendLog);
-                        }
-                        catch (Exception ex)
-                        {
-                            // Swallow telemetry errors per design requirement
                             activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.emit.error",
                                 tags: new System.Diagnostics.ActivityTagsCollection
                                 {
@@ -903,49 +787,14 @@ namespace AdbcDrivers.Databricks
                     true, // unauthed failure will be report separately
                     telemetryConfig);
 
-                // Extract workspace ID from server configuration or connection properties
-                // Note: workspace_id may be 0 if not available (e.g., for SQL warehouses without orgId in config)
+                // Extract workspace ID from org ID in the HTTP path (e.g., ?o=12345)
                 long workspaceId = 0;
-
-                // Strategy 1: Try to extract from server configuration (for clusters)
-                if (_openSessionResp?.__isset.configuration == true && _openSessionResp.Configuration != null)
+                string? orgId = PropertyHelper.ParseOrgIdFromProperties(Properties);
+                if (!string.IsNullOrEmpty(orgId) && long.TryParse(orgId, out long parsedOrgId))
                 {
-                    if (_openSessionResp.Configuration.TryGetValue("spark.databricks.clusterUsageTags.orgId", out string? orgIdStr))
-                    {
-                        if (long.TryParse(orgIdStr, out long parsedOrgId))
-                        {
-                            workspaceId = parsedOrgId;
-                            activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.extracted_from_config",
-                                tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
-                        }
-                        else
-                        {
-                            activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.parse_failed",
-                                tags: new ActivityTagsCollection { { "orgId_value", orgIdStr } }));
-                        }
-                    }
-                }
-
-                // Strategy 2: Check connection property as fallback
-                if (workspaceId == 0 && Properties.TryGetValue("adbc.databricks.workspace_id", out string? workspaceIdProp))
-                {
-                    if (long.TryParse(workspaceIdProp, out long propWorkspaceId))
-                    {
-                        workspaceId = propWorkspaceId;
-                        activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.from_property",
-                            tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
-                    }
-                }
-
-                // Log if workspace ID could not be determined
-                if (workspaceId == 0)
-                {
-                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.unavailable",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "reason", "Not available in server config or connection properties" },
-                            { "workaround", "Set adbc.databricks.workspace_id connection property if needed" }
-                        }));
+                    workspaceId = parsedOrgId;
+                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.from_org_id",
+                        tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
                 }
 
                 // Create session-level telemetry context for V3 direct-object pipeline
@@ -1000,15 +849,8 @@ namespace AdbcDrivers.Databricks
                 LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
                 CharSetEncoding = System.Text.Encoding.Default.WebName,
                 ProcessName = processName,
-                ClientAppName = GetClientAppName(processName)
+                ClientAppName = processName
             };
-        }
-
-        private string GetClientAppName(string processName)
-        {
-            // Check connection property first, fall back to process name
-            Properties.TryGetValue("adbc.databricks.client_app_name", out string? appName);
-            return appName ?? processName;
         }
 
         private Telemetry.Proto.DriverConnectionParameters BuildDriverConnectionParams(bool isAuthenticated)
@@ -1060,7 +902,7 @@ namespace AdbcDrivers.Databricks
         /// <returns>The batch size value.</returns>
         private int GetBatchSize()
         {
-            const int DefaultBatchSize = 50000; // HiveServer2Connection.BatchSizeDefault
+            const int DefaultBatchSize = 2000000; // DatabricksStatement.DatabricksBatchSizeDefault
             if (Properties.TryGetValue(ApacheParameters.BatchSize, out string? batchSizeStr) &&
                 int.TryParse(batchSizeStr, out int batchSize))
             {
@@ -1086,26 +928,19 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Determines the auth_type string based on connection properties.
-        /// Mapping: PAT -> 'pat', OAuth client_credentials -> 'oauth-m2m', OAuth browser -> 'oauth-u2m', Other -> 'other'
+        /// Format: auth_type or auth_type-grant_type (for OAuth).
+        /// Mapping: PAT -> 'pat', OAuth -> 'oauth-{grant_type}', Other -> 'other'
         /// </summary>
         /// <returns>The auth_type string value.</returns>
         private string DetermineAuthType()
         {
-            // Check for OAuth grant type first
+            // Format: auth_type or auth_type-grant_type (for OAuth)
             Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
 
             if (!string.IsNullOrEmpty(grantType))
             {
-                if (grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
-                {
-                    // OAuth M2M (machine-to-machine) - client credentials flow
-                    return "oauth-m2m";
-                }
-                else if (grantType == DatabricksConstants.OAuthGrantTypes.AccessToken)
-                {
-                    // OAuth U2M (user-to-machine) - browser-based flow with access token
-                    return "oauth-u2m";
-                }
+                // OAuth with grant type: oauth-{grant_type}
+                return $"oauth-{grantType}";
             }
 
             // Check for PAT (Personal Access Token)
