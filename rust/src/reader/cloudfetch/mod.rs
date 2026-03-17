@@ -18,16 +18,22 @@
 //! - `StreamingCloudFetchProvider`: Main orchestrator for downloading and streaming
 //! - `ChunkLinkFetcher`: Trait for fetching chunk links from the backend
 //! - `ChunkDownloader`: Downloads and parses Arrow data from presigned URLs
+//! - `Scheduler`: Orchestrates the pipeline by fetching links and dispatching tasks
 //! - Arrow IPC parsing utilities
 
 pub mod arrow_parser;
 pub mod chunk_downloader;
 pub mod link_fetcher;
 pub mod pipeline_types;
+pub mod scheduler;
 pub mod streaming_provider;
+
+#[cfg(test)]
+mod scheduler_tests;
 
 pub use arrow_parser::parse_arrow_ipc;
 pub use chunk_downloader::ChunkDownloader;
 pub use link_fetcher::{ChunkLinkFetcher, SeaChunkLinkFetcher};
 pub use pipeline_types::{ChunkDownloadTask, ChunkHandle};
+pub use scheduler::spawn_scheduler;
 pub use streaming_provider::StreamingCloudFetchProvider;
