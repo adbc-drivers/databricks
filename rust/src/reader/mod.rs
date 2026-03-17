@@ -377,6 +377,22 @@ impl ResultReader for EmptyReader {
     }
 }
 
+/// Arrow field metadata keys for Databricks column information.
+///
+/// These propagate SEA manifest metadata through the Arrow C Data Interface
+/// so downstream consumers (ODBC driver) can access server-provided metadata
+/// without reverse-engineering from Arrow type IDs.
+///
+/// Keys use the `databricks.` prefix to avoid conflicts with other metadata
+/// conventions (e.g., Arrow's own `ARROW:extension:name`).
+pub mod metadata_keys {
+    pub const TYPE_NAME: &str = "databricks.type_name";
+    pub const TYPE_TEXT: &str = "databricks.type_text";
+    pub const TYPE_PRECISION: &str = "databricks.type_precision";
+    pub const TYPE_SCALE: &str = "databricks.type_scale";
+    pub const TYPE_INTERVAL_TYPE: &str = "databricks.type_interval_type";
+}
+
 /// Adapter to make ResultReader work as arrow's RecordBatchReader.
 pub struct ResultReaderAdapter {
     inner: Box<dyn ResultReader + Send>,
@@ -384,10 +400,70 @@ pub struct ResultReaderAdapter {
 }
 
 impl ResultReaderAdapter {
-    /// Create a new adapter wrapping a ResultReader.
-    pub fn new(inner: Box<dyn ResultReader + Send>) -> Result<Self> {
+    /// Create a new adapter wrapping a ResultReader, optionally augmenting the
+    /// schema with Databricks column metadata from the SEA manifest.
+    pub fn new(
+        inner: Box<dyn ResultReader + Send>,
+        manifest: Option<&ResultManifest>,
+    ) -> Result<Self> {
         let schema = inner.schema()?;
+        let schema = match manifest {
+            Some(m) => Self::augment_schema_with_manifest(&schema, m),
+            None => schema,
+        };
         Ok(Self { inner, schema })
+    }
+
+    /// Augment an Arrow schema with Databricks column metadata from the manifest.
+    ///
+    /// For each field in the schema, if a matching ColumnInfo exists (by position),
+    /// attach `databricks.*` key-value metadata to the field. This preserves
+    /// server-provided type_name, type_text, precision, scale, etc. through the
+    /// Arrow C Data Interface FFI boundary.
+    fn augment_schema_with_manifest(schema: &SchemaRef, manifest: &ResultManifest) -> SchemaRef {
+        let columns = &manifest.schema.columns;
+
+        let new_fields: Vec<Field> = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let col_info = columns.iter().find(|c| c.position as usize == i);
+
+                match col_info {
+                    Some(info) => {
+                        let mut metadata = field.metadata().clone();
+                        metadata
+                            .insert(metadata_keys::TYPE_NAME.to_string(), info.type_name.clone());
+                        metadata
+                            .insert(metadata_keys::TYPE_TEXT.to_string(), info.type_text.clone());
+                        if let Some(prec) = info.type_precision {
+                            metadata.insert(
+                                metadata_keys::TYPE_PRECISION.to_string(),
+                                prec.to_string(),
+                            );
+                        }
+                        if let Some(scale) = info.type_scale {
+                            metadata
+                                .insert(metadata_keys::TYPE_SCALE.to_string(), scale.to_string());
+                        }
+                        if let Some(ref interval) = info.type_interval_type {
+                            metadata.insert(
+                                metadata_keys::TYPE_INTERVAL_TYPE.to_string(),
+                                interval.clone(),
+                            );
+                        }
+                        field.as_ref().clone().with_metadata(metadata)
+                    }
+                    None => field.as_ref().clone(),
+                }
+            })
+            .collect();
+
+        Arc::new(Schema::new_with_metadata(
+            new_fields,
+            schema.metadata().clone(),
+        ))
     }
 }
 
@@ -415,6 +491,7 @@ impl Iterator for ResultReaderAdapter {
 mod tests {
     use super::*;
     use crate::reader::test_utils::{ErrorReader, MockReader, SchemaErrorReader};
+    use crate::types::sea::{ColumnInfo, ResultManifest, ResultSchema};
     use arrow_array::StringArray;
 
     fn make_test_batch(values: Vec<&str>) -> RecordBatch {
@@ -428,7 +505,7 @@ mod tests {
     fn test_adapter_schema() {
         let batch = make_test_batch(vec!["a"]);
         let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch]));
-        let adapter = ResultReaderAdapter::new(reader).unwrap();
+        let adapter = ResultReaderAdapter::new(reader, None).unwrap();
         let schema = arrow_array::RecordBatchReader::schema(&adapter);
         assert_eq!(schema.fields().len(), 1);
         assert_eq!(schema.field(0).name(), "name");
@@ -439,7 +516,7 @@ mod tests {
         let batch1 = make_test_batch(vec!["a", "b"]);
         let batch2 = make_test_batch(vec!["c"]);
         let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch1, batch2]));
-        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+        let mut adapter = ResultReaderAdapter::new(reader, None).unwrap();
 
         let first = adapter.next().unwrap().unwrap();
         assert_eq!(first.num_rows(), 2);
@@ -453,7 +530,7 @@ mod tests {
     #[test]
     fn test_adapter_empty_reader() {
         let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![]));
-        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+        let mut adapter = ResultReaderAdapter::new(reader, None).unwrap();
         assert!(adapter.next().is_none());
     }
 
@@ -461,7 +538,7 @@ mod tests {
     fn test_adapter_propagates_error() {
         let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8, false)]));
         let reader: Box<dyn ResultReader + Send> = Box::new(ErrorReader { schema });
-        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+        let mut adapter = ResultReaderAdapter::new(reader, None).unwrap();
 
         let result = adapter.next().unwrap();
         assert!(result.is_err());
@@ -470,7 +547,7 @@ mod tests {
     #[test]
     fn test_adapter_schema_error() {
         let reader: Box<dyn ResultReader + Send> = Box::new(SchemaErrorReader);
-        let result = ResultReaderAdapter::new(reader);
+        let result = ResultReaderAdapter::new(reader, None);
         assert!(result.is_err());
     }
 
@@ -530,5 +607,225 @@ mod tests {
             ResultReaderFactory::map_databricks_type("UNKNOWN_TYPE"),
             DataType::Utf8
         );
+    }
+
+    // --- Schema augmentation tests ---
+
+    fn make_manifest(columns: Vec<ColumnInfo>) -> ResultManifest {
+        ResultManifest {
+            format: "ARROW_STREAM".to_string(),
+            schema: ResultSchema {
+                column_count: columns.len() as i32,
+                columns,
+            },
+            total_chunk_count: None,
+            total_row_count: None,
+            total_byte_count: None,
+            truncated: false,
+            chunks: None,
+            result_compression: None,
+        }
+    }
+
+    fn make_column_info(
+        name: &str,
+        type_name: &str,
+        type_text: &str,
+        position: i32,
+        precision: Option<i64>,
+        scale: Option<i64>,
+        interval_type: Option<&str>,
+    ) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            type_text: type_text.to_string(),
+            position,
+            type_precision: precision,
+            type_scale: scale,
+            type_interval_type: interval_type.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_augment_schema_basic_types() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("active", DataType::Boolean, true),
+        ]));
+        let manifest = make_manifest(vec![
+            make_column_info("id", "INT", "INT", 0, None, None, None),
+            make_column_info("name", "STRING", "STRING", 1, None, None, None),
+            make_column_info("active", "BOOLEAN", "BOOLEAN", 2, None, None, None),
+        ]);
+
+        let augmented = ResultReaderAdapter::augment_schema_with_manifest(&schema, &manifest);
+
+        assert_eq!(augmented.fields().len(), 3);
+        // Check type_name and type_text are set
+        assert_eq!(
+            augmented.field(0).metadata().get(metadata_keys::TYPE_NAME),
+            Some(&"INT".to_string())
+        );
+        assert_eq!(
+            augmented.field(0).metadata().get(metadata_keys::TYPE_TEXT),
+            Some(&"INT".to_string())
+        );
+        assert_eq!(
+            augmented.field(1).metadata().get(metadata_keys::TYPE_NAME),
+            Some(&"STRING".to_string())
+        );
+        // Precision/scale should not be present
+        assert!(augmented
+            .field(0)
+            .metadata()
+            .get(metadata_keys::TYPE_PRECISION)
+            .is_none());
+    }
+
+    #[test]
+    fn test_augment_schema_decimal_with_precision_scale() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "amount",
+            DataType::Decimal128(10, 2),
+            true,
+        )]));
+        let manifest = make_manifest(vec![make_column_info(
+            "amount",
+            "DECIMAL",
+            "DECIMAL(10,2)",
+            0,
+            Some(10),
+            Some(2),
+            None,
+        )]);
+
+        let augmented = ResultReaderAdapter::augment_schema_with_manifest(&schema, &manifest);
+
+        let field = augmented.field(0);
+        assert_eq!(
+            field.metadata().get(metadata_keys::TYPE_NAME),
+            Some(&"DECIMAL".to_string())
+        );
+        assert_eq!(
+            field.metadata().get(metadata_keys::TYPE_TEXT),
+            Some(&"DECIMAL(10,2)".to_string())
+        );
+        assert_eq!(
+            field.metadata().get(metadata_keys::TYPE_PRECISION),
+            Some(&"10".to_string())
+        );
+        assert_eq!(
+            field.metadata().get(metadata_keys::TYPE_SCALE),
+            Some(&"2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_augment_schema_interval_type() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "duration",
+            DataType::Utf8,
+            true,
+        )]));
+        let manifest = make_manifest(vec![make_column_info(
+            "duration",
+            "INTERVAL",
+            "INTERVAL YEAR TO MONTH",
+            0,
+            None,
+            None,
+            Some("YEAR_MONTH"),
+        )]);
+
+        let augmented = ResultReaderAdapter::augment_schema_with_manifest(&schema, &manifest);
+
+        let field = augmented.field(0);
+        assert_eq!(
+            field.metadata().get(metadata_keys::TYPE_INTERVAL_TYPE),
+            Some(&"YEAR_MONTH".to_string())
+        );
+    }
+
+    #[test]
+    fn test_augment_schema_missing_column_info() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("known", DataType::Int32, true),
+            Field::new("unknown", DataType::Utf8, true),
+        ]));
+        // Only provide metadata for position 0, not position 1
+        let manifest = make_manifest(vec![make_column_info(
+            "known", "INT", "INT", 0, None, None, None,
+        )]);
+
+        let augmented = ResultReaderAdapter::augment_schema_with_manifest(&schema, &manifest);
+
+        // First field should have metadata
+        assert!(augmented
+            .field(0)
+            .metadata()
+            .contains_key(metadata_keys::TYPE_NAME));
+        // Second field should have no databricks metadata
+        assert!(!augmented
+            .field(1)
+            .metadata()
+            .contains_key(metadata_keys::TYPE_NAME));
+    }
+
+    #[test]
+    fn test_augment_schema_preserves_existing_metadata() {
+        let mut existing_metadata = std::collections::HashMap::new();
+        existing_metadata.insert("custom.key".to_string(), "custom_value".to_string());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Int32, true).with_metadata(existing_metadata)
+        ]));
+        let manifest = make_manifest(vec![make_column_info(
+            "col", "INT", "INT", 0, None, None, None,
+        )]);
+
+        let augmented = ResultReaderAdapter::augment_schema_with_manifest(&schema, &manifest);
+
+        let field = augmented.field(0);
+        // Existing metadata preserved
+        assert_eq!(
+            field.metadata().get("custom.key"),
+            Some(&"custom_value".to_string())
+        );
+        // New metadata added
+        assert_eq!(
+            field.metadata().get(metadata_keys::TYPE_NAME),
+            Some(&"INT".to_string())
+        );
+    }
+
+    #[test]
+    fn test_adapter_with_manifest() {
+        let batch = make_test_batch(vec!["hello"]);
+        let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch]));
+        let manifest = make_manifest(vec![make_column_info(
+            "name", "STRING", "STRING", 0, None, None, None,
+        )]);
+
+        let adapter = ResultReaderAdapter::new(reader, Some(&manifest)).unwrap();
+        let schema = arrow_array::RecordBatchReader::schema(&adapter);
+        assert_eq!(
+            schema.field(0).metadata().get(metadata_keys::TYPE_NAME),
+            Some(&"STRING".to_string())
+        );
+    }
+
+    #[test]
+    fn test_adapter_without_manifest() {
+        let batch = make_test_batch(vec!["hello"]);
+        let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch]));
+
+        let adapter = ResultReaderAdapter::new(reader, None).unwrap();
+        let schema = arrow_array::RecordBatchReader::schema(&adapter);
+        // No databricks metadata when manifest is None
+        assert!(!schema
+            .field(0)
+            .metadata()
+            .contains_key(metadata_keys::TYPE_NAME));
     }
 }

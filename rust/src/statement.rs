@@ -151,7 +151,7 @@ impl adbc_core::Statement for Statement {
         self.current_statement_id = Some(result.statement_id);
 
         // Wrap in adapter for RecordBatchReader trait
-        ResultReaderAdapter::new(result.reader).map_err(|e| e.to_adbc())
+        ResultReaderAdapter::new(result.reader, result.manifest.as_ref()).map_err(|e| e.to_adbc())
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {

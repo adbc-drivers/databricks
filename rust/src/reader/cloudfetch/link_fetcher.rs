@@ -588,6 +588,7 @@ mod tests {
             Ok(ExecuteResult {
                 statement_id: "mock-statement".to_string(),
                 reader: Box::new(EmptyReader::new(StdArc::new(Schema::empty()))),
+                manifest: None,
             })
         }
 

@@ -420,6 +420,7 @@ impl DatabricksClient for SeaClient {
         Ok(ExecuteResult {
             statement_id: response.statement_id,
             reader,
+            manifest: response.manifest,
         })
     }
 

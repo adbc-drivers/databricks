@@ -62,11 +62,12 @@ pub struct SessionInfo {
     pub session_id: String,
 }
 
-/// Result from `execute_statement`. Contains the statement ID (for cancellation/cleanup)
-/// and a reader over the result data.
+/// Result from `execute_statement`. Contains the statement ID (for cancellation/cleanup),
+/// a reader over the result data, and optionally the SEA manifest for metadata propagation.
 pub struct ExecuteResult {
     pub statement_id: String,
     pub reader: Box<dyn ResultReader + Send>,
+    pub manifest: Option<ResultManifest>,
 }
 
 impl std::fmt::Debug for ExecuteResult {
@@ -74,6 +75,7 @@ impl std::fmt::Debug for ExecuteResult {
         f.debug_struct("ExecuteResult")
             .field("statement_id", &self.statement_id)
             .field("reader", &"<dyn ResultReader>")
+            .field("manifest", &self.manifest)
             .finish()
     }
 }

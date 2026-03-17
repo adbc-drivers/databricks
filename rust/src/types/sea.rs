@@ -98,6 +98,12 @@ pub struct ColumnInfo {
     pub type_name: String,
     pub type_text: String,
     pub position: i32,
+    #[serde(default)]
+    pub type_precision: Option<i64>,
+    #[serde(default)]
+    pub type_scale: Option<i64>,
+    #[serde(default)]
+    pub type_interval_type: Option<String>,
 }
 
 /// Information about a result chunk (metadata only).
@@ -398,5 +404,56 @@ mod tests {
 
         let result: ResultData = serde_json::from_str(json).unwrap();
         assert!(result.attachment.is_none());
+    }
+
+    #[test]
+    fn test_column_info_with_all_optional_fields() {
+        let json = r#"{
+            "name": "amount",
+            "type_name": "DECIMAL",
+            "type_text": "DECIMAL(10,2)",
+            "position": 0,
+            "type_precision": 10,
+            "type_scale": 2
+        }"#;
+
+        let col: ColumnInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(col.name, "amount");
+        assert_eq!(col.type_name, "DECIMAL");
+        assert_eq!(col.type_text, "DECIMAL(10,2)");
+        assert_eq!(col.position, 0);
+        assert_eq!(col.type_precision, Some(10));
+        assert_eq!(col.type_scale, Some(2));
+        assert_eq!(col.type_interval_type, None);
+    }
+
+    #[test]
+    fn test_column_info_without_optional_fields() {
+        let json = r#"{
+            "name": "id",
+            "type_name": "INT",
+            "type_text": "INT",
+            "position": 0
+        }"#;
+
+        let col: ColumnInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(col.name, "id");
+        assert_eq!(col.type_precision, None);
+        assert_eq!(col.type_scale, None);
+        assert_eq!(col.type_interval_type, None);
+    }
+
+    #[test]
+    fn test_column_info_with_interval_type() {
+        let json = r#"{
+            "name": "duration",
+            "type_name": "INTERVAL",
+            "type_text": "INTERVAL YEAR TO MONTH",
+            "position": 0,
+            "type_interval_type": "YEAR_MONTH"
+        }"#;
+
+        let col: ColumnInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(col.type_interval_type, Some("YEAR_MONTH".to_string()));
     }
 }

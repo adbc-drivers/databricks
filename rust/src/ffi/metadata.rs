@@ -95,7 +95,7 @@ fn export_reader(
         return FfiStatus::InvalidHandle;
     }
 
-    let adapter = match ResultReaderAdapter::new(reader) {
+    let adapter = match ResultReaderAdapter::new(reader, None) {
         Ok(a) => a,
         Err(e) => return set_error_from_result(&e),
     };
