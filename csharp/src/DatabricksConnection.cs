@@ -110,6 +110,9 @@ namespace AdbcDrivers.Databricks
         // Shared OAuth token provider for connection-wide token caching
         private OAuthClientCredentialsProvider? _oauthTokenProvider;
 
+        // Captures x-databricks-org-id from HTTP response headers
+        private Http.OrgIdCaptureHandler? _orgIdCaptureHandler;
+
         // Telemetry fields
         private ITelemetryClient? _telemetryClient;
         private string? _host;
@@ -434,6 +437,12 @@ namespace AdbcDrivers.Databricks
                 TimeoutMinutes = 1,
                 AddThriftErrorHandler = true
             };
+
+            // Add org ID capture handler between base and the rest of the chain.
+            // This captures x-databricks-org-id from the first successful HTTP response
+            // (e.g., OpenSession), which works for both SPOG and legacy URLs.
+            _orgIdCaptureHandler = new Http.OrgIdCaptureHandler(config.BaseHandler);
+            config.BaseHandler = _orgIdCaptureHandler;
 
             var result = HttpHandlerFactory.CreateHandlersWithTokenProvider(config);
             _oauthTokenProvider = result.TokenProvider;
@@ -800,13 +809,14 @@ namespace AdbcDrivers.Databricks
                     true, // unauthed failure will be report separately
                     telemetryConfig);
 
-                // Extract workspace ID from org ID in the HTTP path (e.g., ?o=12345)
+                // Extract workspace ID from x-databricks-org-id response header
+                // This works for both SPOG and legacy URLs, unlike parsing from the HTTP path.
                 long workspaceId = 0;
-                string? orgId = PropertyHelper.ParseOrgIdFromProperties(Properties);
+                string? orgId = _orgIdCaptureHandler?.CapturedOrgId;
                 if (!string.IsNullOrEmpty(orgId) && long.TryParse(orgId, out long parsedOrgId))
                 {
                     workspaceId = parsedOrgId;
-                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.from_org_id",
+                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.from_response_header",
                         tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
                 }
 
@@ -915,13 +925,12 @@ namespace AdbcDrivers.Databricks
         /// <returns>The batch size value.</returns>
         private int GetBatchSize()
         {
-            const int DefaultBatchSize = 2000000; // DatabricksStatement.DatabricksBatchSizeDefault
             if (Properties.TryGetValue(ApacheParameters.BatchSize, out string? batchSizeStr) &&
                 int.TryParse(batchSizeStr, out int batchSize))
             {
                 return batchSize;
             }
-            return DefaultBatchSize;
+            return (int)DatabricksStatement.DatabricksBatchSizeDefault;
         }
 
         /// <summary>
@@ -930,13 +939,7 @@ namespace AdbcDrivers.Databricks
         /// <returns>The socket timeout value in milliseconds.</returns>
         private int GetSocketTimeout()
         {
-            const int DefaultConnectTimeoutMs = 30000; // Default from HiveServer2
-            if (Properties.TryGetValue(SparkParameters.ConnectTimeoutMilliseconds, out string? timeoutStr) &&
-                int.TryParse(timeoutStr, out int timeout))
-            {
-                return timeout;
-            }
-            return DefaultConnectTimeoutMs;
+            return ConnectTimeoutMilliseconds;
         }
 
         /// <summary>
