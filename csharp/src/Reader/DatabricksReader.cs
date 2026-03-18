@@ -241,10 +241,6 @@ namespace AdbcDrivers.Databricks.Reader
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
-            {
-                _ = CloseOperationAsync().Result;
-            }
             base.Dispose(disposing);
         }
 
