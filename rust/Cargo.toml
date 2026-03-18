@@ -60,6 +60,7 @@ dashmap = "5"
 futures = "0.3"
 tokio-util = "0.7"
 async-trait = "0.1"
+async-channel = "2.3"
 
 # Error handling
 thiserror = "2"
