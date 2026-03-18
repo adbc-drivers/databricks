@@ -55,7 +55,7 @@ namespace AdbcDrivers.Databricks
         // Databricks CloudFetch supports much larger batch sizes than standard Arrow batches (1024MB vs 10MB limit).
         // Using 2M rows significantly reduces round trips for medium/large result sets compared to the base 50K default,
         // improving query performance by reducing the number of FetchResults calls needed.
-        private const long DatabricksBatchSizeDefault = 2000000;
+        internal const long DatabricksBatchSizeDefault = 2000000;
         private const string QueryTagsKey = "query_tags";
         private bool useCloudFetch;
         private bool canDecompressLz4;

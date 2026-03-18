@@ -174,60 +174,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             }
         }
 
-        /// <summary>
-        /// Tests that workspace_id can be explicitly set via connection property.
-        /// This allows users to provide workspace ID when it's not available from server configuration.
-        /// </summary>
-        [SkippableFact]
-        public async Task WorkspaceId_CanBeSet_ViaConnectionProperty()
-        {
-            CapturingTelemetryExporter exporter = null!;
-            AdbcConnection? connection = null;
-
-            try
-            {
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-
-                // Set explicit workspace ID via connection property
-                long expectedWorkspaceId = 1234567890123456;
-                properties["adbc.databricks.workspace_id"] = expectedWorkspaceId.ToString();
-
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
-
-                // Execute a simple query to trigger telemetry
-                using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT 1 AS test_value";
-                var result = statement.ExecuteQuery();
-                using var reader = result.Stream;
-
-                statement.Dispose();
-
-                // Wait for telemetry to be captured
-                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
-                TelemetryTestHelpers.AssertLogCount(logs, 1);
-
-                var frontendLog = logs[0];
-
-                // Assert workspace_id matches the explicit value from connection property
-                // Note: If server config provides orgId, it takes precedence over connection property
-                Assert.True(frontendLog.WorkspaceId == expectedWorkspaceId || frontendLog.WorkspaceId > 0,
-                    $"workspace_id should either match explicit value ({expectedWorkspaceId}) or be from server config, but was {frontendLog.WorkspaceId}");
-
-                OutputHelper?.WriteLine($"✓ workspace_id: {frontendLog.WorkspaceId}");
-                if (frontendLog.WorkspaceId == expectedWorkspaceId)
-                {
-                    OutputHelper?.WriteLine("  ✓ Matches explicit value from connection property");
-                }
-                else
-                {
-                    OutputHelper?.WriteLine("  ✓ Server configuration orgId took precedence over connection property");
-                }
-            }
-            finally
-            {
-                connection?.Dispose();
-                TelemetryTestHelpers.ClearExporterOverride();
-            }
-        }
+        // Note: adbc.databricks.workspace_id is not a supported connection property.
+        // Workspace ID is extracted from x-databricks-org-id response header.
     }
 }
