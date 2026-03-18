@@ -1,18 +1,11 @@
 /*
 * Copyright (c) 2025 ADBC Drivers Contributors
 *
-* This file has been modified from its original version, which is
-* under the Apache License:
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
 *
-* Licensed to the Apache Software Foundation (ASF) under one
-* or more contributor license agreements.  See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership.  The ASF licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
+*     http://www.apache.org/licenses/LICENSE-2.0
 *
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,7 +15,6 @@
 */
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -54,7 +46,8 @@ namespace AdbcDrivers.Databricks.Tests
     /// </summary>
     public class CloseOperationE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IDisposable
     {
-        private readonly ConcurrentBag<(string ActivityName, string EventName)> _capturedEvents = new();
+        private readonly List<(string ActivityName, string EventName)> _capturedEvents = new();
+        private readonly object _capturedEventsLock = new();
         private readonly ActivityListener _activityListener;
         private bool _disposed;
 
@@ -69,9 +62,12 @@ namespace AdbcDrivers.Databricks.Tests
                 Sample = (ref ActivityCreationOptions<ActivityContext> options) => ActivitySamplingResult.AllDataAndRecorded,
                 ActivityStopped = activity =>
                 {
-                    foreach (var evt in activity.Events)
+                    lock (_capturedEventsLock)
                     {
-                        _capturedEvents.Add((activity.OperationName, evt.Name));
+                        foreach (var evt in activity.Events)
+                        {
+                            _capturedEvents.Add((activity.OperationName, evt.Name));
+                        }
                     }
                 }
             };
@@ -134,7 +130,7 @@ namespace AdbcDrivers.Databricks.Tests
         [MemberData(nameof(TestCases))]
         public async Task DisposeEmitsCloseOperationEvent(string description, string query, bool useCloudFetch, bool enableDirectResults)
         {
-            _capturedEvents.Clear();
+            lock (_capturedEventsLock) { _capturedEvents.Clear(); }
 
             var parameters = new Dictionary<string, string>
             {
@@ -168,10 +164,14 @@ namespace AdbcDrivers.Databricks.Tests
                 OutputHelper?.WriteLine($"[{description}] Read {totalRows} rows, reader disposed.");
 
                 // Collect the events emitted by DatabricksCompositeReader.Dispose.
-                var disposeEvents = _capturedEvents
-                    .Where(e => e.ActivityName == "DatabricksCompositeReader.Dispose")
-                    .Select(e => e.EventName)
-                    .ToList();
+                List<string> disposeEvents;
+                lock (_capturedEventsLock)
+                {
+                    disposeEvents = _capturedEvents
+                        .Where(e => e.ActivityName == "DatabricksCompositeReader.Dispose")
+                        .Select(e => e.EventName)
+                        .ToList();
+                }
 
                 OutputHelper?.WriteLine($"[{description}] Dispose events: [{string.Join(", ", disposeEvents)}]");
 
