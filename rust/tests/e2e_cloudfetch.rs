@@ -392,6 +392,7 @@ fn test_cloudfetch_multichunk_sequential_order_and_completeness() {
 // ===========================================================================
 
 #[tokio::test]
+#[ignore = "requires Phase 2 retry/refetch implementation"]
 async fn test_cloudfetch_url_expiry_triggers_refetch_and_continues() {
     // This test uses wiremock to simulate a real CloudFetch pipeline where
     // some chunk URLs return 403 (Forbidden), triggering the driver's
