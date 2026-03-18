@@ -118,6 +118,41 @@ namespace AdbcDrivers.Databricks
             return ctx;
         }
 
+        /// <summary>
+        /// Maps a metadata SQL command to the corresponding telemetry operation type.
+        /// Returns null if the command is not a recognized metadata command.
+        /// </summary>
+        internal static OperationType? GetMetadataOperationType(string? sqlQuery)
+        {
+            return sqlQuery?.ToLowerInvariant() switch
+            {
+                "getcatalogs" => OperationType.ListCatalogs,
+                "getschemas" => OperationType.ListSchemas,
+                "gettables" => OperationType.ListTables,
+                "getcolumns" or "getcolumnsextended" => OperationType.ListColumns,
+                "gettabletypes" => OperationType.ListTableTypes,
+                "getprimarykeys" => OperationType.ListPrimaryKeys,
+                "getcrossreference" => OperationType.ListCrossReferences,
+                _ => null
+            };
+        }
+
+        private StatementTelemetryContext? CreateMetadataTelemetryContext()
+        {
+            var session = ((DatabricksConnection)Connection).TelemetrySession;
+            if (session?.TelemetryClient == null) return null;
+
+            var operationType = GetMetadataOperationType(SqlQuery) ?? OperationType.Unspecified;
+
+            var ctx = new StatementTelemetryContext(session);
+            ctx.OperationType = operationType;
+            ctx.StatementType = Telemetry.Proto.Statement.Types.Type.Metadata;
+            ctx.ResultFormat = ExecutionResultFormat.InlineArrow;
+            ctx.IsCompressed = false;
+            ctx.IsInternalCall = IsInternalCall;
+            return ctx;
+        }
+
         private void RecordSuccess(StatementTelemetryContext ctx)
         {
             ctx.RecordFirstBatchReady();
@@ -136,7 +171,9 @@ namespace AdbcDrivers.Databricks
 
         public override QueryResult ExecuteQuery()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
+            var ctx = IsMetadataCommand
+                ? CreateMetadataTelemetryContext()
+                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
             if (ctx == null) return base.ExecuteQuery();
 
             try
@@ -159,7 +196,9 @@ namespace AdbcDrivers.Databricks
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
+            var ctx = IsMetadataCommand
+                ? CreateMetadataTelemetryContext()
+                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
             if (ctx == null) return await base.ExecuteQueryAsync();
 
             try
