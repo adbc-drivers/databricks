@@ -109,9 +109,13 @@ namespace AdbcDrivers.Databricks
         // Shared OAuth token provider for connection-wide token caching
         private OAuthClientCredentialsProvider? _oauthTokenProvider;
 
+        // Captures x-databricks-org-id from HTTP response headers
+        private Http.OrgIdCaptureHandler? _orgIdCaptureHandler;
+
         // Telemetry fields
         private ITelemetryClient? _telemetryClient;
         private string? _host;
+        private TOpenSessionResp? _openSessionResp;
         internal TelemetrySessionContext? TelemetrySession { get; private set; }
 
         /// <summary>
@@ -421,6 +425,12 @@ namespace AdbcDrivers.Databricks
                 AddThriftErrorHandler = true
             };
 
+            // Add org ID capture handler between base and the rest of the chain.
+            // This captures x-databricks-org-id from the first successful HTTP response
+            // (e.g., OpenSession), which works for both SPOG and legacy URLs.
+            _orgIdCaptureHandler = new Http.OrgIdCaptureHandler(config.BaseHandler);
+            config.BaseHandler = _orgIdCaptureHandler;
+
             var result = HttpHandlerFactory.CreateHandlersWithTokenProvider(config);
             _oauthTokenProvider = result.TokenProvider;
             return result.Handler;
@@ -429,6 +439,138 @@ namespace AdbcDrivers.Databricks
         protected override bool GetObjectsPatternsRequireLowerCase => true;
 
         protected override string DriverName => DatabricksDriverName;
+
+        /// <summary>
+        /// Overrides GetObjects to emit telemetry with appropriate operation type based on depth.
+        /// </summary>
+        public override IArrowArrayStream GetObjects(
+            GetObjectsDepth depth,
+            string? catalogPattern,
+            string? dbSchemaPattern,
+            string? tableNamePattern,
+            IReadOnlyList<string>? tableTypes,
+            string? columnNamePattern)
+        {
+            var operationType = depth switch
+            {
+                GetObjectsDepth.Catalogs => Telemetry.Proto.Operation.Types.Type.ListCatalogs,
+                GetObjectsDepth.DbSchemas => Telemetry.Proto.Operation.Types.Type.ListSchemas,
+                GetObjectsDepth.Tables => Telemetry.Proto.Operation.Types.Type.ListTables,
+                GetObjectsDepth.All => Telemetry.Proto.Operation.Types.Type.ListColumns,
+                _ => Telemetry.Proto.Operation.Types.Type.Unspecified
+            };
+
+            return ExecuteWithMetadataTelemetry(
+                operationType,
+                () => base.GetObjects(depth, catalogPattern, dbSchemaPattern, tableNamePattern, tableTypes, columnNamePattern));
+        }
+
+        /// <summary>
+        /// Overrides GetTableTypes to emit telemetry with LIST_TABLE_TYPES operation type.
+        /// </summary>
+        public override IArrowArrayStream GetTableTypes()
+        {
+            return ExecuteWithMetadataTelemetry(
+                Telemetry.Proto.Operation.Types.Type.ListTableTypes,
+                () => base.GetTableTypes());
+        }
+
+        /// <summary>
+        /// Executes a metadata operation with telemetry instrumentation.
+        /// Metadata operations don't track batch/consumption timing since results are returned inline.
+        /// </summary>
+        private T ExecuteWithMetadataTelemetry<T>(Telemetry.Proto.Operation.Types.Type operationType, Func<T> operation)
+        {
+            return this.TraceActivity(activity =>
+            {
+                StatementTelemetryContext? telemetryContext = null;
+                try
+                {
+                    if (TelemetrySession?.TelemetryClient != null)
+                    {
+                        telemetryContext = new StatementTelemetryContext(TelemetrySession)
+                        {
+                            StatementType = Telemetry.Proto.Statement.Types.Type.Metadata,
+                            OperationType = operationType,
+                            ResultFormat = Telemetry.Proto.ExecutionResult.Types.Format.InlineArrow,
+                            IsCompressed = false
+                        };
+
+                        activity?.SetTag("telemetry.operation_type", operationType.ToString());
+                        activity?.SetTag("telemetry.statement_type", "METADATA");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.context_creation.error",
+                        tags: new System.Diagnostics.ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
+
+                T result;
+                try
+                {
+                    result = operation();
+                }
+                catch (Exception ex)
+                {
+                    if (telemetryContext != null)
+                    {
+                        try
+                        {
+                            telemetryContext.HasError = true;
+                            telemetryContext.ErrorName = ex.GetType().Name;
+                            telemetryContext.ErrorMessage = ex.Message;
+                        }
+                        catch
+                        {
+                            // Swallow telemetry errors
+                        }
+                    }
+                    throw;
+                }
+                finally
+                {
+                    if (telemetryContext != null)
+                    {
+                        try
+                        {
+                            var telemetryLog = telemetryContext.BuildTelemetryLog();
+
+                            var frontendLog = new Telemetry.Models.TelemetryFrontendLog
+                            {
+                                WorkspaceId = telemetryContext.WorkspaceId,
+                                FrontendLogEventId = Guid.NewGuid().ToString(),
+                                Context = new Telemetry.Models.FrontendLogContext
+                                {
+                                    TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                                },
+                                Entry = new Telemetry.Models.FrontendLogEntry
+                                {
+                                    SqlDriverLog = telemetryLog
+                                }
+                            };
+
+                            TelemetrySession?.TelemetryClient?.Enqueue(frontendLog);
+                        }
+                        catch (Exception ex)
+                        {
+                            activity?.AddEvent(new System.Diagnostics.ActivityEvent("telemetry.emit.error",
+                                tags: new System.Diagnostics.ActivityTagsCollection
+                                {
+                                    { "error.type", ex.GetType().Name },
+                                    { "error.message", ex.Message }
+                                }));
+                        }
+                    }
+                }
+
+                return result;
+            });
+        }
 
         internal override IArrowArrayStream NewReader<T>(T statement, Schema schema, IResponse response, TGetResultSetMetadataResp? metadataResp = null)
         {
@@ -532,6 +674,9 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("error.type", "NullSessionResponse");
                 return;
             }
+
+            // Store session response for later use (e.g., extracting workspace ID)
+            _openSessionResp = session;
 
             var version = session.ServerProtocolVersion;
 
@@ -651,15 +796,29 @@ namespace AdbcDrivers.Databricks
                     true, // unauthed failure will be report separately
                     telemetryConfig);
 
+                // Extract workspace ID from x-databricks-org-id response header
+                // This works for both SPOG and legacy URLs, unlike parsing from the HTTP path.
+                long workspaceId = 0;
+                string? orgId = _orgIdCaptureHandler?.CapturedOrgId;
+                if (!string.IsNullOrEmpty(orgId) && long.TryParse(orgId, out long parsedOrgId))
+                {
+                    workspaceId = parsedOrgId;
+                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.from_response_header",
+                        tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
+                }
+
                 // Create session-level telemetry context for V3 direct-object pipeline
                 TelemetrySession = new TelemetrySessionContext
                 {
                     SessionId = SessionHandle?.SessionId?.Guid != null
                         ? new Guid(SessionHandle.SessionId.Guid).ToString()
                         : null,
+                    WorkspaceId = workspaceId,
+
                     TelemetryClient = _telemetryClient,
                     SystemConfiguration = BuildSystemConfiguration(),
-                    DriverConnectionParams = BuildDriverConnectionParams(true)
+                    DriverConnectionParams = BuildDriverConnectionParams(true),
+                    AuthType = DetermineAuthType()
                 };
 
                 activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
@@ -686,6 +845,7 @@ namespace AdbcDrivers.Databricks
         private Telemetry.Proto.DriverSystemConfiguration BuildSystemConfiguration()
         {
             var osVersion = System.Environment.OSVersion;
+            var processName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
             return new Telemetry.Proto.DriverSystemConfiguration
             {
                 DriverVersion = s_assemblyVersion,
@@ -695,9 +855,11 @@ namespace AdbcDrivers.Databricks
                 OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
                 RuntimeName = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
                 RuntimeVersion = System.Environment.Version.ToString(),
+                RuntimeVendor = "Microsoft",
                 LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
                 CharSetEncoding = System.Text.Encoding.Default.WebName,
-                ProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName
+                ProcessName = processName,
+                ClientAppName = processName
             };
         }
 
@@ -735,7 +897,64 @@ namespace AdbcDrivers.Databricks
                 },
                 AuthMech = authMech,
                 AuthFlow = authFlow,
+                EnableArrow = true, // Always true for ADBC driver
+                RowsFetchedPerBlock = GetBatchSize(),
+                SocketTimeout = GetSocketTimeout(),
+                EnableDirectResults = _enableDirectResults,
+                EnableComplexDatatypeSupport = _useDescTableExtended,
+                AutoCommit = true, // ADBC always uses auto-commit (implicit commits)
             };
+        }
+
+        /// <summary>
+        /// Gets the batch size from connection properties.
+        /// </summary>
+        /// <returns>The batch size value.</returns>
+        private int GetBatchSize()
+        {
+            if (Properties.TryGetValue(ApacheParameters.BatchSize, out string? batchSizeStr) &&
+                int.TryParse(batchSizeStr, out int batchSize))
+            {
+                return batchSize;
+            }
+            return (int)DatabricksStatement.DatabricksBatchSizeDefault;
+        }
+
+        /// <summary>
+        /// Gets the socket timeout from connection properties.
+        /// </summary>
+        /// <returns>The socket timeout value in milliseconds.</returns>
+        private int GetSocketTimeout()
+        {
+            return ConnectTimeoutMilliseconds;
+        }
+
+        /// <summary>
+        /// Determines the auth_type string based on connection properties.
+        /// Format: auth_type or auth_type-grant_type (for OAuth).
+        /// Mapping: PAT -> 'pat', OAuth -> 'oauth-{grant_type}', Other -> 'other'
+        /// </summary>
+        /// <returns>The auth_type string value.</returns>
+        private string DetermineAuthType()
+        {
+            // Format: auth_type or auth_type-grant_type (for OAuth)
+            Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
+
+            if (!string.IsNullOrEmpty(grantType))
+            {
+                // OAuth with grant type: oauth-{grant_type}
+                return $"oauth-{grantType}";
+            }
+
+            // Check for PAT (Personal Access Token)
+            Properties.TryGetValue(SparkParameters.Token, out string? token);
+            if (!string.IsNullOrEmpty(token))
+            {
+                return "pat";
+            }
+
+            // Default to 'other' for unknown or unspecified auth types
+            return "other";
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
@@ -744,6 +963,7 @@ namespace AdbcDrivers.Databricks
         {
             using var statement = new DatabricksStatement(this);
             statement.SqlQuery = $"USE {schemaName}";
+            statement.IsInternalCall = true; // Mark as internal driver operation
             await statement.ExecuteUpdateAsync();
         }
 
