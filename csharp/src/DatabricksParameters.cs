@@ -360,7 +360,7 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Whether to enable the feature flag cache for fetching remote configuration from the server.
         /// When enabled, the driver fetches feature flags from the Databricks server and merges them with local properties.
-        /// Default value is true if not specified.
+        /// Default value is false if not specified.
         /// </summary>
         public const string FeatureFlagCacheEnabled = "adbc.databricks.feature_flag_cache_enabled";
 

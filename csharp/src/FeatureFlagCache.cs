@@ -307,9 +307,9 @@ namespace AdbcDrivers.Databricks
 
             try
             {
-                // Check if feature flag cache is enabled (default: true)
-                if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) &&
-                    bool.TryParse(enabledStr, out bool enabled) &&
+                // Check if feature flag cache is enabled (default: false)
+                if (!localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) ||
+                    !bool.TryParse(enabledStr, out bool enabled) ||
                     !enabled)
                 {
                     activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
