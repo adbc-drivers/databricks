@@ -260,6 +260,9 @@ namespace AdbcDrivers.Databricks
             }
 
             _refreshCts.Dispose();
+
+            // Dispose the HttpClient — this context owns it (transferred from FeatureFlagCache)
+            _httpClient?.Dispose();
         }
 
         /// <summary>

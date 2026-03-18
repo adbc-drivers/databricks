@@ -188,6 +188,98 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             context.Dispose();
         }
 
+        [Fact]
+        public void FeatureFlagContext_Dispose_DisposesOwnedHttpClient()
+        {
+            // Arrange - Use a trackable HttpClient to verify disposal
+            var mockHandler = new Mock<HttpMessageHandler>();
+            mockHandler.Protected().Setup("Dispose", ItExpr.IsAny<bool>());
+            var httpClient = new HttpClient(mockHandler.Object)
+            {
+                BaseAddress = new Uri("https://test.databricks.com")
+            };
+
+            var context = new FeatureFlagContext(
+                host: "test-host",
+                httpClient: httpClient,
+                driverVersion: DriverVersion,
+                endpointFormat: null);
+
+            // Act
+            context.Dispose();
+
+            // Assert - Verify that after dispose, the HttpClient is no longer usable
+            // HttpClient.Dispose() sets it into a disposed state; subsequent calls throw ObjectDisposedException
+            Assert.Throws<ObjectDisposedException>(() => httpClient.GetAsync("https://test.databricks.com/test").GetAwaiter().GetResult());
+        }
+
+        [Fact]
+        public void FeatureFlagContext_Dispose_HandlesNullHttpClient()
+        {
+            // Arrange - Context created without HttpClient (null)
+            var context = new FeatureFlagContext(
+                host: "test-host",
+                httpClient: null,
+                driverVersion: DriverVersion,
+                endpointFormat: null);
+
+            // Act - should not throw even though HttpClient is null
+            context.Dispose();
+            context.Dispose(); // Double-dispose also safe
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_HttpClient_RemainsUsableDuringLifetime()
+        {
+            // Arrange - Verify HttpClient is usable for background refresh before dispose
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>
+                {
+                    new FeatureFlagEntry { Name = "flag1", Value = "value1" }
+                },
+                TtlSeconds = 1 // Short TTL to trigger background refresh quickly
+            };
+
+            var callCount = 0;
+            var mockHandler = new Mock<HttpMessageHandler>();
+            mockHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .Returns((HttpRequestMessage request, CancellationToken token) =>
+                {
+                    Interlocked.Increment(ref callCount);
+                    var json = JsonSerializer.Serialize(response);
+                    return Task.FromResult(new HttpResponseMessage
+                    {
+                        StatusCode = HttpStatusCode.OK,
+                        Content = new StringContent(json)
+                    });
+                });
+
+            var httpClient = new HttpClient(mockHandler.Object)
+            {
+                BaseAddress = new Uri("https://test.databricks.com")
+            };
+
+            // Act - Create context (transfers ownership of httpClient)
+            var context = await FeatureFlagContext.CreateAsync(
+                "test-lifetime.databricks.com",
+                httpClient,
+                DriverVersion);
+
+            // Wait for at least one background refresh
+            await Task.Delay(1500);
+
+            // Assert - Background refresh should have succeeded (HttpClient was not prematurely disposed)
+            Assert.True(callCount >= 2, $"Expected at least 2 HTTP calls (initial + background), got {callCount}");
+
+            // Cleanup
+            context.Dispose();
+        }
+
         #endregion
 
         #region FeatureFlagContext Tests - Internal Methods
