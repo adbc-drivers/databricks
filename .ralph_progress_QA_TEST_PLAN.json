@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T03:47:48.701922",
+  "updated_at": "2026-03-19T03:49:03.733814",
   "tasks": [
     {
       "id": "1.1.1",
@@ -192,8 +192,12 @@
       "id": "1.1.24",
       "phase": "Phase 1",
       "title": "Test GetPositiveLongPropertyWithValidation returns value for positive long",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.3957485,
+        "turns": 14
+      }
     },
     {
       "id": "1.1.25",

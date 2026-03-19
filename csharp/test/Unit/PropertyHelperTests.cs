@@ -501,5 +501,24 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Contains("longKey", exception.Message);
             Assert.Contains(invalidValue, exception.Message);
         }
+
+        /// <summary>
+        /// Test that GetPositiveLongPropertyWithValidation returns the value when given a positive long string.
+        /// </summary>
+        [Fact]
+        public void GetPositiveLongPropertyWithValidation_ReturnsValueForPositiveLong()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "positiveLongKey", "9223372036854775807" } // long.MaxValue
+            };
+
+            // Act
+            var result = PropertyHelper.GetPositiveLongPropertyWithValidation(properties, "positiveLongKey", 1L);
+
+            // Assert
+            Assert.Equal(9223372036854775807L, result);
+        }
     }
 }
