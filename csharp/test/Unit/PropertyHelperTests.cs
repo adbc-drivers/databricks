@@ -345,5 +345,31 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal(99, result);
         }
+
+        /// <summary>
+        /// Test that GetIntPropertyWithValidation throws ArgumentException for non-integer values.
+        /// </summary>
+        [Theory]
+        [InlineData("abc")]
+        [InlineData("1.5")]
+        [InlineData("")]
+        [InlineData("12.34")]
+        [InlineData("not a number")]
+        public void GetIntPropertyWithValidation_ThrowsArgumentExceptionForNonInteger(string invalidValue)
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "intKey", invalidValue }
+            };
+
+            // Act & Assert
+            var exception = Assert.Throws<ArgumentException>(() =>
+                PropertyHelper.GetIntPropertyWithValidation(properties, "intKey", 0));
+
+            // Verify the error message contains the key and value
+            Assert.Contains("intKey", exception.Message);
+            Assert.Contains(invalidValue, exception.Message);
+        }
     }
 }

@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T02:28:32.180317",
+  "updated_at": "2026-03-19T02:29:48.064292",
   "tasks": [
     {
       "id": "1.1.1",
@@ -123,8 +123,12 @@
       "id": "1.1.17",
       "phase": "Phase 1",
       "title": "GetIntPropertyWithValidation throws ArgumentException for non-integer",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.43939925,
+        "turns": 11
+      }
     },
     {
       "id": "1.1.18",
