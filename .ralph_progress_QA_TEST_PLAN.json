@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T03:44:04.361876",
+  "updated_at": "2026-03-19T03:44:58.981865",
   "tasks": [
     {
       "id": "1.1.1",
@@ -148,8 +148,12 @@
       "id": "1.1.20",
       "phase": "Phase 1",
       "title": "Test GetPositiveIntPropertyWithValidation throws ArgumentOutOfRangeException for negative int",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.316856,
+        "turns": 9
+      }
     },
     {
       "id": "1.1.21",
