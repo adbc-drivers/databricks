@@ -98,5 +98,22 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Throws<ArgumentNullException>(() =>
                 PropertyHelper.GetStringProperty(properties, "key1", "defaultValue"));
         }
+
+        /// <summary>
+        /// Test that GetStringProperty throws ArgumentNullException when key is null.
+        /// </summary>
+        [Fact]
+        public void GetStringProperty_ThrowsArgumentNullExceptionWhenKeyIsNull()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "key1", "value1" }
+            };
+
+            // Act & Assert
+            Assert.Throws<ArgumentNullException>(() =>
+                PropertyHelper.GetStringProperty(properties, null!, "defaultValue"));
+        }
     }
 }

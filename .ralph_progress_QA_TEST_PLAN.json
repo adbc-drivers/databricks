@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T01:16:47.453793",
+  "updated_at": "2026-03-19T01:17:40.057778",
   "tasks": [
     {
       "id": "1.1.1",
@@ -51,8 +51,12 @@
       "id": "1.1.5",
       "phase": "Phase 1",
       "title": "GetStringProperty - Throws ArgumentNullException when key is null",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.21403024999999998,
+        "turns": 8
+      }
     },
     {
       "id": "1.1.6",
