@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T03:45:55.105852",
+  "updated_at": "2026-03-19T03:46:52.577884",
   "tasks": [
     {
       "id": "1.1.1",
@@ -170,8 +170,12 @@
       "id": "1.1.22",
       "phase": "Phase 1",
       "title": "Test GetLongPropertyWithValidation returns parsed long for valid string",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.3603604999999999,
+        "turns": 12
+      }
     },
     {
       "id": "1.1.23",
