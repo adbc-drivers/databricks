@@ -4,6 +4,8 @@
 
 The C# driver uses a release branch model to provide stable, hotfixable releases. Downstream consumers (e.g., PowerBI) pin to a specific version and receive cherry-picked fixes without pulling in all new development work.
 
+The ADBC driver version is included in the user agent string sent to Databricks, making it visible in query history. This allows tracing exactly which driver version a consumer is running when investigating issues.
+
 ## Branch Naming
 
 ```
