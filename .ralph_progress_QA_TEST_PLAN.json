@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T03:55:23.865846",
+  "updated_at": "2026-03-19T03:56:35.905892",
   "tasks": [
     {
       "id": "1.1.1",
@@ -269,8 +269,12 @@
       "id": "1.1.31",
       "phase": "Phase 1",
       "title": "Test ParseOrgIdFromQueryString handles multiple query params",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.4553014999999999,
+        "turns": 15
+      }
     },
     {
       "id": "1.1.32",

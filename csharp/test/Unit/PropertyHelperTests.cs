@@ -624,5 +624,21 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal("abc+def=123", result);
         }
+
+        /// <summary>
+        /// Test that ParseOrgIdFromQueryString correctly extracts org ID from query strings with multiple parameters.
+        /// </summary>
+        [Fact]
+        public void ParseOrgIdFromQueryString_HandlesMultipleQueryParams()
+        {
+            // Arrange
+            var queryString = "a=1&o=123&b=2";
+
+            // Act
+            var result = PropertyHelper.ParseOrgIdFromQueryString(queryString);
+
+            // Assert
+            Assert.Equal("123", result);
+        }
     }
 }
