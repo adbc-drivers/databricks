@@ -64,5 +64,25 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal("defaultValue", result);
         }
+
+        /// <summary>
+        /// Test that GetStringProperty returns the default value when the value is an empty string.
+        /// </summary>
+        [Fact]
+        public void GetStringProperty_ReturnsDefaultWhenValueIsEmptyString()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "key1", "" },
+                { "key2", "value2" }
+            };
+
+            // Act
+            var result = PropertyHelper.GetStringProperty(properties, "key1", "defaultValue");
+
+            // Assert
+            Assert.Equal("defaultValue", result);
+        }
     }
 }
