@@ -640,5 +640,21 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal("123", result);
         }
+
+        /// <summary>
+        /// Test that ParseOrgIdFromProperties returns null when properties is null.
+        /// </summary>
+        [Fact]
+        public void ParseOrgIdFromProperties_ReturnsNullWhenPropertiesIsNull()
+        {
+            // Arrange
+            IReadOnlyDictionary<string, string>? properties = null;
+
+            // Act
+            var result = PropertyHelper.ParseOrgIdFromProperties(properties);
+
+            // Assert
+            Assert.Null(result);
+        }
     }
 }
