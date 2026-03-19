@@ -390,5 +390,25 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal(42, result);
         }
+
+        /// <summary>
+        /// Test that GetPositiveIntPropertyWithValidation throws ArgumentOutOfRangeException when the value is 0.
+        /// </summary>
+        [Fact]
+        public void GetPositiveIntPropertyWithValidation_ThrowsArgumentOutOfRangeExceptionForZero()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "positiveIntKey", "0" }
+            };
+
+            // Act & Assert
+            var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+                PropertyHelper.GetPositiveIntPropertyWithValidation(properties, "positiveIntKey", 1));
+
+            // Verify the exception contains the key name
+            Assert.Contains("positiveIntKey", exception.Message);
+        }
     }
 }
