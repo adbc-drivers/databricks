@@ -17,24 +17,19 @@ Examples: `release/csharp/v1.0.0`, `release/csharp/v1.1.0`
 ### Full Release Lifecycle
 
 ```mermaid
-gitGraph
-    commit id: "A"
-    commit id: "B"
-    branch release/csharp/v1.1.0
-    checkout main
-    commit id: "C"
-    checkout release/csharp/v1.1.0
-    merge main id: "merge C"
-    checkout main
-    commit id: "D"
-    checkout release/csharp/v1.1.0
-    merge main id: "merge D (final)" tag: "csharp/v1.1.0"
-    checkout main
-    commit id: "E"
-    commit id: "F"
-    checkout release/csharp/v1.1.0
-    commit id: "cherry-pick fix A" tag: "csharp/v1.1.1"
-    commit id: "cherry-pick fix B" tag: "csharp/v1.1.2"
+flowchart LR
+    subgraph main
+        A((A)) --> B((B)) --> C((C)) --> D((D)) --> E((E)) --> F((F))
+    end
+    subgraph release/csharp/v1.1.0
+        B -.->|branch| R1((start))
+        C -.->|merge| R2((merge C))
+        R1 --> R2
+        D -.->|merge + tag v1.1.0| R3((cutoff))
+        R2 --> R3
+        R3 -->|cherry-pick| R4((fix A\ntag v1.1.1))
+        R4 -->|cherry-pick| R5((fix B\ntag v1.1.2))
+    end
 ```
 
 ### Phase 1: Pre-Cutoff (Active Development)
