@@ -47,7 +47,7 @@ When the release is ready to freeze:
 
 ```mermaid
 flowchart TD
-    A[Final merge of main into release branch] --> B[Tag the cutoff point e.g. csharp/v1.1.0]
+    A[Final merge of main into release branch] --> B[Tag the cutoff point on the release branch e.g. csharp/v1.1.0]
     B --> C[Create next release branch e.g. release/csharp/v1.2.0]
 ```
 
