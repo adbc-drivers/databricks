@@ -14,13 +14,30 @@ Examples: `release/csharp/v1.0.0`, `release/csharp/v1.1.0`
 
 ## Lifecycle
 
-### Phase 1: Pre-Cutoff (Active Development)
+### Full Release Lifecycle
 
+```mermaid
+gitGraph
+    commit id: "A"
+    commit id: "B"
+    branch release/csharp/v1.1.0
+    checkout main
+    commit id: "C"
+    checkout release/csharp/v1.1.0
+    merge main id: "merge C"
+    checkout main
+    commit id: "D"
+    checkout release/csharp/v1.1.0
+    merge main id: "merge D (final)" tag: "csharp/v1.1.0"
+    checkout main
+    commit id: "E"
+    commit id: "F"
+    checkout release/csharp/v1.1.0
+    commit id: "cherry-pick fix A" tag: "csharp/v1.1.1"
+    commit id: "cherry-pick fix B" tag: "csharp/v1.1.2"
 ```
-main:                    A → B → C → D → E → F
-                          \       \       \
-release/csharp/v1.1.0:    merge   merge   merge
-```
+
+### Phase 1: Pre-Cutoff (Active Development)
 
 - All new commits go to `main` as usual.
 - The release branch is created early from `main`.
@@ -31,22 +48,25 @@ release/csharp/v1.1.0:    merge   merge   merge
 
 When the release is ready to freeze:
 
-1. Final merge of `main` into the release branch.
-2. Tag the cutoff point (e.g., `csharp/v1.1.0`).
-3. Enable branch protection (require PR + approval, no direct push).
-4. Create the next release branch (e.g., `release/csharp/v1.2.0`).
+```mermaid
+flowchart TD
+    A[Final merge of main into release branch] --> B[Tag the cutoff point e.g. csharp/v1.1.0]
+    B --> C[Enable branch protection on release branch]
+    C --> D[Create next release branch e.g. release/csharp/v1.2.0]
+```
 
 ### Phase 3: Post-Cutoff (Maintenance)
-
-```
-release/csharp/v1.1.0:  ... cutoff -> cherry-pick fix A -> cherry-pick fix B
-                                |              |
-                          tag v1.1.0      tag v1.1.1
-```
 
 - Only cherry-picks allowed, with PR review.
 - Fixes go to `main` first, then cherry-picked to the release branch.
 - Each cherry-pick batch gets a new patch tag (e.g., `csharp/v1.1.1`, `csharp/v1.1.2`).
+
+```mermaid
+flowchart LR
+    A[Bug found] --> B[Fix on main via PR]
+    B --> C[Cherry-pick to release branch via PR]
+    C --> D[Tag new patch version]
+```
 
 ## Scope
 
