@@ -81,9 +81,9 @@ namespace AdbcDrivers.Databricks.Telemetry
 
         /// <summary>
         /// Gets or sets whether telemetry is enabled.
-        /// Default is true.
+        /// Default is false.
         /// </summary>
-        public bool Enabled { get; set; } = true;
+        public bool Enabled { get; set; } = false;
 
         /// <summary>
         /// Gets or sets the batch size for telemetry metrics.
