@@ -84,5 +84,19 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal("defaultValue", result);
         }
+
+        /// <summary>
+        /// Test that GetStringProperty throws ArgumentNullException when properties is null.
+        /// </summary>
+        [Fact]
+        public void GetStringProperty_ThrowsArgumentNullExceptionWhenPropertiesIsNull()
+        {
+            // Arrange
+            IReadOnlyDictionary<string, string>? properties = null;
+
+            // Act & Assert
+            Assert.Throws<ArgumentNullException>(() =>
+                PropertyHelper.GetStringProperty(properties, "key1", "defaultValue"));
+        }
     }
 }
