@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T03:52:07.097848",
+  "updated_at": "2026-03-19T03:52:56.637881",
   "tasks": [
     {
       "id": "1.1.1",
@@ -236,8 +236,12 @@
       "id": "1.1.28",
       "phase": "Phase 1",
       "title": "Test ParseOrgIdFromQueryString returns null when 'o' param missing",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.3520395,
+        "turns": 9
+      }
     },
     {
       "id": "1.1.29",

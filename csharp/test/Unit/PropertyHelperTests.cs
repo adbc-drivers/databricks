@@ -576,5 +576,21 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal("12345", result);
         }
+
+        /// <summary>
+        /// Test that ParseOrgIdFromQueryString returns null when the 'o' parameter is missing.
+        /// </summary>
+        [Fact]
+        public void ParseOrgIdFromQueryString_ReturnsNullWhenOParamMissing()
+        {
+            // Arrange
+            var queryString = "a=1&b=2&c=3";
+
+            // Act
+            var result = PropertyHelper.ParseOrgIdFromQueryString(queryString);
+
+            // Assert
+            Assert.Null(result);
+        }
     }
 }
