@@ -115,5 +115,25 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Throws<ArgumentNullException>(() =>
                 PropertyHelper.GetStringProperty(properties, null!, "defaultValue"));
         }
+
+        /// <summary>
+        /// Test that GetRequiredStringProperty returns the correct value when the key exists.
+        /// </summary>
+        [Fact]
+        public void GetRequiredStringProperty_ReturnsValueWhenKeyExists()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "key1", "value1" },
+                { "key2", "value2" }
+            };
+
+            // Act
+            var result = PropertyHelper.GetRequiredStringProperty(properties, "key1");
+
+            // Assert
+            Assert.Equal("value1", result);
+        }
     }
 }
