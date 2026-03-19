@@ -258,5 +258,28 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.False(result);
         }
+
+        /// <summary>
+        /// Test that GetBooleanPropertyWithValidation returns the default value when the key is missing.
+        /// </summary>
+        [Fact]
+        public void GetBooleanPropertyWithValidation_ReturnsDefaultWhenKeyMissing()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "otherKey", "value" }
+            };
+
+            // Act - Test with default value true
+            var resultTrue = PropertyHelper.GetBooleanPropertyWithValidation(properties, "missingKey", true);
+
+            // Act - Test with default value false
+            var resultFalse = PropertyHelper.GetBooleanPropertyWithValidation(properties, "missingKey", false);
+
+            // Assert
+            Assert.True(resultTrue);
+            Assert.False(resultFalse);
+        }
     }
 }
