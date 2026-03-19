@@ -1,1524 +1,1472 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T01:29:01.049715",
+  "updated_at": "2026-03-19T02:28:32.180317",
   "tasks": [
     {
       "id": "1.1.1",
       "phase": "Phase 1",
-      "title": "GetStringProperty - Returns value when key exists",
+      "title": "GetStringProperty returns value when key exists",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.40187124999999996,
-        "turns": 16
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.2",
       "phase": "Phase 1",
-      "title": "GetStringProperty - Returns default when key missing",
+      "title": "GetStringProperty returns default when key missing",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.313021,
-        "turns": 9
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.3",
       "phase": "Phase 1",
-      "title": "GetStringProperty - Returns default when value is empty string",
+      "title": "GetStringProperty returns default when value is empty string",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.32857425,
-        "turns": 10
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.4",
       "phase": "Phase 1",
-      "title": "GetStringProperty - Throws ArgumentNullException when properties is null",
+      "title": "GetStringProperty throws ArgumentNullException when properties is null",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.30050825000000003,
-        "turns": 8
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.5",
       "phase": "Phase 1",
-      "title": "GetStringProperty - Throws ArgumentNullException when key is null",
+      "title": "GetStringProperty throws ArgumentNullException when key is null",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.21403024999999998,
-        "turns": 8
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.6",
       "phase": "Phase 1",
-      "title": "GetRequiredStringProperty - Returns value when key exists",
+      "title": "GetRequiredStringProperty returns value when key exists",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.32672575,
-        "turns": 10
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.7",
       "phase": "Phase 1",
-      "title": "GetRequiredStringProperty - Throws ArgumentException when key missing",
+      "title": "GetRequiredStringProperty throws ArgumentException when key missing",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.44167825,
-        "turns": 14
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.8",
       "phase": "Phase 1",
-      "title": "GetRequiredStringProperty - Throws ArgumentException when value is empty",
+      "title": "GetRequiredStringProperty throws ArgumentException when value is empty",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.35442999999999997,
-        "turns": 10
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.9",
       "phase": "Phase 1",
-      "title": "GetRequiredStringProperty - Uses custom error message when provided",
+      "title": "GetRequiredStringProperty uses custom error message when provided",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.51802425,
-        "turns": 10
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.10",
       "phase": "Phase 1",
-      "title": "GetRequiredStringProperty - Uses default error message when not provided",
+      "title": "GetRequiredStringProperty uses default error message when not provided",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.4377702500000001,
-        "turns": 11
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.11",
       "phase": "Phase 1",
-      "title": "GetBooleanPropertyWithValidation - Returns true for 'true'",
+      "title": "GetBooleanPropertyWithValidation returns true for \"true\"",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.27065174999999997,
-        "turns": 10
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.12",
       "phase": "Phase 1",
-      "title": "GetBooleanPropertyWithValidation - Returns false for 'false'",
+      "title": "GetBooleanPropertyWithValidation returns false for \"false\"",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.23888600000000004,
-        "turns": 9
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.13",
       "phase": "Phase 1",
-      "title": "GetBooleanPropertyWithValidation - Returns default when key missing",
+      "title": "GetBooleanPropertyWithValidation returns default when key missing",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.34933025,
-        "turns": 14
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.14",
       "phase": "Phase 1",
-      "title": "GetBooleanPropertyWithValidation - Throws ArgumentException for invalid value",
+      "title": "GetBooleanPropertyWithValidation throws ArgumentException for invalid value",
       "status": "completed",
-      "attempts": 1,
-      "stats": {
-        "cost_usd": 0.47264075000000005,
-        "turns": 15
-      }
+      "attempts": 0
     },
     {
       "id": "1.1.15",
       "phase": "Phase 1",
-      "title": "GetIntPropertyWithValidation - Returns parsed int for valid string",
-      "status": "pending",
+      "title": "GetIntPropertyWithValidation returns parsed int for valid string",
+      "status": "completed",
       "attempts": 0
     },
     {
       "id": "1.1.16",
       "phase": "Phase 1",
-      "title": "GetIntPropertyWithValidation - Returns default when key missing",
-      "status": "pending",
-      "attempts": 0
+      "title": "GetIntPropertyWithValidation returns default when key missing",
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.30777724999999995,
+        "turns": 12
+      }
     },
     {
       "id": "1.1.17",
       "phase": "Phase 1",
-      "title": "GetIntPropertyWithValidation - Throws ArgumentException for non-integer",
+      "title": "GetIntPropertyWithValidation throws ArgumentException for non-integer",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.18",
       "phase": "Phase 1",
-      "title": "GetPositiveIntPropertyWithValidation - Returns value for positive int",
+      "title": "GetPositiveIntPropertyWithValidation returns value for positive int",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.19",
       "phase": "Phase 1",
-      "title": "GetPositiveIntPropertyWithValidation - Throws ArgumentOutOfRangeException for 0",
+      "title": "GetPositiveIntPropertyWithValidation throws ArgumentOutOfRangeException for 0",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.20",
       "phase": "Phase 1",
-      "title": "GetPositiveIntPropertyWithValidation - Throws ArgumentOutOfRangeException for negative int",
+      "title": "GetPositiveIntPropertyWithValidation throws ArgumentOutOfRangeException for negative int",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.21",
       "phase": "Phase 1",
-      "title": "GetPositiveIntPropertyWithValidation - Throws ArgumentException for non-integer",
+      "title": "GetPositiveIntPropertyWithValidation throws ArgumentException for non-integer",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.22",
       "phase": "Phase 1",
-      "title": "GetLongPropertyWithValidation - Returns parsed long for valid string",
+      "title": "GetLongPropertyWithValidation returns parsed long for valid string",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.23",
       "phase": "Phase 1",
-      "title": "GetLongPropertyWithValidation - Throws ArgumentException for non-long",
+      "title": "GetLongPropertyWithValidation throws ArgumentException for non-long",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.24",
       "phase": "Phase 1",
-      "title": "GetPositiveLongPropertyWithValidation - Returns value for positive long",
+      "title": "GetPositiveLongPropertyWithValidation returns value for positive long",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.25",
       "phase": "Phase 1",
-      "title": "GetPositiveLongPropertyWithValidation - Throws ArgumentOutOfRangeException for 0",
+      "title": "GetPositiveLongPropertyWithValidation throws ArgumentOutOfRangeException for 0",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.26",
       "phase": "Phase 1",
-      "title": "GetPositiveLongPropertyWithValidation - Throws ArgumentOutOfRangeException for negative long",
+      "title": "GetPositiveLongPropertyWithValidation throws ArgumentOutOfRangeException for negative long",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.27",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromQueryString - Extracts org ID from 'o=12345'",
+      "title": "ParseOrgIdFromQueryString extracts org ID from \"o=12345\"",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.28",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromQueryString - Returns null when 'o' param missing",
+      "title": "ParseOrgIdFromQueryString returns null when \"o\" param missing",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.29",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromQueryString - Returns null when 'o' param is empty",
+      "title": "ParseOrgIdFromQueryString returns null when \"o\" param is empty",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.30",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromQueryString - Handles URL-encoded org ID values",
+      "title": "ParseOrgIdFromQueryString handles URL-encoded org ID values",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.31",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromQueryString - Handles multiple query params",
+      "title": "ParseOrgIdFromQueryString handles multiple query params",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.32",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromProperties - Returns null when properties is null",
+      "title": "ParseOrgIdFromProperties returns null when properties is null",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.33",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromProperties - Extracts org ID from Path property query string",
+      "title": "ParseOrgIdFromProperties extracts org ID from Path property query string",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.34",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromProperties - Falls back to Uri property when Path has no org ID",
+      "title": "ParseOrgIdFromProperties falls back to Uri property when Path has no org ID",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.1.35",
       "phase": "Phase 1",
-      "title": "ParseOrgIdFromProperties - Returns null when neither Path nor Uri has org ID",
+      "title": "ParseOrgIdFromProperties returns null when neither Path nor Uri has org ID",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.1",
       "phase": "Phase 1",
-      "title": "GetArrowType - BIGINT_TYPE \u2192 Int64Type",
+      "title": "GetArrowType maps BIGINT_TYPE to Int64Type",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.2",
       "phase": "Phase 1",
-      "title": "GetArrowType - BINARY_TYPE \u2192 BinaryType",
+      "title": "GetArrowType maps BINARY_TYPE to BinaryType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.3",
       "phase": "Phase 1",
-      "title": "GetArrowType - BOOLEAN_TYPE \u2192 BooleanType",
+      "title": "GetArrowType maps BOOLEAN_TYPE to BooleanType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.4",
       "phase": "Phase 1",
-      "title": "GetArrowType - DATE_TYPE \u2192 Date32Type",
+      "title": "GetArrowType maps DATE_TYPE to Date32Type",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.5",
       "phase": "Phase 1",
-      "title": "GetArrowType - DOUBLE_TYPE \u2192 DoubleType",
+      "title": "GetArrowType maps DOUBLE_TYPE to DoubleType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.6",
       "phase": "Phase 1",
-      "title": "GetArrowType - FLOAT_TYPE \u2192 FloatType",
+      "title": "GetArrowType maps FLOAT_TYPE to FloatType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.7",
       "phase": "Phase 1",
-      "title": "GetArrowType - INT_TYPE \u2192 Int32Type",
+      "title": "GetArrowType maps INT_TYPE to Int32Type",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.8",
       "phase": "Phase 1",
-      "title": "GetArrowType - NULL_TYPE \u2192 NullType",
+      "title": "GetArrowType maps NULL_TYPE to NullType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.9",
       "phase": "Phase 1",
-      "title": "GetArrowType - SMALLINT_TYPE \u2192 Int16Type",
+      "title": "GetArrowType maps SMALLINT_TYPE to Int16Type",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.10",
       "phase": "Phase 1",
-      "title": "GetArrowType - TIMESTAMP_TYPE \u2192 TimestampType(Microsecond)",
+      "title": "GetArrowType maps TIMESTAMP_TYPE to TimestampType(Microsecond)",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.11",
       "phase": "Phase 1",
-      "title": "GetArrowType - TINYINT_TYPE \u2192 Int8Type",
+      "title": "GetArrowType maps TINYINT_TYPE to Int8Type",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.12",
       "phase": "Phase 1",
-      "title": "GetArrowType - STRING_TYPE \u2192 StringType",
+      "title": "GetArrowType maps STRING_TYPE to StringType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.13",
       "phase": "Phase 1",
-      "title": "GetArrowType - DECIMAL_TYPE \u2192 StringType",
+      "title": "GetArrowType maps DECIMAL_TYPE to StringType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.14",
       "phase": "Phase 1",
-      "title": "GetArrowType - CHAR_TYPE \u2192 StringType",
+      "title": "GetArrowType maps CHAR_TYPE to StringType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.15",
       "phase": "Phase 1",
-      "title": "GetArrowType - VARCHAR_TYPE \u2192 StringType",
+      "title": "GetArrowType maps VARCHAR_TYPE to StringType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.16",
       "phase": "Phase 1",
-      "title": "GetArrowType - ARRAY_TYPE \u2192 StringType",
+      "title": "GetArrowType maps ARRAY_TYPE to StringType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.17",
       "phase": "Phase 1",
-      "title": "GetArrowType - MAP_TYPE \u2192 StringType",
+      "title": "GetArrowType maps MAP_TYPE to StringType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.18",
       "phase": "Phase 1",
-      "title": "GetArrowType - STRUCT_TYPE \u2192 StringType",
+      "title": "GetArrowType maps STRUCT_TYPE to StringType",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.19",
       "phase": "Phase 1",
-      "title": "GetArrowType - TIMESTAMPLOCALTZ_TYPE \u2192 throws NotImplementedException",
+      "title": "GetArrowType throws NotImplementedException for TIMESTAMPLOCALTZ_TYPE",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.20",
       "phase": "Phase 1",
-      "title": "ParseArrowSchema - Returns null for null input",
+      "title": "ParseArrowSchema returns null for null input",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.21",
       "phase": "Phase 1",
-      "title": "ParseArrowSchema - Returns null for empty byte array",
+      "title": "ParseArrowSchema returns null for empty byte array",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.2.22",
       "phase": "Phase 1",
-      "title": "ParseArrowSchema - Throws InvalidOperationException for corrupt bytes",
+      "title": "ParseArrowSchema throws InvalidOperationException for corrupt bytes",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.1",
       "phase": "Phase 1",
-      "title": "DatabricksException - Default constructor creates exception",
+      "title": "DatabricksException default constructor creates exception",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.2",
       "phase": "Phase 1",
-      "title": "DatabricksException - Message constructor preserves message",
+      "title": "DatabricksException message constructor preserves message",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.3",
       "phase": "Phase 1",
-      "title": "DatabricksException - Message + StatusCode constructor preserves both",
+      "title": "DatabricksException message + StatusCode constructor preserves both",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.4",
       "phase": "Phase 1",
-      "title": "DatabricksException - Message + InnerException constructor preserves both",
+      "title": "DatabricksException message + InnerException constructor preserves both",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.5",
       "phase": "Phase 1",
-      "title": "DatabricksException - Full constructor preserves all parameters",
+      "title": "DatabricksException full constructor preserves all parameters",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.6",
       "phase": "Phase 1",
-      "title": "DatabricksException - SetSqlState sets value and returns instance",
+      "title": "SetSqlState sets SqlState and returns same instance (fluent)",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.7",
       "phase": "Phase 1",
-      "title": "DatabricksException - SetNativeError sets value and returns instance",
+      "title": "SetNativeError sets NativeError and returns same instance (fluent)",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.8",
       "phase": "Phase 1",
-      "title": "DatabricksException - Fluent chain sets both values",
+      "title": "Fluent chain SetSqlState().SetNativeError() sets both values",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.3.9",
       "phase": "Phase 1",
-      "title": "DatabricksException - Default SqlState is null and NativeError is 0",
+      "title": "DatabricksException defaults: SqlState is null and NativeError is 0",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.4.1",
       "phase": "Phase 1",
-      "title": "StaticBearerTokenHandler - Sets Bearer authorization header",
+      "title": "StaticBearerTokenHandler sets Bearer authorization header on request",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.4.2",
       "phase": "Phase 1",
-      "title": "StaticBearerTokenHandler - Passes request to inner handler",
+      "title": "StaticBearerTokenHandler passes request to inner handler",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.4.3",
       "phase": "Phase 1",
-      "title": "StaticBearerTokenHandler - Throws ArgumentNullException for null token",
+      "title": "StaticBearerTokenHandler throws ArgumentNullException for null token",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.4.4",
       "phase": "Phase 1",
-      "title": "OAuthDelegatingHandler - Sets Bearer header from token provider",
+      "title": "OAuthDelegatingHandler sets Bearer header from token provider",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.4.5",
       "phase": "Phase 1",
-      "title": "OAuthDelegatingHandler - Throws ArgumentNullException for null provider",
+      "title": "OAuthDelegatingHandler throws ArgumentNullException for null provider",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "1.4.6",
       "phase": "Phase 1",
-      "title": "OAuthDelegatingHandler - Calls provider on each request",
+      "title": "OAuthDelegatingHandler calls provider on each request",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.1",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - Connect options override properties",
+      "title": "Connect options override properties for overlapping keys",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.2",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - Properties retained when no overlap",
+      "title": "Connect retains properties when no overlap with options",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.3",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - Case-insensitive key dedup",
+      "title": "Connect performs case-insensitive key dedup (options win)",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.4",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - Null options uses properties only",
+      "title": "Connect null options uses properties only",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.5",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - DetermineDriverConfigPrecedence returns true for passed-in 'true'",
+      "title": "DetermineDriverConfigPrecedence returns true for passed-in \"true\"",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.6",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - DetermineDriverConfigPrecedence returns false for passed-in 'false'",
+      "title": "DetermineDriverConfigPrecedence returns false for passed-in \"false\"",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.7",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - DetermineDriverConfigPrecedence returns true from env when not passed-in",
+      "title": "DetermineDriverConfigPrecedence returns true when env is \"true\" and no passed-in",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.8",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - DetermineDriverConfigPrecedence returns false default",
+      "title": "DetermineDriverConfigPrecedence returns false when neither set (default)",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.9",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - Invalid passed-in value falls through to env",
+      "title": "DetermineDriverConfigPrecedence invalid passed-in value falls through to env",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.10",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - MergeProperties overrides base",
+      "title": "MergeProperties additional properties override base",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.11",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - MergeProperties returns base when additional is null/empty",
+      "title": "MergeProperties null/empty additional returns base unchanged",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.12",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - Invalid protocol throws ArgumentException",
+      "title": "Protocol selection invalid protocol throws ArgumentException",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.13",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - Default protocol is 'thrift'",
+      "title": "Protocol selection default protocol is \"thrift\"",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.14",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - Case-insensitive 'REST' protocol works",
+      "title": "Protocol selection case-insensitive \"REST\" works",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.1.15",
       "phase": "Phase 2",
-      "title": "DatabricksDatabase - AggregateException with AdbcException is unwrapped",
+      "title": "Exception unwrap AggregateException with AdbcException is unwrapped",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.2.1",
       "phase": "Phase 2",
-      "title": "FeatureVersionNegotiator - Client version > server minimum",
+      "title": "Version comparison client version > server minimum",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.2.2",
       "phase": "Phase 2",
-      "title": "FeatureVersionNegotiator - Client version < server minimum",
+      "title": "Version comparison client version < server minimum",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.2.3",
       "phase": "Phase 2",
-      "title": "FeatureVersionNegotiator - Exact version match",
+      "title": "Version comparison exact match",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.2.4",
       "phase": "Phase 2",
-      "title": "FeatureVersionNegotiator - Edge case null/empty version strings",
+      "title": "Version comparison null/empty version strings",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.3.1",
       "phase": "Phase 2",
-      "title": "FlatColumnsResultBuilder - Builds correct Arrow schema from metadata",
+      "title": "FlatColumnsResultBuilder builds correct Arrow schema from column metadata",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.3.2",
       "phase": "Phase 2",
-      "title": "FlatColumnsResultBuilder - Handles empty column list",
+      "title": "FlatColumnsResultBuilder handles empty column list",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "2.3.3",
       "phase": "Phase 2",
-      "title": "FlatColumnsResultBuilder - Handles nullable vs non-nullable columns",
+      "title": "FlatColumnsResultBuilder handles nullable vs non-nullable columns",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.1.1",
       "phase": "Phase 3",
-      "title": "RetryHttpHandler - Retry-After header with value '0'",
+      "title": "RetryHttpHandler Retry-After header with value \"0\"",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.1.2",
       "phase": "Phase 3",
-      "title": "RetryHttpHandler - Retry-After header with negative value",
+      "title": "RetryHttpHandler Retry-After header with negative value",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.1.3",
       "phase": "Phase 3",
-      "title": "RetryHttpHandler - Retry-After header with date format (RFC 7231)",
+      "title": "RetryHttpHandler Retry-After header with date format (RFC 7231)",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.1.4",
       "phase": "Phase 3",
-      "title": "RetryHttpHandler - Max retries exhausted returns last response",
+      "title": "RetryHttpHandler max retries exhausted returns last response",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.1.5",
       "phase": "Phase 3",
-      "title": "RetryHttpHandler - Cancellation during retry backoff",
+      "title": "RetryHttpHandler cancellation during retry backoff",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.2.1",
       "phase": "Phase 3",
-      "title": "CloudFetchMemoryBufferManager - Concurrent acquire stays within limit",
+      "title": "CloudFetchMemoryBufferManager concurrent acquire stays within limit",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.2.2",
       "phase": "Phase 3",
-      "title": "CloudFetchMemoryBufferManager - Release unblocks waiting acquire",
+      "title": "CloudFetchMemoryBufferManager release unblocks waiting acquire",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.2.3",
       "phase": "Phase 3",
-      "title": "CloudFetchMemoryBufferManager - Cancellation during blocked acquire",
+      "title": "CloudFetchMemoryBufferManager cancellation during blocked acquire",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.3.1",
       "phase": "Phase 3",
-      "title": "TokenRefreshDelegatingHandler - Concurrent requests don't trigger multiple refreshes",
-      "status": "pending",
+      "title": "TokenRefreshDelegatingHandler concurrent requests don't trigger multiple refreshes",
+      "status": "completed",
       "attempts": 0
     },
     {
       "id": "3.3.2",
       "phase": "Phase 3",
-      "title": "TokenRefreshDelegatingHandler - Disposal during active refresh doesn't deadlock",
+      "title": "TokenRefreshDelegatingHandler disposal during active refresh doesn't deadlock",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.3.3",
       "phase": "Phase 3",
-      "title": "TokenRefreshDelegatingHandler - Token expires between check and send",
+      "title": "TokenRefreshDelegatingHandler token expires between check and send",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.4.1",
       "phase": "Phase 3",
-      "title": "DatabricksConfiguration - JSON file with non-string values",
+      "title": "DatabricksConfiguration JSON file with non-string values",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.4.2",
       "phase": "Phase 3",
-      "title": "DatabricksConfiguration - JSON file with nested objects",
+      "title": "DatabricksConfiguration JSON file with nested objects",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "3.4.3",
       "phase": "Phase 3",
-      "title": "DatabricksConfiguration - Malformed JSON throws meaningful error",
-      "status": "pending",
+      "title": "DatabricksConfiguration malformed JSON throws meaningful error",
+      "status": "completed",
       "attempts": 0
     },
     {
       "id": "3.4.4",
       "phase": "Phase 3",
-      "title": "DatabricksConfiguration - Empty JSON file",
-      "status": "pending",
+      "title": "DatabricksConfiguration empty JSON file",
+      "status": "completed",
       "attempts": 0
     },
     {
       "id": "3.4.5",
       "phase": "Phase 3",
-      "title": "DatabricksConfiguration - Config file path with spaces/special characters",
+      "title": "DatabricksConfiguration config file path with spaces/special characters",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "4.1.1",
       "phase": "Phase 4",
-      "title": "Disposal Chain - Database dispose cleans up memory pools",
+      "title": "Database dispose cleans up memory pools",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "4.1.2",
       "phase": "Phase 4",
-      "title": "Disposal Chain - Connection dispose closes HTTP clients and Thrift session",
+      "title": "Connection dispose closes HTTP clients and Thrift session",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "4.1.3",
       "phase": "Phase 4",
-      "title": "Disposal Chain - Statement dispose cancels pending operations",
+      "title": "Statement dispose cancels pending operations",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "4.1.4",
       "phase": "Phase 4",
-      "title": "Disposal Chain - Reader dispose releases CloudFetch buffers",
+      "title": "Reader dispose releases CloudFetch buffers",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "4.2.1",
       "phase": "Phase 4",
-      "title": "Error Propagation - Thrift error \u2192 DatabricksException with SqlState",
+      "title": "Thrift error propagates to DatabricksException with SqlState",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "4.2.2",
       "phase": "Phase 4",
-      "title": "Error Propagation - HTTP 401 \u2192 meaningful auth error message",
-      "status": "pending",
+      "title": "HTTP 401 produces meaningful auth error message",
+      "status": "completed",
       "attempts": 0
     },
     {
       "id": "4.2.3",
       "phase": "Phase 4",
-      "title": "Error Propagation - HTTP 503 \u2192 retried then surfaced with context",
-      "status": "pending",
+      "title": "HTTP 503 is retried then surfaced with context",
+      "status": "completed",
       "attempts": 0
     },
     {
       "id": "4.2.4",
       "phase": "Phase 4",
-      "title": "Error Propagation - Connection timeout \u2192 exception with timeout info",
-      "status": "pending",
+      "title": "Connection timeout produces exception with timeout info",
+      "status": "completed",
       "attempts": 0
     },
     {
       "id": "5.1.1",
       "phase": "Phase 5",
-      "title": "E2E Performance - Pairwise config sweep on 100K-row query",
+      "title": "Pairwise config sweep 100K-row query",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.1.2",
       "phase": "Phase 5",
-      "title": "E2E Performance - Baseline benchmark on 1M rows",
+      "title": "Baseline benchmark 1M rows default settings",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.1.3",
       "phase": "Phase 5",
-      "title": "E2E Performance - Large query sweep on 1M rows",
+      "title": "Large query sweep 1M rows pairwise configs",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.2.1",
       "phase": "Phase 5",
-      "title": "E2E Performance - Time to first batch latency",
+      "title": "Time to first batch 100K rows",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.2.2",
       "phase": "Phase 5",
-      "title": "E2E Performance - Polling overhead comparison",
+      "title": "Polling overhead comparison 100ms vs 500ms",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.2.3",
       "phase": "Phase 5",
-      "title": "E2E Performance - Direct results latency",
+      "title": "Direct results latency 10-row query",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.2.4",
       "phase": "Phase 5",
-      "title": "E2E Performance - REST vs Thrift latency comparison",
+      "title": "REST vs Thrift latency comparison",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.3.1",
       "phase": "Phase 5",
-      "title": "E2E Performance - 10M rows stress test",
+      "title": "10M rows stress test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.3.2",
       "phase": "Phase 5",
-      "title": "E2E Performance - Wide rows stress test",
+      "title": "Wide rows stress test 50+ columns 1M rows",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.3.3",
       "phase": "Phase 5",
-      "title": "E2E Performance - Large string columns stress test",
+      "title": "Large string columns stress test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "5.3.4",
       "phase": "Phase 5",
-      "title": "E2E Performance - Binary data stress test",
+      "title": "Binary data stress test with large payloads",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.1.1",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Parallel statements on same connection",
+      "title": "Parallel statements on same connection",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.1.2",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Parallel connections from same database",
+      "title": "Parallel connections from same database",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.1.3",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Mixed workloads",
+      "title": "Mixed workloads concurrent small and large queries",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.1.4",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Rapid open/close connections",
+      "title": "Rapid open/close 20 connections sequentially",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.1.5",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Concurrent open/close connections",
+      "title": "Concurrent open/close 10 threads",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.2.1",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Shared memory pool across queries",
+      "title": "Shared memory pool 3 concurrent large queries",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.2.2",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Download contention",
+      "title": "Download contention 2 concurrent CloudFetch queries",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.2.3",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Reader interleaving",
+      "title": "Reader interleaving from 2 concurrent result sets",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.3.1",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Concurrent requests during token refresh",
+      "title": "Concurrent requests during token refresh",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.3.2",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Connection pool with OAuth",
+      "title": "Connection pool with OAuth token reuse",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.4.1",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Cancel during CloudFetch download",
+      "title": "Cancel during CloudFetch download",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.4.2",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Cancel during polling",
+      "title": "Cancel during polling before execution completes",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.4.3",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Dispose during active read",
+      "title": "Dispose during active read",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "6.4.4",
       "phase": "Phase 6",
-      "title": "E2E Concurrency - Concurrent cancel",
+      "title": "Concurrent cancel multiple threads",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.1.1",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Generated rows all base types differential",
+      "title": "Differential test generated rows all base types",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.1.2",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Complex types as JSON differential",
+      "title": "Differential test complex types as JSON",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.1.3",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Complex types as Arrow differential",
+      "title": "Differential test complex types as Arrow",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.1.4",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - NULL pattern generation differential",
+      "title": "Differential test NULL pattern generation",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.1.5",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Empty result set differential",
+      "title": "Differential test empty result set",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.1.6",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Large batch differential",
+      "title": "Differential test large batch 10K generated rows",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.2.1",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Integer round-trip property-based",
+      "title": "Property-based integer round-trip test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.2.2",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - DECIMAL round-trip property-based",
+      "title": "Property-based DECIMAL round-trip test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.2.3",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - FLOAT/DOUBLE round-trip property-based",
+      "title": "Property-based FLOAT/DOUBLE round-trip test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.2.4",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Boundary saturation for integer types",
+      "title": "Property-based boundary saturation test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.2.5",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Cross-protocol numeric differential",
+      "title": "Cross-protocol numeric differential test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.3.1",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Random Unicode round-trip",
+      "title": "Property-based random Unicode round-trip test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.3.2",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Binary round-trip",
+      "title": "Property-based binary round-trip test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.3.3",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Empty vs NULL distinction",
+      "title": "Property-based empty vs NULL distinction test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.3.4",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Special character preservation",
+      "title": "Property-based special character preservation test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.3.5",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Large string fidelity",
+      "title": "Property-based large string fidelity test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.3.6",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - VARCHAR boundary testing",
+      "title": "Property-based VARCHAR boundary test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.4.1",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Random DATE round-trip",
+      "title": "Property-based random DATE round-trip test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.4.2",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Random TIMESTAMP round-trip",
+      "title": "Property-based random TIMESTAMP round-trip test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.4.3",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - TIMESTAMP vs TIMESTAMP_NTZ",
+      "title": "Property-based TIMESTAMP vs TIMESTAMP_NTZ test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.4.4",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Interval generation",
+      "title": "Property-based interval generation test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.4.5",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Boundary-weighted dates",
+      "title": "Property-based boundary-weighted dates test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.5.1",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - CloudFetch vs Direct Results differential",
+      "title": "Differential CloudFetch vs direct results same data",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.5.2",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - LZ4 fidelity",
+      "title": "Differential LZ4 fidelity test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.5.3",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Row count with random LIMIT",
+      "title": "Differential row count with random LIMIT",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.5.4",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Ordering with random ORDER BY",
+      "title": "Differential ordering with random ORDER BY",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.6.1",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - GetObjects metadata correctness",
+      "title": "GetObjects metadata completeness test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.6.2",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - GetTableSchema metadata correctness",
+      "title": "GetTableSchema metadata accuracy test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.6.3",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - GetColumns metadata correctness",
+      "title": "GetColumns metadata precision test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.6.4",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Primary/Foreign keys metadata",
+      "title": "Primary/Foreign keys metadata test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.6.5",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - GetCrossReference correctness",
+      "title": "GetCrossReference FK\u2192PK mappings test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.7.1",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - INSERT\u2192SELECT round-trip property-based",
+      "title": "Property-based INSERT\u2192SELECT round-trip test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.7.2",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - UPDATE\u2192SELECT verification",
+      "title": "Property-based UPDATE\u2192SELECT test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.7.3",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - DELETE\u2192count verification",
+      "title": "Property-based DELETE\u2192count test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "7.7.4",
       "phase": "Phase 7",
-      "title": "E2E Data Correctness - Concurrent mutation",
+      "title": "Property-based concurrent mutation test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.1.1",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Syntax error produces meaningful exception",
+      "title": "Syntax error handling test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.1.2",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Table not found error includes table name",
+      "title": "Table not found error handling test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.1.3",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Column not found error includes column name",
+      "title": "Column not found error handling test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.1.4",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Permission denied produces appropriate auth error",
+      "title": "Permission denied error handling test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.1.5",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Division by zero handling",
+      "title": "Division by zero error handling test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.2.1",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Invalid host produces timeout with meaningful error",
+      "title": "Invalid host connection error test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.2.2",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Invalid token produces auth error",
+      "title": "Invalid token connection error test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.2.3",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Invalid HTTP path produces meaningful error",
+      "title": "Invalid HTTP path connection error test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.2.4",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Invalid port produces connection refused error",
+      "title": "Invalid port connection error test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.3.1",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Query timeout behavior",
+      "title": "Query timeout behavior test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.3.2",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Connection timeout fails fast",
+      "title": "Connection timeout behavior test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.3.3",
       "phase": "Phase 8",
-      "title": "E2E Resilience - CloudFetch download timeout",
+      "title": "CloudFetch download timeout behavior test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.3.4",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Heartbeat keeps query alive",
+      "title": "Heartbeat keeps query alive test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.4.1",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Transient failure recovery",
+      "title": "Transient failure recovery retry test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.4.2",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Rate limit backoff",
+      "title": "Rate limit backoff retry test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "8.4.3",
       "phase": "Phase 8",
-      "title": "E2E Resilience - Non-retryable errors fail immediately",
+      "title": "Non-retryable errors immediate failure test",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.1.1",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - Arrow IPC random bytes never crashes",
+      "title": "Arrow IPC fuzzing random byte arrays",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.1.2",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - Arrow IPC valid prefix + truncated body",
+      "title": "Arrow IPC fuzzing valid prefix truncated body",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.1.3",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - Arrow IPC corrupted field types",
+      "title": "Arrow IPC fuzzing corrupted field types",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.2.1",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - LZ4 random bytes never crashes",
+      "title": "LZ4 decompression fuzzing random byte arrays",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.2.2",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - LZ4 valid header + truncated body",
+      "title": "LZ4 decompression fuzzing valid header truncated body",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.2.3",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - LZ4 enormous uncompressed size claim",
+      "title": "LZ4 decompression fuzzing enormous claimed size",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.2.4",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - CustomLZ4DecoderStream random bytes",
+      "title": "LZ4 stream fuzzing random bytes",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.2.5",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - CustomLZ4FrameReader malformed headers",
+      "title": "LZ4 frame reader fuzzing malformed headers",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.3.1",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - Complex type JSON malformed",
+      "title": "Complex type JSON fuzzing malformed JSON",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.3.2",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - Complex type JSON deeply nested",
+      "title": "Complex type JSON fuzzing deeply nested",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.3.3",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - Complex type JSON unexpected types",
+      "title": "Complex type JSON fuzzing unexpected types",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.3.4",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - Complex type JSON empty/null/whitespace input",
+      "title": "Complex type JSON fuzzing empty/null/whitespace",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.4.1",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - HTTP response random bodies",
+      "title": "HTTP response fuzzing random bodies",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.4.2",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - HTTP response random status codes",
+      "title": "HTTP response fuzzing random status codes",
       "status": "pending",
       "attempts": 0
     },
     {
       "id": "9.4.3",
       "phase": "Phase 9",
-      "title": "Serialization Fuzzing - HTTP Retry-After random string values",
+      "title": "HTTP response fuzzing Retry-After random strings",
       "status": "pending",
       "attempts": 0
     }

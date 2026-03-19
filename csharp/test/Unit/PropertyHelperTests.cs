@@ -307,5 +307,43 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Contains("boolKey", exception.Message);
             Assert.Contains(invalidValue, exception.Message);
         }
+
+        /// <summary>
+        /// Test that GetIntPropertyWithValidation returns the correctly parsed integer when given a valid integer string.
+        /// </summary>
+        [Fact]
+        public void GetIntPropertyWithValidation_ReturnsParsedIntForValidString()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "intKey", "42" }
+            };
+
+            // Act
+            var result = PropertyHelper.GetIntPropertyWithValidation(properties, "intKey", 0);
+
+            // Assert
+            Assert.Equal(42, result);
+        }
+
+        /// <summary>
+        /// Test that GetIntPropertyWithValidation returns the default value when the key is missing.
+        /// </summary>
+        [Fact]
+        public void GetIntPropertyWithValidation_ReturnsDefaultWhenKeyMissing()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "otherKey", "123" }
+            };
+
+            // Act
+            var result = PropertyHelper.GetIntPropertyWithValidation(properties, "missingKey", 99);
+
+            // Assert
+            Assert.Equal(99, result);
+        }
     }
 }
