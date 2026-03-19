@@ -135,5 +135,23 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal("value1", result);
         }
+
+        /// <summary>
+        /// Test that GetRequiredStringProperty throws ArgumentException when the key is missing.
+        /// </summary>
+        [Fact]
+        public void GetRequiredStringProperty_ThrowsArgumentExceptionWhenKeyMissing()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "key1", "value1" },
+                { "key2", "value2" }
+            };
+
+            // Act & Assert
+            Assert.Throws<ArgumentException>(() =>
+                PropertyHelper.GetRequiredStringProperty(properties, "missingKey"));
+        }
     }
 }

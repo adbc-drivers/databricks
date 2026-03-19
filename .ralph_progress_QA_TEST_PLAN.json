@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T01:18:44.869793",
+  "updated_at": "2026-03-19T01:20:03.033824",
   "tasks": [
     {
       "id": "1.1.1",
@@ -73,8 +73,12 @@
       "id": "1.1.7",
       "phase": "Phase 1",
       "title": "GetRequiredStringProperty - Throws ArgumentException when key missing",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.44167825,
+        "turns": 14
+      }
     },
     {
       "id": "1.1.8",
