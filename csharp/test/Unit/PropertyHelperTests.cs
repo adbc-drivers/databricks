@@ -281,5 +281,31 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(resultTrue);
             Assert.False(resultFalse);
         }
+
+        /// <summary>
+        /// Test that GetBooleanPropertyWithValidation throws ArgumentException for invalid values.
+        /// </summary>
+        [Theory]
+        [InlineData("yes")]
+        [InlineData("1")]
+        [InlineData("abc")]
+        [InlineData("0")]
+        [InlineData("")]
+        public void GetBooleanPropertyWithValidation_ThrowsArgumentExceptionForInvalidValue(string invalidValue)
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "boolKey", invalidValue }
+            };
+
+            // Act & Assert
+            var exception = Assert.Throws<ArgumentException>(() =>
+                PropertyHelper.GetBooleanPropertyWithValidation(properties, "boolKey", false));
+
+            // Verify the error message contains the key and value
+            Assert.Contains("boolKey", exception.Message);
+            Assert.Contains(invalidValue, exception.Message);
+        }
     }
 }
