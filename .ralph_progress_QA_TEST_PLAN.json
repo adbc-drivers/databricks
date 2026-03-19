@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T03:46:52.577884",
+  "updated_at": "2026-03-19T03:47:48.701922",
   "tasks": [
     {
       "id": "1.1.1",
@@ -181,8 +181,12 @@
       "id": "1.1.23",
       "phase": "Phase 1",
       "title": "Test GetLongPropertyWithValidation throws ArgumentException for non-long",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.45837724999999996,
+        "turns": 11
+      }
     },
     {
       "id": "1.1.24",

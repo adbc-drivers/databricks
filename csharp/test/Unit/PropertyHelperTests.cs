@@ -475,5 +475,31 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal(9223372036854775807L, result);
         }
+
+        /// <summary>
+        /// Test that GetLongPropertyWithValidation throws ArgumentException for non-long values.
+        /// </summary>
+        [Theory]
+        [InlineData("abc")]
+        [InlineData("1.5")]
+        [InlineData("")]
+        [InlineData("12.34")]
+        [InlineData("not a number")]
+        public void GetLongPropertyWithValidation_ThrowsArgumentExceptionForNonLong(string invalidValue)
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "longKey", invalidValue }
+            };
+
+            // Act & Assert
+            var exception = Assert.Throws<ArgumentException>(() =>
+                PropertyHelper.GetLongPropertyWithValidation(properties, "longKey", 0L));
+
+            // Verify the error message contains the key and value
+            Assert.Contains("longKey", exception.Message);
+            Assert.Contains(invalidValue, exception.Message);
+        }
     }
 }
