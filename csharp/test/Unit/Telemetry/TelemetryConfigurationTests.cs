@@ -50,7 +50,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var config = new TelemetryConfiguration();
 
             // Assert
-            Assert.True(config.Enabled);
+            Assert.False(config.Enabled);
             Assert.Equal(100, config.BatchSize);
             Assert.Equal(5000, config.FlushIntervalMs);
             Assert.Equal(3, config.MaxRetries);
@@ -106,7 +106,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert - should use defaults for invalid values
             Assert.Equal(100, config.BatchSize); // default
-            Assert.True(config.Enabled); // default
+            Assert.False(config.Enabled); // default
             Assert.Equal(5000, config.FlushIntervalMs); // default
         }
 
@@ -117,7 +117,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var config = TelemetryConfiguration.FromProperties(null);
 
             // Assert
-            Assert.True(config.Enabled);
+            Assert.False(config.Enabled);
             Assert.Equal(100, config.BatchSize);
             Assert.Equal(5000, config.FlushIntervalMs);
         }
@@ -132,7 +132,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var config = TelemetryConfiguration.FromProperties(properties);
 
             // Assert
-            Assert.True(config.Enabled);
+            Assert.False(config.Enabled);
             Assert.Equal(100, config.BatchSize);
             Assert.Equal(5000, config.FlushIntervalMs);
         }
@@ -187,7 +187,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert - should use defaults for invalid environment variables
             Assert.Equal(100, config.BatchSize);
-            Assert.True(config.Enabled);
+            Assert.False(config.Enabled);
         }
 
         [Fact]

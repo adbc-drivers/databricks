@@ -567,6 +567,64 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
         #endregion
 
+        #region MergePropertiesWithFeatureFlagsAsync Default Behavior Tests
+
+        [Fact]
+        public async Task MergePropertiesWithFeatureFlagsAsync_PropertyNotSet_ReturnsLocalProperties()
+        {
+            // Arrange - No FeatureFlagCacheEnabled property set (default: false)
+            var localProperties = new Dictionary<string, string>
+            {
+                ["host"] = TestHost,
+                ["some_property"] = "some_value"
+            };
+            var cache = FeatureFlagCache.GetInstance();
+
+            // Act
+            var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
+
+            // Assert - Should return local properties unchanged (feature flags skipped)
+            Assert.Same(localProperties, result);
+        }
+
+        [Fact]
+        public async Task MergePropertiesWithFeatureFlagsAsync_PropertySetToFalse_ReturnsLocalProperties()
+        {
+            // Arrange - FeatureFlagCacheEnabled explicitly set to false
+            var localProperties = new Dictionary<string, string>
+            {
+                ["host"] = TestHost,
+                [DatabricksParameters.FeatureFlagCacheEnabled] = "false"
+            };
+            var cache = FeatureFlagCache.GetInstance();
+
+            // Act
+            var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
+
+            // Assert - Should return local properties unchanged (feature flags skipped)
+            Assert.Same(localProperties, result);
+        }
+
+        [Fact]
+        public async Task MergePropertiesWithFeatureFlagsAsync_PropertySetToInvalidValue_ReturnsLocalProperties()
+        {
+            // Arrange - FeatureFlagCacheEnabled set to a non-boolean value
+            var localProperties = new Dictionary<string, string>
+            {
+                ["host"] = TestHost,
+                [DatabricksParameters.FeatureFlagCacheEnabled] = "notabool"
+            };
+            var cache = FeatureFlagCache.GetInstance();
+
+            // Act
+            var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
+
+            // Assert - Should return local properties unchanged (can't parse as bool)
+            Assert.Same(localProperties, result);
+        }
+
+        #endregion
+
         #region Helper Methods
 
         /// <summary>

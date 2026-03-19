@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;
@@ -49,7 +50,7 @@ namespace AdbcDrivers.Databricks.Tests
             Skip.If(string.IsNullOrEmpty(hostName), "Cannot determine host name from test configuration");
 
             // Act - Create a connection which initializes the feature flag cache
-            using var connection = NewConnection(TestConfiguration);
+            using var connection = NewConnectionWithFeatureFlagCache();
 
             // Assert - The connection should be created successfully
             Assert.NotNull(connection);
@@ -97,8 +98,8 @@ namespace AdbcDrivers.Databricks.Tests
             var cache = FeatureFlagCache.GetInstance();
 
             // Act - Create two connections to the same host
-            using var connection1 = NewConnection(TestConfiguration);
-            using var connection2 = NewConnection(TestConfiguration);
+            using var connection1 = NewConnectionWithFeatureFlagCache();
+            using var connection2 = NewConnectionWithFeatureFlagCache();
 
             // Assert - Both connections should work properly
             Assert.NotNull(connection1);
@@ -134,7 +135,7 @@ namespace AdbcDrivers.Databricks.Tests
             OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Initial cache count: {cache.CachedHostCount}");
 
             // Act - Create and close a connection
-            using (var connection = NewConnection(TestConfiguration))
+            using (var connection = NewConnectionWithFeatureFlagCache())
             {
                 // Connection is active, cache should have a context for this host
                 Assert.NotNull(connection);
@@ -176,7 +177,7 @@ namespace AdbcDrivers.Databricks.Tests
         public async Task TestConnectionWithFeatureFlagsExecutesQueries()
         {
             // Arrange
-            using var connection = NewConnection(TestConfiguration);
+            using var connection = NewConnectionWithFeatureFlagCache();
 
             // Act - Execute multiple queries to ensure feature flags don't interfere
             var queries = new[]
@@ -200,6 +201,18 @@ namespace AdbcDrivers.Databricks.Tests
 
                 OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] Query executed successfully: {query}");
             }
+        }
+
+        /// <summary>
+        /// Creates a connection with feature flag cache explicitly enabled.
+        /// </summary>
+        private AdbcConnection NewConnectionWithFeatureFlagCache()
+        {
+            var parameters = GetDriverParameters(TestConfiguration);
+            parameters[DatabricksParameters.FeatureFlagCacheEnabled] = "true";
+            var driver = new DatabricksDriver();
+            var database = driver.Open(parameters);
+            return database.Connect(new Dictionary<string, string>());
         }
 
         /// <summary>
