@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T01:22:00.005779",
+  "updated_at": "2026-03-19T01:23:25.829768",
   "tasks": [
     {
       "id": "1.1.1",
@@ -106,8 +106,12 @@
       "id": "1.1.10",
       "phase": "Phase 1",
       "title": "GetRequiredStringProperty - Uses default error message when not provided",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.4377702500000001,
+        "turns": 11
+      }
     },
     {
       "id": "1.1.11",

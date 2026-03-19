@@ -196,5 +196,29 @@ namespace AdbcDrivers.Databricks.Tests
                 PropertyHelper.GetRequiredStringProperty(properties, "emptyKey", customMessage));
             Assert.Equal(customMessage, exceptionEmpty.Message);
         }
+
+        /// <summary>
+        /// Test that GetRequiredStringProperty uses default error message when not provided.
+        /// </summary>
+        [Fact]
+        public void GetRequiredStringProperty_UsesDefaultErrorMessageWhenNotProvided()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "key1", "value1" }
+            };
+
+            // Act & Assert - Test with missing key
+            var exceptionMissing = Assert.Throws<ArgumentException>(() =>
+                PropertyHelper.GetRequiredStringProperty(properties, "missingKey"));
+            Assert.Equal("Required property 'missingKey' is missing or empty.", exceptionMissing.Message);
+
+            // Act & Assert - Test with empty value
+            properties["emptyKey"] = "";
+            var exceptionEmpty = Assert.Throws<ArgumentException>(() =>
+                PropertyHelper.GetRequiredStringProperty(properties, "emptyKey"));
+            Assert.Equal("Required property 'emptyKey' is missing or empty.", exceptionEmpty.Message);
+        }
     }
 }
