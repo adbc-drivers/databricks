@@ -656,5 +656,24 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Null(result);
         }
+
+        /// <summary>
+        /// Test that ParseOrgIdFromProperties extracts the org ID from the Path property query string.
+        /// </summary>
+        [Fact]
+        public void ParseOrgIdFromProperties_ExtractsOrgIdFromPathPropertyQueryString()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "adbc.spark.path", "/sql/1.0/warehouses/abc123?o=987654321" }
+            };
+
+            // Act
+            var result = PropertyHelper.ParseOrgIdFromProperties(properties);
+
+            // Assert
+            Assert.Equal("987654321", result);
+        }
     }
 }
