@@ -371,5 +371,24 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Contains("intKey", exception.Message);
             Assert.Contains(invalidValue, exception.Message);
         }
+
+        /// <summary>
+        /// Test that GetPositiveIntPropertyWithValidation returns the value when given a positive integer string.
+        /// </summary>
+        [Fact]
+        public void GetPositiveIntPropertyWithValidation_ReturnsValueForPositiveInt()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "positiveIntKey", "42" }
+            };
+
+            // Act
+            var result = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, "positiveIntKey", 1);
+
+            // Assert
+            Assert.Equal(42, result);
+        }
     }
 }
