@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T03:53:53.785808",
+  "updated_at": "2026-03-19T03:55:23.865846",
   "tasks": [
     {
       "id": "1.1.1",
@@ -258,8 +258,12 @@
       "id": "1.1.30",
       "phase": "Phase 1",
       "title": "Test ParseOrgIdFromQueryString handles URL-encoded org ID values",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.5259387500000001,
+        "turns": 17
+      }
     },
     {
       "id": "1.1.31",

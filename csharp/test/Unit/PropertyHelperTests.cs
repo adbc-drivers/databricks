@@ -608,5 +608,21 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Null(result);
         }
+
+        /// <summary>
+        /// Test that ParseOrgIdFromQueryString correctly handles URL-encoded organization ID values.
+        /// </summary>
+        [Fact]
+        public void ParseOrgIdFromQueryString_HandlesUrlEncodedOrgIdValues()
+        {
+            // Arrange
+            var queryString = "o=abc%2Bdef%3D123"; // URL-encoded "abc+def=123"
+
+            // Act
+            var result = PropertyHelper.ParseOrgIdFromQueryString(queryString);
+
+            // Assert
+            Assert.Equal("abc+def=123", result);
+        }
     }
 }
