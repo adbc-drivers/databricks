@@ -675,5 +675,25 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal("987654321", result);
         }
+
+        /// <summary>
+        /// Test that ParseOrgIdFromProperties falls back to checking the Uri property when the Path property doesn't contain an org ID.
+        /// </summary>
+        [Fact]
+        public void ParseOrgIdFromProperties_FallsBackToUriPropertyWhenPathHasNoOrgId()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "adbc.spark.path", "/sql/1.0/warehouses/abc123" }, // No org ID in path
+                { "uri", "https://example.databricks.com/sql/1.0/warehouses/xyz?o=555666777" } // Org ID in Uri
+            };
+
+            // Act
+            var result = PropertyHelper.ParseOrgIdFromProperties(properties);
+
+            // Assert
+            Assert.Equal("555666777", result);
+        }
     }
 }
