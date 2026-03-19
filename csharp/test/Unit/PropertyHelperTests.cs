@@ -592,5 +592,21 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Null(result);
         }
+
+        /// <summary>
+        /// Test that ParseOrgIdFromQueryString returns null when the 'o' parameter is present but has no value.
+        /// </summary>
+        [Fact]
+        public void ParseOrgIdFromQueryString_ReturnsNullWhenOParamIsEmpty()
+        {
+            // Arrange
+            var queryString = "o=";
+
+            // Act
+            var result = PropertyHelper.ParseOrgIdFromQueryString(queryString);
+
+            // Assert
+            Assert.Null(result);
+        }
     }
 }
