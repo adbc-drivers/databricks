@@ -540,5 +540,25 @@ namespace AdbcDrivers.Databricks.Tests
             // Verify the exception contains the key name
             Assert.Contains("positiveLongKey", exception.Message);
         }
+
+        /// <summary>
+        /// Test that GetPositiveLongPropertyWithValidation throws ArgumentOutOfRangeException for negative longs.
+        /// </summary>
+        [Fact]
+        public void GetPositiveLongPropertyWithValidation_ThrowsArgumentOutOfRangeExceptionForNegativeLong()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "positiveLongKey", "-9223372036854775808" } // long.MinValue
+            };
+
+            // Act & Assert
+            var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+                PropertyHelper.GetPositiveLongPropertyWithValidation(properties, "positiveLongKey", 1L));
+
+            // Verify the exception contains the key name
+            Assert.Contains("positiveLongKey", exception.Message);
+        }
     }
 }
