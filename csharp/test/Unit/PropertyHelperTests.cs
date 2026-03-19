@@ -44,5 +44,25 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.Equal("value1", result);
         }
+
+        /// <summary>
+        /// Test that GetStringProperty returns the default value when the key is missing.
+        /// </summary>
+        [Fact]
+        public void GetStringProperty_ReturnsDefaultWhenKeyMissing()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "key1", "value1" },
+                { "key2", "value2" }
+            };
+
+            // Act
+            var result = PropertyHelper.GetStringProperty(properties, "missingKey", "defaultValue");
+
+            // Assert
+            Assert.Equal("defaultValue", result);
+        }
     }
 }
