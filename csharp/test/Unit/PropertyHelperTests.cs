@@ -239,5 +239,24 @@ namespace AdbcDrivers.Databricks.Tests
             // Assert
             Assert.True(result);
         }
+
+        /// <summary>
+        /// Test that GetBooleanPropertyWithValidation returns false for "false".
+        /// </summary>
+        [Fact]
+        public void GetBooleanPropertyWithValidation_ReturnsFalseForFalse()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "boolKey", "false" }
+            };
+
+            // Act
+            var result = PropertyHelper.GetBooleanPropertyWithValidation(properties, "boolKey", true);
+
+            // Assert
+            Assert.False(result);
+        }
     }
 }

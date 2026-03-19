@@ -1,7 +1,7 @@
 {
   "task_doc_path": "/home/jade.wang/adbc-databricks-1/csharp/test/QA_TEST_PLAN.md",
   "phase_filter": null,
-  "updated_at": "2026-03-19T01:24:32.393789",
+  "updated_at": "2026-03-19T01:25:38.561760",
   "tasks": [
     {
       "id": "1.1.1",
@@ -128,8 +128,12 @@
       "id": "1.1.12",
       "phase": "Phase 1",
       "title": "GetBooleanPropertyWithValidation - Returns false for 'false'",
-      "status": "pending",
-      "attempts": 0
+      "status": "completed",
+      "attempts": 1,
+      "stats": {
+        "cost_usd": 0.23888600000000004,
+        "turns": 9
+      }
     },
     {
       "id": "1.1.13",
