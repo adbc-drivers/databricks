@@ -430,5 +430,31 @@ namespace AdbcDrivers.Databricks.Tests
             // Verify the exception contains the key name
             Assert.Contains("positiveIntKey", exception.Message);
         }
+
+        /// <summary>
+        /// Test that GetPositiveIntPropertyWithValidation throws ArgumentException for non-integer values.
+        /// </summary>
+        [Theory]
+        [InlineData("abc")]
+        [InlineData("1.5")]
+        [InlineData("")]
+        [InlineData("12.34")]
+        [InlineData("not a number")]
+        public void GetPositiveIntPropertyWithValidation_ThrowsArgumentExceptionForNonInteger(string invalidValue)
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "positiveIntKey", invalidValue }
+            };
+
+            // Act & Assert
+            var exception = Assert.Throws<ArgumentException>(() =>
+                PropertyHelper.GetPositiveIntPropertyWithValidation(properties, "positiveIntKey", 1));
+
+            // Verify the error message contains the key and value
+            Assert.Contains("positiveIntKey", exception.Message);
+            Assert.Contains(invalidValue, exception.Message);
+        }
     }
 }
