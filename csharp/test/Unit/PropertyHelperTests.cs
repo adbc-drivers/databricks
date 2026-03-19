@@ -560,5 +560,21 @@ namespace AdbcDrivers.Databricks.Tests
             // Verify the exception contains the key name
             Assert.Contains("positiveLongKey", exception.Message);
         }
+
+        /// <summary>
+        /// Test that ParseOrgIdFromQueryString extracts the org ID from a query string containing 'o=12345'.
+        /// </summary>
+        [Fact]
+        public void ParseOrgIdFromQueryString_ExtractsOrgIdFromSimpleQueryString()
+        {
+            // Arrange
+            var queryString = "o=12345";
+
+            // Act
+            var result = PropertyHelper.ParseOrgIdFromQueryString(queryString);
+
+            // Assert
+            Assert.Equal("12345", result);
+        }
     }
 }
