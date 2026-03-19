@@ -51,8 +51,7 @@ When the release is ready to freeze:
 ```mermaid
 flowchart TD
     A[Final merge of main into release branch] --> B[Tag the cutoff point e.g. csharp/v1.1.0]
-    B --> C[Enable branch protection on release branch]
-    C --> D[Create next release branch e.g. release/csharp/v1.2.0]
+    B --> C[Create next release branch e.g. release/csharp/v1.2.0]
 ```
 
 ### Phase 3: Post-Cutoff (Maintenance)
@@ -88,14 +87,14 @@ csharp/vX.Y.Z
 
 Consistent with the existing Go convention (`go/vX.Y.Z`).
 
-## Branch Protection Rules (Post-Cutoff)
+## Branch Protection
 
-Apply to `release/csharp/*`:
+Release branches follow the same protection rules as `main`:
 
-- Require pull request with at least 1 approval
-- Enforce for administrators
-- Restrict who can push (release managers only)
-- No direct merges from `main` after cutoff
+- Require pull request to merge
+- CI must pass
+
+Cutoff is enforced by team convention (stop merging `main`, only cherry-pick), not by additional branch restrictions.
 
 ## CI/CD
 
