@@ -220,5 +220,24 @@ namespace AdbcDrivers.Databricks.Tests
                 PropertyHelper.GetRequiredStringProperty(properties, "emptyKey"));
             Assert.Equal("Required property 'emptyKey' is missing or empty.", exceptionEmpty.Message);
         }
+
+        /// <summary>
+        /// Test that GetBooleanPropertyWithValidation returns true for "true".
+        /// </summary>
+        [Fact]
+        public void GetBooleanPropertyWithValidation_ReturnsTrueForTrue()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                { "boolKey", "true" }
+            };
+
+            // Act
+            var result = PropertyHelper.GetBooleanPropertyWithValidation(properties, "boolKey", false);
+
+            // Assert
+            Assert.True(result);
+        }
     }
 }
