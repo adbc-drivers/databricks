@@ -215,6 +215,57 @@ pub trait DatabricksClient: Send + Sync + std::fmt::Debug {
         column_pattern: Option<&str>,
     ) -> Result<ExecuteResult>;
 
+    /// List procedures, optionally filtered by catalog, schema pattern, and procedure name pattern.
+    ///
+    /// Uses `information_schema.routines` filtered by `routine_type = 'PROCEDURE'`.
+    /// When catalog is None, queries `system.information_schema.routines` (cross-catalog).
+    /// When catalog is empty string, returns empty result.
+    async fn list_procedures(
+        &self,
+        session_id: &str,
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+        procedure_pattern: Option<&str>,
+    ) -> Result<ExecuteResult>;
+
+    /// List procedure columns (parameters), optionally filtered.
+    ///
+    /// Uses `information_schema.parameters` joined with `information_schema.routines`
+    /// filtered by `routine_type = 'PROCEDURE'`.
+    /// When catalog is None, queries `system.information_schema` (cross-catalog).
+    /// When catalog is empty string, returns empty result.
+    async fn list_procedure_columns(
+        &self,
+        session_id: &str,
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+        procedure_pattern: Option<&str>,
+        column_pattern: Option<&str>,
+    ) -> Result<ExecuteResult>;
+
+    /// List cross-references (foreign key relationships) between two tables.
+    ///
+    /// Uses `SHOW FOREIGN KEYS` on the foreign table, same as `getForeignKeys`.
+    /// The ODBC layer filters results client-side to match the parent table.
+    ///
+    /// Parameters follow the ODBC SQLCrossReferences spec:
+    /// - `pk_catalog/pk_schema/pk_table`: parent (primary key) table identifier
+    /// - `fk_catalog/fk_schema/fk_table`: foreign key table identifier
+    ///
+    /// The SQL query is issued against the foreign table; parent table filtering
+    /// is done client-side by the ODBC driver.
+    #[allow(clippy::too_many_arguments)]
+    async fn list_cross_references(
+        &self,
+        session_id: &str,
+        pk_catalog: &str,
+        pk_schema: &str,
+        pk_table: &str,
+        fk_catalog: &str,
+        fk_schema: &str,
+        fk_table: &str,
+    ) -> Result<ExecuteResult>;
+
     /// List supported table types (static, no SQL executed).
     fn list_table_types(&self) -> Vec<String>;
 }

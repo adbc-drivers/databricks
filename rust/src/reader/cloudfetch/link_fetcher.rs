@@ -666,6 +666,43 @@ mod tests {
                 .await
         }
 
+        async fn list_procedures(
+            &self,
+            _session_id: &str,
+            _catalog: Option<&str>,
+            _schema_pattern: Option<&str>,
+            _procedure_pattern: Option<&str>,
+        ) -> Result<ExecuteResult> {
+            self.execute_statement("", "", &ExecuteParams::default())
+                .await
+        }
+
+        async fn list_procedure_columns(
+            &self,
+            _session_id: &str,
+            _catalog: Option<&str>,
+            _schema_pattern: Option<&str>,
+            _procedure_pattern: Option<&str>,
+            _column_pattern: Option<&str>,
+        ) -> Result<ExecuteResult> {
+            self.execute_statement("", "", &ExecuteParams::default())
+                .await
+        }
+
+        async fn list_cross_references(
+            &self,
+            _session_id: &str,
+            _pk_catalog: &str,
+            _pk_schema: &str,
+            _pk_table: &str,
+            _fk_catalog: &str,
+            _fk_schema: &str,
+            _fk_table: &str,
+        ) -> Result<ExecuteResult> {
+            self.execute_statement("", "", &ExecuteParams::default())
+                .await
+        }
+
         fn list_table_types(&self) -> Vec<String> {
             vec!["TABLE".to_string()]
         }

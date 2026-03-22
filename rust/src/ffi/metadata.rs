@@ -397,6 +397,180 @@ pub unsafe extern "C" fn metadata_get_foreign_keys(
     .unwrap_or_else(handle_panic)
 }
 
+/// List cross-references (foreign key relationships) between two tables.
+///
+/// Uses `SHOW FOREIGN KEYS` on the foreign table. The ODBC layer filters
+/// results client-side to match the parent table.
+///
+/// # Safety
+///
+/// - `conn` must be a valid pointer to a `Connection`
+/// - All string arguments must be valid non-null C strings
+/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
+#[no_mangle]
+pub unsafe extern "C" fn metadata_get_cross_references(
+    conn: *const c_void,
+    pk_catalog: *const c_char,
+    pk_schema: *const c_char,
+    pk_table: *const c_char,
+    fk_catalog: *const c_char,
+    fk_schema: *const c_char,
+    fk_table: *const c_char,
+    out: *mut FFI_ArrowArrayStream,
+) -> FfiStatus {
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let conn = get_connection!(conn);
+        let Ok(pk_catalog) = (unsafe { c_str_to_str(pk_catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(pk_schema) = (unsafe { c_str_to_str(pk_schema) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(pk_table) = (unsafe { c_str_to_str(pk_table) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(fk_catalog) = (unsafe { c_str_to_str(fk_catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(fk_schema) = (unsafe { c_str_to_str(fk_schema) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(fk_table) = (unsafe { c_str_to_str(fk_table) }) else {
+            return FfiStatus::Error;
+        };
+
+        match conn
+            .runtime_handle()
+            .block_on(conn.client().list_cross_references(
+                conn.session_id(),
+                pk_catalog,
+                pk_schema,
+                pk_table,
+                fk_catalog,
+                fk_schema,
+                fk_table,
+            )) {
+            Ok(result) => export_reader(result.reader, result.manifest.as_ref(), out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
+}
+
+/// List procedures matching the given filter criteria.
+///
+/// Uses `information_schema.routines` filtered by `routine_type = 'PROCEDURE'`.
+/// When catalog is NULL, queries `system.information_schema` (cross-catalog).
+/// When catalog is empty string, returns an empty result set.
+///
+/// # Safety
+///
+/// - `conn` must be a valid pointer to a `Connection`
+/// - String arguments may be null (treated as no filter)
+/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
+#[no_mangle]
+pub unsafe extern "C" fn metadata_get_procedures(
+    conn: *const c_void,
+    catalog: *const c_char,
+    schema_pattern: *const c_char,
+    procedure_pattern: *const c_char,
+    out: *mut FFI_ArrowArrayStream,
+) -> FfiStatus {
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let conn = get_connection!(conn);
+        let Ok(catalog) = (unsafe { c_str_to_option(catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(schema_pattern) = (unsafe { c_str_to_option(schema_pattern) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(procedure_pattern) = (unsafe { c_str_to_option(procedure_pattern) }) else {
+            return FfiStatus::Error;
+        };
+
+        // Empty string catalog → empty result set
+        if catalog == Some("") {
+            let reader: Box<dyn ResultReader + Send> =
+                Box::new(EmptyReader::new(Arc::new(Schema::empty())));
+            return export_reader(reader, None, out);
+        }
+
+        match conn
+            .runtime_handle()
+            .block_on(conn.client().list_procedures(
+                conn.session_id(),
+                catalog,
+                schema_pattern,
+                procedure_pattern,
+            )) {
+            Ok(result) => export_reader(result.reader, result.manifest.as_ref(), out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
+}
+
+/// List procedure columns (parameters) matching the given filter criteria.
+///
+/// Uses `information_schema.parameters` joined with `information_schema.routines`.
+/// When catalog is NULL, queries `system.information_schema` (cross-catalog).
+/// When catalog is empty string, returns an empty result set.
+///
+/// # Safety
+///
+/// - `conn` must be a valid pointer to a `Connection`
+/// - String arguments may be null (treated as no filter)
+/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
+#[no_mangle]
+pub unsafe extern "C" fn metadata_get_procedure_columns(
+    conn: *const c_void,
+    catalog: *const c_char,
+    schema_pattern: *const c_char,
+    procedure_pattern: *const c_char,
+    column_pattern: *const c_char,
+    out: *mut FFI_ArrowArrayStream,
+) -> FfiStatus {
+    clear_last_error();
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let conn = get_connection!(conn);
+        let Ok(catalog) = (unsafe { c_str_to_option(catalog) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(schema_pattern) = (unsafe { c_str_to_option(schema_pattern) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(procedure_pattern) = (unsafe { c_str_to_option(procedure_pattern) }) else {
+            return FfiStatus::Error;
+        };
+        let Ok(column_pattern) = (unsafe { c_str_to_option(column_pattern) }) else {
+            return FfiStatus::Error;
+        };
+
+        // Empty string catalog → empty result set
+        if catalog == Some("") {
+            let reader: Box<dyn ResultReader + Send> =
+                Box::new(EmptyReader::new(Arc::new(Schema::empty())));
+            return export_reader(reader, None, out);
+        }
+
+        match conn
+            .runtime_handle()
+            .block_on(conn.client().list_procedure_columns(
+                conn.session_id(),
+                catalog,
+                schema_pattern,
+                procedure_pattern,
+                column_pattern,
+            )) {
+            Ok(result) => export_reader(result.reader, result.manifest.as_ref(), out),
+            Err(e) => set_error_from_result(&e),
+        }
+    }))
+    .unwrap_or_else(handle_panic)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

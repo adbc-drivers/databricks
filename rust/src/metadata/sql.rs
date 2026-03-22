@@ -172,6 +172,114 @@ impl SqlCommandBuilder {
         sql
     }
 
+    /// Escape a value for use in a SQL string literal (single-quote escaping only).
+    fn escape_sql_string(value: &str) -> String {
+        value.replace('\'', "''")
+    }
+
+    /// Resolve the catalog prefix for `information_schema` queries.
+    ///
+    /// - `None` → `system` (cross-catalog query)
+    /// - `Some("main")` → `` `main` `` (scoped to catalog)
+    fn resolve_catalog_prefix(catalog: Option<&str>) -> String {
+        match catalog {
+            None => "system".to_string(),
+            Some(c) => Self::escape_identifier(c),
+        }
+    }
+
+    /// Build a SELECT query against `information_schema.routines` for getProcedures.
+    ///
+    /// Catalog resolution:
+    /// - `None` → queries `system.information_schema.routines` (cross-catalog)
+    /// - `Some("main")` → queries `` `main`.information_schema.routines ``
+    ///
+    /// Schema and procedure patterns use SQL LIKE syntax directly (no Hive conversion).
+    pub fn build_get_procedures(
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+        procedure_pattern: Option<&str>,
+    ) -> String {
+        let prefix = Self::resolve_catalog_prefix(catalog);
+        let mut sql = format!(
+            "SELECT routine_catalog, routine_schema, routine_name, comment, specific_name \
+             FROM {}.information_schema.routines \
+             WHERE routine_type = 'PROCEDURE'",
+            prefix
+        );
+
+        if let Some(pattern) = schema_pattern {
+            sql.push_str(&format!(
+                " AND routine_schema LIKE '{}'",
+                Self::escape_sql_string(pattern)
+            ));
+        }
+
+        if let Some(pattern) = procedure_pattern {
+            sql.push_str(&format!(
+                " AND routine_name LIKE '{}'",
+                Self::escape_sql_string(pattern)
+            ));
+        }
+
+        sql.push_str(" ORDER BY routine_catalog, routine_schema, routine_name");
+        sql
+    }
+
+    /// Build a SELECT query against `information_schema.parameters` joined with
+    /// `information_schema.routines` for getProcedureColumns.
+    ///
+    /// Same catalog resolution as `build_get_procedures`.
+    pub fn build_get_procedure_columns(
+        catalog: Option<&str>,
+        schema_pattern: Option<&str>,
+        procedure_pattern: Option<&str>,
+        column_pattern: Option<&str>,
+    ) -> String {
+        let prefix = Self::resolve_catalog_prefix(catalog);
+        let mut sql = format!(
+            "SELECT \
+             p.specific_catalog, p.specific_schema, p.specific_name, \
+             p.parameter_name, p.parameter_mode, p.is_result, \
+             p.data_type, p.full_data_type, \
+             p.numeric_precision, p.numeric_precision_radix, p.numeric_scale, \
+             p.character_maximum_length, p.character_octet_length, \
+             p.ordinal_position, p.parameter_default, p.comment \
+             FROM {prefix}.information_schema.parameters p \
+             JOIN {prefix}.information_schema.routines r \
+             ON p.specific_catalog = r.specific_catalog \
+             AND p.specific_schema = r.specific_schema \
+             AND p.specific_name = r.specific_name \
+             WHERE r.routine_type = 'PROCEDURE'"
+        );
+
+        if let Some(pattern) = schema_pattern {
+            sql.push_str(&format!(
+                " AND p.specific_schema LIKE '{}'",
+                Self::escape_sql_string(pattern)
+            ));
+        }
+
+        if let Some(pattern) = procedure_pattern {
+            sql.push_str(&format!(
+                " AND p.specific_name LIKE '{}'",
+                Self::escape_sql_string(pattern)
+            ));
+        }
+
+        if let Some(pattern) = column_pattern {
+            sql.push_str(&format!(
+                " AND p.parameter_name LIKE '{}'",
+                Self::escape_sql_string(pattern)
+            ));
+        }
+
+        sql.push_str(
+            " ORDER BY p.specific_catalog, p.specific_schema, p.specific_name, p.ordinal_position",
+        );
+        sql
+    }
+
     pub fn build_show_primary_keys(catalog: &str, schema: &str, table: &str) -> String {
         format!(
             "SHOW KEYS IN CATALOG {} IN SCHEMA {} IN TABLE {}",
@@ -325,6 +433,107 @@ mod tests {
             sql,
             "SHOW FOREIGN KEYS IN CATALOG `main` IN SCHEMA `default` IN TABLE `my_table`"
         );
+    }
+
+    // --- getProcedures / getProcedureColumns SQL builder tests ---
+
+    #[test]
+    fn test_get_procedures_null_catalog() {
+        let sql = SqlCommandBuilder::build_get_procedures(None, None, None);
+        assert!(sql.starts_with("SELECT routine_catalog"));
+        assert!(sql.contains("FROM system.information_schema.routines"));
+        assert!(sql.contains("WHERE routine_type = 'PROCEDURE'"));
+        assert!(sql.ends_with("ORDER BY routine_catalog, routine_schema, routine_name"));
+    }
+
+    #[test]
+    fn test_get_procedures_specific_catalog() {
+        let sql = SqlCommandBuilder::build_get_procedures(Some("main"), None, None);
+        assert!(sql.contains("FROM `main`.information_schema.routines"));
+    }
+
+    #[test]
+    fn test_get_procedures_with_schema_pattern() {
+        let sql = SqlCommandBuilder::build_get_procedures(None, Some("default%"), None);
+        assert!(sql.contains("AND routine_schema LIKE 'default%'"));
+    }
+
+    #[test]
+    fn test_get_procedures_with_procedure_pattern() {
+        let sql = SqlCommandBuilder::build_get_procedures(None, None, Some("my_proc%"));
+        assert!(sql.contains("AND routine_name LIKE 'my_proc%'"));
+    }
+
+    #[test]
+    fn test_get_procedures_with_all_filters() {
+        let sql =
+            SqlCommandBuilder::build_get_procedures(Some("prod"), Some("public"), Some("sp_%"));
+        assert!(sql.contains("FROM `prod`.information_schema.routines"));
+        assert!(sql.contains("AND routine_schema LIKE 'public'"));
+        assert!(sql.contains("AND routine_name LIKE 'sp_%'"));
+    }
+
+    #[test]
+    fn test_get_procedures_sql_injection_escaped() {
+        let sql = SqlCommandBuilder::build_get_procedures(None, Some("it's"), None);
+        assert!(sql.contains("AND routine_schema LIKE 'it''s'"));
+    }
+
+    #[test]
+    fn test_get_procedures_catalog_with_backtick() {
+        let sql = SqlCommandBuilder::build_get_procedures(Some("my`catalog"), None, None);
+        assert!(sql.contains("FROM `my``catalog`.information_schema.routines"));
+    }
+
+    #[test]
+    fn test_get_procedure_columns_null_catalog() {
+        let sql = SqlCommandBuilder::build_get_procedure_columns(None, None, None, None);
+        assert!(sql.contains("FROM system.information_schema.parameters p"));
+        assert!(sql.contains("JOIN system.information_schema.routines r"));
+        assert!(sql.contains("WHERE r.routine_type = 'PROCEDURE'"));
+        assert!(sql.ends_with(
+            "ORDER BY p.specific_catalog, p.specific_schema, p.specific_name, p.ordinal_position"
+        ));
+    }
+
+    #[test]
+    fn test_get_procedure_columns_specific_catalog() {
+        let sql = SqlCommandBuilder::build_get_procedure_columns(Some("main"), None, None, None);
+        assert!(sql.contains("FROM `main`.information_schema.parameters p"));
+        assert!(sql.contains("JOIN `main`.information_schema.routines r"));
+    }
+
+    #[test]
+    fn test_get_procedure_columns_with_all_filters() {
+        let sql = SqlCommandBuilder::build_get_procedure_columns(
+            Some("prod"),
+            Some("public"),
+            Some("my_proc"),
+            Some("param%"),
+        );
+        assert!(sql.contains("FROM `prod`.information_schema.parameters p"));
+        assert!(sql.contains("AND p.specific_schema LIKE 'public'"));
+        assert!(sql.contains("AND p.specific_name LIKE 'my_proc'"));
+        assert!(sql.contains("AND p.parameter_name LIKE 'param%'"));
+    }
+
+    #[test]
+    fn test_get_procedure_columns_selects_all_needed_columns() {
+        let sql = SqlCommandBuilder::build_get_procedure_columns(None, None, None, None);
+        // Verify key columns are selected
+        assert!(sql.contains("p.specific_catalog"));
+        assert!(sql.contains("p.parameter_name"));
+        assert!(sql.contains("p.parameter_mode"));
+        assert!(sql.contains("p.is_result"));
+        assert!(sql.contains("p.data_type"));
+        assert!(sql.contains("p.full_data_type"));
+        assert!(sql.contains("p.numeric_precision"));
+        assert!(sql.contains("p.numeric_scale"));
+        assert!(sql.contains("p.character_maximum_length"));
+        assert!(sql.contains("p.character_octet_length"));
+        assert!(sql.contains("p.ordinal_position"));
+        assert!(sql.contains("p.parameter_default"));
+        assert!(sql.contains("p.comment"));
     }
 
     // --- jdbc_pattern_to_hive tests (matches JDBC WildcardUtil) ---
