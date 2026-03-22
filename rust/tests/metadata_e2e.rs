@@ -298,24 +298,17 @@ fn test_metadata_get_procedures_with_schema_filter() {
     println!("  PASS");
 }
 
+/// Verify the static procedures_schema matches expected columns.
+/// This is a local-only test (no server round-trip needed).
 #[test]
-#[ignore]
-fn test_metadata_get_procedures_empty_catalog() {
-    let mut conn = create_connection();
-
-    // Tests build_get_procedures with empty catalog — should return 0 rows
-    let sql = SqlCommandBuilder::build_get_procedures(Some(""), None, None);
-    println!("getProcedures SQL (empty catalog): {}", sql);
-    assert!(
-        sql.contains("WHERE 1=0"),
-        "Empty catalog should produce WHERE 1=0"
-    );
-    let (schema, row_count, _) = execute_query(&mut conn, &sql);
-
-    assert_eq!(row_count, 0, "Empty catalog should return 0 rows");
-    // Schema should still have correct columns for ODBC column discovery
+fn test_metadata_procedures_empty_catalog_schema() {
+    let schema = databricks_adbc::metadata::sql::procedures_schema();
+    assert_eq!(schema.fields().len(), 5);
     assert!(schema.column_with_name("routine_catalog").is_some());
-    println!("  PASS");
+    assert!(schema.column_with_name("routine_schema").is_some());
+    assert!(schema.column_with_name("routine_name").is_some());
+    assert!(schema.column_with_name("comment").is_some());
+    assert!(schema.column_with_name("specific_name").is_some());
 }
 
 // ─── getProcedureColumns (uses SqlCommandBuilder) ───────────────────────────
@@ -339,18 +332,15 @@ fn test_metadata_get_procedure_columns_cross_catalog() {
     println!("  PASS");
 }
 
+/// Verify the static procedure_columns_schema matches expected columns.
+/// This is a local-only test (no server round-trip needed).
 #[test]
-#[ignore]
-fn test_metadata_get_procedure_columns_empty_catalog() {
-    let mut conn = create_connection();
-
-    // Tests build_get_procedure_columns with empty catalog
-    let sql = SqlCommandBuilder::build_get_procedure_columns(Some(""), None, None, None);
-    println!("getProcedureColumns SQL (empty catalog): {}", sql);
-    assert!(sql.contains("WHERE 1=0"));
-    let (schema, row_count, _) = execute_query(&mut conn, &sql);
-
-    assert_eq!(row_count, 0, "Empty catalog should return 0 rows");
+fn test_metadata_procedure_columns_empty_catalog_schema() {
+    let schema = databricks_adbc::metadata::sql::procedure_columns_schema();
+    assert_eq!(schema.fields().len(), 16);
     assert!(schema.column_with_name("specific_catalog").is_some());
-    println!("  PASS");
+    assert!(schema.column_with_name("parameter_name").is_some());
+    assert!(schema.column_with_name("data_type").is_some());
+    assert!(schema.column_with_name("ordinal_position").is_some());
+    assert!(schema.column_with_name("comment").is_some());
 }

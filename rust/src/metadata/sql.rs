@@ -17,6 +17,48 @@
 //! Builds SHOW SQL commands based on the Databricks SQL dialect, matching
 //! the patterns used by the JDBC driver (`CommandConstants.java`).
 
+use arrow_schema::{DataType, Field, Schema};
+use std::sync::Arc;
+
+/// Schema for getProcedures results (matches `information_schema.routines` SELECT columns).
+///
+/// Used by `EmptyReader` when catalog is empty string, to return zero rows
+/// with correct column metadata for ODBC column discovery.
+pub fn procedures_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("routine_catalog", DataType::Utf8, true),
+        Field::new("routine_schema", DataType::Utf8, true),
+        Field::new("routine_name", DataType::Utf8, true),
+        Field::new("comment", DataType::Utf8, true),
+        Field::new("specific_name", DataType::Utf8, true),
+    ]))
+}
+
+/// Schema for getProcedureColumns results (matches `information_schema.parameters` SELECT columns).
+///
+/// Used by `EmptyReader` when catalog is empty string, to return zero rows
+/// with correct column metadata for ODBC column discovery.
+pub fn procedure_columns_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("specific_catalog", DataType::Utf8, true),
+        Field::new("specific_schema", DataType::Utf8, true),
+        Field::new("specific_name", DataType::Utf8, true),
+        Field::new("parameter_name", DataType::Utf8, true),
+        Field::new("parameter_mode", DataType::Utf8, true),
+        Field::new("is_result", DataType::Utf8, true),
+        Field::new("data_type", DataType::Utf8, true),
+        Field::new("full_data_type", DataType::Utf8, true),
+        Field::new("numeric_precision", DataType::Int32, true),
+        Field::new("numeric_precision_radix", DataType::Int32, true),
+        Field::new("numeric_scale", DataType::Int32, true),
+        Field::new("character_maximum_length", DataType::Int64, true),
+        Field::new("character_octet_length", DataType::Int64, true),
+        Field::new("ordinal_position", DataType::Int32, true),
+        Field::new("parameter_default", DataType::Utf8, true),
+        Field::new("comment", DataType::Utf8, true),
+    ]))
+}
+
 /// Builds SQL commands for metadata queries.
 ///
 /// Uses a builder pattern to set optional filters before generating the SQL.
@@ -186,6 +228,9 @@ impl SqlCommandBuilder {
     ///
     /// Databricks SQL treats backslash as an escape character in string literals
     /// by default, so both single quotes and backslashes must be escaped.
+    ///
+    /// Order matters: backslashes must be escaped first, then quotes.
+    /// Reversing the order would double-escape `\'` → `\''` → `\\''`.
     fn escape_sql_string(value: &str) -> String {
         value.replace('\\', "\\\\").replace('\'', "''")
     }
@@ -193,13 +238,20 @@ impl SqlCommandBuilder {
     /// Resolve the catalog prefix for `information_schema` queries.
     ///
     /// - `None` → `system` (cross-catalog query)
-    /// - `Some("")` → `None` (empty catalog produces a no-results query)
     /// - `Some("main")` → `` `main` `` (scoped to catalog)
-    fn resolve_catalog_prefix(catalog: Option<&str>) -> Option<String> {
+    ///
+    /// # Panics
+    ///
+    /// Empty string catalog must be handled by the caller before reaching
+    /// the SQL builder. Use [`procedures_schema`] / [`procedure_columns_schema`]
+    /// with `EmptyReader` for the empty catalog case.
+    fn resolve_catalog_prefix(catalog: Option<&str>) -> String {
         match catalog {
-            None => Some("system".to_string()),
-            Some("") => None,
-            Some(c) => Some(Self::escape_identifier(c)),
+            None => "system".to_string(),
+            Some(c) => {
+                debug_assert!(!c.is_empty(), "Empty catalog must be handled by caller");
+                Self::escape_identifier(c)
+            }
         }
     }
 
@@ -207,8 +259,10 @@ impl SqlCommandBuilder {
     ///
     /// Catalog resolution:
     /// - `None` → queries `system.information_schema.routines` (cross-catalog)
-    /// - `Some("")` → returns a query that produces no rows (`WHERE 1=0`)
     /// - `Some("main")` → queries `` `main`.information_schema.routines ``
+    ///
+    /// Empty string catalog must be handled by the caller (return `EmptyReader`
+    /// with [`procedures_schema`] to avoid a server round-trip and permission issues).
     ///
     /// Schema and procedure patterns use SQL LIKE syntax directly (no Hive conversion).
     pub fn build_get_procedures(
@@ -216,13 +270,7 @@ impl SqlCommandBuilder {
         schema_pattern: Option<&str>,
         procedure_pattern: Option<&str>,
     ) -> String {
-        let Some(prefix) = Self::resolve_catalog_prefix(catalog) else {
-            // Empty catalog → return a query that produces no rows with correct schema
-            return "SELECT routine_catalog, routine_schema, routine_name, \
-                    comment, specific_name \
-                    FROM system.information_schema.routines WHERE 1=0"
-                .to_string();
-        };
+        let prefix = Self::resolve_catalog_prefix(catalog);
         let mut sql = format!(
             "SELECT routine_catalog, routine_schema, routine_name, comment, specific_name \
              FROM {}.information_schema.routines \
@@ -252,29 +300,16 @@ impl SqlCommandBuilder {
     /// `information_schema.routines` for getProcedureColumns.
     ///
     /// Same catalog resolution as `build_get_procedures`.
+    ///
+    /// Empty string catalog must be handled by the caller (return `EmptyReader`
+    /// with [`procedure_columns_schema`] to avoid a server round-trip and permission issues).
     pub fn build_get_procedure_columns(
         catalog: Option<&str>,
         schema_pattern: Option<&str>,
         procedure_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> String {
-        let Some(prefix) = Self::resolve_catalog_prefix(catalog) else {
-            // Empty catalog → return a query that produces no rows with correct schema
-            return "SELECT \
-                    p.specific_catalog, p.specific_schema, p.specific_name, \
-                    p.parameter_name, p.parameter_mode, p.is_result, \
-                    p.data_type, p.full_data_type, \
-                    p.numeric_precision, p.numeric_precision_radix, p.numeric_scale, \
-                    p.character_maximum_length, p.character_octet_length, \
-                    p.ordinal_position, p.parameter_default, p.comment \
-                    FROM system.information_schema.parameters p \
-                    JOIN system.information_schema.routines r \
-                    ON p.specific_catalog = r.specific_catalog \
-                    AND p.specific_schema = r.specific_schema \
-                    AND p.specific_name = r.specific_name \
-                    WHERE 1=0"
-                .to_string();
-        };
+        let prefix = Self::resolve_catalog_prefix(catalog);
         let mut sql = format!(
             "SELECT \
              p.specific_catalog, p.specific_schema, p.specific_name, \
@@ -512,28 +547,19 @@ mod tests {
     }
 
     #[test]
-    fn test_get_procedures_empty_catalog() {
-        let sql = SqlCommandBuilder::build_get_procedures(Some(""), None, None);
-        assert!(
-            sql.contains("WHERE 1=0"),
-            "Empty catalog should produce no-rows query: {}",
-            sql
-        );
-        // Should still have the correct column list for schema discovery
-        assert!(sql.contains("routine_catalog"));
-        assert!(sql.contains("routine_name"));
+    fn test_procedures_schema_columns() {
+        let schema = procedures_schema();
+        assert_eq!(schema.fields().len(), 5);
+        assert_eq!(schema.field(0).name(), "routine_catalog");
+        assert_eq!(schema.field(4).name(), "specific_name");
     }
 
     #[test]
-    fn test_get_procedure_columns_empty_catalog() {
-        let sql = SqlCommandBuilder::build_get_procedure_columns(Some(""), None, None, None);
-        assert!(
-            sql.contains("WHERE 1=0"),
-            "Empty catalog should produce no-rows query: {}",
-            sql
-        );
-        assert!(sql.contains("p.specific_catalog"));
-        assert!(sql.contains("p.parameter_name"));
+    fn test_procedure_columns_schema_columns() {
+        let schema = procedure_columns_schema();
+        assert_eq!(schema.fields().len(), 16);
+        assert_eq!(schema.field(0).name(), "specific_catalog");
+        assert_eq!(schema.field(15).name(), "comment");
     }
 
     #[test]
@@ -623,22 +649,14 @@ mod tests {
 
     #[test]
     fn test_resolve_catalog_prefix_none() {
-        assert_eq!(
-            SqlCommandBuilder::resolve_catalog_prefix(None),
-            Some("system".to_string())
-        );
-    }
-
-    #[test]
-    fn test_resolve_catalog_prefix_empty_string() {
-        assert_eq!(SqlCommandBuilder::resolve_catalog_prefix(Some("")), None);
+        assert_eq!(SqlCommandBuilder::resolve_catalog_prefix(None), "system");
     }
 
     #[test]
     fn test_resolve_catalog_prefix_specific() {
         assert_eq!(
             SqlCommandBuilder::resolve_catalog_prefix(Some("main")),
-            Some("`main`".to_string())
+            "`main`"
         );
     }
 
@@ -646,7 +664,7 @@ mod tests {
     fn test_resolve_catalog_prefix_special_chars() {
         assert_eq!(
             SqlCommandBuilder::resolve_catalog_prefix(Some("my`catalog")),
-            Some("`my``catalog`".to_string())
+            "`my``catalog`"
         );
     }
 

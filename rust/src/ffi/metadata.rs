@@ -24,7 +24,7 @@
 //! 7. Return status code; on error, set thread-local error buffer
 
 use crate::ffi::error::{clear_last_error, set_error_from_result, set_last_error, FfiStatus};
-use crate::metadata::sql::SqlCommandBuilder;
+use crate::metadata::sql::{self, SqlCommandBuilder};
 use crate::reader::{EmptyReader, ResultReader, ResultReaderAdapter};
 use crate::types::sea::{ExecuteParams, ResultManifest};
 use crate::Connection;
@@ -429,9 +429,14 @@ pub unsafe extern "C" fn metadata_get_procedures(
             return FfiStatus::Error;
         };
 
-        // Empty catalog is handled by the SQL builder (produces WHERE 1=0),
-        // which returns zero rows but preserves the correct column schema
-        // for ODBC column-discovery (SQLDescribeCol).
+        // Empty catalog → return empty result with correct schema (no server round-trip).
+        // Avoids permission errors if user lacks system.information_schema access.
+        if catalog == Some("") {
+            let reader: Box<dyn ResultReader + Send> =
+                Box::new(EmptyReader::new(sql::procedures_schema()));
+            return export_reader(reader, None, out);
+        }
+
         match conn
             .runtime_handle()
             .block_on(conn.client().list_procedures(
@@ -451,7 +456,7 @@ pub unsafe extern "C" fn metadata_get_procedures(
 ///
 /// Uses `information_schema.parameters` joined with `information_schema.routines`.
 /// When catalog is NULL, queries `system.information_schema` (cross-catalog).
-/// When catalog is empty string, returns zero rows with correct column schema.
+/// When catalog is empty string, returns empty result with correct column schema.
 ///
 /// # Safety
 ///
@@ -483,9 +488,13 @@ pub unsafe extern "C" fn metadata_get_procedure_columns(
             return FfiStatus::Error;
         };
 
-        // Empty catalog is handled by the SQL builder (produces WHERE 1=0),
-        // which returns zero rows but preserves the correct column schema
-        // for ODBC column-discovery (SQLDescribeCol).
+        // Empty catalog → return empty result with correct schema (no server round-trip).
+        if catalog == Some("") {
+            let reader: Box<dyn ResultReader + Send> =
+                Box::new(EmptyReader::new(sql::procedure_columns_schema()));
+            return export_reader(reader, None, out);
+        }
+
         match conn
             .runtime_handle()
             .block_on(conn.client().list_procedure_columns(
