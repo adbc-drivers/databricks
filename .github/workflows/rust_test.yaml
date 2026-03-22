@@ -173,6 +173,7 @@ jobs:
           fi
 
           cargo test --locked
+          cargo build --locked --features ffi
           cargo test --locked --features ffi
 
           if [[ -f ci/scripts/post-test.sh ]]; then
