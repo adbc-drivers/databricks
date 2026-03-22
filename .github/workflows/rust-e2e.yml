@@ -38,7 +38,7 @@ defaults:
 
 jobs:
   proxy:
-    name: "E2E/Proxy"
+    name: "Proxy"
     runs-on: ubuntu-latest
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
