@@ -219,13 +219,121 @@ Also add corresponding `get_option_string` entries for reading back proxy config
 6. **`test_set_proxy_options`** — All four proxy options parse correctly via `set_option`.
 7. **`test_get_proxy_options`** — Proxy options are readable via `get_option_string`.
 
-### Integration Tests (requires proxy infrastructure)
+### E2E Proxy Tests (CI workflow)
 
-These would use a local proxy (e.g., `mitmproxy` or a simple HTTP CONNECT proxy in a test fixture) to verify end-to-end proxy routing. Marked `#[ignore]` since they require infrastructure.
+A new GitHub Actions workflow (`rust-e2e.yml`) provides a home for Rust e2e tests that require external infrastructure. The proxy tests are the first job; other e2e jobs (e.g., CloudFetch, metadata, OAuth) can be added to the same workflow later.
 
-8. **`test_connection_through_proxy`** — Full connection + simple query through a proxy.
-9. **`test_connection_through_authenticated_proxy`** — Same but with proxy auth.
-10. **`test_bypass_hosts_bypass`** — Verify requests to bypassed hosts go direct.
+#### Workflow Design
+
+```yaml
+# .github/workflows/rust-e2e.yml
+name: Rust E2E Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rust/**"
+      - .github/workflows/rust-e2e.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - "rust/**"
+      - .github/workflows/rust-e2e.yml
+
+jobs:
+  proxy:
+    name: "E2E/Proxy"
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+
+    services:
+      # Unauthenticated proxy
+      squid:
+        image: ubuntu/squid:latest
+        ports:
+          - 3128:3128
+
+      # Authenticated proxy (basic auth)
+      squid-auth:
+        image: ubuntu/squid:latest
+        ports:
+          - 3129:3128
+        volumes:
+          - ./rust/ci/proxy/squid-auth.conf:/etc/squid/squid.conf
+          - ./rust/ci/proxy/htpasswd:/etc/squid/htpasswd
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Run proxy e2e tests
+        working-directory: rust
+        run: cargo test --test proxy_e2e -- --ignored
+
+      - name: Verify proxy was used (unauthenticated)
+        run: |
+          docker compose logs squid | grep "CONNECT $DATABRICKS_HOST" \
+            || (echo "FAIL: No CONNECT entry in squid access log" && exit 1)
+
+      - name: Verify proxy was used (authenticated)
+        run: |
+          docker compose logs squid-auth | grep "CONNECT $DATABRICKS_HOST" \
+            || (echo "FAIL: No CONNECT entry in squid-auth access log" && exit 1)
+
+  # Future e2e jobs can be added here, e.g.:
+  # cloudfetch:
+  #   name: "E2E/CloudFetch"
+  #   ...
+```
+
+#### Proxy Verification Strategy
+
+Tests verify that requests actually routed through the proxy by checking **Squid's access log** after each test. Squid logs every CONNECT tunnel it establishes, e.g.:
+
+```
+1711234567.890    200 TCP_TUNNEL/200 12345 CONNECT my-workspace.databricks.com:443 - HIER_DIRECT/1.2.3.4 -
+```
+
+The CI step reads the container logs after tests complete and asserts the Databricks host appears in a CONNECT entry. If the driver connected directly (bypassing the proxy), the log would be empty and the step fails.
+
+#### E2E Test Cases
+
+8. **`test_connection_through_proxy`** — Set `databricks.http.proxy.url = http://localhost:3128`, connect to Databricks, run `SELECT 1`. CI step verifies Squid access log contains a CONNECT to the Databricks host.
+
+9. **`test_connection_through_authenticated_proxy`** — Set `proxy.url = http://localhost:3129` with `proxy.username`/`proxy.password`, connect and query. Verifies authenticated proxy works (Squid returns 200, not 407).
+
+10. **`test_proxy_bypass_hosts`** — Set `proxy.url = http://localhost:3128` and `proxy.bypass_hosts` to include the Databricks host. Connect and query. Verify the Squid access log does **not** contain a CONNECT for the Databricks host (traffic went direct).
+
+#### Proxy Configuration Files
+
+```
+rust/ci/proxy/
+├── squid-auth.conf    # Squid config requiring basic auth
+└── htpasswd           # Test credentials (testuser:testpass)
+```
+
+`squid-auth.conf`:
+```
+auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/htpasswd
+auth_param basic realm Proxy Auth
+acl authenticated proxy_auth REQUIRED
+http_access allow authenticated
+http_access deny all
+```
+
+#### Files Added
+
+| File | Purpose |
+|------|---------|
+| `.github/workflows/rust-e2e.yml` | CI workflow with Squid sidecar |
+| `rust/ci/proxy/squid-auth.conf` | Squid config for authenticated proxy |
+| `rust/ci/proxy/htpasswd` | htpasswd file with test credentials |
+| `rust/tests/proxy_e2e.rs` | E2E test cases (marked `#[ignore]`) |
 
 ## Cross-Driver Comparison
 
@@ -250,8 +358,12 @@ The C# driver uses separate `proxy_host` and `proxy_port` fields plus a `use_pro
 
 | File | Change |
 |------|--------|
-| `src/client/http.rs` | Add `ProxyConfig` struct, update `HttpClientConfig`, update `DatabricksHttpClient::new()`, add tests |
-| `src/database.rs` | Parse and get proxy options in `set_option`/`get_option_string` |
+| `rust/src/client/http.rs` | Add `ProxyConfig` struct, update `HttpClientConfig`, update `DatabricksHttpClient::new()`, add unit tests |
+| `rust/src/database.rs` | Parse and get proxy options in `set_option`/`get_option_string` |
+| `.github/workflows/rust-e2e.yml` | New CI workflow with Squid proxy sidecar |
+| `rust/ci/proxy/squid-auth.conf` | Squid config for authenticated proxy testing |
+| `rust/ci/proxy/htpasswd` | Test credentials for authenticated proxy |
+| `rust/tests/proxy_e2e.rs` | E2E proxy test cases |
 
 ## Scope Exclusions
 
