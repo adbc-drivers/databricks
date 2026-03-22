@@ -37,6 +37,7 @@ use adbc_core::Driver as _;
 use adbc_core::Optionable;
 use adbc_core::Statement as _;
 use arrow_array::{Array, RecordBatchReader, StringArray};
+use databricks_adbc::metadata::sql::SqlCommandBuilder;
 use databricks_adbc::Driver;
 
 fn get_env(name: &str) -> String {
@@ -245,25 +246,23 @@ fn test_metadata_get_foreign_keys() {
     println!("  PASS");
 }
 
-// ─── getProcedures ──────────────────────────────────────────────────────────
+// ─── getProcedures (uses SqlCommandBuilder to exercise actual code path) ─────
 
 #[test]
 #[ignore]
 fn test_metadata_get_procedures_cross_catalog() {
     let mut conn = create_connection();
 
-    let (schema, row_count, _) = execute_query(
-        &mut conn,
-        "SELECT routine_catalog, routine_schema, routine_name, comment, specific_name \
-         FROM system.information_schema.routines \
-         WHERE routine_type = 'PROCEDURE' \
-         ORDER BY routine_catalog, routine_schema, routine_name",
-    );
+    // Use the actual SQL builder — tests build_get_procedures with None catalog
+    let sql = SqlCommandBuilder::build_get_procedures(None, None, None);
+    println!("getProcedures SQL (cross-catalog): {}", sql);
+    let (schema, row_count, _) = execute_query(&mut conn, &sql);
 
     println!("getProcedures (cross-catalog): {} rows", row_count);
     assert!(schema.column_with_name("routine_catalog").is_some());
     assert!(schema.column_with_name("routine_name").is_some());
     assert!(schema.column_with_name("specific_name").is_some());
+    assert!(schema.column_with_name("comment").is_some());
     println!("  PASS");
 }
 
@@ -272,13 +271,10 @@ fn test_metadata_get_procedures_cross_catalog() {
 fn test_metadata_get_procedures_specific_catalog() {
     let mut conn = create_connection();
 
-    let (schema, row_count, _) = execute_query(
-        &mut conn,
-        "SELECT routine_catalog, routine_schema, routine_name, comment, specific_name \
-         FROM `main`.information_schema.routines \
-         WHERE routine_type = 'PROCEDURE' \
-         ORDER BY routine_catalog, routine_schema, routine_name",
-    );
+    // Tests build_get_procedures with specific catalog
+    let sql = SqlCommandBuilder::build_get_procedures(Some("main"), None, None);
+    println!("getProcedures SQL (catalog=main): {}", sql);
+    let (schema, row_count, _) = execute_query(&mut conn, &sql);
 
     println!(
         "getProcedures (catalog=main): {} rows, {} cols",
@@ -293,48 +289,68 @@ fn test_metadata_get_procedures_specific_catalog() {
 fn test_metadata_get_procedures_with_schema_filter() {
     let mut conn = create_connection();
 
-    let (_, row_count, _) = execute_query(
-        &mut conn,
-        "SELECT routine_catalog, routine_schema, routine_name, comment, specific_name \
-         FROM system.information_schema.routines \
-         WHERE routine_type = 'PROCEDURE' \
-         AND routine_schema LIKE 'default' \
-         ORDER BY routine_catalog, routine_schema, routine_name",
-    );
+    // Tests build_get_procedures with schema pattern
+    let sql = SqlCommandBuilder::build_get_procedures(None, Some("default"), None);
+    println!("getProcedures SQL (schema=default): {}", sql);
+    let (_, row_count, _) = execute_query(&mut conn, &sql);
 
     println!("getProcedures (schema=default): {} rows", row_count);
     println!("  PASS");
 }
 
-// ─── getProcedureColumns ────────────────────────────────────────────────────
+#[test]
+#[ignore]
+fn test_metadata_get_procedures_empty_catalog() {
+    let mut conn = create_connection();
+
+    // Tests build_get_procedures with empty catalog — should return 0 rows
+    let sql = SqlCommandBuilder::build_get_procedures(Some(""), None, None);
+    println!("getProcedures SQL (empty catalog): {}", sql);
+    assert!(
+        sql.contains("WHERE 1=0"),
+        "Empty catalog should produce WHERE 1=0"
+    );
+    let (schema, row_count, _) = execute_query(&mut conn, &sql);
+
+    assert_eq!(row_count, 0, "Empty catalog should return 0 rows");
+    // Schema should still have correct columns for ODBC column discovery
+    assert!(schema.column_with_name("routine_catalog").is_some());
+    println!("  PASS");
+}
+
+// ─── getProcedureColumns (uses SqlCommandBuilder) ───────────────────────────
 
 #[test]
 #[ignore]
 fn test_metadata_get_procedure_columns_cross_catalog() {
     let mut conn = create_connection();
 
-    let (schema, row_count, _) = execute_query(
-        &mut conn,
-        "SELECT \
-         p.specific_catalog, p.specific_schema, p.specific_name, \
-         p.parameter_name, p.parameter_mode, p.is_result, \
-         p.data_type, p.full_data_type, \
-         p.numeric_precision, p.numeric_precision_radix, p.numeric_scale, \
-         p.character_maximum_length, p.character_octet_length, \
-         p.ordinal_position, p.parameter_default, p.comment \
-         FROM system.information_schema.parameters p \
-         JOIN system.information_schema.routines r \
-         ON p.specific_catalog = r.specific_catalog \
-         AND p.specific_schema = r.specific_schema \
-         AND p.specific_name = r.specific_name \
-         WHERE r.routine_type = 'PROCEDURE' \
-         ORDER BY p.specific_catalog, p.specific_schema, p.specific_name, p.ordinal_position",
-    );
+    // Use the actual SQL builder — tests build_get_procedure_columns with None catalog
+    let sql = SqlCommandBuilder::build_get_procedure_columns(None, None, None, None);
+    println!("getProcedureColumns SQL (cross-catalog): {}", sql);
+    let (schema, row_count, _) = execute_query(&mut conn, &sql);
 
     println!("getProcedureColumns (cross-catalog): {} rows", row_count);
     assert!(schema.column_with_name("specific_catalog").is_some());
     assert!(schema.column_with_name("parameter_name").is_some());
     assert!(schema.column_with_name("data_type").is_some());
     assert!(schema.column_with_name("ordinal_position").is_some());
+    assert!(schema.column_with_name("comment").is_some());
+    println!("  PASS");
+}
+
+#[test]
+#[ignore]
+fn test_metadata_get_procedure_columns_empty_catalog() {
+    let mut conn = create_connection();
+
+    // Tests build_get_procedure_columns with empty catalog
+    let sql = SqlCommandBuilder::build_get_procedure_columns(Some(""), None, None, None);
+    println!("getProcedureColumns SQL (empty catalog): {}", sql);
+    assert!(sql.contains("WHERE 1=0"));
+    let (schema, row_count, _) = execute_query(&mut conn, &sql);
+
+    assert_eq!(row_count, 0, "Empty catalog should return 0 rows");
+    assert!(schema.column_with_name("specific_catalog").is_some());
     println!("  PASS");
 }
