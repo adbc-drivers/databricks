@@ -638,23 +638,6 @@ impl DatabricksClient for SeaClient {
             .await
     }
 
-    async fn list_cross_references(
-        &self,
-        session_id: &str,
-        _pk_catalog: &str,
-        _pk_schema: &str,
-        _pk_table: &str,
-        fk_catalog: &str,
-        fk_schema: &str,
-        fk_table: &str,
-    ) -> Result<ExecuteResult> {
-        // Same query as getForeignKeys — ODBC layer filters by parent table client-side
-        let sql = SqlCommandBuilder::build_show_foreign_keys(fk_catalog, fk_schema, fk_table);
-        debug!("list_cross_references: {}", sql);
-        self.execute_statement(session_id, &sql, &ExecuteParams::default())
-            .await
-    }
-
     fn list_table_types(&self) -> Vec<String> {
         vec![
             "SYSTEM TABLE".to_string(),

@@ -180,11 +180,13 @@ impl SqlCommandBuilder {
     /// Resolve the catalog prefix for `information_schema` queries.
     ///
     /// - `None` → `system` (cross-catalog query)
+    /// - `Some("")` → `None` (empty catalog produces a no-results query)
     /// - `Some("main")` → `` `main` `` (scoped to catalog)
-    fn resolve_catalog_prefix(catalog: Option<&str>) -> String {
+    fn resolve_catalog_prefix(catalog: Option<&str>) -> Option<String> {
         match catalog {
-            None => "system".to_string(),
-            Some(c) => Self::escape_identifier(c),
+            None => Some("system".to_string()),
+            Some("") => None,
+            Some(c) => Some(Self::escape_identifier(c)),
         }
     }
 
@@ -192,6 +194,7 @@ impl SqlCommandBuilder {
     ///
     /// Catalog resolution:
     /// - `None` → queries `system.information_schema.routines` (cross-catalog)
+    /// - `Some("")` → returns a query that produces no rows (`WHERE 1=0`)
     /// - `Some("main")` → queries `` `main`.information_schema.routines ``
     ///
     /// Schema and procedure patterns use SQL LIKE syntax directly (no Hive conversion).
@@ -200,7 +203,13 @@ impl SqlCommandBuilder {
         schema_pattern: Option<&str>,
         procedure_pattern: Option<&str>,
     ) -> String {
-        let prefix = Self::resolve_catalog_prefix(catalog);
+        let Some(prefix) = Self::resolve_catalog_prefix(catalog) else {
+            // Empty catalog → return a query that produces no rows with correct schema
+            return "SELECT routine_catalog, routine_schema, routine_name, \
+                    comment, specific_name \
+                    FROM system.information_schema.routines WHERE 1=0"
+                .to_string();
+        };
         let mut sql = format!(
             "SELECT routine_catalog, routine_schema, routine_name, comment, specific_name \
              FROM {}.information_schema.routines \
@@ -236,7 +245,23 @@ impl SqlCommandBuilder {
         procedure_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> String {
-        let prefix = Self::resolve_catalog_prefix(catalog);
+        let Some(prefix) = Self::resolve_catalog_prefix(catalog) else {
+            // Empty catalog → return a query that produces no rows with correct schema
+            return "SELECT \
+                    p.specific_catalog, p.specific_schema, p.specific_name, \
+                    p.parameter_name, p.parameter_mode, p.is_result, \
+                    p.data_type, p.full_data_type, \
+                    p.numeric_precision, p.numeric_precision_radix, p.numeric_scale, \
+                    p.character_maximum_length, p.character_octet_length, \
+                    p.ordinal_position, p.parameter_default, p.comment \
+                    FROM system.information_schema.parameters p \
+                    JOIN system.information_schema.routines r \
+                    ON p.specific_catalog = r.specific_catalog \
+                    AND p.specific_schema = r.specific_schema \
+                    AND p.specific_name = r.specific_name \
+                    WHERE 1=0"
+                .to_string();
+        };
         let mut sql = format!(
             "SELECT \
              p.specific_catalog, p.specific_schema, p.specific_name, \
@@ -471,6 +496,31 @@ mod tests {
         assert!(sql.contains("FROM `prod`.information_schema.routines"));
         assert!(sql.contains("AND routine_schema LIKE 'public'"));
         assert!(sql.contains("AND routine_name LIKE 'sp_%'"));
+    }
+
+    #[test]
+    fn test_get_procedures_empty_catalog() {
+        let sql = SqlCommandBuilder::build_get_procedures(Some(""), None, None);
+        assert!(
+            sql.contains("WHERE 1=0"),
+            "Empty catalog should produce no-rows query: {}",
+            sql
+        );
+        // Should still have the correct column list for schema discovery
+        assert!(sql.contains("routine_catalog"));
+        assert!(sql.contains("routine_name"));
+    }
+
+    #[test]
+    fn test_get_procedure_columns_empty_catalog() {
+        let sql = SqlCommandBuilder::build_get_procedure_columns(Some(""), None, None, None);
+        assert!(
+            sql.contains("WHERE 1=0"),
+            "Empty catalog should produce no-rows query: {}",
+            sql
+        );
+        assert!(sql.contains("p.specific_catalog"));
+        assert!(sql.contains("p.parameter_name"));
     }
 
     #[test]

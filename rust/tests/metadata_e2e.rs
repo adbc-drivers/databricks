@@ -245,29 +245,6 @@ fn test_metadata_get_foreign_keys() {
     println!("  PASS");
 }
 
-// ─── Cross References (same query as foreign keys) ──────────────────────────
-
-#[test]
-#[ignore]
-fn test_metadata_get_cross_references() {
-    let mut conn = create_connection();
-
-    // getCrossReferences uses SHOW FOREIGN KEYS on the FK table;
-    // parent table filtering is done client-side by the ODBC layer.
-    // Here we just verify the query executes.
-    let (schema, row_count, _) = execute_query(
-        &mut conn,
-        "SHOW FOREIGN KEYS IN CATALOG `main` IN SCHEMA `information_schema` IN TABLE `tables`",
-    );
-
-    println!(
-        "getCrossReferences: {} rows, {} columns",
-        row_count,
-        schema.fields().len()
-    );
-    println!("  PASS");
-}
-
 // ─── getProcedures ──────────────────────────────────────────────────────────
 
 #[test]

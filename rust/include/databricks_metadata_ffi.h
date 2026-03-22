@@ -195,33 +195,6 @@ FfiStatus metadata_get_foreign_keys(
 );
 
 /**
- * List cross-references (foreign key relationships) between two tables.
- *
- * Uses SHOW FOREIGN KEYS on the foreign table. The ODBC layer filters
- * results client-side to match the parent table.
- *
- * @param conn        Pointer to the Rust Connection.
- * @param pk_catalog  Parent table catalog (required, must not be NULL).
- * @param pk_schema   Parent table schema (required, must not be NULL).
- * @param pk_table    Parent table name (required, must not be NULL).
- * @param fk_catalog  Foreign table catalog (required, must not be NULL).
- * @param fk_schema   Foreign table schema (required, must not be NULL).
- * @param fk_table    Foreign table name (required, must not be NULL).
- * @param[out] out    Arrow stream to populate.
- * @return FfiStatus code.
- */
-FfiStatus metadata_get_cross_references(
-    const void* conn,
-    const char* pk_catalog,
-    const char* pk_schema,
-    const char* pk_table,
-    const char* fk_catalog,
-    const char* fk_schema,
-    const char* fk_table,
-    struct ArrowArrayStream* out
-);
-
-/**
  * List procedures matching the given filter criteria.
  *
  * Queries information_schema.routines filtered by routine_type = 'PROCEDURE'.

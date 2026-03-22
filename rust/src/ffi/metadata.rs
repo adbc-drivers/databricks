@@ -397,67 +397,6 @@ pub unsafe extern "C" fn metadata_get_foreign_keys(
     .unwrap_or_else(handle_panic)
 }
 
-/// List cross-references (foreign key relationships) between two tables.
-///
-/// Uses `SHOW FOREIGN KEYS` on the foreign table. The ODBC layer filters
-/// results client-side to match the parent table.
-///
-/// # Safety
-///
-/// - `conn` must be a valid pointer to a `Connection`
-/// - All string arguments must be valid non-null C strings
-/// - `out` must point to a valid, writable `FFI_ArrowArrayStream`
-#[no_mangle]
-pub unsafe extern "C" fn metadata_get_cross_references(
-    conn: *const c_void,
-    pk_catalog: *const c_char,
-    pk_schema: *const c_char,
-    pk_table: *const c_char,
-    fk_catalog: *const c_char,
-    fk_schema: *const c_char,
-    fk_table: *const c_char,
-    out: *mut FFI_ArrowArrayStream,
-) -> FfiStatus {
-    clear_last_error();
-    std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let conn = get_connection!(conn);
-        let Ok(pk_catalog) = (unsafe { c_str_to_str(pk_catalog) }) else {
-            return FfiStatus::Error;
-        };
-        let Ok(pk_schema) = (unsafe { c_str_to_str(pk_schema) }) else {
-            return FfiStatus::Error;
-        };
-        let Ok(pk_table) = (unsafe { c_str_to_str(pk_table) }) else {
-            return FfiStatus::Error;
-        };
-        let Ok(fk_catalog) = (unsafe { c_str_to_str(fk_catalog) }) else {
-            return FfiStatus::Error;
-        };
-        let Ok(fk_schema) = (unsafe { c_str_to_str(fk_schema) }) else {
-            return FfiStatus::Error;
-        };
-        let Ok(fk_table) = (unsafe { c_str_to_str(fk_table) }) else {
-            return FfiStatus::Error;
-        };
-
-        match conn
-            .runtime_handle()
-            .block_on(conn.client().list_cross_references(
-                conn.session_id(),
-                pk_catalog,
-                pk_schema,
-                pk_table,
-                fk_catalog,
-                fk_schema,
-                fk_table,
-            )) {
-            Ok(result) => export_reader(result.reader, result.manifest.as_ref(), out),
-            Err(e) => set_error_from_result(&e),
-        }
-    }))
-    .unwrap_or_else(handle_panic)
-}
-
 /// List procedures matching the given filter criteria.
 ///
 /// Uses `information_schema.routines` filtered by `routine_type = 'PROCEDURE'`.
@@ -490,13 +429,9 @@ pub unsafe extern "C" fn metadata_get_procedures(
             return FfiStatus::Error;
         };
 
-        // Empty string catalog → empty result set
-        if catalog == Some("") {
-            let reader: Box<dyn ResultReader + Send> =
-                Box::new(EmptyReader::new(Arc::new(Schema::empty())));
-            return export_reader(reader, None, out);
-        }
-
+        // Empty catalog is handled by the SQL builder (produces WHERE 1=0),
+        // which returns zero rows but preserves the correct column schema
+        // for ODBC column-discovery (SQLDescribeCol).
         match conn
             .runtime_handle()
             .block_on(conn.client().list_procedures(
@@ -516,7 +451,7 @@ pub unsafe extern "C" fn metadata_get_procedures(
 ///
 /// Uses `information_schema.parameters` joined with `information_schema.routines`.
 /// When catalog is NULL, queries `system.information_schema` (cross-catalog).
-/// When catalog is empty string, returns an empty result set.
+/// When catalog is empty string, returns zero rows with correct column schema.
 ///
 /// # Safety
 ///
@@ -548,13 +483,9 @@ pub unsafe extern "C" fn metadata_get_procedure_columns(
             return FfiStatus::Error;
         };
 
-        // Empty string catalog → empty result set
-        if catalog == Some("") {
-            let reader: Box<dyn ResultReader + Send> =
-                Box::new(EmptyReader::new(Arc::new(Schema::empty())));
-            return export_reader(reader, None, out);
-        }
-
+        // Empty catalog is handled by the SQL builder (produces WHERE 1=0),
+        // which returns zero rows but preserves the correct column schema
+        // for ODBC column-discovery (SQLDescribeCol).
         match conn
             .runtime_handle()
             .block_on(conn.client().list_procedure_columns(
