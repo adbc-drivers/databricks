@@ -17,14 +17,17 @@
 //! Builds SHOW SQL commands based on the Databricks SQL dialect, matching
 //! the patterns used by the JDBC driver (`CommandConstants.java`).
 
+#[cfg(feature = "metadata-ffi")]
 use arrow_schema::{DataType, Field, Schema};
+#[cfg(feature = "metadata-ffi")]
 use std::sync::Arc;
 
 /// Schema for getProcedures results (matches `information_schema.routines` SELECT columns).
 ///
 /// Used by `EmptyReader` when catalog is empty string, to return zero rows
 /// with correct column metadata for ODBC column discovery.
-pub fn procedures_schema() -> Arc<Schema> {
+#[cfg(feature = "metadata-ffi")]
+pub(crate) fn procedures_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("routine_catalog", DataType::Utf8, true),
         Field::new("routine_schema", DataType::Utf8, true),
@@ -38,7 +41,8 @@ pub fn procedures_schema() -> Arc<Schema> {
 ///
 /// Used by `EmptyReader` when catalog is empty string, to return zero rows
 /// with correct column metadata for ODBC column discovery.
-pub fn procedure_columns_schema() -> Arc<Schema> {
+#[cfg(feature = "metadata-ffi")]
+pub(crate) fn procedure_columns_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("specific_catalog", DataType::Utf8, true),
         Field::new("specific_schema", DataType::Utf8, true),
@@ -63,7 +67,7 @@ pub fn procedure_columns_schema() -> Arc<Schema> {
 ///
 /// Uses a builder pattern to set optional filters before generating the SQL.
 #[derive(Default)]
-pub struct SqlCommandBuilder {
+pub(crate) struct SqlCommandBuilder {
     catalog: Option<String>,
     schema_pattern: Option<String>,
     table_pattern: Option<String>,
@@ -353,6 +357,7 @@ impl SqlCommandBuilder {
         sql
     }
 
+    #[cfg(feature = "metadata-ffi")]
     pub fn build_show_primary_keys(catalog: &str, schema: &str, table: &str) -> String {
         format!(
             "SHOW KEYS IN CATALOG {} IN SCHEMA {} IN TABLE {}",
@@ -362,6 +367,7 @@ impl SqlCommandBuilder {
         )
     }
 
+    #[cfg(feature = "metadata-ffi")]
     pub fn build_show_foreign_keys(catalog: &str, schema: &str, table: &str) -> String {
         format!(
             "SHOW FOREIGN KEYS IN CATALOG {} IN SCHEMA {} IN TABLE {}",
@@ -490,6 +496,7 @@ mod tests {
         assert_eq!(sql, "SHOW SCHEMAS IN ALL CATALOGS LIKE 'it''s'");
     }
 
+    #[cfg(feature = "metadata-ffi")]
     #[test]
     fn test_show_primary_keys() {
         let sql = SqlCommandBuilder::build_show_primary_keys("main", "default", "my_table");
@@ -499,6 +506,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "metadata-ffi")]
     #[test]
     fn test_show_foreign_keys() {
         let sql = SqlCommandBuilder::build_show_foreign_keys("main", "default", "my_table");
@@ -546,6 +554,7 @@ mod tests {
         assert!(sql.contains("AND routine_name LIKE 'sp_%'"));
     }
 
+    #[cfg(feature = "metadata-ffi")]
     #[test]
     fn test_procedures_schema_columns() {
         let schema = procedures_schema();
@@ -554,6 +563,7 @@ mod tests {
         assert_eq!(schema.field(4).name(), "specific_name");
     }
 
+    #[cfg(feature = "metadata-ffi")]
     #[test]
     fn test_procedure_columns_schema_columns() {
         let schema = procedure_columns_schema();
@@ -744,6 +754,7 @@ mod tests {
 
     // --- foreign keys with special characters ---
 
+    #[cfg(feature = "metadata-ffi")]
     #[test]
     fn test_show_foreign_keys_special_chars_in_catalog() {
         let sql = SqlCommandBuilder::build_show_foreign_keys("my`cat", "my`sch", "my`tbl");
