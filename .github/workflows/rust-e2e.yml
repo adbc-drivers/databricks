@@ -46,26 +46,35 @@ jobs:
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
     services:
-      # Unauthenticated forward proxy
+      # Unauthenticated forward proxy (no volume mounts needed)
       squid:
         image: ubuntu/squid:latest
         ports:
           - 3128:3128
-
-      # Authenticated forward proxy (basic auth)
-      squid-auth:
-        image: ubuntu/squid:latest
-        ports:
-          - 3129:3128
-        volumes:
-          - ${{ github.workspace }}/rust/ci/proxy/squid-auth.conf:/etc/squid/squid.conf
-          - ${{ github.workspace }}/rust/ci/proxy/htpasswd:/etc/squid/htpasswd
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # Start authenticated proxy after checkout so config files are available
+      - name: Start authenticated proxy
+        run: |
+          docker run -d --name squid-auth \
+            -p 3129:3128 \
+            -v ${{ github.workspace }}/rust/ci/proxy/squid-auth.conf:/etc/squid/squid.conf \
+            -v ${{ github.workspace }}/rust/ci/proxy/htpasswd:/etc/squid/htpasswd \
+            ubuntu/squid:latest
+          # Wait for squid to be ready
+          for i in $(seq 1 10); do
+            if docker exec squid-auth squid -k check 2>/dev/null; then
+              echo "Authenticated proxy is ready"
+              break
+            fi
+            echo "Waiting for authenticated proxy to start... ($i/10)"
+            sleep 1
+          done
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
@@ -83,9 +92,13 @@ jobs:
       - name: Verify proxy was used (authenticated)
         if: always()
         run: |
-          docker logs $(docker ps -q --filter "publish=3129") 2>&1 \
+          docker logs squid-auth 2>&1 \
             | grep -i "CONNECT" \
             || echo "WARNING: No CONNECT entries found in squid-auth logs"
+
+      - name: Cleanup authenticated proxy
+        if: always()
+        run: docker rm -f squid-auth 2>/dev/null || true
 
   # Future e2e jobs can be added here, e.g.:
   # cloudfetch:
