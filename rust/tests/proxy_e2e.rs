@@ -76,6 +76,12 @@ fn create_database_with_proxy(
     bypass_hosts: Option<&str>,
 ) -> databricks_adbc::Database {
     let host = get_env_var("DATABRICKS_HOST");
+    // CI secret may not include the scheme — ensure it's a full URL
+    let host = if host.starts_with("https://") || host.starts_with("http://") {
+        host
+    } else {
+        format!("https://{}", host)
+    };
     let http_path = get_env_var("DATABRICKS_HTTP_PATH");
 
     let mut driver = Driver::new();
