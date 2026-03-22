@@ -37,7 +37,11 @@
 //!    ```bash
 //!    export DATABRICKS_HOST="https://your-workspace.cloud.databricks.com"
 //!    export DATABRICKS_HTTP_PATH="/sql/1.0/warehouses/your-warehouse-id"
+//!    # Either PAT auth:
 //!    export DATABRICKS_TOKEN="your-pat-token"
+//!    # Or OAuth M2M auth (used in CI):
+//!    export DATABRICKS_TEST_CLIENT_ID="your-client-id"
+//!    export DATABRICKS_TEST_CLIENT_SECRET="your-client-secret"
 //!    ```
 //!
 //! 4. Run the tests:
@@ -61,6 +65,10 @@ fn get_env_var(name: &str) -> String {
 }
 
 /// Helper to create a configured database with proxy settings.
+///
+/// Supports both PAT auth (via DATABRICKS_TOKEN) and OAuth M2M auth
+/// (via DATABRICKS_TEST_CLIENT_ID + DATABRICKS_TEST_CLIENT_SECRET).
+/// OAuth M2M is preferred if both are set (this is what CI uses).
 fn create_database_with_proxy(
     proxy_url: &str,
     proxy_username: Option<&str>,
@@ -69,7 +77,6 @@ fn create_database_with_proxy(
 ) -> databricks_adbc::Database {
     let host = get_env_var("DATABRICKS_HOST");
     let http_path = get_env_var("DATABRICKS_HTTP_PATH");
-    let token = get_env_var("DATABRICKS_TOKEN");
 
     let mut driver = Driver::new();
     let mut database = driver.new_database().expect("Failed to create database");
@@ -83,12 +90,39 @@ fn create_database_with_proxy(
             OptionValue::String(http_path),
         )
         .expect("Failed to set http_path");
-    database
-        .set_option(
-            OptionDatabase::Other("databricks.access_token".into()),
-            OptionValue::String(token),
-        )
-        .expect("Failed to set access_token");
+
+    // Use OAuth M2M if client credentials are available (CI), otherwise PAT
+    if let (Ok(client_id), Ok(client_secret)) = (
+        std::env::var("DATABRICKS_TEST_CLIENT_ID"),
+        std::env::var("DATABRICKS_TEST_CLIENT_SECRET"),
+    ) {
+        database
+            .set_option(
+                OptionDatabase::Other("databricks.auth.type".into()),
+                OptionValue::String("oauth_m2m".into()),
+            )
+            .expect("Failed to set auth type");
+        database
+            .set_option(
+                OptionDatabase::Other("databricks.auth.client_id".into()),
+                OptionValue::String(client_id),
+            )
+            .expect("Failed to set client_id");
+        database
+            .set_option(
+                OptionDatabase::Other("databricks.auth.client_secret".into()),
+                OptionValue::String(client_secret),
+            )
+            .expect("Failed to set client_secret");
+    } else {
+        let token = get_env_var("DATABRICKS_TOKEN");
+        database
+            .set_option(
+                OptionDatabase::Other("databricks.access_token".into()),
+                OptionValue::String(token),
+            )
+            .expect("Failed to set access_token");
+    }
 
     // Proxy configuration
     database
