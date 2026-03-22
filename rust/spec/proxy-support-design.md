@@ -123,13 +123,12 @@ pub fn new(config: HttpClientConfig) -> Result<Self> {
             proxy = proxy.basic_auth(username, password);
         }
 
-        builder = builder.proxy(proxy);
-
-        // Apply bypass_hosts list
+        // Apply bypass_hosts list to the proxy
         if let Some(ref bypass_hosts) = config.proxy.bypass_hosts {
-            let bypass_hosts = reqwest::NoProxy::from_string(bypass_hosts);
-            builder = builder.bypass_hosts(bypass_hosts);
+            proxy = proxy.no_proxy(reqwest::NoProxy::from_string(bypass_hosts));
         }
+
+        builder = builder.proxy(proxy);
 
         debug!(
             "HTTP client configured with proxy: {} (bypass_hosts: {:?})",

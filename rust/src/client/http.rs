@@ -34,7 +34,7 @@ use tracing::{debug, warn};
 /// When `url` is set, the driver uses the specified proxy for all requests,
 /// overriding `HTTP_PROXY`/`HTTPS_PROXY` environment variables. When `url`
 /// is `None`, reqwest's default behavior applies (reads env vars automatically).
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ProxyConfig {
     /// Proxy URL (e.g., "http://proxy.corp.example.com:8080").
     /// When set, overrides HTTP_PROXY/HTTPS_PROXY environment variables.
@@ -42,10 +42,23 @@ pub struct ProxyConfig {
     /// Username for proxy authentication.
     pub username: Option<String>,
     /// Password for proxy authentication.
+    ///
+    /// Note: This is a sensitive value. It is redacted in `Debug` output.
     pub password: Option<String>,
     /// Comma-separated list of hosts/domains to bypass the proxy
     /// (e.g., "localhost,*.internal.corp,.example.com").
     pub bypass_hosts: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyConfig")
+            .field("url", &self.url)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("bypass_hosts", &self.bypass_hosts)
+            .finish()
+    }
 }
 
 /// Configuration for the HTTP client.
@@ -150,6 +163,14 @@ impl DatabricksHttpClient {
                 proxy_url, config.proxy.bypass_hosts
             );
         } else {
+            if config.proxy.username.is_some() {
+                warn!(
+                    "Proxy credentials provided but no proxy URL set; credentials will be ignored"
+                );
+            }
+            if config.proxy.bypass_hosts.is_some() {
+                warn!("Proxy bypass_hosts provided but no proxy URL set; bypass list will be ignored (env var NO_PROXY is unaffected)");
+            }
             debug!("HTTP client using default proxy behavior (env vars)");
         }
 
