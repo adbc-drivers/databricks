@@ -53,7 +53,10 @@ impl SqlCommandBuilder {
         self
     }
 
-    /// Convert JDBC/ADBC-style pattern to Hive-style pattern for SHOW commands.
+    /// Convert JDBC/ADBC-style pattern to Hive-style pattern for `SHOW` commands.
+    ///
+    /// Use this for `SHOW TABLES/SCHEMAS/COLUMNS` patterns, which use Hive-style wildcards.
+    /// For `information_schema` SQL `LIKE` patterns, use [`escape_sql_string`] instead.
     ///
     /// Databricks SHOW commands use Hive-style wildcards, not SQL LIKE wildcards:
     /// - `%` → `*` (multi-char wildcard)
@@ -93,6 +96,9 @@ impl SqlCommandBuilder {
     }
 
     /// Escape identifier for use in SQL (backtick-quote).
+    ///
+    /// Use for catalog, schema, table names in SQL statements (e.g., `` `my_catalog` ``).
+    /// For string literal values inside `LIKE` clauses, use [`escape_sql_string`] instead.
     fn escape_identifier(name: &str) -> String {
         format!("`{}`", name.replace('`', "``"))
     }
@@ -172,7 +178,11 @@ impl SqlCommandBuilder {
         sql
     }
 
-    /// Escape a value for use in a SQL string literal.
+    /// Escape a value for use in a SQL string literal (inside single quotes).
+    ///
+    /// Use for `LIKE` pattern values in `information_schema` queries.
+    /// For identifiers (catalog/schema/table names), use [`escape_identifier`] instead.
+    /// For `SHOW` command patterns, use [`jdbc_pattern_to_hive`] instead.
     ///
     /// Databricks SQL treats backslash as an escape character in string literals
     /// by default, so both single quotes and backslashes must be escaped.
@@ -607,6 +617,122 @@ mod tests {
         assert!(sql.contains("p.ordinal_position"));
         assert!(sql.contains("p.parameter_default"));
         assert!(sql.contains("p.comment"));
+    }
+
+    // --- resolve_catalog_prefix edge cases ---
+
+    #[test]
+    fn test_resolve_catalog_prefix_none() {
+        assert_eq!(
+            SqlCommandBuilder::resolve_catalog_prefix(None),
+            Some("system".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_catalog_prefix_empty_string() {
+        assert_eq!(SqlCommandBuilder::resolve_catalog_prefix(Some("")), None);
+    }
+
+    #[test]
+    fn test_resolve_catalog_prefix_specific() {
+        assert_eq!(
+            SqlCommandBuilder::resolve_catalog_prefix(Some("main")),
+            Some("`main`".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_catalog_prefix_special_chars() {
+        assert_eq!(
+            SqlCommandBuilder::resolve_catalog_prefix(Some("my`catalog")),
+            Some("`my``catalog`".to_string())
+        );
+    }
+
+    // --- escape_sql_string edge cases ---
+
+    #[test]
+    fn test_escape_sql_string_single_quote() {
+        assert_eq!(SqlCommandBuilder::escape_sql_string("it's"), "it''s");
+    }
+
+    #[test]
+    fn test_escape_sql_string_backslash() {
+        assert_eq!(
+            SqlCommandBuilder::escape_sql_string(r"foo\bar"),
+            r"foo\\bar"
+        );
+    }
+
+    #[test]
+    fn test_escape_sql_string_trailing_backslash() {
+        assert_eq!(SqlCommandBuilder::escape_sql_string(r"foo\"), r"foo\\");
+    }
+
+    #[test]
+    fn test_escape_sql_string_both_quote_and_backslash() {
+        assert_eq!(
+            SqlCommandBuilder::escape_sql_string(r"it's\here"),
+            r"it''s\\here"
+        );
+    }
+
+    #[test]
+    fn test_escape_sql_string_percent_underscore_passthrough() {
+        // % and _ are SQL LIKE wildcards — they should NOT be escaped by escape_sql_string.
+        // They are meaningful in LIKE patterns and passed through as-is.
+        assert_eq!(
+            SqlCommandBuilder::escape_sql_string("foo%bar_baz"),
+            "foo%bar_baz"
+        );
+    }
+
+    #[test]
+    fn test_escape_sql_string_empty() {
+        assert_eq!(SqlCommandBuilder::escape_sql_string(""), "");
+    }
+
+    // --- procedure_columns SQL injection in column_pattern ---
+
+    #[test]
+    fn test_get_procedure_columns_column_pattern_injection() {
+        let sql = SqlCommandBuilder::build_get_procedure_columns(
+            None,
+            None,
+            None,
+            Some("'; DROP TABLE --"),
+        );
+        // Input: '; DROP TABLE --
+        // After escaping: ''; DROP TABLE --
+        // Embedded in LIKE '...': LIKE '''; DROP TABLE --'
+        assert!(
+            sql.contains("AND p.parameter_name LIKE '''; DROP TABLE --'"),
+            "Single quotes in column_pattern should be escaped: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_get_procedure_columns_column_pattern_backslash() {
+        let sql =
+            SqlCommandBuilder::build_get_procedure_columns(None, None, None, Some(r"param\name"));
+        assert!(
+            sql.contains(r"AND p.parameter_name LIKE 'param\\name'"),
+            "Backslash in column_pattern should be escaped: {}",
+            sql
+        );
+    }
+
+    // --- foreign keys with special characters ---
+
+    #[test]
+    fn test_show_foreign_keys_special_chars_in_catalog() {
+        let sql = SqlCommandBuilder::build_show_foreign_keys("my`cat", "my`sch", "my`tbl");
+        assert_eq!(
+            sql,
+            "SHOW FOREIGN KEYS IN CATALOG `my``cat` IN SCHEMA `my``sch` IN TABLE `my``tbl`"
+        );
     }
 
     // --- jdbc_pattern_to_hive tests (matches JDBC WildcardUtil) ---
