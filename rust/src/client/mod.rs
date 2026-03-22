@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::time::Duration;
 
-pub use http::{DatabricksHttpClient, HttpClientConfig};
+pub use http::{DatabricksHttpClient, HttpClientConfig, ProxyConfig};
 pub use sea::SeaClient;
 
 /// Backend-agnostic configuration for DatabricksClient implementations.

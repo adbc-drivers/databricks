@@ -322,6 +322,40 @@ impl Optionable for Database {
                     }
                 }
 
+                // Proxy configuration
+                "databricks.http.proxy.url" => {
+                    if let OptionValue::String(v) = value {
+                        self.http_config.proxy.url = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.http.proxy.username" => {
+                    if let OptionValue::String(v) = value {
+                        self.http_config.proxy.username = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.http.proxy.password" => {
+                    if let OptionValue::String(v) = value {
+                        self.http_config.proxy.password = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.http.proxy.bypass_hosts" => {
+                    if let OptionValue::String(v) = value {
+                        self.http_config.proxy.bypass_hosts = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+
                 // HTTP client options
                 "databricks.http.connect_timeout_ms" => {
                     if let Some(v) = Self::parse_int_option(&value) {
@@ -419,6 +453,34 @@ impl Optionable for Database {
                     self.auth_config.token_endpoint.clone().ok_or_else(|| {
                         DatabricksErrorHelper::invalid_state()
                             .message("option 'databricks.auth.token_endpoint' is not set")
+                            .to_adbc()
+                    })
+                }
+                "databricks.http.proxy.url" => {
+                    self.http_config.proxy.url.clone().ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_state()
+                            .message("option 'databricks.http.proxy.url' is not set")
+                            .to_adbc()
+                    })
+                }
+                "databricks.http.proxy.username" => {
+                    self.http_config.proxy.username.clone().ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_state()
+                            .message("option 'databricks.http.proxy.username' is not set")
+                            .to_adbc()
+                    })
+                }
+                "databricks.http.proxy.password" => {
+                    self.http_config.proxy.password.clone().ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_state()
+                            .message("option 'databricks.http.proxy.password' is not set")
+                            .to_adbc()
+                    })
+                }
+                "databricks.http.proxy.bypass_hosts" => {
+                    self.http_config.proxy.bypass_hosts.clone().ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_state()
+                            .message("option 'databricks.http.proxy.bypass_hosts' is not set")
                             .to_adbc()
                     })
                 }
@@ -1329,6 +1391,148 @@ mod tests {
             db.auth_config.scopes,
             Some("custom-scope-1 custom-scope-2".to_string())
         );
+    }
+
+    #[test]
+    fn test_database_set_proxy_options() {
+        let mut db = Database::new();
+
+        db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.url".into()),
+            OptionValue::String("http://proxy.example.com:8080".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.username".into()),
+            OptionValue::String("proxyuser".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.password".into()),
+            OptionValue::String("proxypass".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.bypass_hosts".into()),
+            OptionValue::String("localhost,*.internal.corp".into()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.http_config.proxy.url,
+            Some("http://proxy.example.com:8080".to_string())
+        );
+        assert_eq!(db.http_config.proxy.username, Some("proxyuser".to_string()));
+        assert_eq!(db.http_config.proxy.password, Some("proxypass".to_string()));
+        assert_eq!(
+            db.http_config.proxy.bypass_hosts,
+            Some("localhost,*.internal.corp".to_string())
+        );
+    }
+
+    #[test]
+    fn test_database_get_proxy_options() {
+        let mut db = Database::new();
+
+        db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.url".into()),
+            OptionValue::String("http://proxy.example.com:8080".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.username".into()),
+            OptionValue::String("proxyuser".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.password".into()),
+            OptionValue::String("proxypass".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.bypass_hosts".into()),
+            OptionValue::String("localhost".into()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other("databricks.http.proxy.url".into()))
+                .unwrap(),
+            "http://proxy.example.com:8080"
+        );
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other(
+                "databricks.http.proxy.username".into()
+            ))
+            .unwrap(),
+            "proxyuser"
+        );
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other(
+                "databricks.http.proxy.password".into()
+            ))
+            .unwrap(),
+            "proxypass"
+        );
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other(
+                "databricks.http.proxy.bypass_hosts".into()
+            ))
+            .unwrap(),
+            "localhost"
+        );
+    }
+
+    #[test]
+    fn test_database_get_proxy_options_unset_returns_error() {
+        let db = Database::new();
+        assert!(db
+            .get_option_string(OptionDatabase::Other("databricks.http.proxy.url".into()))
+            .is_err());
+        assert!(db
+            .get_option_string(OptionDatabase::Other(
+                "databricks.http.proxy.username".into()
+            ))
+            .is_err());
+        assert!(db
+            .get_option_string(OptionDatabase::Other(
+                "databricks.http.proxy.password".into()
+            ))
+            .is_err());
+        assert!(db
+            .get_option_string(OptionDatabase::Other(
+                "databricks.http.proxy.bypass_hosts".into()
+            ))
+            .is_err());
+    }
+
+    #[test]
+    fn test_database_proxy_options_reject_non_string() {
+        let mut db = Database::new();
+
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.url".into()),
+            OptionValue::Int(8080),
+        );
+        assert!(result.is_err());
+
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.username".into()),
+            OptionValue::Int(0),
+        );
+        assert!(result.is_err());
+
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.password".into()),
+            OptionValue::Int(0),
+        );
+        assert!(result.is_err());
+
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.http.proxy.bypass_hosts".into()),
+            OptionValue::Int(0),
+        );
+        assert!(result.is_err());
     }
 
     #[test]
