@@ -172,9 +172,12 @@ impl SqlCommandBuilder {
         sql
     }
 
-    /// Escape a value for use in a SQL string literal (single-quote escaping only).
+    /// Escape a value for use in a SQL string literal.
+    ///
+    /// Databricks SQL treats backslash as an escape character in string literals
+    /// by default, so both single quotes and backslashes must be escaped.
     fn escape_sql_string(value: &str) -> String {
-        value.replace('\'', "''")
+        value.replace('\\', "\\\\").replace('\'', "''")
     }
 
     /// Resolve the catalog prefix for `information_schema` queries.
@@ -527,6 +530,26 @@ mod tests {
     fn test_get_procedures_sql_injection_escaped() {
         let sql = SqlCommandBuilder::build_get_procedures(None, Some("it's"), None);
         assert!(sql.contains("AND routine_schema LIKE 'it''s'"));
+    }
+
+    #[test]
+    fn test_get_procedures_backslash_escaped() {
+        let sql = SqlCommandBuilder::build_get_procedures(None, Some(r"foo\bar"), None);
+        assert!(
+            sql.contains(r"AND routine_schema LIKE 'foo\\bar'"),
+            "Backslash should be escaped: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_get_procedures_trailing_backslash_escaped() {
+        let sql = SqlCommandBuilder::build_get_procedures(None, Some(r"foo\"), None);
+        assert!(
+            sql.contains(r"AND routine_schema LIKE 'foo\\'"),
+            "Trailing backslash should be escaped: {}",
+            sql
+        );
     }
 
     #[test]
