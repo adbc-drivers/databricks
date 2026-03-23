@@ -23,11 +23,43 @@
 use crate::auth::AuthProvider;
 use crate::error::{DatabricksErrorHelper, Result};
 use driverbase::error::ErrorHelper;
-use reqwest::{Client, Request, Response, StatusCode};
+use reqwest::{Client, NoProxy, Proxy, Request, Response, StatusCode};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, warn};
+
+/// Configuration for HTTP proxy.
+///
+/// When `url` is set, the driver uses the specified proxy for all requests,
+/// overriding `HTTP_PROXY`/`HTTPS_PROXY` environment variables. When `url`
+/// is `None`, reqwest's default behavior applies (reads env vars automatically).
+#[derive(Clone, Default)]
+pub struct ProxyConfig {
+    /// Proxy URL (e.g., "http://proxy.corp.example.com:8080").
+    /// When set, overrides HTTP_PROXY/HTTPS_PROXY environment variables.
+    pub url: Option<String>,
+    /// Username for proxy authentication.
+    pub username: Option<String>,
+    /// Password for proxy authentication.
+    ///
+    /// Note: This is a sensitive value. It is redacted in `Debug` output.
+    pub password: Option<String>,
+    /// Comma-separated list of hosts/domains to bypass the proxy
+    /// (e.g., "localhost,*.internal.corp,.example.com").
+    pub bypass_hosts: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyConfig")
+            .field("url", &self.url)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("bypass_hosts", &self.bypass_hosts)
+            .finish()
+    }
+}
 
 /// Configuration for the HTTP client.
 #[derive(Debug, Clone)]
@@ -44,6 +76,8 @@ pub struct HttpClientConfig {
     pub max_connections_per_host: usize,
     /// User agent string.
     pub user_agent: String,
+    /// Proxy configuration.
+    pub proxy: ProxyConfig,
 }
 
 impl Default for HttpClientConfig {
@@ -59,6 +93,7 @@ impl Default for HttpClientConfig {
             // which returns all chunk links in a single response, enabling true parallel downloads.
             // See: https://github.com/databricks-eng/universe/pull/909153
             user_agent: format!("DatabricksJDBCDriverOSS/{}", env!("CARGO_PKG_VERSION")),
+            proxy: ProxyConfig::default(),
         }
     }
 }
@@ -97,15 +132,71 @@ impl DatabricksHttpClient {
     /// calling `execute()`. Use `execute_without_auth()` for requests that
     /// don't need authentication (e.g., OAuth token endpoint calls).
     pub fn new(config: HttpClientConfig) -> Result<Self> {
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .connect_timeout(config.connect_timeout)
             .timeout(config.read_timeout)
             .pool_max_idle_per_host(config.max_connections_per_host)
-            .user_agent(&config.user_agent)
-            .build()
-            .map_err(|e| {
-                DatabricksErrorHelper::io().message(format!("Failed to create HTTP client: {}", e))
+            .user_agent(&config.user_agent);
+
+        // Apply proxy configuration
+        if let Some(ref proxy_url) = config.proxy.url {
+            // Validate proxy URL scheme
+            if !proxy_url.starts_with("http://") && !proxy_url.starts_with("https://") {
+                return Err(DatabricksErrorHelper::invalid_argument().message(format!(
+                    "Proxy URL must use http:// or https:// scheme, got: '{}'",
+                    proxy_url
+                )));
+            }
+
+            let mut proxy = Proxy::all(proxy_url).map_err(|e| {
+                DatabricksErrorHelper::invalid_argument()
+                    .message(format!("Invalid proxy URL '{}': {}", proxy_url, e))
             })?;
+
+            // Add basic auth if credentials provided.
+            // Explicit username/password override any credentials embedded in the URL.
+            if let Some(ref username) = config.proxy.username {
+                if proxy_url.contains('@') {
+                    warn!("Proxy URL contains embedded credentials, but explicit username/password are also set; explicit credentials take precedence");
+                }
+                let password = config.proxy.password.as_deref().unwrap_or("");
+                proxy = proxy.basic_auth(username, password);
+            } else if config.proxy.password.is_some() {
+                warn!("Proxy password provided without username; password will be ignored");
+            }
+
+            // Apply bypass_hosts list to the proxy.
+            // Normalize by trimming whitespace around entries (e.g., "host1, host2").
+            if let Some(ref bypass_hosts) = config.proxy.bypass_hosts {
+                let normalized: String = bypass_hosts
+                    .split(',')
+                    .map(|s| s.trim())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                proxy = proxy.no_proxy(NoProxy::from_string(&normalized));
+            }
+
+            builder = builder.proxy(proxy);
+
+            debug!(
+                "HTTP client configured with proxy: {} (bypass_hosts: {:?})",
+                proxy_url, config.proxy.bypass_hosts
+            );
+        } else {
+            if config.proxy.username.is_some() {
+                warn!(
+                    "Proxy credentials provided but no proxy URL set; credentials will be ignored"
+                );
+            }
+            if config.proxy.bypass_hosts.is_some() {
+                warn!("Proxy bypass_hosts provided but no proxy URL set; bypass list will be ignored (env var NO_PROXY is unaffected)");
+            }
+            debug!("HTTP client using default proxy behavior (env vars)");
+        }
+
+        let client = builder.build().map_err(|e| {
+            DatabricksErrorHelper::io().message(format!("Failed to create HTTP client: {}", e))
+        })?;
 
         Ok(Self {
             client,
@@ -401,5 +492,110 @@ mod tests {
         // We can't test actual HTTP execution without a mock server, but we verified
         // the method signature and that it doesn't call auth_header()
         assert!(client.auth_provider.get().is_none());
+    }
+
+    #[test]
+    fn test_proxy_config_default() {
+        let config = ProxyConfig::default();
+        assert!(config.url.is_none());
+        assert!(config.username.is_none());
+        assert!(config.password.is_none());
+        assert!(config.bypass_hosts.is_none());
+    }
+
+    #[test]
+    fn test_http_client_config_default_has_default_proxy() {
+        let config = HttpClientConfig::default();
+        assert!(config.proxy.url.is_none());
+    }
+
+    #[test]
+    fn test_http_client_with_proxy() {
+        let mut config = HttpClientConfig::default();
+        config.proxy.url = Some("http://proxy.example.com:8080".to_string());
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_http_client_with_authenticated_proxy() {
+        let mut config = HttpClientConfig::default();
+        config.proxy.url = Some("http://proxy.example.com:8080".to_string());
+        config.proxy.username = Some("user".to_string());
+        config.proxy.password = Some("pass".to_string());
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_http_client_with_invalid_proxy_url() {
+        let mut config = HttpClientConfig::default();
+        config.proxy.url = Some("http://".to_string());
+        let result = DatabricksHttpClient::new(config);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("Invalid proxy URL"));
+    }
+
+    #[test]
+    fn test_http_client_with_no_scheme_proxy_url() {
+        let mut config = HttpClientConfig::default();
+        config.proxy.url = Some("proxy.example.com:8080".to_string());
+        let result = DatabricksHttpClient::new(config);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("http:// or https://"));
+    }
+
+    #[test]
+    fn test_http_client_with_bypass_hosts() {
+        let mut config = HttpClientConfig::default();
+        config.proxy.url = Some("http://proxy.example.com:8080".to_string());
+        config.proxy.bypass_hosts = Some("localhost,*.internal.corp,.example.com".to_string());
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_http_client_with_bypass_hosts_whitespace() {
+        // Verify that whitespace around entries is handled (e.g., "host1, host2")
+        let mut config = HttpClientConfig::default();
+        config.proxy.url = Some("http://proxy.example.com:8080".to_string());
+        config.proxy.bypass_hosts = Some("localhost , *.internal.corp , .example.com".to_string());
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_http_client_rejects_invalid_proxy_scheme() {
+        let mut config = HttpClientConfig::default();
+        config.proxy.url = Some("socks5://proxy.example.com:1080".to_string());
+        let result = DatabricksHttpClient::new(config);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("http:// or https://"));
+    }
+
+    #[test]
+    fn test_http_client_proxy_username_without_url() {
+        // Credentials without proxy URL should not error (just ignored with a warning)
+        let mut config = HttpClientConfig::default();
+        config.proxy.username = Some("user".to_string());
+        config.proxy.password = Some("pass".to_string());
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_proxy_config_debug_redacts_password() {
+        let config = ProxyConfig {
+            url: Some("http://proxy:8080".to_string()),
+            username: Some("user".to_string()),
+            password: Some("secret123".to_string()),
+            bypass_hosts: None,
+        };
+        let debug_output = format!("{:?}", config);
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(!debug_output.contains("secret123"));
     }
 }
