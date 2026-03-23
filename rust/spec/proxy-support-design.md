@@ -199,9 +199,13 @@ Also add corresponding `get_option_string` entries for reading back proxy config
 
 ## Validation
 
+- `proxy.url` must use `http://` or `https://` scheme. Other schemes (e.g., `socks5://`) produce `InvalidArgument` errors.
 - `proxy.url` must be a valid URL parseable by `reqwest::Proxy::all()`. Invalid URLs produce `InvalidArgument` errors at client construction time (i.e., during `Database::new_connection()`), not at first request.
-- `proxy.username` without `proxy.url` is ignored (no error — username is meaningless without a proxy).
-- `proxy.password` without `proxy.username` is ignored.
+- `proxy.username` without `proxy.url` is ignored with a `warn!` log.
+- `proxy.password` without `proxy.username` is ignored with a `warn!` log.
+- `proxy.bypass_hosts` without `proxy.url` is ignored with a `warn!` log.
+- If the proxy URL contains embedded credentials (e.g., `http://user:pass@proxy:8080`) AND explicit `proxy.username`/`proxy.password` are also set, the explicit parameters take precedence (with a `warn!` log).
+- `proxy.bypass_hosts` entries are trimmed of whitespace to handle `"host1, host2"` style input.
 
 ## Testing
 
@@ -367,6 +371,7 @@ The C# driver uses separate `proxy_host` and `proxy_port` fields plus a `use_pro
 ## Scope Exclusions
 
 - **SOCKS5 proxy**: Not needed per requirements. Can be added later by enabling the `socks` reqwest feature.
+- **Digest, NTLM, or Kerberos proxy auth**: Only basic auth is supported. These could be added in the future via reqwest's `custom_http_auth` on `Proxy` if enterprise demand exists.
 - **Per-request proxy**: All requests use the same proxy. No mechanism for routing different requests through different proxies.
 - **Custom TLS for proxy**: No support for custom CA certificates to trust the proxy's TLS interception cert. This could be a follow-up (similar to C#'s `tls.trusted_certificate_path`).
 - **Proxy auto-configuration (PAC)**: Not supported. Users must provide explicit proxy URLs.
