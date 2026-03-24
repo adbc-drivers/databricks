@@ -24,7 +24,7 @@
 //! 7. Return status code; on error, set thread-local error buffer
 
 use crate::ffi::error::{clear_last_error, set_error_from_result, set_last_error, FfiStatus};
-use crate::metadata::sql::{self, SqlCommandBuilder};
+use crate::metadata::sql::SqlCommandBuilder;
 use crate::reader::{EmptyReader, ResultReader, ResultReaderAdapter};
 use crate::types::sea::{ExecuteParams, ResultManifest};
 use crate::Connection;
@@ -429,11 +429,11 @@ pub unsafe extern "C" fn metadata_get_procedures(
             return FfiStatus::Error;
         };
 
-        // Empty catalog → return empty result with correct schema (no server round-trip).
-        // Avoids permission errors if user lacks system.information_schema access.
+        // Empty catalog → return empty result (no server round-trip).
+        // ODBC layer constructs proper schema for the empty result set.
         if catalog == Some("") {
             let reader: Box<dyn ResultReader + Send> =
-                Box::new(EmptyReader::new(sql::procedures_schema()));
+                Box::new(EmptyReader::new(Arc::new(Schema::empty())));
             return export_reader(reader, None, out);
         }
 
@@ -488,10 +488,11 @@ pub unsafe extern "C" fn metadata_get_procedure_columns(
             return FfiStatus::Error;
         };
 
-        // Empty catalog → return empty result with correct schema (no server round-trip).
+        // Empty catalog → return empty result (no server round-trip).
+        // ODBC layer constructs proper schema for the empty result set.
         if catalog == Some("") {
             let reader: Box<dyn ResultReader + Send> =
-                Box::new(EmptyReader::new(sql::procedure_columns_schema()));
+                Box::new(EmptyReader::new(Arc::new(Schema::empty())));
             return export_reader(reader, None, out);
         }
 

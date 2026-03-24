@@ -23,7 +23,7 @@ use crate::client::{
 };
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::metadata::sql::SqlCommandBuilder;
-use crate::reader::{EmptyReader, ResultReaderFactory};
+use crate::reader::ResultReaderFactory;
 use crate::types::cloudfetch::CloudFetchLink;
 use crate::types::sea::{
     CreateSessionRequest, CreateSessionResponse, ExecuteParams, ExecuteStatementRequest,
@@ -612,16 +612,8 @@ impl DatabricksClient for SeaClient {
         schema_pattern: Option<&str>,
         procedure_pattern: Option<&str>,
     ) -> Result<ExecuteResult> {
-        let Some(sql) =
-            SqlCommandBuilder::build_get_procedures(catalog, schema_pattern, procedure_pattern)
-        else {
-            // Empty catalog → return empty result with correct schema
-            return Ok(ExecuteResult {
-                statement_id: String::new(),
-                reader: Box::new(EmptyReader::new(crate::metadata::sql::procedures_schema())),
-                manifest: None,
-            });
-        };
+        let sql =
+            SqlCommandBuilder::build_get_procedures(catalog, schema_pattern, procedure_pattern);
         debug!("list_procedures: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await
@@ -635,20 +627,12 @@ impl DatabricksClient for SeaClient {
         procedure_pattern: Option<&str>,
         column_pattern: Option<&str>,
     ) -> Result<ExecuteResult> {
-        let Some(sql) = SqlCommandBuilder::build_get_procedure_columns(
+        let sql = SqlCommandBuilder::build_get_procedure_columns(
             catalog,
             schema_pattern,
             procedure_pattern,
             column_pattern,
-        ) else {
-            return Ok(ExecuteResult {
-                statement_id: String::new(),
-                reader: Box::new(EmptyReader::new(
-                    crate::metadata::sql::procedure_columns_schema(),
-                )),
-                manifest: None,
-            });
-        };
+        );
         debug!("list_procedure_columns: {}", sql);
         self.execute_statement(session_id, &sql, &ExecuteParams::default())
             .await

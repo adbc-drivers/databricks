@@ -17,53 +17,6 @@
 //! Builds SHOW SQL commands based on the Databricks SQL dialect, matching
 //! the patterns used by the JDBC driver (`CommandConstants.java`).
 
-use arrow_schema::{DataType, Field, Schema};
-use std::sync::Arc;
-
-/// Schema for getProcedures results (matches `information_schema.routines` SELECT columns).
-///
-/// Used by `EmptyReader` when catalog is empty string, to return zero rows
-/// with correct column metadata for ODBC column discovery.
-pub(crate) fn procedures_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new("routine_catalog", DataType::Utf8, true),
-        Field::new("routine_schema", DataType::Utf8, true),
-        Field::new("routine_name", DataType::Utf8, true),
-        Field::new("comment", DataType::Utf8, true),
-        Field::new("specific_name", DataType::Utf8, true),
-    ]))
-}
-
-/// Schema for getProcedureColumns results (matches `information_schema.parameters` SELECT columns).
-///
-/// Used by `EmptyReader` when catalog is empty string, to return zero rows
-/// with correct column metadata for ODBC column discovery.
-///
-/// All columns use Utf8 because the exact server types (Int32 vs Int64 for
-/// numeric_precision, etc.) haven't been validated against a live workspace.
-/// Utf8 is safe for zero-row results — ODBC clients will see VARCHAR for all
-/// columns, which is acceptable when no data is returned.
-pub(crate) fn procedure_columns_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new("specific_catalog", DataType::Utf8, true),
-        Field::new("specific_schema", DataType::Utf8, true),
-        Field::new("specific_name", DataType::Utf8, true),
-        Field::new("parameter_name", DataType::Utf8, true),
-        Field::new("parameter_mode", DataType::Utf8, true),
-        Field::new("is_result", DataType::Utf8, true),
-        Field::new("data_type", DataType::Utf8, true),
-        Field::new("full_data_type", DataType::Utf8, true),
-        Field::new("numeric_precision", DataType::Utf8, true),
-        Field::new("numeric_precision_radix", DataType::Utf8, true),
-        Field::new("numeric_scale", DataType::Utf8, true),
-        Field::new("character_maximum_length", DataType::Utf8, true),
-        Field::new("character_octet_length", DataType::Utf8, true),
-        Field::new("ordinal_position", DataType::Utf8, true),
-        Field::new("parameter_default", DataType::Utf8, true),
-        Field::new("comment", DataType::Utf8, true),
-    ]))
-}
-
 /// Builds SQL commands for metadata queries.
 ///
 /// Uses a builder pattern to set optional filters before generating the SQL.
@@ -242,14 +195,15 @@ impl SqlCommandBuilder {
 
     /// Resolve the catalog prefix for `information_schema` queries.
     ///
-    /// - `None` → `Some("system")` (cross-catalog query)
-    /// - `Some("")` → `None` (caller should use `EmptyReader` with static schema)
-    /// - `Some("main")` → `Some("`main`")` (scoped to catalog)
-    fn resolve_catalog_prefix(catalog: Option<&str>) -> Option<String> {
+    /// - `None` → `system` (cross-catalog query)
+    /// - `Some("main")` → `` `main` `` (scoped to catalog)
+    ///
+    /// Empty string catalog must be handled by the caller before reaching
+    /// the SQL builder (return an empty result at the FFI/client layer).
+    fn resolve_catalog_prefix(catalog: Option<&str>) -> String {
         match catalog {
-            None => Some("system".to_string()),
-            Some("") => None,
-            Some(c) => Some(Self::escape_identifier(c)),
+            None => "system".to_string(),
+            Some(c) => Self::escape_identifier(c),
         }
     }
 
@@ -257,16 +211,18 @@ impl SqlCommandBuilder {
     ///
     /// Catalog resolution:
     /// - `None` → queries `system.information_schema.routines` (cross-catalog)
-    /// - `Some("")` → returns `None` (caller should use `EmptyReader` with static schema)
     /// - `Some("main")` → queries `` `main`.information_schema.routines ``
+    ///
+    /// Empty string catalog must be handled by the caller (return empty result
+    /// at the FFI/client layer) before calling this method.
     ///
     /// Schema and procedure patterns use SQL LIKE syntax directly (no Hive conversion).
     pub fn build_get_procedures(
         catalog: Option<&str>,
         schema_pattern: Option<&str>,
         procedure_pattern: Option<&str>,
-    ) -> Option<String> {
-        let prefix = Self::resolve_catalog_prefix(catalog)?;
+    ) -> String {
+        let prefix = Self::resolve_catalog_prefix(catalog);
         let mut sql = format!(
             "SELECT routine_catalog, routine_schema, routine_name, comment, specific_name \
              FROM {}.information_schema.routines \
@@ -289,7 +245,7 @@ impl SqlCommandBuilder {
         }
 
         sql.push_str(" ORDER BY routine_catalog, routine_schema, routine_name");
-        Some(sql)
+        sql
     }
 
     /// Build a SELECT query against `information_schema.parameters` joined with
@@ -301,8 +257,8 @@ impl SqlCommandBuilder {
         schema_pattern: Option<&str>,
         procedure_pattern: Option<&str>,
         column_pattern: Option<&str>,
-    ) -> Option<String> {
-        let prefix = Self::resolve_catalog_prefix(catalog)?;
+    ) -> String {
+        let prefix = Self::resolve_catalog_prefix(catalog);
         let mut sql = format!(
             "SELECT \
              p.specific_catalog, p.specific_schema, p.specific_name, \
@@ -343,7 +299,7 @@ impl SqlCommandBuilder {
         sql.push_str(
             " ORDER BY p.specific_catalog, p.specific_schema, p.specific_name, p.ordinal_position",
         );
-        Some(sql)
+        sql
     }
 
     #[cfg(feature = "metadata-ffi")]
@@ -509,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_get_procedures_null_catalog() {
-        let sql = SqlCommandBuilder::build_get_procedures(None, None, None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedures(None, None, None);
         assert!(sql.starts_with("SELECT routine_catalog"));
         assert!(sql.contains("FROM system.information_schema.routines"));
         assert!(sql.contains("WHERE routine_type = 'PROCEDURE'"));
@@ -518,69 +474,40 @@ mod tests {
 
     #[test]
     fn test_get_procedures_specific_catalog() {
-        let sql = SqlCommandBuilder::build_get_procedures(Some("main"), None, None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedures(Some("main"), None, None);
         assert!(sql.contains("FROM `main`.information_schema.routines"));
     }
 
     #[test]
     fn test_get_procedures_with_schema_pattern() {
-        let sql = SqlCommandBuilder::build_get_procedures(None, Some("default%"), None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedures(None, Some("default%"), None);
         assert!(sql.contains("AND routine_schema LIKE 'default%'"));
     }
 
     #[test]
     fn test_get_procedures_with_procedure_pattern() {
-        let sql = SqlCommandBuilder::build_get_procedures(None, None, Some("my_proc%")).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedures(None, None, Some("my_proc%"));
         assert!(sql.contains("AND routine_name LIKE 'my_proc%'"));
     }
 
     #[test]
     fn test_get_procedures_with_all_filters() {
         let sql =
-            SqlCommandBuilder::build_get_procedures(Some("prod"), Some("public"), Some("sp_%"))
-                .unwrap();
+            SqlCommandBuilder::build_get_procedures(Some("prod"), Some("public"), Some("sp_%"));
         assert!(sql.contains("FROM `prod`.information_schema.routines"));
         assert!(sql.contains("AND routine_schema LIKE 'public'"));
         assert!(sql.contains("AND routine_name LIKE 'sp_%'"));
     }
 
     #[test]
-    fn test_procedures_schema_columns() {
-        let schema = procedures_schema();
-        assert_eq!(schema.fields().len(), 5);
-        assert_eq!(schema.field(0).name(), "routine_catalog");
-        assert_eq!(schema.field(4).name(), "specific_name");
-    }
-
-    #[test]
-    fn test_procedure_columns_schema_columns() {
-        let schema = procedure_columns_schema();
-        assert_eq!(schema.fields().len(), 16);
-        assert_eq!(schema.field(0).name(), "specific_catalog");
-        assert_eq!(schema.field(15).name(), "comment");
-    }
-
-    #[test]
-    fn test_get_procedures_empty_catalog_returns_none() {
-        assert!(SqlCommandBuilder::build_get_procedures(Some(""), None, None).is_none());
-    }
-
-    #[test]
-    fn test_get_procedure_columns_empty_catalog_returns_none() {
-        assert!(
-            SqlCommandBuilder::build_get_procedure_columns(Some(""), None, None, None).is_none()
-        );
-    }
-
-    #[test]
     fn test_get_procedures_sql_injection_escaped() {
-        let sql = SqlCommandBuilder::build_get_procedures(None, Some("it's"), None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedures(None, Some("it's"), None);
         assert!(sql.contains("AND routine_schema LIKE 'it''s'"));
     }
 
     #[test]
     fn test_get_procedures_backslash_escaped() {
-        let sql = SqlCommandBuilder::build_get_procedures(None, Some(r"foo\bar"), None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedures(None, Some(r"foo\bar"), None);
         assert!(
             sql.contains(r"AND routine_schema LIKE 'foo\\bar'"),
             "Backslash should be escaped: {}",
@@ -590,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_get_procedures_trailing_backslash_escaped() {
-        let sql = SqlCommandBuilder::build_get_procedures(None, Some(r"foo\"), None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedures(None, Some(r"foo\"), None);
         assert!(
             sql.contains(r"AND routine_schema LIKE 'foo\\'"),
             "Trailing backslash should be escaped: {}",
@@ -600,13 +527,13 @@ mod tests {
 
     #[test]
     fn test_get_procedures_catalog_with_backtick() {
-        let sql = SqlCommandBuilder::build_get_procedures(Some("my`catalog"), None, None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedures(Some("my`catalog"), None, None);
         assert!(sql.contains("FROM `my``catalog`.information_schema.routines"));
     }
 
     #[test]
     fn test_get_procedure_columns_null_catalog() {
-        let sql = SqlCommandBuilder::build_get_procedure_columns(None, None, None, None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedure_columns(None, None, None, None);
         assert!(sql.contains("FROM system.information_schema.parameters p"));
         assert!(sql.contains("JOIN system.information_schema.routines r"));
         assert!(sql.contains("WHERE r.routine_type = 'PROCEDURE'"));
@@ -617,8 +544,7 @@ mod tests {
 
     #[test]
     fn test_get_procedure_columns_specific_catalog() {
-        let sql =
-            SqlCommandBuilder::build_get_procedure_columns(Some("main"), None, None, None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedure_columns(Some("main"), None, None, None);
         assert!(sql.contains("FROM `main`.information_schema.parameters p"));
         assert!(sql.contains("JOIN `main`.information_schema.routines r"));
     }
@@ -630,8 +556,7 @@ mod tests {
             Some("public"),
             Some("my_proc"),
             Some("param%"),
-        )
-        .unwrap();
+        );
         assert!(sql.contains("FROM `prod`.information_schema.parameters p"));
         assert!(sql.contains("AND p.specific_schema LIKE 'public'"));
         assert!(sql.contains("AND p.specific_name LIKE 'my_proc'"));
@@ -640,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_get_procedure_columns_selects_all_needed_columns() {
-        let sql = SqlCommandBuilder::build_get_procedure_columns(None, None, None, None).unwrap();
+        let sql = SqlCommandBuilder::build_get_procedure_columns(None, None, None, None);
         // Verify key columns are selected
         assert!(sql.contains("p.specific_catalog"));
         assert!(sql.contains("p.parameter_name"));
@@ -661,22 +586,14 @@ mod tests {
 
     #[test]
     fn test_resolve_catalog_prefix_none() {
-        assert_eq!(
-            SqlCommandBuilder::resolve_catalog_prefix(None),
-            Some("system".to_string())
-        );
-    }
-
-    #[test]
-    fn test_resolve_catalog_prefix_empty_string() {
-        assert_eq!(SqlCommandBuilder::resolve_catalog_prefix(Some("")), None);
+        assert_eq!(SqlCommandBuilder::resolve_catalog_prefix(None), "system");
     }
 
     #[test]
     fn test_resolve_catalog_prefix_specific() {
         assert_eq!(
             SqlCommandBuilder::resolve_catalog_prefix(Some("main")),
-            Some("`main`".to_string())
+            "`main`"
         );
     }
 
@@ -684,7 +601,7 @@ mod tests {
     fn test_resolve_catalog_prefix_special_chars() {
         assert_eq!(
             SqlCommandBuilder::resolve_catalog_prefix(Some("my`catalog")),
-            Some("`my``catalog`".to_string())
+            "`my``catalog`"
         );
     }
 
@@ -740,8 +657,7 @@ mod tests {
             None,
             None,
             Some("'; DROP TABLE --"),
-        )
-        .unwrap();
+        );
         // Input: '; DROP TABLE --
         // After escaping: ''; DROP TABLE --
         // Embedded in LIKE '...': LIKE '''; DROP TABLE --'
@@ -755,8 +671,7 @@ mod tests {
     #[test]
     fn test_get_procedure_columns_column_pattern_backslash() {
         let sql =
-            SqlCommandBuilder::build_get_procedure_columns(None, None, None, Some(r"param\name"))
-                .unwrap();
+            SqlCommandBuilder::build_get_procedure_columns(None, None, None, Some(r"param\name"));
         assert!(
             sql.contains(r"AND p.parameter_name LIKE 'param\\name'"),
             "Backslash in column_pattern should be escaped: {}",
