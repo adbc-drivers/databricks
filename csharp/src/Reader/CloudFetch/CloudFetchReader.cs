@@ -153,7 +153,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             this.currentDownloadResult = await this.downloadManager.GetNextDownloadedFileAsync(cancellationToken);
                             if (this.currentDownloadResult == null)
                             {
-                                Activity.Current?.AddEvent("cloudfetch.reader_no_more_files");
+                                Activity.Current?.AddEvent("cloudfetch.reader_no_more_files", [
+                                    new("rows_read_so_far", _rowsRead),
+                                    new("total_expected_rows", _totalExpectedRows),
+                                    new("current_chunk_rows_read", _currentChunkRowsRead)
+                                ]);
                                 this.downloadManager.Dispose();
                                 this.downloadManager = null;
                                 // No more files

@@ -23,8 +23,11 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.Tracing;
 
 namespace AdbcDrivers.Databricks.Reader.CloudFetch
 {
@@ -84,14 +87,36 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 throw new InvalidOperationException("Download manager has not been started.");
             }
 
+            IDownloadResult? result;
             try
             {
-                return await _downloader.GetNextDownloadedFileAsync(cancellationToken).ConfigureAwait(false);
+                result = await _downloader.GetNextDownloadedFileAsync(cancellationToken).ConfigureAwait(false);
+                Activity.Current?.AddEvent("cloudfetch.download_manager_result", [
+                    new("result_is_null", result == null),
+                    new("fetcher_has_error", _resultFetcher.HasError),
+                    new("fetcher_error_message", _resultFetcher.Error?.Message ?? "(none)"),
+                    new("fetcher_is_completed", _resultFetcher.IsCompleted),
+                    new("downloader_is_completed", _downloader.IsCompleted)
+                ]);
             }
             catch (Exception ex) when (_resultFetcher.HasError)
             {
                 throw new AggregateException("Errors in download pipeline", new[] { ex, _resultFetcher.Error! });
             }
+
+            // If the downloader returned null (end of results) but the fetcher
+            // has a stored error, the fetcher failed mid-stream and the error
+            // was not propagated through the download queue. Surface it now
+            // instead of silently returning partial data.
+            if (result == null && _resultFetcher.HasError)
+            {
+                throw new DatabricksException(
+                    $"Query execution failed: {_resultFetcher.Error!.Message}",
+                    AdbcStatusCode.IOError,
+                    _resultFetcher.Error!);
+            }
+
+            return result;
         }
 
         /// <inheritdoc />

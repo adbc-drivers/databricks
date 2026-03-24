@@ -174,6 +174,36 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 throw;
             }
 
+            // Validate the response status before processing results.
+            // Without this check, a non-SUCCESS response (e.g., warehouse stopped mid-query)
+            // with no result links would be silently treated as end-of-results,
+            // causing partial data to be returned to callers like Power BI.
+            Activity.Current?.AddEvent("cloudfetch.fetch_response_status", [
+                new("status_code", response.Status.StatusCode.ToString()),
+                new("has_result_links", response.Results?.__isset.resultLinks == true),
+                new("result_links_count", response.Results?.ResultLinks?.Count ?? 0),
+                new("has_more_rows", response.HasMoreRows),
+                new("error_message", response.Status.ErrorMessage ?? "(null)"),
+                new("start_offset", startOffset)
+            ]);
+            if (response.Status.StatusCode != TStatusCode.SUCCESS_STATUS &&
+                response.Status.StatusCode != TStatusCode.SUCCESS_WITH_INFO_STATUS)
+            {
+                Activity.Current?.AddEvent("cloudfetch.fetch_error_status_detected", [
+                    new("status_code", response.Status.StatusCode.ToString()),
+                    new("error_message", response.Status.ErrorMessage ?? "(null)"),
+                    new("error_code", response.Status.ErrorCode),
+                    new("sql_state", response.Status.SqlState ?? "(null)")
+                ]);
+                _hasMoreResults = false;
+                var errorMessage = !string.IsNullOrWhiteSpace(response.Status.ErrorMessage)
+                    ? response.Status.ErrorMessage
+                    : $"Thrift server error: {response.Status.StatusCode} (ErrorCode={response.Status.ErrorCode}, SqlState={response.Status.SqlState ?? "null"})";
+                throw new DatabricksException(errorMessage)
+                    .SetNativeError(response.Status.ErrorCode)
+                    .SetSqlState(response.Status.SqlState);
+            }
+
             // Check if we have URL-based results
             if (response.Results.__isset.resultLinks &&
                 response.Results.ResultLinks != null &&

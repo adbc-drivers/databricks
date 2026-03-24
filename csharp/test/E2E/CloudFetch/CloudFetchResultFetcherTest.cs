@@ -27,6 +27,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -330,6 +331,93 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
 
             // The download queue should have the end guard
             Assert.True(_downloadQueue.Count <= 1, "Expected at most 1 item (end guard) in queue");
+
+            // Cleanup
+            await _resultFetcher.StopAsync();
+        }
+
+        [Fact]
+        public async Task FetchResultsAsync_WithErrorStatusCode_SetsErrorState()
+        {
+            // Arrange - simulate a warehouse stopping mid-query by returning
+            // a response with ERROR_STATUS and no result links
+            var errorResults = new TRowSet { __isset = { resultLinks = false } };
+            var errorResponse = new TFetchResultsResp
+            {
+                Status = new TStatus
+                {
+                    StatusCode = TStatusCode.ERROR_STATUS,
+                    ErrorMessage = "Query failed: warehouse stopped",
+                    ErrorCode = 500,
+                    SqlState = "HY000"
+                },
+                HasMoreRows = false,
+                Results = errorResults,
+                __isset = { results = true, hasMoreRows = true }
+            };
+
+            _mockClient.Reset();
+            _mockClient.Setup(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(errorResponse);
+
+            // Act
+            await _resultFetcher.StartAsync(CancellationToken.None);
+
+            // Wait for the fetcher to process the error
+            await Task.Delay(200);
+
+            // Assert - the fetcher should report an error, not silently succeed
+            Assert.False(_resultFetcher.HasMoreResults);
+            Assert.True(_resultFetcher.IsCompleted);
+            Assert.True(_resultFetcher.HasError, "Fetcher should have error state when server returns ERROR_STATUS");
+            Assert.NotNull(_resultFetcher.Error);
+            Assert.IsType<DatabricksException>(_resultFetcher.Error);
+            Assert.Contains("warehouse stopped", _resultFetcher.Error.Message);
+
+            // Cleanup
+            await _resultFetcher.StopAsync();
+        }
+
+        [Fact]
+        public async Task FetchResultsAsync_WithErrorAfterFirstBatch_SetsErrorState()
+        {
+            // Arrange - first batch succeeds, second batch returns error (warehouse stopped)
+            var firstBatchLinks = new List<TSparkArrowResultLink>
+            {
+                CreateTestResultLink(0, 100, "http://test.com/file1", 3600),
+                CreateTestResultLink(100, 100, "http://test.com/file2", 3600)
+            };
+
+            var errorResults = new TRowSet { __isset = { resultLinks = false } };
+            var errorResponse = new TFetchResultsResp
+            {
+                Status = new TStatus
+                {
+                    StatusCode = TStatusCode.ERROR_STATUS,
+                    ErrorMessage = "Query failed: warehouse stopped",
+                    ErrorCode = 500,
+                    SqlState = "HY000"
+                },
+                HasMoreRows = false,
+                Results = errorResults,
+                __isset = { results = true, hasMoreRows = true }
+            };
+
+            _mockClient.SetupSequence(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(CreateFetchResultsResponse(firstBatchLinks, true))  // First batch: success, more rows
+                .ReturnsAsync(errorResponse);  // Second batch: error (warehouse stopped)
+
+            // Act
+            await _resultFetcher.StartAsync(CancellationToken.None);
+
+            // Wait for the fetcher to process
+            await Task.Delay(300);
+
+            // Assert - should have error state even though first batch succeeded
+            Assert.True(_resultFetcher.IsCompleted);
+            Assert.True(_resultFetcher.HasError, "Fetcher should have error state when second batch returns ERROR_STATUS");
+            Assert.NotNull(_resultFetcher.Error);
+            Assert.IsType<DatabricksException>(_resultFetcher.Error);
 
             // Cleanup
             await _resultFetcher.StopAsync();

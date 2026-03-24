@@ -437,10 +437,23 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         new("total_time_sec", overallStopwatch.ElapsedMilliseconds / 1000.0)
                     ]);
 
-                    // If there's an error, add the error to the result queue
+                    // Always mark the result queue as complete when the download
+                    // loop exits. Without this, a subsequent Take() call would
+                    // block forever on an empty, non-completed queue if the caller
+                    // retries after an exception (e.g. a fetcher error that the
+                    // downloader doesn't know about).
                     if (HasError)
                     {
                         CompleteWithError(activity);
+                    }
+                    else
+                    {
+                        _isCompleted = true;
+                        try { _resultQueue.CompleteAdding(); }
+                        catch (Exception ex)
+                        {
+                            activity?.AddException(ex, [new("error.context", "cloudfetch.result_queue_already_completed")]);
+                        }
                     }
                 }
             });
@@ -671,13 +684,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
         private void CompleteWithError(Activity? activity = null)
         {
+            // Mark the download as completed with error
+            _isCompleted = true;
+
             try
             {
                 // Mark the result queue as completed to prevent further additions
                 _resultQueue.CompleteAdding();
-
-                // Mark the download as completed with error
-                _isCompleted = true;
             }
             catch (Exception ex)
             {
