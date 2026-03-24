@@ -302,7 +302,7 @@ impl SqlCommandBuilder {
         sql
     }
 
-    #[cfg(feature = "metadata-ffi")]
+    #[allow(dead_code)] // Used by ffi/metadata.rs when metadata-ffi feature is enabled
     pub fn build_show_primary_keys(catalog: &str, schema: &str, table: &str) -> String {
         format!(
             "SHOW KEYS IN CATALOG {} IN SCHEMA {} IN TABLE {}",
@@ -312,7 +312,7 @@ impl SqlCommandBuilder {
         )
     }
 
-    #[cfg(feature = "metadata-ffi")]
+    #[allow(dead_code)] // Used by ffi/metadata.rs when metadata-ffi feature is enabled
     pub fn build_show_foreign_keys(catalog: &str, schema: &str, table: &str) -> String {
         format!(
             "SHOW FOREIGN KEYS IN CATALOG {} IN SCHEMA {} IN TABLE {}",
@@ -441,7 +441,6 @@ mod tests {
         assert_eq!(sql, "SHOW SCHEMAS IN ALL CATALOGS LIKE 'it''s'");
     }
 
-    #[cfg(feature = "metadata-ffi")]
     #[test]
     fn test_show_primary_keys() {
         let sql = SqlCommandBuilder::build_show_primary_keys("main", "default", "my_table");
@@ -451,7 +450,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "metadata-ffi")]
     #[test]
     fn test_show_foreign_keys() {
         let sql = SqlCommandBuilder::build_show_foreign_keys("main", "default", "my_table");
@@ -681,7 +679,6 @@ mod tests {
 
     // --- foreign keys with special characters ---
 
-    #[cfg(feature = "metadata-ffi")]
     #[test]
     fn test_show_foreign_keys_special_chars_in_catalog() {
         let sql = SqlCommandBuilder::build_show_foreign_keys("my`cat", "my`sch", "my`tbl");
