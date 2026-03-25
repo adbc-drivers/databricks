@@ -17,6 +17,7 @@
 //! This module implements the `DatabricksClient` trait using the Databricks
 //! SQL Statement Execution API (REST-based).
 
+use crate::client::retry::RequestType;
 use crate::client::{
     ChunkLinkFetchResult, DatabricksClient, DatabricksClientConfig, DatabricksHttpClient,
     ExecuteResponse, ExecuteResult, ExecuteResultData, SessionInfo,
@@ -148,7 +149,10 @@ impl SeaClient {
                 DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
             })?;
 
-        let response = self.http_client.execute(request).await?;
+        let response = self
+            .http_client
+            .execute(request, RequestType::GetStatementStatus)
+            .await?;
         let body = response.text().await.map_err(|e| {
             DatabricksErrorHelper::io().message(format!("Failed to read response: {}", e))
         })?;
@@ -260,6 +264,7 @@ impl SeaClient {
         session_id: &str,
         sql: &str,
         params: &ExecuteParams,
+        request_type: RequestType,
     ) -> Result<ExecuteResponse> {
         let url = format!("{}/statements", self.base_url());
 
@@ -292,7 +297,7 @@ impl SeaClient {
                 DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
             })?;
 
-        let response = self.http_client.execute(request).await?;
+        let response = self.http_client.execute(request, request_type).await?;
         let body = response.text().await.map_err(|e| {
             DatabricksErrorHelper::io().message(format!("Failed to read response: {}", e))
         })?;
@@ -328,6 +333,31 @@ impl SeaClient {
             result,
         })
     }
+
+    /// Execute a SQL statement end-to-end: call API → poll → create reader.
+    ///
+    /// Shared implementation for both user queries (`ExecuteStatement`) and
+    /// metadata queries (`ExecuteMetadataQuery`). The `request_type` controls
+    /// the retry strategy (idempotent vs non-idempotent).
+    async fn execute_and_read(
+        &self,
+        session_id: &str,
+        sql: &str,
+        params: &ExecuteParams,
+        request_type: RequestType,
+    ) -> Result<ExecuteResult> {
+        let response = self
+            .call_execute_api(session_id, sql, params, request_type)
+            .await?;
+        let response = self.wait_for_completion(response).await?;
+        let reader_factory = self.reader_factory()?;
+        let reader = reader_factory.create_reader(&response.statement_id, &response)?;
+        Ok(ExecuteResult {
+            statement_id: response.statement_id,
+            reader,
+            manifest: response.manifest,
+        })
+    }
 }
 
 #[async_trait]
@@ -360,7 +390,10 @@ impl DatabricksClient for SeaClient {
                 DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
             })?;
 
-        let response = self.http_client.execute(request).await?;
+        let response = self
+            .http_client
+            .execute(request, RequestType::CreateSession)
+            .await?;
         let body = response.text().await.map_err(|e| {
             DatabricksErrorHelper::io().message(format!("Failed to read response: {}", e))
         })?;
@@ -394,7 +427,10 @@ impl DatabricksClient for SeaClient {
             })?;
 
         // Ignore errors on session deletion (best effort cleanup)
-        let _ = self.http_client.execute(request).await;
+        let _ = self
+            .http_client
+            .execute(request, RequestType::CloseSession)
+            .await;
 
         debug!("Deleted session: {}", session_id);
 
@@ -407,21 +443,8 @@ impl DatabricksClient for SeaClient {
         sql: &str,
         params: &ExecuteParams,
     ) -> Result<ExecuteResult> {
-        // 1. Call SEA API
-        let response = self.call_execute_api(session_id, sql, params).await?;
-
-        // 2. Poll until completion
-        let response = self.wait_for_completion(response).await?;
-
-        // 3. Create appropriate reader
-        let reader_factory = self.reader_factory()?;
-        let reader = reader_factory.create_reader(&response.statement_id, &response)?;
-
-        Ok(ExecuteResult {
-            statement_id: response.statement_id,
-            reader,
-            manifest: response.manifest,
-        })
+        self.execute_and_read(session_id, sql, params, RequestType::ExecuteStatement)
+            .await
     }
 
     async fn get_result_chunks(
@@ -450,7 +473,10 @@ impl DatabricksClient for SeaClient {
                 DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
             })?;
 
-        let response = self.http_client.execute(request).await?;
+        let response = self
+            .http_client
+            .execute(request, RequestType::GetResultChunks)
+            .await?;
         let body = response.text().await.map_err(|e| {
             DatabricksErrorHelper::io().message(format!("Failed to read response: {}", e))
         })?;
@@ -515,7 +541,9 @@ impl DatabricksClient for SeaClient {
                 DatabricksErrorHelper::io().message(format!("Failed to build request: {}", e))
             })?;
 
-        self.http_client.execute(request).await?;
+        self.http_client
+            .execute(request, RequestType::CancelStatement)
+            .await?;
 
         debug!("Canceled statement: {}", statement_id);
 
@@ -537,7 +565,10 @@ impl DatabricksClient for SeaClient {
             })?;
 
         // Ignore errors on statement close (best effort cleanup)
-        let _ = self.http_client.execute(request).await;
+        let _ = self
+            .http_client
+            .execute(request, RequestType::CloseStatement)
+            .await;
 
         debug!("Closed statement: {}", statement_id);
 
@@ -549,8 +580,13 @@ impl DatabricksClient for SeaClient {
     async fn list_catalogs(&self, session_id: &str) -> Result<ExecuteResult> {
         let sql = SqlCommandBuilder::new().build_show_catalogs();
         debug!("list_catalogs: {}", sql);
-        self.execute_statement(session_id, &sql, &ExecuteParams::default())
-            .await
+        self.execute_and_read(
+            session_id,
+            &sql,
+            &ExecuteParams::default(),
+            RequestType::ExecuteMetadataQuery,
+        )
+        .await
     }
 
     async fn list_schemas(
@@ -564,8 +600,13 @@ impl DatabricksClient for SeaClient {
             .with_schema_pattern(schema_pattern)
             .build_show_schemas();
         debug!("list_schemas: {}", sql);
-        self.execute_statement(session_id, &sql, &ExecuteParams::default())
-            .await
+        self.execute_and_read(
+            session_id,
+            &sql,
+            &ExecuteParams::default(),
+            RequestType::ExecuteMetadataQuery,
+        )
+        .await
     }
 
     async fn list_tables(
@@ -583,8 +624,13 @@ impl DatabricksClient for SeaClient {
             .with_table_pattern(table_pattern)
             .build_show_tables();
         debug!("list_tables: {}", sql);
-        self.execute_statement(session_id, &sql, &ExecuteParams::default())
-            .await
+        self.execute_and_read(
+            session_id,
+            &sql,
+            &ExecuteParams::default(),
+            RequestType::ExecuteMetadataQuery,
+        )
+        .await
     }
 
     async fn list_columns(
@@ -601,8 +647,13 @@ impl DatabricksClient for SeaClient {
             .with_column_pattern(column_pattern)
             .build_show_columns(catalog);
         debug!("list_columns: {}", sql);
-        self.execute_statement(session_id, &sql, &ExecuteParams::default())
-            .await
+        self.execute_and_read(
+            session_id,
+            &sql,
+            &ExecuteParams::default(),
+            RequestType::ExecuteMetadataQuery,
+        )
+        .await
     }
 
     async fn list_procedures(
@@ -615,8 +666,13 @@ impl DatabricksClient for SeaClient {
         let sql =
             SqlCommandBuilder::build_get_procedures(catalog, schema_pattern, procedure_pattern);
         debug!("list_procedures: {}", sql);
-        self.execute_statement(session_id, &sql, &ExecuteParams::default())
-            .await
+        self.execute_and_read(
+            session_id,
+            &sql,
+            &ExecuteParams::default(),
+            RequestType::ExecuteMetadataQuery,
+        )
+        .await
     }
 
     async fn list_procedure_columns(
@@ -634,8 +690,13 @@ impl DatabricksClient for SeaClient {
             column_pattern,
         );
         debug!("list_procedure_columns: {}", sql);
-        self.execute_statement(session_id, &sql, &ExecuteParams::default())
-            .await
+        self.execute_and_read(
+            session_id,
+            &sql,
+            &ExecuteParams::default(),
+            RequestType::ExecuteMetadataQuery,
+        )
+        .await
     }
 
     fn list_table_types(&self) -> Vec<String> {
@@ -652,10 +713,14 @@ impl DatabricksClient for SeaClient {
 mod tests {
     use super::*;
     use crate::auth::PersonalAccessToken;
+    use crate::client::retry::{build_retry_configs, RetryConfig};
     use crate::client::HttpClientConfig;
 
     fn create_test_client() -> SeaClient {
-        let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
+        let retry_configs = build_retry_configs(&RetryConfig::default(), &HashMap::new());
+        let http_client = Arc::new(
+            DatabricksHttpClient::new(HttpClientConfig::default(), retry_configs).unwrap(),
+        );
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
         http_client.set_auth_provider(auth);
         SeaClient::new(
@@ -674,7 +739,10 @@ mod tests {
 
     #[test]
     fn test_base_url_strips_trailing_slash() {
-        let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
+        let retry_configs = build_retry_configs(&RetryConfig::default(), &HashMap::new());
+        let http_client = Arc::new(
+            DatabricksHttpClient::new(HttpClientConfig::default(), retry_configs).unwrap(),
+        );
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
         http_client.set_auth_provider(auth);
         let client = SeaClient::new(

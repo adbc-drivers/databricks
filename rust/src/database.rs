@@ -16,6 +16,7 @@
 
 use crate::auth::config::{AuthConfig, AuthType};
 use crate::auth::{AuthProvider, AuthorizationCodeProvider, PersonalAccessToken};
+use crate::client::retry::{build_retry_configs, RetryConfig};
 use crate::client::{
     DatabricksClient, DatabricksClientConfig, DatabricksHttpClient, HttpClientConfig, SeaClient,
 };
@@ -28,6 +29,7 @@ use adbc_core::error::Result;
 use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
 use adbc_core::Optionable;
 use driverbase::error::ErrorHelper;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -373,15 +375,6 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "databricks.http.max_retries" => {
-                    if let Some(v) = Self::parse_int_option(&value) {
-                        self.http_config.max_retries = v as u32;
-                        Ok(())
-                    } else {
-                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
-                    }
-                }
-
                 _ => Err(DatabricksErrorHelper::set_unknown_option(&key).to_adbc()),
             },
             _ => Err(DatabricksErrorHelper::set_unknown_option(&key).to_adbc()),
@@ -566,8 +559,11 @@ impl adbc_core::Database for Database {
         let access_token = self.access_token.as_ref();
 
         // Create HTTP client (without auth provider - two-phase initialization)
-        let http_client =
-            Arc::new(DatabricksHttpClient::new(self.http_config.clone()).map_err(|e| e.to_adbc())?);
+        let retry_configs = build_retry_configs(&RetryConfig::default(), &HashMap::new());
+        let http_client = Arc::new(
+            DatabricksHttpClient::new(self.http_config.clone(), retry_configs)
+                .map_err(|e| e.to_adbc())?,
+        );
 
         // Create tokio runtime for async operations (needed before auth provider creation for U2M)
         let runtime = tokio::runtime::Runtime::new().map_err(|e| {
