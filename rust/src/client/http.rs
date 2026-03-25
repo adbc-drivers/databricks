@@ -171,7 +171,11 @@ impl DatabricksHttpClient {
             .user_agent(&config.user_agent);
 
         // Apply TLS configuration
-        //
+        if config.tls.enabled == Some(false) {
+            builder = builder.https_only(false);
+            warn!("TLS is disabled — connections will use plain HTTP");
+        }
+
         // Both allow_self_signed and disable_server_certificate_validation map to
         // reqwest's danger_accept_invalid_certs(true). reqwest does not support
         // accepting only self-signed certs while still validating the trust chain,
@@ -207,11 +211,6 @@ impl DatabricksHttpClient {
             })?;
             builder = builder.add_root_certificate(cert);
             debug!("Added custom CA certificate from: {}", cert_path);
-        }
-
-        if config.tls.enabled == Some(false) {
-            builder = builder.https_only(false);
-            warn!("TLS is disabled — connections will use plain HTTP");
         }
 
         // Apply proxy configuration

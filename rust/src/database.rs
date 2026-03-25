@@ -98,6 +98,9 @@ impl Database {
     }
 
     /// Parse a boolean option value.
+    ///
+    /// Accepts `OptionValue::String` ("true"/"false"/"1"/"0"/"yes"/"no")
+    /// and `OptionValue::Int` (0 = false, 1 = true).
     fn parse_bool_option(value: &OptionValue) -> Option<bool> {
         match value {
             OptionValue::String(s) => match s.to_lowercase().as_str() {
@@ -105,6 +108,8 @@ impl Database {
                 "false" | "0" | "no" => Some(false),
                 _ => None,
             },
+            OptionValue::Int(0) => Some(false),
+            OptionValue::Int(1) => Some(true),
             _ => None,
         }
     }
@@ -1721,21 +1726,39 @@ mod tests {
     }
 
     #[test]
-    fn test_database_tls_options_reject_invalid_bool() {
+    fn test_database_tls_options_reject_invalid_values() {
         let mut db = Database::new();
 
+        // Invalid string for bool option
         let result = db.set_option(
             OptionDatabase::Other("databricks.http.tls.enabled".into()),
             OptionValue::String("maybe".into()),
         );
         assert!(result.is_err());
 
+        // Invalid int (not 0 or 1) for bool option
         let result = db.set_option(
             OptionDatabase::Other("databricks.http.tls.allow_self_signed".into()),
             OptionValue::Int(42),
         );
         assert!(result.is_err());
 
+        // Int(0) and Int(1) should be accepted for bool options
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.enabled".into()),
+            OptionValue::Int(0),
+        )
+        .unwrap();
+        assert_eq!(db.http_config.tls.enabled, Some(false));
+
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.allow_self_signed".into()),
+            OptionValue::Int(1),
+        )
+        .unwrap();
+        assert_eq!(db.http_config.tls.allow_self_signed, Some(true));
+
+        // Non-string for path option should still be rejected
         let result = db.set_option(
             OptionDatabase::Other("databricks.http.tls.trusted_certificate_path".into()),
             OptionValue::Int(0),
