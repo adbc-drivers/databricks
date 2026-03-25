@@ -717,7 +717,13 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let status = std::process::Command::new("openssl")
             .args([
-                "req", "-x509", "-newkey", "rsa:2048", "-keyout", "/dev/null", "-out",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+                "/dev/null",
+                "-out",
             ])
             .arg(tmp.path())
             .args(["-days", "1", "-nodes", "-subj", "/CN=Test CA"])
