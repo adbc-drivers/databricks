@@ -713,11 +713,20 @@ mod tests {
 
     #[test]
     fn test_http_client_with_custom_ca_cert() {
-        let mut config = HttpClientConfig::default();
-        // Create a temporary PEM file for testing
-        let pem_content = include_str!("../../tests/data/test_ca_cert.pem");
+        // Generate a self-signed CA cert at test time using openssl
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), pem_content).unwrap();
+        let status = std::process::Command::new("openssl")
+            .args([
+                "req", "-x509", "-newkey", "rsa:2048", "-keyout", "/dev/null", "-out",
+            ])
+            .arg(tmp.path())
+            .args(["-days", "1", "-nodes", "-subj", "/CN=Test CA"])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("openssl must be available to run this test");
+        assert!(status.success(), "openssl cert generation failed");
+
+        let mut config = HttpClientConfig::default();
         config.tls.trusted_certificate_path = Some(tmp.path().to_string_lossy().to_string());
         let client = DatabricksHttpClient::new(config);
         assert!(client.is_ok());

@@ -283,6 +283,5 @@ The Rust driver uses `databricks.http.tls.*` while the C# driver uses `adbc.http
 | `rust/src/database.rs` | Parse and get TLS options in `set_option`/`get_option_string`/`get_option_int` |
 | `rust/Cargo.toml` | Add `native-tls` feature to reqwest |
 | `rust/tests/tls_e2e.rs` | E2E TLS test cases (marked `#[ignore]`) |
-| `rust/tests/data/test_ca_cert.pem` | Test CA certificate for unit tests |
 | `.github/workflows/rust-e2e.yml` | Add TLS job with mitmproxy sidecar |
 | `rust/spec/tls-config-design.md` | This design doc |
