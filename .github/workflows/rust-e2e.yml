@@ -101,7 +101,62 @@ jobs:
         if: always()
         run: docker rm -f squid-auth 2>/dev/null || true
 
-  # Future e2e jobs can be added here, e.g.:
-  # cloudfetch:
-  #   name: "E2E/CloudFetch"
-  #   ...
+  tls:
+    name: "TLS"
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Start mitmproxy in intercepting mode (mitmdump logs all flows to stdout)
+      - name: Start mitmproxy
+        run: |
+          docker run -d --name mitmproxy \
+            -p 8080:8080 \
+            mitmproxy/mitmproxy:latest \
+            mitmdump --set stream_large_bodies=0
+          # Wait for mitmproxy to generate its CA cert
+          for i in $(seq 1 15); do
+            if docker exec mitmproxy test -f /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem 2>/dev/null; then
+              echo "mitmproxy CA cert is ready"
+              break
+            fi
+            echo "Waiting for mitmproxy CA cert... ($i/15)"
+            sleep 1
+          done
+
+      # Extract mitmproxy CA certificate for the trusted_certificate_path test
+      - name: Extract mitmproxy CA certificate
+        run: |
+          docker cp mitmproxy:/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem /tmp/mitmproxy-ca-cert.pem
+          echo "MITMPROXY_CA_CERT=/tmp/mitmproxy-ca-cert.pem" >> "$GITHUB_ENV"
+          echo "Extracted mitmproxy CA cert:"
+          openssl x509 -in /tmp/mitmproxy-ca-cert.pem -noout -subject -issuer
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Run TLS E2E tests
+        working-directory: rust
+        run: cargo test --test tls_e2e -- --ignored --nocapture
+
+      - name: Verify traffic flowed through mitmproxy
+        if: always()
+        run: |
+          echo "=== mitmproxy logs ==="
+          docker logs mitmproxy 2>&1 | tail -50
+          echo "=== checking for CONNECT entries ==="
+          docker logs mitmproxy 2>&1 \
+            | grep -i "CONNECT\|clientconnect\|<<" \
+            || (echo "FAIL: No traffic entries found in mitmproxy logs — proxy was not used" && exit 1)
+
+      - name: Cleanup mitmproxy
+        if: always()
+        run: docker rm -f mitmproxy 2>/dev/null || true

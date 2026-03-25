@@ -245,9 +245,14 @@ This is a no-op in terms of binary behavior (native-tls is already compiled in a
 9. **`test_set_tls_options`** — All five TLS options parse correctly via `set_option`.
 10. **`test_get_tls_options`** — TLS options are readable via `get_option_string` / `get_option_int`.
 
-### E2E Tests (future)
+### E2E Tests (`tests/tls_e2e.rs`)
 
-E2E TLS tests (e.g., connecting through a mitmproxy with a custom CA cert) can be added to the existing `.github/workflows/rust-e2e.yml` workflow as a new job. This is out of scope for the initial implementation.
+E2E tests use mitmproxy as a TLS-intercepting proxy. The CI workflow (`.github/workflows/rust-e2e.yml`) starts a `mitmdump` container on port 8080, extracts its CA cert, and verifies traffic routing via mitmdump logs after tests complete.
+
+11. **`test_tls_fails_without_config`** — Connection through mitmproxy fails without any TLS configuration (negative test — verifies TLS interception is detected).
+12. **`test_tls_with_trusted_certificate`** — Connection succeeds when `trusted_certificate_path` points to mitmproxy's CA cert.
+13. **`test_tls_with_cert_validation_disabled`** — Connection succeeds with `disable_server_certificate_validation = true` (no CA cert needed).
+14. **`test_tls_with_allow_self_signed`** — Connection succeeds with `allow_self_signed = true` (exercises the separate config path).
 
 ## Cross-Driver Comparison
 
@@ -277,4 +282,7 @@ The Rust driver uses `databricks.http.tls.*` while the C# driver uses `adbc.http
 | `rust/src/client/http.rs` | Add `TlsConfig` struct, update `HttpClientConfig`, update `DatabricksHttpClient::new()`, add unit tests |
 | `rust/src/database.rs` | Parse and get TLS options in `set_option`/`get_option_string`/`get_option_int` |
 | `rust/Cargo.toml` | Add `native-tls` feature to reqwest |
+| `rust/tests/tls_e2e.rs` | E2E TLS test cases (marked `#[ignore]`) |
+| `rust/tests/data/test_ca_cert.pem` | Test CA certificate for unit tests |
+| `.github/workflows/rust-e2e.yml` | Add TLS job with mitmproxy sidecar |
 | `rust/spec/tls-config-design.md` | This design doc |
