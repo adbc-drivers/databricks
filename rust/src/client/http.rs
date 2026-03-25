@@ -711,26 +711,34 @@ mod tests {
         assert!(client.is_ok());
     }
 
+    /// A self-signed CA certificate for testing. Generated once and hardcoded
+    /// to avoid platform-specific dependencies (e.g., openssl not on Windows).
+    const TEST_CA_CERT_PEM: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIDBTCCAe2gAwIBAgIUbS3CBzF8+mVOJShXAIjPBRUCFWMwDQYJKoZIhvcNAQEL
+BQAwEjEQMA4GA1UEAwwHVGVzdCBDQTAeFw0yNjAzMjUwNjQwMjhaFw0zNjAzMjIw
+NjQwMjhaMBIxEDAOBgNVBAMMB1Rlc3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+DwAwggEKAoIBAQDRoAl14R0QgADk1N3utgSbojOAh/Ub5v6sC8z8dXGxxAFBI+vV
+UYNYNV6iF458lsgo+v1xUBDqmR7+k6YsJhwxrWCBZAei471DrAZid6MtSqP9m+I5
+HAa5qH4TE+NB+npCjQQsFlPl0rdoDSPnsCVMaEgxnkkZdYQTztaUjfapF+kDRPMe
+XedQWRKbdolsmGNV9l6yuX8IDLRWFp4ublly+EszulszhCBqfBolc/eMBn8yRmdN
+txbAhLnklwDBBewP2AU5zpeVcwX+iZM5gj3AN7CDJkAC68ZJKBFLqttsJZKx5NuT
+2isq14/YA5TvoXsaN5rkH5VbmyrRUb3TNILfAgMBAAGjUzBRMB0GA1UdDgQWBBQa
+Vn826exMR5xKRr2ArIOhlNWeLzAfBgNVHSMEGDAWgBQaVn826exMR5xKRr2ArIOh
+lNWeLzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBVxFNYazoo
+uGa3MnOKoK73K/Ew2PSfK+7RbUNxJxsv0mtKZXkaq/TFqnpbqjTllSe9JK+bOaDF
+s5dTvaMxGsAgwKc5TqFuF2jdqiZytUZFsr65gAIFlZOI8zuAiVfj/B1iOtk84Jh/
+PCJ2x3ALIWD5mGMHZM/4tdtajjM+uiSehLzpSp2B2FFupmDLrmQkpr9zKet83ZtG
+If8L/vYYFGAGmphgF1V/Qb4CuP9ZmbgZZgjPAEo9oY2CXwf/TMz7kc3JuKYscc7y
+SKEDvq0G7Lbxl85EtEswMp1mdl7+WOUWgPk3whOzl8rn8BfQAyPBWjzzTWT3eoWv
+lGrv15pBcePj
+-----END CERTIFICATE-----
+";
+
     #[test]
     fn test_http_client_with_custom_ca_cert() {
-        // Generate a self-signed CA cert at test time using openssl
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        let status = std::process::Command::new("openssl")
-            .args([
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-                "/dev/null",
-                "-out",
-            ])
-            .arg(tmp.path())
-            .args(["-days", "1", "-nodes", "-subj", "/CN=Test CA"])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .expect("openssl must be available to run this test");
-        assert!(status.success(), "openssl cert generation failed");
+        std::fs::write(tmp.path(), TEST_CA_CERT_PEM).unwrap();
 
         let mut config = HttpClientConfig::default();
         config.tls.trusted_certificate_path = Some(tmp.path().to_string_lossy().to_string());
