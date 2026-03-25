@@ -204,8 +204,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 Activity.Current?.AddEvent("cloudfetch.fetcher_unhandled_error", [
                     new("error_message", ex.Message),
-                    new("error_type", ex.GetType().Name),
-                    new("error_stack", ex.StackTrace ?? "(null)")
+                    new("error_type", ex.GetType().Name)
                 ]);
                 _error = ex;
                 _hasMoreResults = false;
