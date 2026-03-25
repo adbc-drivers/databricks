@@ -88,6 +88,7 @@ pub struct ResultManifest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResultSchema {
     pub column_count: i32,
+    #[serde(default)]
     pub columns: Vec<ColumnInfo>,
 }
 
@@ -441,6 +442,36 @@ mod tests {
         assert_eq!(col.type_precision, None);
         assert_eq!(col.type_scale, None);
         assert_eq!(col.type_interval_type, None);
+    }
+
+    #[test]
+    fn test_ddl_response_with_empty_schema() {
+        // DDL statements (CREATE TABLE, DROP TABLE) return column_count: 0
+        // with the columns field omitted entirely.
+        let json = r#"{
+            "statement_id": "01f12850-3b6a-123f-8e77-57d8d2fd960a",
+            "status": {"state": "SUCCEEDED"},
+            "manifest": {
+                "format": "ARROW_STREAM",
+                "schema": {"column_count": 0},
+                "total_chunk_count": 0,
+                "total_row_count": 0,
+                "total_byte_count": 0,
+                "truncated": false
+            },
+            "result": {}
+        }"#;
+
+        let response: StatementExecutionResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            response.statement_id,
+            "01f12850-3b6a-123f-8e77-57d8d2fd960a"
+        );
+        assert_eq!(response.status.state, StatementState::Succeeded);
+        let manifest = response.manifest.unwrap();
+        assert_eq!(manifest.schema.column_count, 0);
+        assert!(manifest.schema.columns.is_empty());
+        assert_eq!(manifest.total_row_count, Some(0));
     }
 
     #[test]
