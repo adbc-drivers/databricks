@@ -219,15 +219,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 {
                     _startOffset = maxOffset;
                 }
+            }
 
-                // Update whether there are more results
-                _hasMoreResults = response.HasMoreRows;
-            }
-            else
-            {
-                // No more results
-                _hasMoreResults = false;
-            }
+            _hasMoreResults = response.HasMoreRows;
         }
 
         /// <summary>
