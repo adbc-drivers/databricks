@@ -378,14 +378,6 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "databricks.http.tls.disable_server_certificate_validation" => {
-                    if let Some(v) = Self::parse_bool_option(&value) {
-                        self.http_config.tls.disable_server_certificate_validation = Some(v);
-                        Ok(())
-                    } else {
-                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
-                    }
-                }
                 "databricks.http.tls.allow_hostname_mismatch" => {
                     if let Some(v) = Self::parse_bool_option(&value) {
                         self.http_config.tls.allow_hostname_mismatch = Some(v);
@@ -510,12 +502,6 @@ impl Optionable for Database {
                     .http_config
                     .tls
                     .allow_self_signed
-                    .unwrap_or(false)
-                    .to_string()),
-                "databricks.http.tls.disable_server_certificate_validation" => Ok(self
-                    .http_config
-                    .tls
-                    .disable_server_certificate_validation
                     .unwrap_or(false)
                     .to_string()),
                 "databricks.http.tls.allow_hostname_mismatch" => Ok(self
@@ -1630,13 +1616,6 @@ mod tests {
         )
         .unwrap();
         db.set_option(
-            OptionDatabase::Other(
-                "databricks.http.tls.disable_server_certificate_validation".into(),
-            ),
-            OptionValue::String("true".into()),
-        )
-        .unwrap();
-        db.set_option(
             OptionDatabase::Other("databricks.http.tls.allow_hostname_mismatch".into()),
             OptionValue::String("yes".into()),
         )
@@ -1649,10 +1628,6 @@ mod tests {
 
         assert_eq!(db.http_config.tls.enabled, Some(false));
         assert_eq!(db.http_config.tls.allow_self_signed, Some(true));
-        assert_eq!(
-            db.http_config.tls.disable_server_certificate_validation,
-            Some(true)
-        );
         assert_eq!(db.http_config.tls.allow_hostname_mismatch, Some(true));
         assert_eq!(
             db.http_config.tls.trusted_certificate_path,
@@ -1673,13 +1648,6 @@ mod tests {
         assert_eq!(
             db.get_option_string(OptionDatabase::Other(
                 "databricks.http.tls.allow_self_signed".into()
-            ))
-            .unwrap(),
-            "false"
-        );
-        assert_eq!(
-            db.get_option_string(OptionDatabase::Other(
-                "databricks.http.tls.disable_server_certificate_validation".into()
             ))
             .unwrap(),
             "false"

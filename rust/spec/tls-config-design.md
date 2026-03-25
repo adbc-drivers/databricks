@@ -52,8 +52,7 @@ New ADBC database options under the `databricks.http.tls` namespace:
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `databricks.http.tls.enabled` | bool | Enable TLS for connections. When `false`, forces plain HTTP. | `true` |
-| `databricks.http.tls.allow_self_signed` | bool | Accept self-signed server certificates. | `false` |
-| `databricks.http.tls.disable_server_certificate_validation` | bool | Skip all certificate validation (dangerous). | `false` |
+| `databricks.http.tls.allow_self_signed` | bool | Accept self-signed server certificates (disables all cert validation). | `false` |
 | `databricks.http.tls.allow_hostname_mismatch` | bool | Don't verify that the certificate hostname matches the server. | `false` |
 | `databricks.http.tls.trusted_certificate_path` | String | Path to a PEM-encoded CA certificate file to add to the trust store. | None |
 
@@ -75,14 +74,13 @@ Controls whether the driver uses HTTPS or HTTP. When set to `false`, the driver 
 
 **Note:** Databricks cloud endpoints always require TLS. Setting this to `false` against a real Databricks workspace will fail.
 
-#### `tls.allow_self_signed` vs `tls.disable_server_certificate_validation`
+#### `tls.allow_self_signed`
 
-These are related but distinct:
+Accepts certificates that are not signed by a trusted CA (self-signed or signed by an unknown CA).
 
-- **`allow_self_signed`** — Accepts certificates that are not signed by a trusted CA (self-signed or signed by an unknown CA). Certificate hostname verification is still performed.
-- **`disable_server_certificate_validation`** — Disables **all** certificate checks: CA trust chain, expiration, hostname, etc. This is a superset of `allow_self_signed` + `allow_hostname_mismatch`.
+**Important:** reqwest does not support accepting only self-signed certs while still validating the trust chain. Setting this to `true` calls `danger_accept_invalid_certs(true)`, which disables ALL certificate validation (CA trust, expiration, etc.). The driver logs a warning to make this clear.
 
-In reqwest, both map to `danger_accept_invalid_certs(true)` since reqwest doesn't distinguish between "self-signed" and "fully unvalidated" — the distinction is semantic for the user. If either is set to `true`, `danger_accept_invalid_certs(true)` is applied.
+This matches the Simba ODBC driver's `AllowSelfSignedCert` option. An earlier design considered adding a separate `disable_server_certificate_validation` flag (matching the C# driver), but since reqwest cannot distinguish between the two behaviors, a single option is cleaner.
 
 #### `tls.allow_hostname_mismatch`
 
@@ -113,12 +111,9 @@ pub struct TlsConfig {
     /// Default: true (TLS enabled).
     pub enabled: Option<bool>,
     /// Accept self-signed server certificates.
+    /// Note: reqwest disables ALL cert validation when this is true.
     /// Default: false.
     pub allow_self_signed: Option<bool>,
-    /// Skip all certificate validation (dangerous — disables CA trust,
-    /// expiration, and hostname checks).
-    /// Default: false.
-    pub disable_server_certificate_validation: Option<bool>,
     /// Don't verify that the certificate hostname matches the server.
     /// Default: false.
     pub allow_hostname_mismatch: Option<bool>,
@@ -137,16 +132,12 @@ Add `pub tls: TlsConfig` to `HttpClientConfig`.
 // Apply TLS configuration
 let tls = &config.tls;
 
-// Both allow_self_signed and disable_server_certificate_validation map to
-// reqwest's danger_accept_invalid_certs(true). reqwest does not support
-// accepting only self-signed certs while still validating the trust chain,
-// so allow_self_signed effectively disables all certificate validation.
-if tls.disable_server_certificate_validation.unwrap_or(false) {
+// reqwest does not support accepting only self-signed certs while still
+// validating the trust chain — danger_accept_invalid_certs(true) disables
+// ALL certificate validation (CA trust, expiration, etc.).
+if tls.allow_self_signed.unwrap_or(false) {
     warn!("TLS certificate validation is disabled — this is insecure and should only be used in development");
-    builder = builder.danger_accept_invalid_certs(true);
-} else if tls.allow_self_signed.unwrap_or(false) {
-    warn!("TLS certificate validation is disabled — this is insecure and should only be used in development");
-    warn!("allow_self_signed is enabled — note: reqwest does not distinguish self-signed from fully unvalidated; this disables ALL certificate validation, equivalent to disable_server_certificate_validation");
+    warn!("allow_self_signed is enabled — note: reqwest does not distinguish self-signed from fully unvalidated; this disables ALL certificate validation");
     builder = builder.danger_accept_invalid_certs(true);
 }
 
@@ -187,11 +178,6 @@ if tls.enabled == Some(false) {
     self.http_config.tls.allow_self_signed = Some(Self::parse_bool_option(&key, &value)?);
     Ok(())
 }
-"databricks.http.tls.disable_server_certificate_validation" => {
-    self.http_config.tls.disable_server_certificate_validation =
-        Some(Self::parse_bool_option(&key, &value)?);
-    Ok(())
-}
 "databricks.http.tls.allow_hostname_mismatch" => {
     self.http_config.tls.allow_hostname_mismatch =
         Some(Self::parse_bool_option(&key, &value)?);
@@ -221,9 +207,8 @@ This is a no-op in terms of binary behavior (native-tls is already compiled in a
 
 ## Validation
 
-- `tls.enabled`, `tls.allow_self_signed`, `tls.disable_server_certificate_validation`, `tls.allow_hostname_mismatch` must be valid boolean values ("true"/"false"/"1"/"0"/"yes"/"no"). Invalid values produce `InvalidArgument` errors via `parse_bool_option()`.
+- `tls.enabled`, `tls.allow_self_signed`, `tls.allow_hostname_mismatch` must be valid boolean values ("true"/"false"/"1"/"0"/"yes"/"no" or `Int(0)`/`Int(1)`). Invalid values produce `InvalidArgument` errors via `parse_bool_option()`.
 - `tls.trusted_certificate_path` must point to an existing, readable PEM file. Errors are raised at connection creation time, not at `set_option` time.
-- Setting `tls.disable_server_certificate_validation = true` logs a `warn!` message.
 - Setting `tls.allow_hostname_mismatch = true` logs a `warn!` message.
 - Setting `tls.enabled = false` logs a `warn!` message.
 
@@ -232,9 +217,8 @@ This is a no-op in terms of binary behavior (native-tls is already compiled in a
 ### Unit Tests (`src/client/http.rs`)
 
 1. **`test_tls_config_default`** — `TlsConfig::default()` has all `None` fields.
-2. **`test_http_client_with_invalid_certs_allowed`** — Client builds successfully with `allow_self_signed = true`.
-3. **`test_http_client_with_cert_validation_disabled`** — Client builds with `disable_server_certificate_validation = true`.
-4. **`test_http_client_with_hostname_mismatch_allowed`** — Client builds with `allow_hostname_mismatch = true`.
+2. **`test_http_client_with_allow_self_signed`** — Client builds successfully with `allow_self_signed = true`.
+3. **`test_http_client_with_hostname_mismatch_allowed`** — Client builds with `allow_hostname_mismatch = true`.
 5. **`test_http_client_with_custom_ca_cert`** — Client builds with a valid PEM cert path.
 6. **`test_http_client_with_invalid_cert_path`** — Returns error for nonexistent cert file.
 7. **`test_http_client_with_invalid_pem`** — Returns error for non-PEM cert file.
@@ -251,16 +235,14 @@ E2E tests use mitmproxy as a TLS-intercepting proxy. The CI workflow (`.github/w
 
 11. **`test_tls_fails_without_config`** — Connection through mitmproxy fails without any TLS configuration (negative test — verifies TLS interception is detected).
 12. **`test_tls_with_trusted_certificate`** — Connection succeeds when `trusted_certificate_path` points to mitmproxy's CA cert.
-13. **`test_tls_with_cert_validation_disabled`** — Connection succeeds with `disable_server_certificate_validation = true` (no CA cert needed).
-14. **`test_tls_with_allow_self_signed`** — Connection succeeds with `allow_self_signed = true` (exercises the separate config path).
+13. **`test_tls_with_allow_self_signed`** — Connection succeeds with `allow_self_signed = true` (no CA cert needed).
 
 ## Cross-Driver Comparison
 
 | Feature | Rust (this design) | C# |
 |---------|-------------------|-----|
 | TLS toggle | `databricks.http.tls.enabled` | `adbc.http_options.tls.enabled` |
-| Self-signed certs | `databricks.http.tls.allow_self_signed` | `adbc.http_options.tls.allow_self_signed` |
-| Skip all cert validation | `databricks.http.tls.disable_server_certificate_validation` | `adbc.http_options.tls.disable_server_certificate_validation` |
+| Self-signed certs / skip cert validation | `databricks.http.tls.allow_self_signed` | `adbc.http_options.tls.allow_self_signed` + `adbc.http_options.tls.disable_server_certificate_validation` |
 | Hostname mismatch | `databricks.http.tls.allow_hostname_mismatch` | `adbc.http_options.tls.allow_hostname_mismatch` |
 | Custom CA cert | `databricks.http.tls.trusted_certificate_path` | `adbc.http_options.tls.trusted_certificate_path` |
 | Cert revocation mode | Not supported | `adbc.http_options.tls.revocation_mode` |

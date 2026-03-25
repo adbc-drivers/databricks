@@ -18,7 +18,6 @@
 //! routing traffic through mitmproxy (a TLS-intercepting proxy). This exercises:
 //!
 //! - `databricks.http.tls.trusted_certificate_path` — custom CA cert
-//! - `databricks.http.tls.disable_server_certificate_validation` — skip validation
 //! - `databricks.http.tls.allow_self_signed` — accept self-signed certs
 //! - Negative case: connection fails without TLS config when proxy intercepts TLS
 //!
@@ -203,32 +202,10 @@ fn test_tls_with_trusted_certificate() {
     execute_select_1(&database);
 }
 
-/// Test connection with `disable_server_certificate_validation`.
-///
-/// Skips all certificate validation, allowing connection through mitmproxy
-/// without trusting its CA cert.
-/// CI verifies traffic routing via mitmdump logs.
-#[test]
-#[ignore]
-fn test_tls_with_cert_validation_disabled() {
-    let mut database = create_database_with_mitmproxy();
-    database
-        .set_option(
-            OptionDatabase::Other(
-                "databricks.http.tls.disable_server_certificate_validation".into(),
-            ),
-            OptionValue::String("true".into()),
-        )
-        .expect("Failed to set disable_server_certificate_validation");
-
-    execute_select_1(&database);
-}
-
 /// Test connection with `allow_self_signed`.
 ///
-/// This is functionally equivalent to `disable_server_certificate_validation`
-/// in reqwest (both call `danger_accept_invalid_certs`), but we test it
-/// separately to verify the config path works.
+/// Disables certificate validation via `danger_accept_invalid_certs`, allowing
+/// connection through mitmproxy without trusting its CA cert.
 /// CI verifies traffic routing via mitmdump logs.
 #[test]
 #[ignore]

@@ -75,13 +75,10 @@ pub struct TlsConfig {
     ///
     /// Note: reqwest does not distinguish between "self-signed only" and
     /// "fully unvalidated". Setting this to `true` actually disables ALL
-    /// certificate validation, equivalent to `disable_server_certificate_validation`.
+    /// certificate validation (CA trust, expiration, etc.) via
+    /// `danger_accept_invalid_certs(true)`.
     /// Default: false.
     pub allow_self_signed: Option<bool>,
-    /// Skip all certificate validation (dangerous — disables CA trust,
-    /// expiration, and hostname checks).
-    /// Default: false.
-    pub disable_server_certificate_validation: Option<bool>,
     /// Don't verify that the certificate hostname matches the server.
     /// Requires the `native-tls` backend.
     /// Default: false.
@@ -176,20 +173,12 @@ impl DatabricksHttpClient {
             warn!("TLS is disabled — connections will use plain HTTP");
         }
 
-        // Both allow_self_signed and disable_server_certificate_validation map to
-        // reqwest's danger_accept_invalid_certs(true). reqwest does not support
-        // accepting only self-signed certs while still validating the trust chain,
-        // so allow_self_signed effectively disables all certificate validation.
-        if config
-            .tls
-            .disable_server_certificate_validation
-            .unwrap_or(false)
-        {
+        // reqwest does not support accepting only self-signed certs while still
+        // validating the trust chain — danger_accept_invalid_certs(true) disables
+        // ALL certificate validation (CA trust, expiration, etc.).
+        if config.tls.allow_self_signed.unwrap_or(false) {
             warn!("TLS certificate validation is disabled — this is insecure and should only be used in development");
-            builder = builder.danger_accept_invalid_certs(true);
-        } else if config.tls.allow_self_signed.unwrap_or(false) {
-            warn!("TLS certificate validation is disabled — this is insecure and should only be used in development");
-            warn!("allow_self_signed is enabled — note: reqwest does not distinguish self-signed from fully unvalidated; this disables ALL certificate validation, equivalent to disable_server_certificate_validation");
+            warn!("allow_self_signed is enabled — note: reqwest does not distinguish self-signed from fully unvalidated; this disables ALL certificate validation");
             builder = builder.danger_accept_invalid_certs(true);
         }
 
@@ -666,7 +655,6 @@ mod tests {
         let config = TlsConfig::default();
         assert!(config.enabled.is_none());
         assert!(config.allow_self_signed.is_none());
-        assert!(config.disable_server_certificate_validation.is_none());
         assert!(config.allow_hostname_mismatch.is_none());
         assert!(config.trusted_certificate_path.is_none());
     }
@@ -676,14 +664,6 @@ mod tests {
         let config = HttpClientConfig::default();
         assert!(config.tls.enabled.is_none());
         assert!(config.tls.trusted_certificate_path.is_none());
-    }
-
-    #[test]
-    fn test_http_client_with_cert_validation_disabled() {
-        let mut config = HttpClientConfig::default();
-        config.tls.disable_server_certificate_validation = Some(true);
-        let client = DatabricksHttpClient::new(config);
-        assert!(client.is_ok());
     }
 
     #[test]
