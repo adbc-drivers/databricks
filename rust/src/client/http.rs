@@ -176,7 +176,11 @@ impl DatabricksHttpClient {
         // reqwest's danger_accept_invalid_certs(true). reqwest does not support
         // accepting only self-signed certs while still validating the trust chain,
         // so allow_self_signed effectively disables all certificate validation.
-        if config.tls.disable_server_certificate_validation.unwrap_or(false) {
+        if config
+            .tls
+            .disable_server_certificate_validation
+            .unwrap_or(false)
+        {
             warn!("TLS certificate validation is disabled — this is insecure and should only be used in development");
             builder = builder.danger_accept_invalid_certs(true);
         } else if config.tls.allow_self_signed.unwrap_or(false) {
@@ -192,8 +196,10 @@ impl DatabricksHttpClient {
 
         if let Some(ref cert_path) = config.tls.trusted_certificate_path {
             let pem = std::fs::read(cert_path).map_err(|e| {
-                DatabricksErrorHelper::invalid_argument()
-                    .message(format!("Failed to read TLS certificate '{}': {}", cert_path, e))
+                DatabricksErrorHelper::invalid_argument().message(format!(
+                    "Failed to read TLS certificate '{}': {}",
+                    cert_path, e
+                ))
             })?;
             let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| {
                 DatabricksErrorHelper::invalid_argument()

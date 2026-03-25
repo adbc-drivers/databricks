@@ -501,22 +501,36 @@ impl Optionable for Database {
                 "databricks.http.tls.enabled" => {
                     Ok(self.http_config.tls.enabled.unwrap_or(true).to_string())
                 }
-                "databricks.http.tls.allow_self_signed" => {
-                    Ok(self.http_config.tls.allow_self_signed.unwrap_or(false).to_string())
-                }
-                "databricks.http.tls.disable_server_certificate_validation" => {
-                    Ok(self.http_config.tls.disable_server_certificate_validation.unwrap_or(false).to_string())
-                }
-                "databricks.http.tls.allow_hostname_mismatch" => {
-                    Ok(self.http_config.tls.allow_hostname_mismatch.unwrap_or(false).to_string())
-                }
-                "databricks.http.tls.trusted_certificate_path" => {
-                    self.http_config.tls.trusted_certificate_path.clone().ok_or_else(|| {
+                "databricks.http.tls.allow_self_signed" => Ok(self
+                    .http_config
+                    .tls
+                    .allow_self_signed
+                    .unwrap_or(false)
+                    .to_string()),
+                "databricks.http.tls.disable_server_certificate_validation" => Ok(self
+                    .http_config
+                    .tls
+                    .disable_server_certificate_validation
+                    .unwrap_or(false)
+                    .to_string()),
+                "databricks.http.tls.allow_hostname_mismatch" => Ok(self
+                    .http_config
+                    .tls
+                    .allow_hostname_mismatch
+                    .unwrap_or(false)
+                    .to_string()),
+                "databricks.http.tls.trusted_certificate_path" => self
+                    .http_config
+                    .tls
+                    .trusted_certificate_path
+                    .clone()
+                    .ok_or_else(|| {
                         DatabricksErrorHelper::invalid_state()
-                            .message("option 'databricks.http.tls.trusted_certificate_path' is not set")
+                            .message(
+                                "option 'databricks.http.tls.trusted_certificate_path' is not set",
+                            )
                             .to_adbc()
-                    })
-                }
+                    }),
                 "databricks.http.proxy.url" => {
                     self.http_config.proxy.url.clone().ok_or_else(|| {
                         DatabricksErrorHelper::invalid_state()
@@ -1611,7 +1625,9 @@ mod tests {
         )
         .unwrap();
         db.set_option(
-            OptionDatabase::Other("databricks.http.tls.disable_server_certificate_validation".into()),
+            OptionDatabase::Other(
+                "databricks.http.tls.disable_server_certificate_validation".into(),
+            ),
             OptionValue::String("true".into()),
         )
         .unwrap();
