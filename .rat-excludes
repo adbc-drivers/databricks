@@ -39,3 +39,5 @@ rust/license.tpl
 rust/pixi.lock
 # htpasswd is a data file (username:password_hash) that cannot contain license headers
 rust/ci/proxy/htpasswd
+# PEM certificate is a data file that cannot contain license headers
+rust/tests/data/test_ca_cert.pem
