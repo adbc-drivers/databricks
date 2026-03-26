@@ -61,6 +61,32 @@ impl std::fmt::Debug for ProxyConfig {
     }
 }
 
+/// Configuration for TLS behavior.
+///
+/// All fields default to the most secure settings (`None` = use defaults).
+/// Relaxing any of these options should only be done in development/testing
+/// environments.
+#[derive(Debug, Clone, Default)]
+pub struct TlsConfig {
+    /// Enable TLS for connections. When `false`, allows plain HTTP.
+    /// Default: true (TLS enabled).
+    pub enabled: Option<bool>,
+    /// Accept self-signed server certificates.
+    ///
+    /// Note: reqwest does not distinguish between "self-signed only" and
+    /// "fully unvalidated". Setting this to `true` actually disables ALL
+    /// certificate validation (CA trust, expiration, etc.) via
+    /// `danger_accept_invalid_certs(true)`.
+    /// Default: false.
+    pub allow_self_signed: Option<bool>,
+    /// Don't verify that the certificate hostname matches the server.
+    /// Requires the `native-tls` backend.
+    /// Default: false.
+    pub allow_hostname_mismatch: Option<bool>,
+    /// Path to a PEM-encoded CA certificate file to add to the trust store.
+    pub trusted_certificate_path: Option<String>,
+}
+
 /// Configuration for the HTTP client.
 #[derive(Debug, Clone)]
 pub struct HttpClientConfig {
@@ -78,6 +104,8 @@ pub struct HttpClientConfig {
     pub user_agent: String,
     /// Proxy configuration.
     pub proxy: ProxyConfig,
+    /// TLS configuration.
+    pub tls: TlsConfig,
 }
 
 impl Default for HttpClientConfig {
@@ -94,6 +122,7 @@ impl Default for HttpClientConfig {
             // See: https://github.com/databricks-eng/universe/pull/909153
             user_agent: format!("DatabricksJDBCDriverOSS/{}", env!("CARGO_PKG_VERSION")),
             proxy: ProxyConfig::default(),
+            tls: TlsConfig::default(),
         }
     }
 }
@@ -137,6 +166,41 @@ impl DatabricksHttpClient {
             .timeout(config.read_timeout)
             .pool_max_idle_per_host(config.max_connections_per_host)
             .user_agent(&config.user_agent);
+
+        // Apply TLS configuration
+        if config.tls.enabled == Some(false) {
+            builder = builder.https_only(false);
+            warn!("TLS is disabled — connections will use plain HTTP");
+        }
+
+        // reqwest does not support accepting only self-signed certs while still
+        // validating the trust chain — danger_accept_invalid_certs(true) disables
+        // ALL certificate validation (CA trust, expiration, etc.).
+        if config.tls.allow_self_signed.unwrap_or(false) {
+            warn!("TLS certificate validation is disabled — this is insecure and should only be used in development");
+            warn!("allow_self_signed is enabled — note: reqwest does not distinguish self-signed from fully unvalidated; this disables ALL certificate validation");
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        if config.tls.allow_hostname_mismatch.unwrap_or(false) {
+            warn!("TLS hostname verification is disabled — this is insecure and should only be used in development");
+            builder = builder.danger_accept_invalid_hostnames(true);
+        }
+
+        if let Some(ref cert_path) = config.tls.trusted_certificate_path {
+            let pem = std::fs::read(cert_path).map_err(|e| {
+                DatabricksErrorHelper::invalid_argument().message(format!(
+                    "Failed to read TLS certificate '{}': {}",
+                    cert_path, e
+                ))
+            })?;
+            let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| {
+                DatabricksErrorHelper::invalid_argument()
+                    .message(format!("Invalid PEM certificate '{}': {}", cert_path, e))
+            })?;
+            builder = builder.add_root_certificate(cert);
+            debug!("Added custom CA certificate from: {}", cert_path);
+        }
 
         // Apply proxy configuration
         if let Some(ref proxy_url) = config.proxy.url {
@@ -584,6 +648,103 @@ mod tests {
         config.proxy.password = Some("pass".to_string());
         let client = DatabricksHttpClient::new(config);
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_tls_config_default() {
+        let config = TlsConfig::default();
+        assert!(config.enabled.is_none());
+        assert!(config.allow_self_signed.is_none());
+        assert!(config.allow_hostname_mismatch.is_none());
+        assert!(config.trusted_certificate_path.is_none());
+    }
+
+    #[test]
+    fn test_http_client_config_default_has_default_tls() {
+        let config = HttpClientConfig::default();
+        assert!(config.tls.enabled.is_none());
+        assert!(config.tls.trusted_certificate_path.is_none());
+    }
+
+    #[test]
+    fn test_http_client_with_allow_self_signed() {
+        let mut config = HttpClientConfig::default();
+        config.tls.allow_self_signed = Some(true);
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_http_client_with_hostname_mismatch_allowed() {
+        let mut config = HttpClientConfig::default();
+        config.tls.allow_hostname_mismatch = Some(true);
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_http_client_with_tls_disabled() {
+        let mut config = HttpClientConfig::default();
+        config.tls.enabled = Some(false);
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    /// A self-signed CA certificate for testing. Generated once and hardcoded
+    /// to avoid platform-specific dependencies (e.g., openssl not on Windows).
+    const TEST_CA_CERT_PEM: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIDBTCCAe2gAwIBAgIUbS3CBzF8+mVOJShXAIjPBRUCFWMwDQYJKoZIhvcNAQEL
+BQAwEjEQMA4GA1UEAwwHVGVzdCBDQTAeFw0yNjAzMjUwNjQwMjhaFw0zNjAzMjIw
+NjQwMjhaMBIxEDAOBgNVBAMMB1Rlc3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+DwAwggEKAoIBAQDRoAl14R0QgADk1N3utgSbojOAh/Ub5v6sC8z8dXGxxAFBI+vV
+UYNYNV6iF458lsgo+v1xUBDqmR7+k6YsJhwxrWCBZAei471DrAZid6MtSqP9m+I5
+HAa5qH4TE+NB+npCjQQsFlPl0rdoDSPnsCVMaEgxnkkZdYQTztaUjfapF+kDRPMe
+XedQWRKbdolsmGNV9l6yuX8IDLRWFp4ublly+EszulszhCBqfBolc/eMBn8yRmdN
+txbAhLnklwDBBewP2AU5zpeVcwX+iZM5gj3AN7CDJkAC68ZJKBFLqttsJZKx5NuT
+2isq14/YA5TvoXsaN5rkH5VbmyrRUb3TNILfAgMBAAGjUzBRMB0GA1UdDgQWBBQa
+Vn826exMR5xKRr2ArIOhlNWeLzAfBgNVHSMEGDAWgBQaVn826exMR5xKRr2ArIOh
+lNWeLzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBVxFNYazoo
+uGa3MnOKoK73K/Ew2PSfK+7RbUNxJxsv0mtKZXkaq/TFqnpbqjTllSe9JK+bOaDF
+s5dTvaMxGsAgwKc5TqFuF2jdqiZytUZFsr65gAIFlZOI8zuAiVfj/B1iOtk84Jh/
+PCJ2x3ALIWD5mGMHZM/4tdtajjM+uiSehLzpSp2B2FFupmDLrmQkpr9zKet83ZtG
+If8L/vYYFGAGmphgF1V/Qb4CuP9ZmbgZZgjPAEo9oY2CXwf/TMz7kc3JuKYscc7y
+SKEDvq0G7Lbxl85EtEswMp1mdl7+WOUWgPk3whOzl8rn8BfQAyPBWjzzTWT3eoWv
+lGrv15pBcePj
+-----END CERTIFICATE-----
+";
+
+    #[test]
+    fn test_http_client_with_custom_ca_cert() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), TEST_CA_CERT_PEM).unwrap();
+
+        let mut config = HttpClientConfig::default();
+        config.tls.trusted_certificate_path = Some(tmp.path().to_string_lossy().to_string());
+        let client = DatabricksHttpClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_http_client_with_invalid_cert_path() {
+        let mut config = HttpClientConfig::default();
+        config.tls.trusted_certificate_path = Some("/nonexistent/path/cert.pem".to_string());
+        let result = DatabricksHttpClient::new(config);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("Failed to read TLS certificate"));
+    }
+
+    #[test]
+    fn test_http_client_with_invalid_pem() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "not a valid PEM certificate").unwrap();
+        let mut config = HttpClientConfig::default();
+        config.tls.trusted_certificate_path = Some(tmp.path().to_string_lossy().to_string());
+        let result = DatabricksHttpClient::new(config);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("Invalid PEM certificate"));
     }
 
     #[test]

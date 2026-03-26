@@ -98,6 +98,9 @@ impl Database {
     }
 
     /// Parse a boolean option value.
+    ///
+    /// Accepts `OptionValue::String` ("true"/"false"/"1"/"0"/"yes"/"no")
+    /// and `OptionValue::Int` (0 = false, 1 = true).
     fn parse_bool_option(value: &OptionValue) -> Option<bool> {
         match value {
             OptionValue::String(s) => match s.to_lowercase().as_str() {
@@ -105,6 +108,8 @@ impl Database {
                 "false" | "0" | "no" => Some(false),
                 _ => None,
             },
+            OptionValue::Int(0) => Some(false),
+            OptionValue::Int(1) => Some(true),
             _ => None,
         }
     }
@@ -356,6 +361,40 @@ impl Optionable for Database {
                     }
                 }
 
+                // TLS configuration
+                "databricks.http.tls.enabled" => {
+                    if let Some(v) = Self::parse_bool_option(&value) {
+                        self.http_config.tls.enabled = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.http.tls.allow_self_signed" => {
+                    if let Some(v) = Self::parse_bool_option(&value) {
+                        self.http_config.tls.allow_self_signed = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.http.tls.allow_hostname_mismatch" => {
+                    if let Some(v) = Self::parse_bool_option(&value) {
+                        self.http_config.tls.allow_hostname_mismatch = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.http.tls.trusted_certificate_path" => {
+                    if let OptionValue::String(v) = value {
+                        self.http_config.tls.trusted_certificate_path = Some(v);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+
                 // HTTP client options
                 "databricks.http.connect_timeout_ms" => {
                     if let Some(v) = Self::parse_int_option(&value) {
@@ -456,6 +495,33 @@ impl Optionable for Database {
                             .to_adbc()
                     })
                 }
+                "databricks.http.tls.enabled" => {
+                    Ok(self.http_config.tls.enabled.unwrap_or(true).to_string())
+                }
+                "databricks.http.tls.allow_self_signed" => Ok(self
+                    .http_config
+                    .tls
+                    .allow_self_signed
+                    .unwrap_or(false)
+                    .to_string()),
+                "databricks.http.tls.allow_hostname_mismatch" => Ok(self
+                    .http_config
+                    .tls
+                    .allow_hostname_mismatch
+                    .unwrap_or(false)
+                    .to_string()),
+                "databricks.http.tls.trusted_certificate_path" => self
+                    .http_config
+                    .tls
+                    .trusted_certificate_path
+                    .clone()
+                    .ok_or_else(|| {
+                        DatabricksErrorHelper::invalid_state()
+                            .message(
+                                "option 'databricks.http.tls.trusted_certificate_path' is not set",
+                            )
+                            .to_adbc()
+                    }),
                 "databricks.http.proxy.url" => {
                     self.http_config.proxy.url.clone().ok_or_else(|| {
                         DatabricksErrorHelper::invalid_state()
@@ -1530,6 +1596,139 @@ mod tests {
 
         let result = db.set_option(
             OptionDatabase::Other("databricks.http.proxy.bypass_hosts".into()),
+            OptionValue::Int(0),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_database_set_tls_options() {
+        let mut db = Database::new();
+
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.enabled".into()),
+            OptionValue::String("false".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.allow_self_signed".into()),
+            OptionValue::String("true".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.allow_hostname_mismatch".into()),
+            OptionValue::String("yes".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.trusted_certificate_path".into()),
+            OptionValue::String("/path/to/cert.pem".into()),
+        )
+        .unwrap();
+
+        assert_eq!(db.http_config.tls.enabled, Some(false));
+        assert_eq!(db.http_config.tls.allow_self_signed, Some(true));
+        assert_eq!(db.http_config.tls.allow_hostname_mismatch, Some(true));
+        assert_eq!(
+            db.http_config.tls.trusted_certificate_path,
+            Some("/path/to/cert.pem".to_string())
+        );
+    }
+
+    #[test]
+    fn test_database_get_tls_options() {
+        let mut db = Database::new();
+
+        // Bool options return defaults when not set
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other("databricks.http.tls.enabled".into()))
+                .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other(
+                "databricks.http.tls.allow_self_signed".into()
+            ))
+            .unwrap(),
+            "false"
+        );
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other(
+                "databricks.http.tls.allow_hostname_mismatch".into()
+            ))
+            .unwrap(),
+            "false"
+        );
+
+        // trusted_certificate_path returns error when not set
+        assert!(db
+            .get_option_string(OptionDatabase::Other(
+                "databricks.http.tls.trusted_certificate_path".into()
+            ))
+            .is_err());
+
+        // Set values and verify
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.enabled".into()),
+            OptionValue::String("false".into()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.trusted_certificate_path".into()),
+            OptionValue::String("/path/to/cert.pem".into()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other("databricks.http.tls.enabled".into()))
+                .unwrap(),
+            "false"
+        );
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Other(
+                "databricks.http.tls.trusted_certificate_path".into()
+            ))
+            .unwrap(),
+            "/path/to/cert.pem"
+        );
+    }
+
+    #[test]
+    fn test_database_tls_options_reject_invalid_values() {
+        let mut db = Database::new();
+
+        // Invalid string for bool option
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.http.tls.enabled".into()),
+            OptionValue::String("maybe".into()),
+        );
+        assert!(result.is_err());
+
+        // Invalid int (not 0 or 1) for bool option
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.http.tls.allow_self_signed".into()),
+            OptionValue::Int(42),
+        );
+        assert!(result.is_err());
+
+        // Int(0) and Int(1) should be accepted for bool options
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.enabled".into()),
+            OptionValue::Int(0),
+        )
+        .unwrap();
+        assert_eq!(db.http_config.tls.enabled, Some(false));
+
+        db.set_option(
+            OptionDatabase::Other("databricks.http.tls.allow_self_signed".into()),
+            OptionValue::Int(1),
+        )
+        .unwrap();
+        assert_eq!(db.http_config.tls.allow_self_signed, Some(true));
+
+        // Non-string for path option should still be rejected
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.http.tls.trusted_certificate_path".into()),
             OptionValue::Int(0),
         );
         assert!(result.is_err());
