@@ -18,6 +18,7 @@
 //! including HTTP header handling, speed monitoring, decompression,
 //! and Arrow IPC parsing.
 
+use crate::client::retry::RequestType;
 use crate::client::DatabricksHttpClient;
 use crate::error::{DatabricksErrorHelper, Result};
 use crate::reader::cloudfetch::arrow_parser::parse_arrow_ipc;
@@ -90,7 +91,10 @@ impl ChunkDownloader {
         })?;
 
         // Execute without auth (presigned URLs have their own auth)
-        let response = self.http_client.execute_without_auth(request).await?;
+        let response = self
+            .http_client
+            .execute_without_auth(request, RequestType::CloudFetchDownload)
+            .await?;
 
         // Read response body
         let bytes = response.bytes().await.map_err(|e| {
@@ -153,7 +157,9 @@ mod tests {
 
     #[test]
     fn test_chunk_downloader_creation() {
-        let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default()).unwrap());
+        let http_client = Arc::new(
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default()).unwrap(),
+        );
         let auth = Arc::new(PersonalAccessToken::new("test-token".to_string()));
         http_client.set_auth_provider(auth);
         let downloader = ChunkDownloader::new(http_client, CompressionCodec::None, 0.1);

@@ -80,7 +80,7 @@ const DEFAULT_CALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
 /// use std::sync::Arc;
 ///
 /// # async fn example() -> databricks_adbc::error::Result<()> {
-/// let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default())?);
+/// let http_client = Arc::new(DatabricksHttpClient::with_default_retry(HttpClientConfig::default())?);
 /// let provider = AuthorizationCodeProvider::new(
 ///     "https://my-workspace.cloud.databricks.com",
 ///     "my-client-id",
@@ -144,7 +144,7 @@ impl AuthorizationCodeProvider {
     /// # use databricks_adbc::client::http::{DatabricksHttpClient, HttpClientConfig};
     /// # use std::sync::Arc;
     /// # async fn example() -> databricks_adbc::error::Result<()> {
-    /// let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default())?);
+    /// let http_client = Arc::new(DatabricksHttpClient::with_default_retry(HttpClientConfig::default())?);
     /// let provider = AuthorizationCodeProvider::new(
     ///     "https://my-workspace.cloud.databricks.com",
     ///     "client-id",
@@ -514,7 +514,7 @@ mod tests {
             .await;
 
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 
@@ -564,7 +564,7 @@ mod tests {
         mock_oidc_discovery(&mock_server).await;
 
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 
@@ -627,7 +627,7 @@ mod tests {
         // (we're not actually launching browser/callback in unit test)
 
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 
