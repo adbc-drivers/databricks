@@ -186,7 +186,7 @@ jobs:
           ref=${{ github.ref }}
           tag=${ref#"refs/tags/"}
           declared_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          if [[ "${declared_version}" != "${tag#*v}" ]];
+          if [[ "${declared_version}" != "${tag#*v}" ]]; then
              echo "Declared driver version in Cargo.toml ${declared_version}"
              echo "does not match tag ${tag#*v}"
              echo "Please update the version before release."
