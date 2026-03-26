@@ -558,8 +558,26 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             ]);
                         }
 
-                        // Read the file data
-                        fileData = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                        // Read the file data with a body read timeout.
+                        // ReadAsByteArrayAsync() has no CancellationToken overload on net472/netstandard2.0.
+                        // Without a timeout, if Azure Blob Storage resets the TCP connection mid-transfer
+                        // (observed as TCP RST with win=0 under concurrent download load), the body read
+                        // hangs indefinitely — the Mono TLS layer does not propagate the RST to the pending
+                        // ReadAsync. This freezes the entire CloudFetch pipeline for the partition because
+                        // the reader processes chunks in order.
+                        // Using ReadAsStreamAsync + CopyToAsync with a linked CancellationToken provides
+                        // a timeout that works on all target frameworks. When the timeout fires, the existing
+                        // retry logic catches the OperationCanceledException and retries with a new connection.
+                        using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                        {
+                            bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
+                            using (var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            using (var memoryStream = new System.IO.MemoryStream())
+                            {
+                                await responseStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
+                                fileData = memoryStream.ToArray();
+                            }
+                        }
                         break; // Success, exit retry loop
                     }
                     catch (Exception ex) when (retry < _maxRetries - 1 && !cancellationToken.IsCancellationRequested)
