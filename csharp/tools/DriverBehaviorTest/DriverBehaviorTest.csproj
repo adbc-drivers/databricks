@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks Condition="'$(IsWindows)'=='true'">net472;net8.0</TargetFrameworks>
+    <TargetFrameworks Condition="'$(TargetFrameworks)'==''">net8.0</TargetFrameworks>
+    <RootNamespace>AdbcDrivers.Databricks.DriverBehaviorTest</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/AdbcDrivers.Databricks.csproj" />
+  </ItemGroup>
+
+</Project>
