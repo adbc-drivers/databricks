@@ -24,8 +24,9 @@
 using System;
 using System.IO;
 using Apache.Arrow;
-using Apache.Arrow.Adbc.Drivers.Apache;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
+using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.HiveServer2.Thrift;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using Apache.Hive.Service.Rpc.Thrift;

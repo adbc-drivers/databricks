@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-module github.com/adbc-drivers/databricks/go/databricks
+module github.com/adbc-drivers/databricks/go
 
 go 1.25.5
 
 require (
 	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20251215145213-df04bfe8de4f
+	github.com/adbc-drivers/driverbase-go/validation v0.0.0-20251215145213-df04bfe8de4f
 	github.com/apache/arrow-adbc/go/adbc v1.9.0
 	github.com/apache/arrow-go/v18 v18.5.0
 	github.com/databricks/databricks-sql-go v1.9.0

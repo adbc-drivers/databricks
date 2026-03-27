@@ -17,7 +17,7 @@
 using System;
 using System.Collections.Generic;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;

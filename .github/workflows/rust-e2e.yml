@@ -1,0 +1,162 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Rust E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "rust/**"
+      - .github/workflows/rust-e2e.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "rust/**"
+      - .github/workflows/rust-e2e.yml
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-rust-e2e
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  proxy:
+    name: "Proxy"
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+
+    services:
+      # Unauthenticated forward proxy (no volume mounts needed)
+      squid:
+        image: ubuntu/squid:latest
+        ports:
+          - 3128:3128
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Start authenticated proxy after checkout so config files are available
+      - name: Start authenticated proxy
+        run: |
+          docker run -d --name squid-auth \
+            -p 3129:3128 \
+            -v ${{ github.workspace }}/rust/ci/proxy/squid-auth.conf:/etc/squid/squid.conf \
+            -v ${{ github.workspace }}/rust/ci/proxy/htpasswd:/etc/squid/htpasswd \
+            ubuntu/squid:latest
+          # Wait for squid to be ready
+          for i in $(seq 1 10); do
+            if docker exec squid-auth squid -k check 2>/dev/null; then
+              echo "Authenticated proxy is ready"
+              break
+            fi
+            echo "Waiting for authenticated proxy to start... ($i/10)"
+            sleep 1
+          done
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Run proxy E2E tests
+        working-directory: rust
+        run: cargo test --test proxy_e2e -- --ignored --nocapture
+
+      - name: Verify proxy was used (unauthenticated)
+        if: always()
+        run: |
+          docker logs $(docker ps -q --filter "publish=3128") 2>&1 \
+            | grep -i "CONNECT" \
+            || (echo "FAIL: No CONNECT entries found in squid logs — proxy was not used" && exit 1)
+
+      - name: Verify proxy was used (authenticated)
+        if: always()
+        run: |
+          docker logs squid-auth 2>&1 \
+            | grep -i "CONNECT" \
+            || (echo "FAIL: No CONNECT entries found in squid-auth logs — proxy was not used" && exit 1)
+
+      - name: Cleanup authenticated proxy
+        if: always()
+        run: docker rm -f squid-auth 2>/dev/null || true
+
+  tls:
+    name: "TLS"
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Start mitmproxy in intercepting mode (mitmdump logs all flows to stdout)
+      - name: Start mitmproxy
+        run: |
+          docker run -d --name mitmproxy \
+            -p 8080:8080 \
+            mitmproxy/mitmproxy:latest \
+            mitmdump --set stream_large_bodies=0
+          # Wait for mitmproxy to generate its CA cert
+          for i in $(seq 1 15); do
+            if docker exec mitmproxy test -f /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem 2>/dev/null; then
+              echo "mitmproxy CA cert is ready"
+              break
+            fi
+            echo "Waiting for mitmproxy CA cert... ($i/15)"
+            sleep 1
+          done
+
+      # Extract mitmproxy CA certificate for the trusted_certificate_path test
+      - name: Extract mitmproxy CA certificate
+        run: |
+          docker cp mitmproxy:/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem /tmp/mitmproxy-ca-cert.pem
+          echo "MITMPROXY_CA_CERT=/tmp/mitmproxy-ca-cert.pem" >> "$GITHUB_ENV"
+          echo "Extracted mitmproxy CA cert:"
+          openssl x509 -in /tmp/mitmproxy-ca-cert.pem -noout -subject -issuer
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Run TLS E2E tests
+        working-directory: rust
+        run: cargo test --test tls_e2e -- --ignored --nocapture
+
+      - name: Verify traffic flowed through mitmproxy
+        if: always()
+        run: |
+          echo "=== mitmproxy logs ==="
+          docker logs mitmproxy 2>&1 | tail -50
+          echo "=== checking for CONNECT entries ==="
+          docker logs mitmproxy 2>&1 \
+            | grep -i "CONNECT\|clientconnect\|<<" \
+            || (echo "FAIL: No traffic entries found in mitmproxy logs — proxy was not used" && exit 1)
+
+      - name: Cleanup mitmproxy
+        if: always()
+        run: docker rm -f mitmproxy 2>/dev/null || true

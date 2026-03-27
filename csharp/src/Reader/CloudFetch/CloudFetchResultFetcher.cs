@@ -211,6 +211,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
             finally
             {
+                Activity.Current?.AddEvent("cloudfetch.fetcher_completing", [
+                    new("has_error", _error != null),
+                    new("error_message", _error?.Message ?? "(none)"),
+                    new("error_type", _error?.GetType().Name ?? "(none)")
+                ]);
                 // Always add the end of results guard to signal completion to the downloader.
                 // Use Add with cancellation token to exit promptly when cancelled.
                 try

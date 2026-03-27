@@ -65,7 +65,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/adbc-drivers/databricks/go/databricks"
+	"github.com/adbc-drivers/databricks/go"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/cdata"

@@ -16,6 +16,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Net;
+using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks
 {
@@ -199,6 +202,52 @@ namespace AdbcDrivers.Databricks
                 return result;
             }
             return defaultValue;
+        }
+
+        /// <summary>
+        /// Extracts the value of the 'o' parameter from a URL query string.
+        /// </summary>
+        /// <param name="queryString">Query string without leading '?'.</param>
+        /// <returns>The org ID value, or null if not present or empty.</returns>
+        public static string? ParseOrgIdFromQueryString(string queryString)
+        {
+            foreach (var part in queryString.Split('&'))
+            {
+                var kv = part.Split('=');
+                if (kv.Length == 2 && kv[0] == "o" && !string.IsNullOrEmpty(kv[1]))
+                    return Uri.UnescapeDataString(kv[1]);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Extracts the org ID from connection properties by inspecting the http path and URI query strings.
+        /// Checks <see cref="SparkParameters.Path"/> first, then falls back to <see cref="AdbcOptions.Uri"/>.
+        /// </summary>
+        /// <param name="properties">Connection properties.</param>
+        /// <returns>The org ID value, or null if not present.</returns>
+        public static string? ParseOrgIdFromProperties(IReadOnlyDictionary<string, string>? properties)
+        {
+            if (properties == null) return null;
+
+            if (properties.TryGetValue(SparkParameters.Path, out string? path) && !string.IsNullOrEmpty(path))
+            {
+                int q = path.IndexOf('?');
+                if (q >= 0)
+                {
+                    string? orgId = ParseOrgIdFromQueryString(path.Substring(q + 1));
+                    if (orgId != null) return orgId;
+                }
+            }
+
+            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri)
+                && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri)
+                && !string.IsNullOrEmpty(parsedUri.Query))
+            {
+                return ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
+            }
+
+            return null;
         }
     }
 }

@@ -80,15 +80,10 @@ namespace AdbcDrivers.Databricks.Telemetry
         public const string EnvKeyFlushIntervalMs = "DATABRICKS_TELEMETRY_FLUSH_INTERVAL_MS";
 
         /// <summary>
-        /// Feature flag name for server-side telemetry control.
-        /// </summary>
-        public const string FeatureFlagName = "databricks.partnerplatform.clientConfigsFeatureFlags.enableTelemetryForAdbc";
-
-        /// <summary>
         /// Gets or sets whether telemetry is enabled.
-        /// Default is true.
+        /// Default is false.
         /// </summary>
-        public bool Enabled { get; set; } = true;
+        public bool Enabled { get; set; } = false;
 
         /// <summary>
         /// Gets or sets the batch size for telemetry metrics.

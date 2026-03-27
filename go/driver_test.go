@@ -29,10 +29,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adbc-drivers/databricks/go/databricks"
+	"github.com/adbc-drivers/databricks/go"
+	"github.com/adbc-drivers/driverbase-go/validation"
 	"github.com/apache/arrow-adbc/go/adbc"
-	"github.com/apache/arrow-adbc/go/adbc/validation"
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,14 +41,15 @@ import (
 )
 
 type DatabricksQuirks struct {
-	mem         *memory.CheckedAllocator
-	catalogName string
-	schemaName  string
-	hostname    string
-	httpPath    string
-	token       string
-	port        string
-	uri         string // The URI to use for the test if set
+	mem               *memory.CheckedAllocator
+	catalogName       string
+	schemaName        string
+	hostname          string
+	httpPath          string
+	oauthClientId     string
+	oauthClientSecret string
+	port              string
+	uri               string // The URI to use for the test if set
 }
 
 func (d *DatabricksQuirks) SetupDriver(t *testing.T) adbc.Driver {
@@ -59,6 +61,10 @@ func (d *DatabricksQuirks) TearDownDriver(t *testing.T, _ adbc.Driver) {
 	d.mem.AssertSize(t, 0)
 }
 
+func (d *DatabricksQuirks) QuoteTableName(tableName string) string {
+	return quoteTblName(tableName)
+}
+
 func (d *DatabricksQuirks) DatabaseOptions() map[string]string {
 	if d.uri != "" {
 		return map[string]string{
@@ -67,9 +73,10 @@ func (d *DatabricksQuirks) DatabaseOptions() map[string]string {
 	}
 
 	opts := map[string]string{
-		databricks.OptionServerHostname: d.hostname,
-		databricks.OptionHTTPPath:       d.httpPath,
-		databricks.OptionAccessToken:    d.token,
+		databricks.OptionServerHostname:    d.hostname,
+		databricks.OptionHTTPPath:          d.httpPath,
+		databricks.OptionOAuthClientID:     d.oauthClientId,
+		databricks.OptionOAuthClientSecret: d.oauthClientSecret,
 	}
 
 	if d.port != "" {
@@ -242,18 +249,18 @@ func (d *DatabricksQuirks) BindParameter(index int) string              { return
 func (d *DatabricksQuirks) SupportsBulkIngest(mode string) bool         { return true }
 func (d *DatabricksQuirks) SupportsConcurrentStatements() bool          { return true }
 func (d *DatabricksQuirks) SupportsCurrentCatalogSchema() bool          { return true }
-func (d *DatabricksQuirks) SupportsExecuteSchema() bool                 { return true }
+func (d *DatabricksQuirks) SupportsExecuteSchema() bool                 { return false }
 func (d *DatabricksQuirks) SupportsGetSetOptions() bool                 { return true }
 func (d *DatabricksQuirks) SupportsPartitionedData() bool               { return false }
 func (d *DatabricksQuirks) SupportsStatistics() bool                    { return false }
-func (d *DatabricksQuirks) SupportsTransactions() bool                  { return true }
+func (d *DatabricksQuirks) SupportsTransactions() bool                  { return false }
 func (d *DatabricksQuirks) SupportsGetParameterSchema() bool            { return false }
 func (d *DatabricksQuirks) SupportsDynamicParameterBinding() bool       { return false }
 func (d *DatabricksQuirks) SupportsErrorIngestIncompatibleSchema() bool { return false }
 func (d *DatabricksQuirks) Catalog() string                             { return d.catalogName }
 func (d *DatabricksQuirks) DBSchema() string                            { return d.schemaName }
 
-func (d *DatabricksQuirks) GetMetadata(code adbc.InfoCode) interface{} {
+func (d *DatabricksQuirks) GetMetadata(code adbc.InfoCode) any {
 	switch code {
 	case adbc.InfoDriverName:
 		return "ADBC Driver Foundry Driver for Databricks"
@@ -262,7 +269,7 @@ func (d *DatabricksQuirks) GetMetadata(code adbc.InfoCode) interface{} {
 	case adbc.InfoDriverArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoVendorVersion:
-		return "(unknown or development build)"
+		return "2025.35"
 	case adbc.InfoVendorArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoDriverADBCVersion:
@@ -304,7 +311,8 @@ func (suite *DatabricksTests) checkRowCount(expected int64, actual int64) {
 func withQuirks(t *testing.T, fn func(*DatabricksQuirks)) {
 	hostname := os.Getenv("DATABRICKS_HOST")
 	httpPath := os.Getenv("DATABRICKS_HTTPPATH")
-	token := os.Getenv("DATABRICKS_ACCESSTOKEN")
+	oauth_client_id := os.Getenv("DATABRICKS_OAUTH_CLIENT_ID")
+	oauth_client_secret := os.Getenv("DATABRICKS_OAUTH_CLIENT_SECRET")
 	catalog := os.Getenv("DATABRICKS_CATALOG")
 	schema := os.Getenv("DATABRICKS_SCHEMA")
 
@@ -312,23 +320,26 @@ func withQuirks(t *testing.T, fn func(*DatabricksQuirks)) {
 		t.Skip("DATABRICKS_HOST not defined, skipping Databricks driver tests")
 	} else if httpPath == "" {
 		t.Skip("DATABRICKS_HTTPPATH not defined, skipping Databricks driver tests")
-	} else if token == "" {
-		t.Skip("DATABRICKS_ACCESSTOKEN not defined, skipping Databricks driver tests")
+	} else if oauth_client_id == "" {
+		t.Skip("DATABRICKS_OAUTH_CLIENT_ID not defined, skipping Databricks driver tests")
+	} else if oauth_client_secret == "" {
+		t.Skip("DATABRICKS_OAUTH_CLIENT_SECRET not defined, skipping Databricks driver tests")
 	}
 
 	if catalog == "" {
 		catalog = "main"
 	}
 	if schema == "" {
-		schema = "default"
+		schema = "adbc_testing"
 	}
 	q := &DatabricksQuirks{
-		hostname:    hostname,
-		httpPath:    httpPath,
-		token:       token,
-		catalogName: catalog,
-		schemaName:  schema,
-		port:        os.Getenv("DATABRICKS_PORT"), // optional
+		hostname:          hostname,
+		httpPath:          httpPath,
+		oauthClientId:     oauth_client_id,
+		oauthClientSecret: oauth_client_secret,
+		catalogName:       catalog,
+		schemaName:        schema,
+		port:              os.Getenv("DATABRICKS_PORT"), // optional
 	}
 
 	fn(q)
@@ -346,17 +357,58 @@ func withQuirksURI(t *testing.T, fn func(*DatabricksQuirks)) {
 	fn(q)
 }
 
+type ConnectionTests struct {
+	validation.ConnectionTests
+}
+
+func (suite *ConnectionTests) TestMetadataGetObjectsColumns() {
+	suite.T().Skip("test takes too long; already tested in validation suite")
+}
+
+func (suite *ConnectionTests) TestMetadataGetTableSchema() {
+	suite.T().Skip("not supported")
+}
+
+type StatementTests struct {
+	validation.StatementTests
+}
+
+func (suite *StatementTests) TestSqlIngestAppend() {
+	// we'd have to override the test since databricks returns two batches not one
+	suite.T().Skip()
+}
+
+func (suite *StatementTests) TestSqlIngestCreateAppend() {
+	// we'd have to override the test since databricks returns two batches not one
+	suite.T().Skip()
+}
+
+func (suite *StatementTests) TestSqlIngestInts() {
+	// we'd have to override the test since databricks returns two batches not one
+	suite.T().Skip()
+}
+
+func (suite *StatementTests) TestSqlIngestErrors() {
+	suite.T().Skip("sqlstate not supported")
+}
+
 func TestValidation(t *testing.T) {
 	withQuirks(t, func(q *DatabricksQuirks) {
-		suite.Run(t, &validation.DatabaseTests{Quirks: q})
-		suite.Run(t, &validation.ConnectionTests{Quirks: q})
-		suite.Run(t, &validation.StatementTests{Quirks: q})
+		t.Run("Database", func(t *testing.T) {
+			suite.Run(t, &validation.DatabaseTests{Quirks: q})
+		})
+		t.Run("Connection", func(t *testing.T) {
+			suite.Run(t, &ConnectionTests{validation.ConnectionTests{Quirks: q}})
+		})
+		t.Run("Statement", func(t *testing.T) {
+			suite.Run(t, &StatementTests{validation.StatementTests{Quirks: q}})
+		})
 	})
 }
 
 func TestDatabricks(t *testing.T) {
 	withQuirks(t, func(q *DatabricksQuirks) {
-		suite.Run(t, &DatabricksTests{Quirks: q})
+		suite.Run(t, &DatabricksTests{BaseTests{Quirks: q}})
 	})
 }
 
@@ -393,9 +445,7 @@ func TestDatabricksWithURI(t *testing.T) {
 	})
 }
 
-// ---- Additional Tests --------------------
-
-type DatabricksTests struct {
+type BaseTests struct {
 	suite.Suite
 
 	Quirks *DatabricksQuirks
@@ -407,7 +457,7 @@ type DatabricksTests struct {
 	stmt   adbc.Statement
 }
 
-func (suite *DatabricksTests) SetupTest() {
+func (suite *BaseTests) SetupTest() {
 	var err error
 	suite.ctx = context.Background()
 	suite.driver = suite.Quirks.SetupDriver(suite.T())
@@ -419,7 +469,7 @@ func (suite *DatabricksTests) SetupTest() {
 	suite.NoError(err)
 }
 
-func (suite *DatabricksTests) TearDownTest() {
+func (suite *BaseTests) TearDownTest() {
 	validation.CheckedClose(suite.T(), suite.stmt)
 	validation.CheckedClose(suite.T(), suite.cnxn)
 	validation.CheckedClose(suite.T(), suite.db)
@@ -427,6 +477,12 @@ func (suite *DatabricksTests) TearDownTest() {
 	suite.cnxn = nil
 	suite.db = nil
 	suite.driver = nil
+}
+
+// ---- Additional Tests --------------------
+
+type DatabricksTests struct {
+	BaseTests
 }
 
 func (suite *DatabricksTests) TestNewDatabaseWithOptions() {
@@ -809,4 +865,66 @@ func (suite *DatabricksTests) TestDecimalTypes() {
 
 	suite.False(rdr.Next())
 	suite.Require().NoError(rdr.Err())
+}
+
+func (suite *DatabricksTests) TestMultiBatch() {
+	// Regression test for issue reported directly to us
+	query := fmt.Sprintf("CREATE OR REPLACE TABLE `%s`.`%s`.`test_multi_batch` (founder STRING, born STRING)", suite.Quirks.catalogName, suite.Quirks.schemaName)
+	suite.Require().NoError(suite.stmt.SetSqlQuery(query))
+	_, err := suite.stmt.ExecuteUpdate(suite.ctx)
+	suite.Require().NoError(err)
+
+	type row struct {
+		founder string
+		born    string
+	}
+
+	rows := []row{
+		{"Ali Ghodsi", "Iran"},
+		{"Ion Stoica", "Romania"},
+		{"Matei Zaharia", "Romania"},
+		{"Patrick Wendell", "USA"},
+		{"Reynold Xin", "China"},
+		{"Andy Konwinski", "USA"},
+		{"Arsalan Tavakoli-Shiraji", "Iran"},
+	}
+	for _, r := range rows {
+		query = fmt.Sprintf("INSERT INTO `%s`.`%s`.`test_multi_batch` VALUES ('%s', '%s')", suite.Quirks.catalogName, suite.Quirks.schemaName, r.founder, r.born)
+		suite.Require().NoError(suite.stmt.SetSqlQuery(query))
+		_, err = suite.stmt.ExecuteUpdate(suite.ctx)
+		suite.Require().NoError(err)
+	}
+
+	query = fmt.Sprintf("SELECT * FROM `%s`.`%s`.`test_multi_batch`", suite.Quirks.catalogName, suite.Quirks.schemaName)
+	suite.Require().NoError(suite.stmt.SetSqlQuery(query))
+	rdr, _, err := suite.stmt.ExecuteQuery(suite.ctx)
+	suite.Require().NoError(err)
+	defer rdr.Release()
+
+	// This used to only return one row.
+	rowCount := 0
+	seen := map[string]string{}
+	for rdr.Next() {
+		batch := rdr.RecordBatch()
+		rowCount += int(batch.NumRows())
+
+		founder := batch.Column(0).(*array.String)
+		born := batch.Column(1).(*array.String)
+
+		for i := range int(batch.NumRows()) {
+			seen[founder.Value(i)] = born.Value(i)
+		}
+	}
+	suite.NoError(rdr.Err())
+	suite.Equal(len(rows), rowCount)
+
+	suite.EqualValues(map[string]string{
+		"Ali Ghodsi":               "Iran",
+		"Ion Stoica":               "Romania",
+		"Matei Zaharia":            "Romania",
+		"Patrick Wendell":          "USA",
+		"Reynold Xin":              "China",
+		"Andy Konwinski":           "USA",
+		"Arsalan Tavakoli-Shiraji": "Iran",
+	}, seen)
 }

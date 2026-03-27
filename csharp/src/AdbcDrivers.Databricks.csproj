@@ -7,7 +7,17 @@
   <ItemGroup>
     <PackageReference Include="K4os.Compression.LZ4" />
     <PackageReference Include="K4os.Compression.LZ4.Streams" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" />
+    <PackageReference Include="Polly" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Telemetry\Proto\sql_driver_telemetry.proto" GrpcServices="None" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="readme.md">
@@ -17,6 +27,6 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\arrow-adbc\csharp\src\Drivers\Apache\Apache.Arrow.Adbc.Drivers.Apache.csproj" />
+    <ProjectReference Include="..\hiveserver2\csharp\src\AdbcDrivers.HiveServer2.csproj" />
   </ItemGroup>
 </Project>

@@ -39,7 +39,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
     /// </summary>
     internal sealed class CloudFetchMemoryBufferManager : ICloudFetchMemoryBufferManager
     {
-        private const int DefaultMemoryBufferSizeMB = 200;
         private readonly long _maxMemory;
         private long _usedMemory;
         private readonly SemaphoreSlim _memorySemaphore;
@@ -48,16 +47,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// Initializes a new instance of the <see cref="CloudFetchMemoryBufferManager"/> class.
         /// </summary>
         /// <param name="maxMemoryMB">The maximum memory allowed for buffering in megabytes.</param>
-        public CloudFetchMemoryBufferManager(int? maxMemoryMB = null)
+        public CloudFetchMemoryBufferManager(int maxMemoryMB = CloudFetchConfiguration.DefaultMemoryBufferSizeMB)
         {
-            int memoryMB = maxMemoryMB ?? DefaultMemoryBufferSizeMB;
-            if (memoryMB <= 0)
+            if (maxMemoryMB <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(maxMemoryMB), "Memory buffer size must be positive.");
             }
 
             // Convert MB to bytes
-            _maxMemory = memoryMB * 1024L * 1024L;
+            _maxMemory = maxMemoryMB * 1024L * 1024L;
             _usedMemory = 0;
             _memorySemaphore = new SemaphoreSlim(1, 1);
         }

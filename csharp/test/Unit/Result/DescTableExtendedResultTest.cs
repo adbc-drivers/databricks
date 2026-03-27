@@ -25,7 +25,7 @@ using System.Linq;
 using System.Text.Json;
 using AdbcDrivers.Databricks.Result;
 using Xunit;
-using static Apache.Arrow.Adbc.Drivers.Apache.Hive2.HiveServer2Connection;
+using static AdbcDrivers.HiveServer2.Hive2.HiveServer2Connection;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Result
 {

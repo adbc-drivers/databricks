@@ -34,3 +34,8 @@ go/validation/queries/*/*.sql
 # adbc.h is vendored
 go/pkg/adbc.h
 test-infrastructure/proxy-server/generated/**
+rust/Cargo.lock
+rust/license.tpl
+rust/pixi.lock
+# htpasswd is a data file (username:password_hash) that cannot contain license headers
+rust/ci/proxy/htpasswd

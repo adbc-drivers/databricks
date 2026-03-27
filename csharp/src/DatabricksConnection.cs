@@ -27,17 +27,20 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Drivers.Apache;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2.Client;
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.HiveServer2.Spark;
+using AdbcDrivers.HiveServer2.Thrift;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -47,6 +50,7 @@ namespace AdbcDrivers.Databricks
 {
     internal class DatabricksConnection : SparkHttpConnection
     {
+        internal const string DatabricksDriverName = "ADBC Databricks Driver";
         internal static new readonly string s_assemblyName = ApacheUtility.GetAssemblyName(typeof(DatabricksConnection));
         internal static new readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(DatabricksConnection));
 
@@ -66,6 +70,7 @@ namespace AdbcDrivers.Databricks
         private bool _enableMultipleCatalogSupport = true;
         private bool _enablePKFK = true;
         private bool _runAsyncInThrift = true;
+        private bool _enableComplexDatatypeSupport = false;
 
         // DirectQuery configuration
         private const long DefaultDirectResultMaxBytes = 10 * 1024 * 1024; // 10MB for direct query results size limit
@@ -101,7 +106,13 @@ namespace AdbcDrivers.Databricks
         // Default namespace
         private TNamespace? _defaultNamespace;
 
-        private HttpClient? _authHttpClient;
+        // Shared OAuth token provider for connection-wide token caching
+        private OAuthClientCredentialsProvider? _oauthTokenProvider;
+
+        // Telemetry fields
+        private ITelemetryClient? _telemetryClient;
+        private string? _host;
+        internal TelemetrySessionContext? TelemetrySession { get; private set; }
 
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
@@ -126,12 +137,13 @@ namespace AdbcDrivers.Databricks
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager? memoryStreamManager,
             System.Buffers.ArrayPool<byte>? lz4BufferPool)
-            : base(MergeWithDefaultEnvironmentConfig(properties))
+            : base(properties)
         {
             // Use provided manager (from Database) or create new instance (for direct construction)
             RecyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             // Use provided pool (from Database) or create new instance (for direct construction)
             Lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
+
             ValidateProperties();
         }
 
@@ -172,100 +184,6 @@ namespace AdbcDrivers.Databricks
             return new ThreadSafeClient(new TCLIService.Client(protocol));
         }
 
-        /// <summary>
-        /// Automatically merges properties from the default DATABRICKS_CONFIG_FILE environment variable with passed-in properties.
-        /// The merge priority is controlled by the "adbc.databricks.driver_config_take_precedence" property.
-        /// If DATABRICKS_CONFIG_FILE is not set or invalid, only passed-in properties are used.
-        /// </summary>
-        /// <param name="properties">Properties passed to constructor.</param>
-        /// <returns>Merged properties dictionary.</returns>
-        private static IReadOnlyDictionary<string, string> MergeWithDefaultEnvironmentConfig(IReadOnlyDictionary<string, string> properties)
-        {
-            // Try to load configuration from the default environment variable
-            var environmentConfig = DatabricksConfiguration.TryFromEnvironmentVariable(DefaultConfigEnvironmentVariable);
-
-            if (environmentConfig != null)
-            {
-                // Determine precedence setting - check passed-in properties first, then environment config
-                bool driverConfigTakesPrecedence = DetermineDriverConfigPrecedence(properties, environmentConfig.Properties);
-
-                if (driverConfigTakesPrecedence)
-                {
-                    // Environment config properties override passed-in properties
-                    return MergeProperties(properties, environmentConfig.Properties);
-                }
-                else
-                {
-                    // Passed-in properties override environment config properties (default behavior)
-                    return MergeProperties(environmentConfig.Properties, properties);
-                }
-            }
-
-            // No environment config available, use only passed-in properties
-            return properties;
-        }
-
-        /// <summary>
-        /// Determines whether driver configuration should take precedence based on the precedence property.
-        /// Checks passed-in properties first, then environment properties, defaulting to false.
-        /// </summary>
-        /// <param name="passedInProperties">Properties passed to constructor.</param>
-        /// <param name="environmentProperties">Properties loaded from environment configuration.</param>
-        /// <returns>True if driver config should take precedence, false otherwise.</returns>
-        private static bool DetermineDriverConfigPrecedence(IReadOnlyDictionary<string, string> passedInProperties, IReadOnlyDictionary<string, string> environmentProperties)
-        {
-            // Priority 1: Check passed-in properties for precedence setting
-            if (passedInProperties.TryGetValue(DatabricksParameters.DriverConfigTakePrecedence, out string? passedInValue))
-            {
-                if (bool.TryParse(passedInValue, out bool passedInPrecedence))
-                {
-                    return passedInPrecedence;
-                }
-            }
-
-            // Priority 2: Check environment config for precedence setting
-            if (environmentProperties.TryGetValue(DatabricksParameters.DriverConfigTakePrecedence, out string? environmentValue))
-            {
-                if (bool.TryParse(environmentValue, out bool environmentPrecedence))
-                {
-                    return environmentPrecedence;
-                }
-            }
-
-            // Default: Passed-in properties override environment config (current behavior)
-            return false;
-        }
-
-        /// <summary>
-        /// Merges two property dictionaries, with additional properties taking precedence.
-        /// </summary>
-        /// <param name="baseProperties">Base properties dictionary.</param>
-        /// <param name="additionalProperties">Additional properties to merge. These take precedence over base properties.</param>
-        /// <returns>Merged properties dictionary.</returns>
-        private static IReadOnlyDictionary<string, string> MergeProperties(IReadOnlyDictionary<string, string> baseProperties, IReadOnlyDictionary<string, string>? additionalProperties)
-        {
-            if (additionalProperties == null || additionalProperties.Count == 0)
-            {
-                return baseProperties;
-            }
-
-            var merged = new Dictionary<string, string>();
-
-            // Add base properties first
-            foreach (var kvp in baseProperties)
-            {
-                merged[kvp.Key] = kvp.Value;
-            }
-
-            // Additional properties override base properties
-            foreach (var kvp in additionalProperties)
-            {
-                merged[kvp.Key] = kvp.Value;
-            }
-
-            return merged;
-        }
-
         private void ValidateProperties()
         {
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnablePKFK, _enablePKFK);
@@ -278,6 +196,7 @@ namespace AdbcDrivers.Databricks
             _canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.CanDecompressLz4, _canDecompressLz4);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseDescTableExtended, _useDescTableExtended);
             _runAsyncInThrift = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableRunAsyncInThriftOp, _runAsyncInThrift);
+            _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableComplexDatatypeSupport, _enableComplexDatatypeSupport);
 
             if (Properties.ContainsKey(DatabricksParameters.MaxBytesPerFile))
             {
@@ -454,6 +373,11 @@ namespace AdbcDrivers.Databricks
         public bool RunAsyncInThrift => _runAsyncInThrift;
 
         /// <summary>
+        /// Whether to return complex types as native Arrow types (true) or JSON strings (false).
+        /// </summary>
+        internal bool EnableComplexDatatypeSupport => _enableComplexDatatypeSupport;
+
+        /// <summary>
         /// Gets a value indicating whether to retry requests that receive retryable responses (408, 502, 503, 504) .
         /// </summary>
         protected bool TemporarilyUnavailableRetry { get; private set; } = DefaultRetryOnUnavailable;
@@ -497,18 +421,14 @@ namespace AdbcDrivers.Databricks
                 AddThriftErrorHandler = true
             };
 
-            var result = HttpHandlerFactory.CreateHandlers(config);
-
-            if (result.AuthHttpClient != null)
-            {
-                Debug.Assert(_authHttpClient == null, "Auth HttpClient should not be initialized yet.");
-                _authHttpClient = result.AuthHttpClient;
-            }
-
+            var result = HttpHandlerFactory.CreateHandlersWithTokenProvider(config);
+            _oauthTokenProvider = result.TokenProvider;
             return result.Handler;
         }
 
         protected override bool GetObjectsPatternsRequireLowerCase => true;
+
+        protected override string DriverName => DatabricksDriverName;
 
         internal override IArrowArrayStream NewReader<T>(T statement, Schema schema, IResponse response, TGetResultSetMetadataResp? metadataResp = null)
         {
@@ -526,7 +446,13 @@ namespace AdbcDrivers.Databricks
                 isLz4Compressed = metadataResp.Lz4Compressed;
             }
 
-            HttpClient httpClient = new HttpClient(HiveServer2TlsImpl.NewHttpClientHandler(TlsOptions, _proxyConfigurator));
+            // Capture statement ID from server response for telemetry
+            if (response.OperationHandle?.OperationId?.Guid != null)
+            {
+                databricksStatement.StatementId = new Guid(response.OperationHandle.OperationId.Guid).ToString();
+            }
+
+            HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
             return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
         }
 
@@ -548,6 +474,11 @@ namespace AdbcDrivers.Databricks
                     new("driver.version", s_assemblyVersion),
                     new("driver.assembly", s_assemblyName)
                 ]);
+
+                // Add telemetry tags for driver version and environment
+                activity?.SetTag(ConnectionOpenEvent.DriverVersion, s_assemblyVersion);
+                activity?.SetTag(ConnectionOpenEvent.DriverOS, GetOperatingSystemInfo());
+                activity?.SetTag(ConnectionOpenEvent.DriverRuntime, GetRuntimeInfo());
 
                 // Log connection properties (sanitize sensitive values)
                 LogConnectionProperties(activity);
@@ -645,6 +576,10 @@ namespace AdbcDrivers.Databricks
             activity?.SetTag("connection.feature.use_desc_table_extended", _useDescTableExtended);
             activity?.SetTag("connection.feature.enable_run_async_in_thrift_op", _runAsyncInThrift);
 
+            // Add telemetry tags for feature flags
+            activity?.SetTag(ConnectionOpenEvent.FeatureCloudFetch, _useCloudFetch);
+            activity?.SetTag(ConnectionOpenEvent.FeatureLz4, _canDecompressLz4);
+
             // Handle default namespace
             if (session.__isset.initialNamespace)
             {
@@ -664,10 +599,147 @@ namespace AdbcDrivers.Databricks
                 ]);
                 await SetSchema(_defaultNamespace.SchemaName);
             }
+
+            // Initialize telemetry after successful session creation
+            InitializeTelemetry(activity);
+        }
+
+        /// <summary>
+        /// Initializes telemetry client based on feature flag.
+        /// All exceptions are swallowed to ensure telemetry failures don't impact connection.
+        /// </summary>
+        /// <param name="activity">Optional activity for tracing telemetry initialization.</param>
+        private void InitializeTelemetry(Activity? activity = null)
+        {
+            try
+            {
+                // Extract host for telemetry
+                _host = GetHost();
+
+                // Parse telemetry configuration from connection properties
+                // Properties already contains merged feature flags from connection construction
+                TelemetryConfiguration telemetryConfig = TelemetryConfiguration.FromProperties(Properties);
+
+                // Only initialize telemetry if enabled
+                if (!telemetryConfig.Enabled)
+                {
+                    activity?.AddEvent(new ActivityEvent("telemetry.initialization.skipped",
+                        tags: new ActivityTagsCollection { { "reason", "feature_flag_disabled" } }));
+                    return;
+                }
+
+                // Validate configuration
+                IReadOnlyList<string> validationErrors = telemetryConfig.Validate();
+                if (validationErrors.Count > 0)
+                {
+                    activity?.AddEvent(new ActivityEvent("telemetry.initialization.failed",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "reason", "invalid_configuration" },
+                            { "errors", string.Join("; ", validationErrors) }
+                        }));
+                    return;
+                }
+
+                // Create HTTP client for telemetry export, reusing the connection's OAuth token provider
+                HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(Properties, _host, s_assemblyVersion, _oauthTokenProvider);
+
+                // Get or create telemetry client from manager (per-host singleton)
+                _telemetryClient = TelemetryClientManager.GetInstance().GetOrCreateClient(
+                    _host,
+                    telemetryHttpClient,
+                    true, // unauthed failure will be report separately
+                    telemetryConfig);
+
+                // Create session-level telemetry context for V3 direct-object pipeline
+                TelemetrySession = new TelemetrySessionContext
+                {
+                    SessionId = SessionHandle?.SessionId?.Guid != null
+                        ? new Guid(SessionHandle.SessionId.Guid).ToString()
+                        : null,
+                    TelemetryClient = _telemetryClient,
+                    SystemConfiguration = BuildSystemConfiguration(),
+                    DriverConnectionParams = BuildDriverConnectionParams(true)
+                };
+
+                activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", _host },
+                        { "batch_size", telemetryConfig.BatchSize },
+                        { "flush_interval_ms", telemetryConfig.FlushIntervalMs }
+                    }));
+            }
+            catch (Exception ex)
+            {
+                // Swallow all telemetry initialization exceptions per design requirement
+                // Telemetry failures must not impact connection behavior
+                activity?.AddEvent(new ActivityEvent("telemetry.initialization.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+            }
+        }
+
+        private Telemetry.Proto.DriverSystemConfiguration BuildSystemConfiguration()
+        {
+            var osVersion = System.Environment.OSVersion;
+            return new Telemetry.Proto.DriverSystemConfiguration
+            {
+                DriverVersion = s_assemblyVersion,
+                DriverName = "Databricks ADBC Driver",
+                OsName = osVersion.Platform.ToString(),
+                OsVersion = osVersion.Version.ToString(),
+                OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
+                RuntimeName = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+                RuntimeVersion = System.Environment.Version.ToString(),
+                LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
+                CharSetEncoding = System.Text.Encoding.Default.WebName,
+                ProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName
+            };
+        }
+
+        private Telemetry.Proto.DriverConnectionParameters BuildDriverConnectionParams(bool isAuthenticated)
+        {
+            Properties.TryGetValue("adbc.spark.http_path", out string? httpPath);
+
+            // Determine auth mechanism
+            var authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Unspecified;
+            var authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.Unspecified;
+
+            Properties.TryGetValue(SparkParameters.AuthType, out string? authType);
+            Properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
+
+            if (!string.IsNullOrEmpty(grantType) &&
+                grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
+            {
+                authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Oauth;
+                authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.ClientCredentials;
+            }
+            else if (isAuthenticated)
+            {
+                authMech = Telemetry.Proto.DriverAuthMech.Types.Type.Pat;
+                authFlow = Telemetry.Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
+            }
+
+            return new Telemetry.Proto.DriverConnectionParameters
+            {
+                HttpPath = httpPath ?? "",
+                Mode = Telemetry.Proto.DriverMode.Types.Type.Thrift,
+                HostInfo = new Telemetry.Proto.HostDetails
+                {
+                    HostUrl = $"https://{_host}:443",
+                    Port = 0
+                },
+                AuthMech = authMech,
+                AuthFlow = authFlow,
+            };
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema
-        // in case the server version is too low.
+        // in case the server version is too old.
         private async Task SetSchema(string schemaName)
         {
             using var statement = new DatabricksStatement(this);
@@ -970,9 +1042,98 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
-                _authHttpClient?.Dispose();
+                // Clean up telemetry client
+                // This is synchronous because Dispose() cannot be async
+                // We use GetAwaiter().GetResult() to block, which is acceptable in Dispose
+                DisposeTelemetryAsync().GetAwaiter().GetResult();
             }
+
             base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Disposes telemetry client asynchronously.
+        /// Follows the graceful shutdown sequence: flush → release client → release feature flags.
+        /// All exceptions are swallowed per telemetry design requirement.
+        /// </summary>
+        private async Task DisposeTelemetryAsync()
+        {
+            try
+            {
+                if (_telemetryClient != null && !string.IsNullOrEmpty(_host))
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.started",
+                        tags: new ActivityTagsCollection { { "host", _host } }));
+
+                    // Step 1: Flush pending metrics (wait for any in-flight flush to complete)
+                    try
+                    {
+                        await _telemetryClient.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.flushed"));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Swallow flush exceptions
+                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.flush_error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
+
+                    // Step 2: Release telemetry client from manager
+                    try
+                    {
+                        await TelemetryClientManager.GetInstance()
+                            .ReleaseClientAsync(_host)
+                            .ConfigureAwait(false);
+                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.client_released"));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Swallow release exceptions
+                        Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.release_error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
+
+                    _telemetryClient = null;
+
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.completed"));
+                }
+            }
+            catch (Exception ex)
+            {
+                // Swallow all telemetry disposal exceptions
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.dispose.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+            }
+        }
+
+        /// <summary>
+        /// Gets operating system information.
+        /// </summary>
+        /// <returns>Operating system description.</returns>
+        private static string GetOperatingSystemInfo()
+        {
+            return RuntimeInformation.OSDescription;
+        }
+
+        /// <summary>
+        /// Gets .NET runtime information.
+        /// </summary>
+        /// <returns>.NET runtime description.</returns>
+        private static string GetRuntimeInfo()
+        {
+            return RuntimeInformation.FrameworkDescription;
         }
     }
 }

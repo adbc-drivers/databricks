@@ -27,7 +27,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Adbc.Drivers.Apache.Hive2;
+using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -241,10 +241,6 @@ namespace AdbcDrivers.Databricks.Reader
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
-            {
-                _ = CloseOperationAsync().Result;
-            }
             base.Dispose(disposing);
         }
 

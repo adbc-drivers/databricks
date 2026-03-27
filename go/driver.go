@@ -73,8 +73,8 @@ const (
 )
 
 func init() {
-	// databricks-go sends logs to zerolog; set the global log level
-	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+	// databricks-go sends logs to zerolog; disable them
+	zerolog.SetGlobalLevel(zerolog.Disabled)
 }
 
 type driverImpl struct {

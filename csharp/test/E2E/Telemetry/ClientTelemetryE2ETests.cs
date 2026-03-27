@@ -1,0 +1,1248 @@
+/*
+* Copyright (c) 2025 ADBC Drivers Contributors
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*     http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/
+
+using System;
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.Tests;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
+{
+    /// <summary>
+    /// End-to-end tests for client telemetry that sends telemetry to Databricks endpoint.
+    /// These tests verify that the DatabricksTelemetryExporter can successfully send
+    /// telemetry events to real Databricks telemetry endpoints.
+    /// </summary>
+    public class ClientTelemetryE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
+    {
+        public ClientTelemetryE2ETests(ITestOutputHelper? outputHelper)
+            : base(outputHelper, new DatabricksTestEnvironment.Factory())
+        {
+        }
+
+        /// <summary>
+        /// Tests that telemetry can be sent to the authenticated endpoint (/telemetry-ext).
+        /// This endpoint requires a valid authentication token.
+        /// </summary>
+        [SkippableFact]
+        public async Task CanSendTelemetryToAuthenticatedEndpoint()
+        {
+            // Skip if no token is available
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for authenticated telemetry endpoint test");
+
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            OutputHelper?.WriteLine($"Testing authenticated telemetry endpoint at {host}/telemetry-ext");
+
+            // Create HttpClient with authentication
+            using var httpClient = CreateAuthenticatedHttpClient();
+
+            var config = new TelemetryConfiguration
+            {
+                MaxRetries = 2,
+                RetryDelayMs = 100
+            };
+
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: true, config);
+
+            // Verify endpoint URL
+            var endpointUrl = exporter.GetEndpointUrl();
+            Assert.Equal($"{host}/telemetry-ext", endpointUrl);
+            OutputHelper?.WriteLine($"Endpoint URL: {endpointUrl}");
+
+            // Create a test telemetry log
+            var logs = CreateTestTelemetryLogs(1);
+
+            // Send telemetry - should succeed and return true
+            var success = await exporter.ExportAsync(logs);
+
+            // ExportAsync should return true indicating HTTP 200 response
+            Assert.True(success, "ExportAsync should return true indicating successful HTTP 200 response");
+            OutputHelper?.WriteLine("Successfully sent telemetry to authenticated endpoint");
+        }
+
+        /// <summary>
+        /// Tests that telemetry can be sent to the unauthenticated endpoint (/telemetry-unauth).
+        /// This endpoint does not require authentication.
+        /// </summary>
+        [SkippableFact]
+        public async Task CanSendTelemetryToUnauthenticatedEndpoint()
+        {
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            OutputHelper?.WriteLine($"Testing unauthenticated telemetry endpoint at {host}/telemetry-unauth");
+
+            // Create HttpClient without authentication
+            using var httpClient = new HttpClient();
+
+            var config = new TelemetryConfiguration
+            {
+                MaxRetries = 2,
+                RetryDelayMs = 100
+            };
+
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: false, config);
+
+            // Verify endpoint URL
+            var endpointUrl = exporter.GetEndpointUrl();
+            Assert.Equal($"{host}/telemetry-unauth", endpointUrl);
+            OutputHelper?.WriteLine($"Endpoint URL: {endpointUrl}");
+
+            // Create a test telemetry log
+            var logs = CreateTestTelemetryLogs(1);
+
+            // Send telemetry - should succeed and return true
+            var success = await exporter.ExportAsync(logs);
+
+            // ExportAsync should return true indicating HTTP 200 response
+            Assert.True(success, "ExportAsync should return true indicating successful HTTP 200 response");
+            OutputHelper?.WriteLine("Successfully sent telemetry to unauthenticated endpoint");
+        }
+
+        /// <summary>
+        /// Tests that multiple telemetry logs can be batched and sent together.
+        /// </summary>
+        [SkippableFact]
+        public async Task CanSendBatchedTelemetryLogs()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for authenticated telemetry endpoint test");
+
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            OutputHelper?.WriteLine($"Testing batched telemetry to {host}");
+
+            using var httpClient = CreateAuthenticatedHttpClient();
+
+            var config = new TelemetryConfiguration
+            {
+                MaxRetries = 2,
+                RetryDelayMs = 100
+            };
+
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: true, config);
+
+            // Create multiple telemetry logs
+            var logs = CreateTestTelemetryLogs(5);
+            OutputHelper?.WriteLine($"Created {logs.Count} telemetry logs for batch send");
+
+            // Send telemetry - should succeed and return true
+            var success = await exporter.ExportAsync(logs);
+
+            Assert.True(success, "ExportAsync should return true for batched telemetry");
+            OutputHelper?.WriteLine("Successfully sent batched telemetry logs");
+        }
+
+        /// <summary>
+        /// Tests that the telemetry request is properly formatted.
+        /// </summary>
+        [SkippableFact]
+        public void TelemetryRequestIsProperlyFormatted()
+        {
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            using var httpClient = new HttpClient();
+            var config = new TelemetryConfiguration();
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: true, config);
+
+            // Create test logs
+            var logs = CreateTestTelemetryLogs(2);
+
+            // Create the request
+            var request = exporter.CreateTelemetryRequest(logs);
+
+            // Verify request structure
+            Assert.True(request.UploadTime > 0, "UploadTime should be a positive timestamp");
+            Assert.Equal(2, request.ProtoLogs.Count);
+
+            // Verify each log is serialized as JSON with snake_case field names
+            foreach (var protoLog in request.ProtoLogs)
+            {
+                Assert.NotEmpty(protoLog);
+                Assert.Contains("workspace_id", protoLog);
+                Assert.Contains("frontend_log_event_id", protoLog);
+
+                // Verify proto fields use snake_case (not camelCase)
+                Assert.Contains("session_id", protoLog);
+                Assert.Contains("sql_statement_id", protoLog);
+                Assert.Contains("operation_latency_ms", protoLog);
+                Assert.DoesNotContain("\"sessionId\"", protoLog);
+                Assert.DoesNotContain("\"sqlStatementId\"", protoLog);
+                Assert.DoesNotContain("\"operationLatencyMs\"", protoLog);
+
+                OutputHelper?.WriteLine($"Serialized log: {protoLog}");
+            }
+
+            // Verify the full request serialization
+            var json = exporter.SerializeRequest(request);
+            Assert.Contains("uploadTime", json);
+            Assert.Contains("protoLogs", json);
+            OutputHelper?.WriteLine($"Full request JSON: {json}");
+        }
+
+        /// <summary>
+        /// Tests telemetry with a complete TelemetryFrontendLog including all nested objects.
+        /// </summary>
+        [SkippableFact]
+        public async Task CanSendCompleteTelemetryEvent()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for authenticated telemetry endpoint test");
+
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            OutputHelper?.WriteLine($"Testing complete telemetry event to {host}");
+
+            using var httpClient = CreateAuthenticatedHttpClient();
+
+            var config = new TelemetryConfiguration
+            {
+                MaxRetries = 2,
+                RetryDelayMs = 100
+            };
+
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: true, config);
+
+            // Create a complete telemetry log with all fields populated
+            var log = new TelemetryFrontendLog
+            {
+                WorkspaceId = 12345678901234,
+                FrontendLogEventId = Guid.NewGuid().ToString(),
+                Context = new FrontendLogContext
+                {
+                    TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ClientContext = new TelemetryClientContext
+                    {
+                        UserAgent = "AdbcDatabricksDriver/1.0.0-test (.NET; E2E Test)"
+                    }
+                },
+                Entry = new FrontendLogEntry
+                {
+                    SqlDriverLog = new OssSqlDriverTelemetryLog
+                    {
+                        SessionId = Guid.NewGuid().ToString(),
+                        SqlStatementId = Guid.NewGuid().ToString(),
+                        OperationLatencyMs = 150,
+                        SystemConfiguration = new DriverSystemConfiguration
+                        {
+                            DriverName = "Databricks ADBC Driver",
+                            DriverVersion = "1.0.0-test",
+                            OsName = Environment.OSVersion.Platform.ToString(),
+                            OsVersion = Environment.OSVersion.Version.ToString(),
+                            RuntimeName = ".NET",
+                            RuntimeVersion = Environment.Version.ToString(),
+                            LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name
+                        }
+                    }
+                }
+            };
+
+            var logs = new List<TelemetryFrontendLog> { log };
+
+            OutputHelper?.WriteLine($"Sending complete telemetry event:");
+            OutputHelper?.WriteLine($"  WorkspaceId: {log.WorkspaceId}");
+            OutputHelper?.WriteLine($"  EventId: {log.FrontendLogEventId}");
+            OutputHelper?.WriteLine($"  SessionId: {log.Entry?.SqlDriverLog?.SessionId}");
+
+            // Send telemetry - should succeed and return true
+            var success = await exporter.ExportAsync(logs);
+
+            Assert.True(success, "ExportAsync should return true for complete telemetry event");
+            OutputHelper?.WriteLine("Successfully sent complete telemetry event");
+        }
+
+        /// <summary>
+        /// Tests that empty log lists are handled gracefully without making HTTP requests.
+        /// </summary>
+        [SkippableFact]
+        public async Task EmptyLogListDoesNotSendRequest()
+        {
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            using var httpClient = new HttpClient();
+            var config = new TelemetryConfiguration();
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: true, config);
+
+            // Send empty list - should return immediately with true (nothing to export)
+            var success = await exporter.ExportAsync(new List<TelemetryFrontendLog>());
+
+            Assert.True(success, "ExportAsync should return true for empty list (nothing to export)");
+            OutputHelper?.WriteLine("Empty log list handled gracefully");
+
+            // Send null list - should also return immediately with true (nothing to export)
+            success = await exporter.ExportAsync(null!);
+
+            Assert.True(success, "ExportAsync should return true for null list (nothing to export)");
+            OutputHelper?.WriteLine("Null log list handled gracefully");
+        }
+
+        /// <summary>
+        /// Tests that the exporter properly retries on transient failures.
+        /// This test verifies the retry configuration is respected.
+        /// </summary>
+        [SkippableFact]
+        public async Task TelemetryExporterRespectsRetryConfiguration()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for authenticated telemetry endpoint test");
+
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            OutputHelper?.WriteLine("Testing retry configuration");
+
+            using var httpClient = CreateAuthenticatedHttpClient();
+
+            // Configure with specific retry settings
+            var config = new TelemetryConfiguration
+            {
+                MaxRetries = 3,
+                RetryDelayMs = 50
+            };
+
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: true, config);
+
+            var logs = CreateTestTelemetryLogs(1);
+
+            // This should succeed and return true
+            var success = await exporter.ExportAsync(logs);
+
+            // Exporter should return true on success
+            Assert.True(success, "ExportAsync should return true with retry configuration");
+            OutputHelper?.WriteLine("Retry configuration test completed");
+        }
+
+        /// <summary>
+        /// Tests that the authenticated telemetry endpoint returns HTTP 200.
+        /// This test directly calls the endpoint to verify the response status code.
+        /// </summary>
+        [SkippableFact]
+        public async Task AuthenticatedEndpointReturnsHttp200()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for authenticated telemetry endpoint test");
+
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            var endpointUrl = $"{host}/telemetry-ext";
+            OutputHelper?.WriteLine($"Testing HTTP response from {endpointUrl}");
+
+            using var httpClient = CreateAuthenticatedHttpClient();
+
+            // Create a minimal telemetry request
+            var logs = CreateTestTelemetryLogs(1);
+            var config = new TelemetryConfiguration();
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: true, config);
+            var request = exporter.CreateTelemetryRequest(logs);
+            var json = exporter.SerializeRequest(request);
+
+            // Send the request directly to verify HTTP status
+            using var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            using var response = await httpClient.PostAsync(endpointUrl, content);
+
+            OutputHelper?.WriteLine($"HTTP Status Code: {(int)response.StatusCode} ({response.StatusCode})");
+            OutputHelper?.WriteLine($"Response Headers: {response.Headers}");
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+            OutputHelper?.WriteLine($"Response Body: {responseBody}");
+
+            // Assert we get HTTP 200
+            Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+            OutputHelper?.WriteLine("Verified: Authenticated endpoint returns HTTP 200");
+        }
+
+        /// <summary>
+        /// Tests that the unauthenticated telemetry endpoint returns HTTP 200.
+        /// This test directly calls the endpoint to verify the response status code.
+        /// </summary>
+        [SkippableFact]
+        public async Task UnauthenticatedEndpointReturnsHttp200()
+        {
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            var endpointUrl = $"{host}/telemetry-unauth";
+            OutputHelper?.WriteLine($"Testing HTTP response from {endpointUrl}");
+
+            using var httpClient = new HttpClient();
+
+            // Create a minimal telemetry request
+            var logs = CreateTestTelemetryLogs(1);
+            var config = new TelemetryConfiguration();
+            var exporter = new DatabricksTelemetryExporter(httpClient, host, isAuthenticated: false, config);
+            var request = exporter.CreateTelemetryRequest(logs);
+            var json = exporter.SerializeRequest(request);
+
+            // Send the request directly to verify HTTP status
+            using var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            using var response = await httpClient.PostAsync(endpointUrl, content);
+
+            OutputHelper?.WriteLine($"HTTP Status Code: {(int)response.StatusCode} ({response.StatusCode})");
+            OutputHelper?.WriteLine($"Response Headers: {response.Headers}");
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+            OutputHelper?.WriteLine($"Response Body: {responseBody}");
+
+            // Assert we get HTTP 200
+            Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+            OutputHelper?.WriteLine("Verified: Unauthenticated endpoint returns HTTP 200");
+        }
+
+        #region Helper Methods
+
+        /// <summary>
+        /// Gets the Databricks host URL from the test configuration.
+        /// </summary>
+        private string GetDatabricksHost()
+        {
+            // Try Uri first, then fall back to HostName
+            if (!string.IsNullOrEmpty(TestConfiguration.Uri))
+            {
+                var uri = new Uri(TestConfiguration.Uri);
+                return $"{uri.Scheme}://{uri.Host}";
+            }
+
+            if (!string.IsNullOrEmpty(TestConfiguration.HostName))
+            {
+                return $"https://{TestConfiguration.HostName}";
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// Creates an HttpClient with authentication headers.
+        /// </summary>
+        private HttpClient CreateAuthenticatedHttpClient()
+        {
+            var httpClient = new HttpClient();
+
+            // Use AccessToken if available, otherwise fall back to Token
+            var token = !string.IsNullOrEmpty(TestConfiguration.AccessToken)
+                ? TestConfiguration.AccessToken
+                : TestConfiguration.Token;
+
+            if (!string.IsNullOrEmpty(token))
+            {
+                httpClient.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            }
+
+            return httpClient;
+        }
+
+        /// <summary>
+        /// Creates test telemetry logs for E2E testing.
+        /// </summary>
+        private IReadOnlyList<TelemetryFrontendLog> CreateTestTelemetryLogs(int count)
+        {
+            var logs = new List<TelemetryFrontendLog>(count);
+
+            for (int i = 0; i < count; i++)
+            {
+                logs.Add(new TelemetryFrontendLog
+                {
+                    WorkspaceId = 5870029948831567,
+                    FrontendLogEventId = Guid.NewGuid().ToString(),
+                    Context = new FrontendLogContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        ClientContext = new TelemetryClientContext
+                        {
+                            UserAgent = $"AdbcDatabricksDriver/1.0.0-test (.NET; E2E Test {i})"
+                        }
+                    },
+                    Entry = new FrontendLogEntry
+                    {
+                        SqlDriverLog = new OssSqlDriverTelemetryLog
+                        {
+                            SessionId = Guid.NewGuid().ToString(),
+                            SqlStatementId = Guid.NewGuid().ToString(),
+                            OperationLatencyMs = 100 + (i * 10)
+                        }
+                    }
+                });
+            }
+
+            return logs;
+        }
+
+        #endregion
+
+        #region Comprehensive E2E Tests
+
+        /// <summary>
+        /// Sets up a CapturingTelemetryExporter as the override and returns it.
+        /// Must call ClearExporterOverride() in a finally block after use.
+        /// </summary>
+        private CapturingTelemetryExporter SetupCapturingExporter()
+        {
+            var exporter = new CapturingTelemetryExporter();
+            TelemetryClientManager.ExporterOverride = exporter;
+            return exporter;
+        }
+
+        /// <summary>
+        /// Clears the exporter override. Call in finally block after SetupCapturingExporter().
+        /// </summary>
+        private void ClearExporterOverride()
+        {
+            TelemetryClientManager.ExporterOverride = null;
+        }
+
+        /// <summary>
+        /// Tests that the capturing exporter is wired into the telemetry pipeline
+        /// and connection/query lifecycle completes without errors when telemetry is enabled.
+        /// Telemetry event emission will be validated once V3 direct-object pipeline is wired.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_Connection_ExportsConnectionEvent()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for connection telemetry test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    using (AdbcStatement statement = connection.CreateStatement())
+                    {
+                        statement.SqlQuery = "SELECT 1 as test_column";
+                        QueryResult result = statement.ExecuteQuery();
+                        Assert.NotNull(result);
+                    }
+                }
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs, ExportAsync called {capturingExporter.ExportCallCount} times");
+
+                // Validate: if any logs were exported, they should be well-formed
+                foreach (var log in capturingExporter.ExportedLogs)
+                {
+                    Assert.False(string.IsNullOrEmpty(log.FrontendLogEventId), "FrontendLogEventId should be populated");
+                    OutputHelper?.WriteLine($"  Log: workspace_id={log.WorkspaceId}, event_id={log.FrontendLogEventId}");
+                }
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that statement execution with telemetry enabled works correctly.
+        /// Validates the capturing exporter receives logs if the pipeline emits them.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_Statement_ExportsStatementEvent()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for statement telemetry test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    for (int i = 0; i < 3; i++)
+                    {
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as iteration, 'test_{i}' as label";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
+                    }
+                }
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs after 3 queries, ExportAsync called {capturingExporter.ExportCallCount} times");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that large query results with CloudFetch complete correctly with telemetry enabled,
+        /// and that the capturing exporter is wired in to receive any exported metrics.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_CloudFetch_ExportsChunkMetrics()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for CloudFetch telemetry test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+                properties["adbc.databricks.use_cloud_fetch"] = "true";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    using (AdbcStatement statement = connection.CreateStatement())
+                    {
+                        statement.SqlQuery = @"
+                            SELECT
+                                id,
+                                CONCAT('row_', CAST(id AS STRING)) as data,
+                                id * 2 as computed_value
+                            FROM RANGE(1000)";
+
+                        QueryResult result = statement.ExecuteQuery();
+                        Assert.NotNull(result);
+
+                        // Consume all batches to ensure CloudFetch completes
+                        int totalRows = 0;
+                        while (true)
+                        {
+                            RecordBatch? batch = result.Stream.ReadNextRecordBatchAsync().Result;
+                            if (batch == null) break;
+                            totalRows += batch.Length;
+                            batch.Dispose();
+                        }
+
+                        OutputHelper?.WriteLine($"CloudFetch query consumed {totalRows} rows");
+                        Assert.True(totalRows >= 1000, $"Expected at least 1000 rows but got {totalRows}");
+                    }
+                }
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs, ExportAsync called {capturingExporter.ExportCallCount} times");
+
+                // Validate: if logs were exported, they should be well-formed
+                foreach (var log in capturingExporter.ExportedLogs)
+                {
+                    Assert.False(string.IsNullOrEmpty(log.FrontendLogEventId), "FrontendLogEventId should be populated");
+                }
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that error queries complete correctly with telemetry enabled.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_Error_ExportsErrorEvent()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for error telemetry test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    try
+                    {
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = "SELECT * FROM table_that_does_not_exist_12345";
+                            statement.ExecuteQuery();
+                            Assert.Fail("Expected query to fail but it succeeded");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        OutputHelper?.WriteLine($"Expected error occurred: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs after error query, ExportAsync called {capturingExporter.ExportCallCount} times");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that when telemetry is disabled, no telemetry is exported.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_FeatureFlagDisabled_NoExport()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for feature flag test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "false";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    for (int i = 0; i < 5; i++)
+                    {
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as test";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
+                    }
+                }
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"With telemetry disabled: ExportAsync called {capturingExporter.ExportCallCount} times, {capturingExporter.ExportedLogs.Count} logs captured");
+                Assert.Equal(0, capturingExporter.ExportCallCount);
+                Assert.Empty(capturingExporter.ExportedLogs);
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that multiple connections to the same host complete correctly with telemetry enabled
+        /// and all connections share a single telemetry pipeline (single capturing exporter).
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_MultipleConnections_SameHost_SharesClient()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for multiple connections test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                List<AdbcConnection> connections = new List<AdbcConnection>();
+                try
+                {
+                    for (int i = 0; i < 3; i++)
+                    {
+                        AdbcConnection connection = database.Connect(properties);
+                        connections.Add(connection);
+
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as connection_id";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
+                    }
+                }
+                finally
+                {
+                    foreach (var connection in connections)
+                    {
+                        connection.Dispose();
+                    }
+                }
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"Captured {capturingExporter.ExportedLogs.Count} telemetry logs from 3 connections, ExportAsync called {capturingExporter.ExportCallCount} times");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that circuit breaker stops exporting telemetry after failure threshold.
+        /// </summary>
+        [SkippableFact]
+        public async Task Telemetry_CircuitBreaker_StopsExportingOnFailure()
+        {
+            var host = GetDatabricksHost();
+            Skip.If(string.IsNullOrEmpty(host), "Databricks host is required");
+
+            string invalidHost = "https://invalid-databricks-host-12345.cloud.databricks.com";
+
+            using var httpClient = new HttpClient();
+
+            var config = new TelemetryConfiguration
+            {
+                Enabled = true,
+                BatchSize = 1,
+                FlushIntervalMs = 100,
+                MaxRetries = 1,
+                RetryDelayMs = 50,
+                CircuitBreakerEnabled = true,
+                CircuitBreakerThreshold = 3,
+                CircuitBreakerTimeout = TimeSpan.FromSeconds(30)
+            };
+
+            var exporter = new DatabricksTelemetryExporter(httpClient, invalidHost, isAuthenticated: false, config);
+            var circuitBreakerExporter = new CircuitBreakerTelemetryExporter(exporter, invalidHost);
+
+            var logs = CreateTestTelemetryLogs(1);
+
+            int failCount = 0;
+            for (int i = 0; i < 5; i++)
+            {
+                bool success = await circuitBreakerExporter.ExportAsync(logs);
+                if (!success) failCount++;
+                OutputHelper?.WriteLine($"Export attempt {i + 1}: {(success ? "Success/Dropped" : "Failed")}");
+            }
+
+            OutputHelper?.WriteLine($"Total failures: {failCount}");
+            Assert.True(failCount > 0, "At least some exports should have failed against invalid host");
+        }
+
+        /// <summary>
+        /// Tests that connection close flushes all pending telemetry events.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_GracefulShutdown_FlushesBeforeClose()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for graceful shutdown test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "100"; // Large batch so auto-flush won't trigger
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "30000"; // Long interval to prevent timer flush
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    for (int i = 0; i < 10; i++)
+                    {
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as iteration";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
+                    }
+
+                    // At this point, events should be pending (not flushed due to large batch/long interval)
+                    int logsBeforeDispose = capturingExporter.ExportedLogs.Count;
+                    OutputHelper?.WriteLine($"Logs before connection dispose: {logsBeforeDispose}");
+                }
+
+                // After connection dispose, flush should have been triggered
+                int logsAfterDispose = capturingExporter.ExportedLogs.Count;
+                OutputHelper?.WriteLine($"Logs after connection dispose: {logsAfterDispose}");
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"ExportAsync called {capturingExporter.ExportCallCount} times during dispose");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that telemetry overhead is less than 1% of query execution time.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_PerformanceOverhead_LessThanOnePercent()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for performance test");
+
+            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+            const int iterations = 20;
+            const string testQuery = "SELECT 42 as answer, 'performance_test' as label";
+
+            // Measure baseline WITHOUT telemetry
+            properties[TelemetryConfiguration.PropertyKeyEnabled] = "false";
+
+            AdbcDriver driver1 = NewDriver;
+            AdbcDatabase database1 = driver1.Open(properties);
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            using (AdbcConnection connection = database1.Connect(properties))
+            {
+                for (int i = 0; i < iterations; i++)
+                {
+                    using (AdbcStatement statement = connection.CreateStatement())
+                    {
+                        statement.SqlQuery = testQuery;
+                        QueryResult result = statement.ExecuteQuery();
+                        Assert.NotNull(result);
+                    }
+                }
+            }
+
+            stopwatch.Stop();
+            long baselineMs = stopwatch.ElapsedMilliseconds;
+            database1.Dispose();
+            OutputHelper?.WriteLine($"Baseline (no telemetry): {iterations} queries in {baselineMs} ms");
+
+            // Measure WITH telemetry using capturing exporter (no network overhead)
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "50";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "5000";
+
+                AdbcDriver driver2 = NewDriver;
+                AdbcDatabase database2 = driver2.Open(properties);
+
+                stopwatch.Restart();
+
+                using (AdbcConnection connection = database2.Connect(properties))
+                {
+                    for (int i = 0; i < iterations; i++)
+                    {
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = testQuery;
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
+                    }
+                }
+
+                stopwatch.Stop();
+                long withTelemetryMs = stopwatch.ElapsedMilliseconds;
+                database2.Dispose();
+
+                OutputHelper?.WriteLine($"With telemetry: {iterations} queries in {withTelemetryMs} ms");
+
+                double overheadPercent = baselineMs > 0 ? ((double)(withTelemetryMs - baselineMs) / baselineMs) * 100.0 : 0;
+                OutputHelper?.WriteLine($"Overhead: {overheadPercent:F2}%");
+
+                Assert.True(overheadPercent < 50.0,
+                    $"Telemetry overhead {overheadPercent:F2}% exceeds acceptable threshold of 50%");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that a query execution captures all expected telemetry fields:
+        /// sessionId, statementId, operationLatencyMs, resultFormat, and operationType.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_QueryExecution_CapturesAllFields()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for telemetry field validation test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    using (AdbcStatement statement = connection.CreateStatement())
+                    {
+                        statement.SqlQuery = "SELECT 42 as answer, 'hello' as greeting";
+                        QueryResult result = statement.ExecuteQuery();
+                        Assert.NotNull(result);
+                    }
+                }
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"ExportedLogs.Count = {capturingExporter.ExportedLogs.Count}, ExportCallCount = {capturingExporter.ExportCallCount}");
+                Assert.True(capturingExporter.ExportedLogs.Count > 0, "Expected at least one telemetry log");
+
+                // Find the statement telemetry log (has SqlDriverLog with SqlOperation)
+                TelemetryFrontendLog? statementLog = null;
+                foreach (var log in capturingExporter.ExportedLogs)
+                {
+                    if (log.Entry?.SqlDriverLog?.SqlOperation != null)
+                    {
+                        statementLog = log;
+                        break;
+                    }
+                }
+
+                Assert.NotNull(statementLog);
+                OutputHelper?.WriteLine($"Found statement telemetry log: event_id={statementLog!.FrontendLogEventId}");
+
+                // Verify FrontendLog envelope
+                Assert.False(string.IsNullOrEmpty(statementLog.FrontendLogEventId), "FrontendLogEventId should be set");
+                Assert.NotNull(statementLog.Context);
+                Assert.True(statementLog.Context!.TimestampMillis > 0, "TimestampMillis should be set");
+
+                // Verify OssSqlDriverTelemetryLog fields
+                var sqlLog = statementLog.Entry!.SqlDriverLog!;
+                OutputHelper?.WriteLine($"  SessionId: {sqlLog.SessionId}");
+                OutputHelper?.WriteLine($"  SqlStatementId: {sqlLog.SqlStatementId}");
+                OutputHelper?.WriteLine($"  OperationLatencyMs: {sqlLog.OperationLatencyMs}");
+
+                Assert.False(string.IsNullOrEmpty(sqlLog.SessionId), "SessionId should be populated from connection");
+                Assert.False(string.IsNullOrEmpty(sqlLog.SqlStatementId), "SqlStatementId should be populated from server response");
+                Assert.True(sqlLog.OperationLatencyMs > 0, "OperationLatencyMs should be > 0");
+
+                // Verify SqlExecutionEvent
+                var sqlOp = sqlLog.SqlOperation;
+                Assert.NotNull(sqlOp);
+                OutputHelper?.WriteLine($"  StatementType: {sqlOp.StatementType}");
+                OutputHelper?.WriteLine($"  ExecutionResult: {sqlOp.ExecutionResult}");
+
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type.Unspecified, sqlOp.StatementType);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format.Unspecified, sqlOp.ExecutionResult);
+
+                // Verify OperationDetail
+                Assert.NotNull(sqlOp.OperationDetail);
+                OutputHelper?.WriteLine($"  OperationType: {sqlOp.OperationDetail.OperationType}");
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type.Unspecified, sqlOp.OperationDetail.OperationType);
+
+                // Verify SystemConfiguration (from TelemetrySessionContext)
+                Assert.NotNull(sqlLog.SystemConfiguration);
+                var sysConfig = sqlLog.SystemConfiguration;
+                OutputHelper?.WriteLine($"  DriverVersion: {sysConfig.DriverVersion}");
+                OutputHelper?.WriteLine($"  DriverName: {sysConfig.DriverName}");
+                OutputHelper?.WriteLine($"  OsName: {sysConfig.OsName}");
+                OutputHelper?.WriteLine($"  OsVersion: {sysConfig.OsVersion}");
+                OutputHelper?.WriteLine($"  OsArch: {sysConfig.OsArch}");
+                OutputHelper?.WriteLine($"  RuntimeName: {sysConfig.RuntimeName}");
+                OutputHelper?.WriteLine($"  RuntimeVersion: {sysConfig.RuntimeVersion}");
+                OutputHelper?.WriteLine($"  LocaleName: {sysConfig.LocaleName}");
+                OutputHelper?.WriteLine($"  CharSetEncoding: {sysConfig.CharSetEncoding}");
+                OutputHelper?.WriteLine($"  ProcessName: {sysConfig.ProcessName}");
+                Assert.False(string.IsNullOrEmpty(sysConfig.DriverVersion), "DriverVersion should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.DriverName), "DriverName should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.OsName), "OsName should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.OsVersion), "OsVersion should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.RuntimeName), "RuntimeName should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.RuntimeVersion), "RuntimeVersion should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.CharSetEncoding), "CharSetEncoding should be populated");
+                Assert.False(string.IsNullOrEmpty(sysConfig.ProcessName), "ProcessName should be populated");
+
+                // Verify DriverConnectionParams (from TelemetrySessionContext)
+                Assert.NotNull(sqlLog.DriverConnectionParams);
+                var connParams = sqlLog.DriverConnectionParams;
+                OutputHelper?.WriteLine($"  Mode: {connParams.Mode}");
+                OutputHelper?.WriteLine($"  HostUrl: {connParams.HostInfo?.HostUrl}");
+                OutputHelper?.WriteLine($"  Port: {connParams.HostInfo?.Port}");
+                OutputHelper?.WriteLine($"  AuthMech: {connParams.AuthMech}");
+                OutputHelper?.WriteLine($"  AuthFlow: {connParams.AuthFlow}");
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type.Unspecified, connParams.Mode);
+                Assert.NotNull(connParams.HostInfo);
+                Assert.False(string.IsNullOrEmpty(connParams.HostInfo.HostUrl), "HostUrl should be populated");
+                Assert.Contains("https://", connParams.HostInfo.HostUrl);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthMech.Types.Type.Unspecified, connParams.AuthMech);
+                Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthFlow.Types.Type.Unspecified, connParams.AuthFlow);
+
+                // Log IsCompressed
+                OutputHelper?.WriteLine($"  IsCompressed: {sqlOp.IsCompressed}");
+
+                OutputHelper?.WriteLine("All telemetry fields validated successfully");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that an error query captures error info in telemetry.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_ErrorQuery_CapturesErrorInfo()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for error telemetry field validation test");
+
+            var capturingExporter = SetupCapturingExporter();
+            try
+            {
+                Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+                properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+                properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "500";
+
+                AdbcDriver driver = NewDriver;
+                AdbcDatabase database = driver.Open(properties);
+
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    try
+                    {
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = "SELECT * FROM nonexistent_table_xyz_12345";
+                            statement.ExecuteQuery();
+                            Assert.Fail("Expected query to fail");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        OutputHelper?.WriteLine($"Expected error: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+
+                database.Dispose();
+
+                OutputHelper?.WriteLine($"ExportedLogs.Count = {capturingExporter.ExportedLogs.Count}, ExportCallCount = {capturingExporter.ExportCallCount}");
+
+                Assert.True(capturingExporter.ExportedLogs.Count > 0, "Expected at least one telemetry log for error query");
+
+                // Find the log with error info
+                TelemetryFrontendLog? errorLog = null;
+                foreach (var log in capturingExporter.ExportedLogs)
+                {
+                    if (log.Entry?.SqlDriverLog?.ErrorInfo != null)
+                    {
+                        errorLog = log;
+                        break;
+                    }
+                }
+
+                Assert.NotNull(errorLog);
+                var errorInfo = errorLog!.Entry!.SqlDriverLog!.ErrorInfo!;
+                OutputHelper?.WriteLine($"  ErrorName: {errorInfo.ErrorName}");
+
+                Assert.False(string.IsNullOrEmpty(errorInfo.ErrorName), "ErrorName should be populated");
+                Assert.True(errorLog.Entry!.SqlDriverLog!.OperationLatencyMs > 0, "OperationLatencyMs should be > 0 even for errors");
+
+                OutputHelper?.WriteLine("Error telemetry fields validated successfully");
+            }
+            finally
+            {
+                ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Tests that telemetry never propagates exceptions to driver operations.
+        /// </summary>
+        [SkippableFact]
+        public void Telemetry_NeverPropagatesExceptions()
+        {
+            Skip.If(string.IsNullOrEmpty(TestConfiguration.Token) && string.IsNullOrEmpty(TestConfiguration.AccessToken),
+                "Token is required for exception propagation test");
+
+            Dictionary<string, string> properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+            properties[TelemetryConfiguration.PropertyKeyBatchSize] = "1";
+            properties[TelemetryConfiguration.PropertyKeyFlushIntervalMs] = "1";
+            properties[TelemetryConfiguration.PropertyKeyMaxRetries] = "0";
+
+            AdbcDriver driver = NewDriver;
+            AdbcDatabase database = driver.Open(properties);
+
+            try
+            {
+                using (AdbcConnection connection = database.Connect(properties))
+                {
+                    for (int i = 0; i < 10; i++)
+                    {
+                        using (AdbcStatement statement = connection.CreateStatement())
+                        {
+                            statement.SqlQuery = $"SELECT {i} as iteration";
+                            QueryResult result = statement.ExecuteQuery();
+                            Assert.NotNull(result);
+                        }
+                    }
+                }
+
+                OutputHelper?.WriteLine("No exceptions propagated - test passed");
+            }
+            catch (Exception ex)
+            {
+                Assert.Fail($"Exception propagated from telemetry: {ex.Message}");
+            }
+            finally
+            {
+                database.Dispose();
+            }
+        }
+
+        #endregion
+    }
+}

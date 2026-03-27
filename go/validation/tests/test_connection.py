@@ -302,6 +302,73 @@ class TestConnection(BaseTestConnection):
         assert (*table_id, "ints") in columns
         assert (*table_id, "strs") in columns
 
+    def test_get_objects_column_filter_column_name(
+        self,
+        conn: adbc_driver_manager.dbapi.Connection,
+        driver: model.DriverQuirks,
+        get_objects_table,
+    ) -> None:
+        table_id = get_objects_table
+        objects = (
+            conn.adbc_get_objects(
+                depth="columns",
+                catalog_filter=driver.features.current_catalog,
+                db_schema_filter=driver.features.current_schema,
+                column_name_filter="ints",
+            )
+            .read_all()
+            .to_pylist()
+        )
+        columns = [
+            (
+                obj["catalog_name"],
+                schema["db_schema_name"],
+                table["table_name"],
+                column["column_name"],
+            )
+            for obj in objects
+            for schema in obj["catalog_db_schemas"]
+            for table in schema["db_schema_tables"]
+            for column in table["table_columns"]
+        ]
+        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert (*table_id, "ints") in columns
+        assert (*table_id, "strs") not in columns
+
+    def test_get_objects_column_filter_table_name(
+        self,
+        conn: adbc_driver_manager.dbapi.Connection,
+        driver: model.DriverQuirks,
+        get_objects_table,
+    ) -> None:
+        table_id = get_objects_table
+        objects = (
+            conn.adbc_get_objects(
+                depth="columns",
+                catalog_filter=driver.features.current_catalog,
+                db_schema_filter=driver.features.current_schema,
+                table_name_filter=table_id[-1],
+            )
+            .read_all()
+            .to_pylist()
+        )
+        columns = [
+            (
+                obj["catalog_name"],
+                schema["db_schema_name"],
+                table["table_name"],
+                column["column_name"],
+            )
+            for obj in objects
+            for schema in obj["catalog_db_schemas"]
+            for table in schema["db_schema_tables"]
+            for column in table["table_columns"]
+        ]
+        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert (*table_id, "ints") in columns
+        assert (*table_id, "strs") in columns
+        assert len(columns) == 2
+
 
 def pytest_generate_tests(metafunc) -> None:
     return generate_tests(databricks.QUIRKS, metafunc)

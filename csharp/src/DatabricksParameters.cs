@@ -21,7 +21,7 @@
 * limitations under the License.
 */
 
-using Apache.Arrow.Adbc.Drivers.Apache.Spark;
+using AdbcDrivers.HiveServer2.Spark;
 
 namespace AdbcDrivers.Databricks
 {
@@ -401,6 +401,34 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         public const string EnableSessionManagement = "adbc.databricks.rest.enable_session_management";
 
+        /// <summary>
+        /// Whether to enable the feature flag cache for fetching remote configuration from the server.
+        /// When enabled, the driver fetches feature flags from the Databricks server and merges them with local properties.
+        /// Default value is false if not specified.
+        /// </summary>
+        public const string FeatureFlagCacheEnabled = "adbc.databricks.feature_flag_cache_enabled";
+
+        /// <summary>
+        /// Timeout in seconds for feature flag API requests.
+        /// Default value is 10 seconds if not specified.
+        /// </summary>
+        public const string FeatureFlagTimeoutSeconds = "adbc.databricks.feature_flag_timeout_seconds";
+
+        /// <summary>
+        /// Sliding expiration TTL in seconds for feature flag cache entries.
+        /// When a cache entry is read, its expiration is extended by this duration.
+        /// Default value is 900 seconds (15 minutes) if not specified.
+        /// </summary>
+        public const string FeatureFlagCacheTtlSeconds = "adbc.databricks.feature_flag_cache_ttl_seconds";
+
+        /// <summary>
+        /// Whether to return complex types (ARRAY, MAP, STRUCT) as native Arrow types.
+        /// When false (default): complex types are serialized to JSON strings, matching legacy behavior.
+        /// When true: complex types are returned as native Arrow types (ListType, MapType, StructType).
+        /// This applies to both Thrift and SEA protocols, providing consistent behavior across protocols.
+        /// Default value is false if not specified.
+        /// </summary>
+        public const string EnableComplexDatatypeSupport = "adbc.databricks.enable_complex_datatype_support";
     }
 
     /// <summary>
@@ -408,6 +436,10 @@ namespace AdbcDrivers.Databricks
     /// </summary>
     public class DatabricksConstants
     {
+        /// <summary>
+        /// HTTP header for passing the Databricks organization ID on REST requests.
+        /// </summary>
+        public const string OrgIdHeader = "x-databricks-org-id";
         /// <summary>
         /// Default heartbeat interval in seconds for long-running operations.
         /// </summary>

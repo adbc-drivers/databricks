@@ -99,7 +99,7 @@ jobs:
             else
               QUERY="select * from main.tpcds_sf1_delta.catalog_sales"
             fi
-            QUERIES=$(jq -n --arg q "$QUERY" '[{
+            QUERIES=$(jq -nc --arg q "$QUERY" '[{
               "name": "default",
               "description": "Custom or default query",
               "query": $q,
