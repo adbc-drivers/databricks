@@ -637,7 +637,24 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         }
                         else
                         {
-                            fileData = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                            // Even without straggler detection, use CopyToAsync with cancellation token
+                            // to ensure body reads are cancellable. ReadAsByteArrayAsync() on net472 has
+                            // no CancellationToken overload, and HttpClient.Timeout may not propagate
+                            // to body reads on all runtimes (e.g., Mono). CopyToAsync passes the token
+                            // to each 81920-byte chunk read, ensuring dead TCP connections are detected.
+#if NET5_0_OR_GREATER
+                            fileData = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+#else
+                            using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            {
+                                int capacity = contentLength.HasValue && contentLength.Value > 0
+                                    ? (int)Math.Min(contentLength.Value, int.MaxValue)
+                                    : 0;
+                                var memoryStream = new MemoryStream(capacity);
+                                await contentStream.CopyToAsync(memoryStream, 81920, cancellationToken).ConfigureAwait(false);
+                                fileData = memoryStream.ToArray();
+                            }
+#endif
                         }
                         break; // Success, exit retry loop
                     }
