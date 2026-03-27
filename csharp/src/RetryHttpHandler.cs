@@ -60,7 +60,7 @@ namespace AdbcDrivers.Databricks
         /// <param name="retryTimeoutSeconds">Maximum total time in seconds to retry retryable responses (408, 502, 503, 504) before failing.</param>
         /// <param name="rateLimitRetryTimeoutSeconds">Maximum total time in seconds to retry HTTP 429 responses before failing.</param>
         public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds)
-            : this(innerHandler, activityTracer, retryTimeoutSeconds, rateLimitRetryTimeoutSeconds, true, true, true, 900)
+            : this(innerHandler, activityTracer, retryTimeoutSeconds, rateLimitRetryTimeoutSeconds, true, true, true, DatabricksConstants.DefaultHttpRequestTimeout)
         {
         }
 
@@ -75,7 +75,7 @@ namespace AdbcDrivers.Databricks
         /// <param name="rateLimitRetryEnabled">Whether to retry HTTP 429 responses.</param>
         /// <param name="transportErrorRetryEnabled">Whether to retry transport-level errors (connection reset, DNS failure, etc.).</param>
         /// <param name="httpRequestTimeoutSeconds">Per-request timeout in seconds to detect dead connections. Default 900s (15 min) matches JDBC socketTimeout.</param>
-        public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled, bool transportErrorRetryEnabled = true, int httpRequestTimeoutSeconds = 900)
+        public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled, bool transportErrorRetryEnabled = true, int httpRequestTimeoutSeconds = DatabricksConstants.DefaultHttpRequestTimeout)
             : base(innerHandler)
         {
             _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
