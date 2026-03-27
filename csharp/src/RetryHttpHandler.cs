@@ -47,7 +47,6 @@ namespace AdbcDrivers.Databricks
         private readonly int _rateLimitRetryTimeoutSeconds;
         private readonly bool _retryTemporarilyUnavailableEnabled;
         private readonly bool _rateLimitRetryEnabled;
-        private readonly int _transportErrorRetryTimeoutSeconds;
         private readonly bool _transportErrorRetryEnabled;
         private readonly int _httpRequestTimeoutSeconds;
         private readonly int _initialBackoffSeconds = 1;
@@ -61,7 +60,7 @@ namespace AdbcDrivers.Databricks
         /// <param name="retryTimeoutSeconds">Maximum total time in seconds to retry retryable responses (408, 502, 503, 504) before failing.</param>
         /// <param name="rateLimitRetryTimeoutSeconds">Maximum total time in seconds to retry HTTP 429 responses before failing.</param>
         public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds)
-            : this(innerHandler, activityTracer, retryTimeoutSeconds, rateLimitRetryTimeoutSeconds, true, true, true, retryTimeoutSeconds, 900)
+            : this(innerHandler, activityTracer, retryTimeoutSeconds, rateLimitRetryTimeoutSeconds, true, true, true, 900)
         {
         }
 
@@ -75,9 +74,8 @@ namespace AdbcDrivers.Databricks
         /// <param name="retryTemporarilyUnavailableEnabled">Whether to retry temporarily unavailable (408, 502, 503, 504) responses.</param>
         /// <param name="rateLimitRetryEnabled">Whether to retry HTTP 429 responses.</param>
         /// <param name="transportErrorRetryEnabled">Whether to retry transport-level errors (connection reset, DNS failure, etc.).</param>
-        /// <param name="transportErrorRetryTimeoutSeconds">Maximum total time in seconds to retry transport-level errors before failing. 0 means inherit from retryTimeoutSeconds.</param>
         /// <param name="httpRequestTimeoutSeconds">Per-request timeout in seconds to detect dead connections. Default 900s (15 min) matches JDBC socketTimeout.</param>
-        public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled, bool transportErrorRetryEnabled = true, int transportErrorRetryTimeoutSeconds = 0, int httpRequestTimeoutSeconds = 900)
+        public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled, bool transportErrorRetryEnabled = true, int httpRequestTimeoutSeconds = 900)
             : base(innerHandler)
         {
             _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
@@ -86,7 +84,6 @@ namespace AdbcDrivers.Databricks
             _retryTemporarilyUnavailableEnabled = retryTemporarilyUnavailableEnabled;
             _rateLimitRetryEnabled = rateLimitRetryEnabled;
             _transportErrorRetryEnabled = transportErrorRetryEnabled;
-            _transportErrorRetryTimeoutSeconds = transportErrorRetryTimeoutSeconds > 0 ? transportErrorRetryTimeoutSeconds : retryTimeoutSeconds;
             _httpRequestTimeoutSeconds = httpRequestTimeoutSeconds;
         }
 
@@ -156,7 +153,7 @@ namespace AdbcDrivers.Databricks
                         request.Content = null;
 
                         // Check if we would exceed the transport error retry timeout
-                        if (_transportErrorRetryTimeoutSeconds > 0 && totalTransportErrorRetrySeconds + transportWaitSeconds > _transportErrorRetryTimeoutSeconds)
+                        if (_retryTimeoutSeconds > 0 && totalTransportErrorRetrySeconds + transportWaitSeconds > _retryTimeoutSeconds)
                         {
                             activity?.SetTag("http.retry.outcome", "transport_error_timeout_exceeded");
                             activity?.SetTag("http.retry.total_attempts", attemptCount);

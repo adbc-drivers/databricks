@@ -463,7 +463,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             var mockTracer = new MockActivityTracer();
             var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
-                transportErrorRetryEnabled: true, transportErrorRetryTimeoutSeconds: 10, httpRequestTimeoutSeconds: 0);
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
 
             var httpClient = new HttpClient(retryHandler);
             var response = await httpClient.GetAsync("http://test.com");
@@ -488,7 +488,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             var mockTracer = new MockActivityTracer();
             var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
-                transportErrorRetryEnabled: true, transportErrorRetryTimeoutSeconds: 10, httpRequestTimeoutSeconds: 0);
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
 
             var httpClient = new HttpClient(retryHandler);
             var response = await httpClient.GetAsync("http://test.com");
@@ -513,7 +513,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             var mockTracer = new MockActivityTracer();
             var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
-                transportErrorRetryEnabled: true, transportErrorRetryTimeoutSeconds: 10, httpRequestTimeoutSeconds: 0);
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
 
             var httpClient = new HttpClient(retryHandler);
             var response = await httpClient.GetAsync("http://test.com");
@@ -541,7 +541,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             var mockTracer = new MockActivityTracer();
             var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
-                transportErrorRetryEnabled: true, transportErrorRetryTimeoutSeconds: 10, httpRequestTimeoutSeconds: 0);
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
 
             var httpClient = new HttpClient(retryHandler);
             var response = await httpClient.GetAsync("http://test.com");
@@ -568,7 +568,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var mockTracer = new MockActivityTracer();
             // Use a very short transport error timeout so it exceeds quickly
             var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 1, 1, true, true,
-                transportErrorRetryEnabled: true, transportErrorRetryTimeoutSeconds: 1, httpRequestTimeoutSeconds: 0);
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
 
             var httpClient = new HttpClient(retryHandler);
 
@@ -627,7 +627,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             var mockTracer = new MockActivityTracer();
             var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
-                transportErrorRetryEnabled: true, transportErrorRetryTimeoutSeconds: 10, httpRequestTimeoutSeconds: 0);
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
 
             var httpClient = new HttpClient(retryHandler);
 
@@ -656,7 +656,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var mockTracer = new MockActivityTracer();
             // Set a very short per-request timeout (1 second) to trigger quickly
             var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
-                transportErrorRetryEnabled: true, transportErrorRetryTimeoutSeconds: 10, httpRequestTimeoutSeconds: 1);
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 1);
 
             var httpClient = new HttpClient(retryHandler);
             var response = await httpClient.GetAsync("http://test.com");
