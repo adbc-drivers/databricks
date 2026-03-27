@@ -149,22 +149,22 @@ namespace AdbcDrivers.Databricks
                         activity?.SetTag("http.retry.transport_error", ex.GetType().Name);
                         activity?.SetTag("http.retry.transport_error_message", ex.Message);
 
-                        int waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
-                        lastErrorMessage = $"Transport error ({ex.GetType().Name}: {ex.Message}). Using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
+                        int transportWaitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
+                        lastErrorMessage = $"Transport error ({ex.GetType().Name}: {ex.Message}). Using exponential backoff of {transportWaitSeconds} seconds. Attempt {attemptCount}.";
 
                         // Reset the request content for the next attempt
                         request.Content = null;
 
                         // Check if we would exceed the transport error retry timeout
-                        if (_transportErrorRetryTimeoutSeconds > 0 && totalTransportErrorRetrySeconds + waitSeconds > _transportErrorRetryTimeoutSeconds)
+                        if (_transportErrorRetryTimeoutSeconds > 0 && totalTransportErrorRetrySeconds + transportWaitSeconds > _transportErrorRetryTimeoutSeconds)
                         {
                             activity?.SetTag("http.retry.outcome", "transport_error_timeout_exceeded");
                             activity?.SetTag("http.retry.total_attempts", attemptCount);
                             break;
                         }
-                        totalTransportErrorRetrySeconds += waitSeconds;
+                        totalTransportErrorRetrySeconds += transportWaitSeconds;
 
-                        await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
+                        await Task.Delay(TimeSpan.FromSeconds(transportWaitSeconds), cancellationToken);
                         currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
                         continue;
                     }
@@ -185,7 +185,7 @@ namespace AdbcDrivers.Databricks
                     activity?.SetTag("http.retry.attempt", attemptCount);
                     activity?.SetTag("http.response.status_code", (int)statusCode);
 
-                    int waitSecondsForStatus;
+                    int waitSeconds;
 
                     // Check for Retry-After header
                     if (response.Headers.TryGetValues("Retry-After", out var retryAfterValues))
@@ -195,21 +195,21 @@ namespace AdbcDrivers.Databricks
                         if (int.TryParse(retryAfterValue, out int retryAfterSeconds) && retryAfterSeconds > 0)
                         {
                             // Use the Retry-After value
-                            waitSecondsForStatus = retryAfterSeconds;
-                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using server-specified retry after {waitSecondsForStatus} seconds. Attempt {attemptCount}.";
+                            waitSeconds = retryAfterSeconds;
+                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using server-specified retry after {waitSeconds} seconds. Attempt {attemptCount}.";
                         }
                         else
                         {
                             // Invalid Retry-After value, use exponential backoff
-                            waitSecondsForStatus = CalculateBackoffWithJitter(currentBackoffSeconds);
-                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Invalid Retry-After header, using exponential backoff of {waitSecondsForStatus} seconds. Attempt {attemptCount}.";
+                            waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
+                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Invalid Retry-After header, using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
                         }
                     }
                     else
                     {
                         // No Retry-After header, use exponential backoff
-                        waitSecondsForStatus = CalculateBackoffWithJitter(currentBackoffSeconds);
-                        lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using exponential backoff of {waitSecondsForStatus} seconds. Attempt {attemptCount}.";
+                        waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
+                        lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
                     }
 
                     // Dispose the response before retrying
@@ -222,30 +222,30 @@ namespace AdbcDrivers.Databricks
                     if (isTooManyRequests)
                     {
                         // Check 429 rate limit timeout
-                        if (_rateLimitRetryTimeoutSeconds > 0 && totalTooManyRequestsRetrySeconds + waitSecondsForStatus > _rateLimitRetryTimeoutSeconds)
+                        if (_rateLimitRetryTimeoutSeconds > 0 && totalTooManyRequestsRetrySeconds + waitSeconds > _rateLimitRetryTimeoutSeconds)
                         {
                             // We've exceeded the rate limit retry timeout, so break out of the loop
                             activity?.SetTag("http.retry.outcome", "rate_limit_timeout_exceeded");
                             activity?.SetTag("http.retry.total_attempts", attemptCount);
                             break;
                         }
-                        totalTooManyRequestsRetrySeconds += waitSecondsForStatus;
+                        totalTooManyRequestsRetrySeconds += waitSeconds;
                     }
                     else
                     {
                         // Check service unavailable timeout for other retryable errors (408, 502, 503, 504)
-                        if (_retryTimeoutSeconds > 0 && totalServiceUnavailableRetrySeconds + waitSecondsForStatus > _retryTimeoutSeconds)
+                        if (_retryTimeoutSeconds > 0 && totalServiceUnavailableRetrySeconds + waitSeconds > _retryTimeoutSeconds)
                         {
                             // We've exceeded the retry timeout, so break out of the loop
                             activity?.SetTag("http.retry.outcome", "timeout_exceeded");
                             activity?.SetTag("http.retry.total_attempts", attemptCount);
                             break;
                         }
-                        totalServiceUnavailableRetrySeconds += waitSecondsForStatus;
+                        totalServiceUnavailableRetrySeconds += waitSeconds;
                     }
 
                     // Wait for the calculated time
-                    await Task.Delay(TimeSpan.FromSeconds(waitSecondsForStatus), cancellationToken);
+                    await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
 
                     // Increase backoff for next attempt (exponential backoff)
                     currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
