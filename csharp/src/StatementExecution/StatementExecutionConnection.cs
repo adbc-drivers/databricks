@@ -277,6 +277,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Retry configuration
             bool temporarilyUnavailableRetry = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TemporarilyUnavailableRetry, true);
             bool rateLimitRetry = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.RateLimitRetry, true);
+            bool transportErrorRetry = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TransportErrorRetry, true);
             int temporarilyUnavailableRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.TemporarilyUnavailableRetryTimeout, DatabricksConstants.DefaultTemporarilyUnavailableRetryTimeout);
             int rateLimitRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.RateLimitRetryTimeout, DatabricksConstants.DefaultRateLimitRetryTimeout);
             int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
@@ -296,6 +297,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 TemporarilyUnavailableRetryTimeout = temporarilyUnavailableRetryTimeout,
                 RateLimitRetry = rateLimitRetry,
                 RateLimitRetryTimeout = rateLimitRetryTimeout,
+                TransportErrorRetry = transportErrorRetry,
                 TimeoutMinutes = timeoutMinutes,
                 AddThriftErrorHandler = false
             };

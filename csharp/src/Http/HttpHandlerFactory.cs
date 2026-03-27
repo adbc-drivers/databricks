@@ -95,6 +95,11 @@ namespace AdbcDrivers.Databricks.Http
             public bool RateLimitRetry { get; set; } = true;
 
             /// <summary>
+            /// Whether to enable transport error retry (connection refused, TCP reset, DNS failure, etc.).
+            /// </summary>
+            public bool TransportErrorRetry { get; set; } = true;
+
+            /// <summary>
             /// Timeout for rate limit retry in seconds.
             /// </summary>
             public int RateLimitRetryTimeout { get; set; }
@@ -320,6 +325,7 @@ namespace AdbcDrivers.Databricks.Http
                 config.RateLimitRetryTimeout,
                 config.TemporarilyUnavailableRetry,
                 config.RateLimitRetry,
+                transportErrorRetryEnabled: config.TransportErrorRetry,
                 httpRequestTimeoutSeconds: config.HttpRequestTimeout);
             authHandler = new RetryHttpHandler(
                 authHandler,
@@ -328,6 +334,7 @@ namespace AdbcDrivers.Databricks.Http
                 config.RateLimitRetryTimeout,
                 config.TemporarilyUnavailableRetry,
                 config.RateLimitRetry,
+                transportErrorRetryEnabled: config.TransportErrorRetry,
                 httpRequestTimeoutSeconds: config.HttpRequestTimeout);
 
             // Add Thrift error handler if requested (for Thrift connections only)

@@ -136,6 +136,13 @@ namespace AdbcDrivers.Databricks
         public const string RateLimitRetryTimeout = "adbc.databricks.rate_limit_retry_timeout";
 
         /// <summary>
+        /// Controls whether to retry requests that fail due to transport-level errors
+        /// (connection refused, TCP reset, DNS failure, dead connections).
+        /// Default value is true (enabled). Set to false to disable transport error retry behavior.
+        /// </summary>
+        public const string TransportErrorRetry = "adbc.databricks.transport_error_retry";
+
+        /// <summary>
         /// Per-request timeout in seconds to detect dead connections (e.g., half-open TCP).
         /// When a connection hangs without sending data, this timeout fires to cancel the request
         /// and allow retry. Default value is 900 seconds (15 minutes), matching JDBC socketTimeout.
