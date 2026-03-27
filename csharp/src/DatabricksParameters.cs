@@ -73,6 +73,15 @@ namespace AdbcDrivers.Databricks
         /// Buffer time in seconds before URL expiration to trigger refresh.
         /// Default value is 60 seconds if not specified.
         /// </summary>
+        /// <summary>
+        /// Timeout in minutes for individual CloudFetch body reads.
+        /// When HttpCompletionOption.ResponseHeadersRead is used, HttpClient.Timeout may not
+        /// protect the body read on all runtimes. This provides an explicit cancellation timeout
+        /// on each body download to prevent permanent hangs on dead TCP connections.
+        /// Default value is 15 minutes if not specified.
+        /// </summary>
+        public const string CloudFetchBodyReadTimeoutMinutes = "adbc.databricks.cloudfetch.body_read_timeout_minutes";
+
         public const string CloudFetchUrlExpirationBufferSeconds = "adbc.databricks.cloudfetch.url_expiration_buffer_seconds";
 
         /// <summary>
@@ -425,6 +434,11 @@ namespace AdbcDrivers.Databricks
         /// Default timeout in minutes for CloudFetch HTTP operations.
         /// </summary>
         public const int DefaultCloudFetchTimeoutMinutes = 5;
+
+        /// <summary>
+        /// Default timeout in minutes for individual CloudFetch body reads.
+        /// </summary>
+        public const int DefaultCloudFetchBodyReadTimeoutMinutes = 15;
 
         /// <summary>
         /// OAuth grant type constants
