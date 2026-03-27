@@ -75,7 +75,7 @@ namespace AdbcDrivers.Databricks
         /// <param name="retryTemporarilyUnavailableEnabled">Whether to retry temporarily unavailable (408, 502, 503, 504) responses.</param>
         /// <param name="rateLimitRetryEnabled">Whether to retry HTTP 429 responses.</param>
         /// <param name="transportErrorRetryEnabled">Whether to retry transport-level errors (connection reset, DNS failure, etc.).</param>
-        /// <param name="transportErrorRetryTimeoutSeconds">Maximum total time in seconds to retry transport-level errors before failing.</param>
+        /// <param name="transportErrorRetryTimeoutSeconds">Maximum total time in seconds to retry transport-level errors before failing. 0 means inherit from retryTimeoutSeconds.</param>
         /// <param name="httpRequestTimeoutSeconds">Per-request timeout in seconds to detect dead connections. Default 900s (15 min) matches JDBC socketTimeout.</param>
         public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled, bool transportErrorRetryEnabled = true, int transportErrorRetryTimeoutSeconds = 0, int httpRequestTimeoutSeconds = 900)
             : base(innerHandler)
@@ -168,6 +168,11 @@ namespace AdbcDrivers.Databricks
                         currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
                         continue;
                     }
+
+                    // We got a response — clear any earlier transport error so the final
+                    // exception (if we later exceed the HTTP retry budget) reflects the
+                    // actual HTTP failure, not a stale transport error.
+                    lastTransportException = null;
 
                     // If it's not a retryable status code, return immediately
                     if (!IsRetryableStatusCode(response.StatusCode))
@@ -344,9 +349,12 @@ namespace AdbcDrivers.Databricks
                 return true;
             }
 
-            // TaskCanceledException NOT caused by the caller's token
-            // This fires when the per-request timeout detects a dead connection
-            if (ex is TaskCanceledException tce && tce.CancellationToken != cancellationToken)
+            // TaskCanceledException NOT caused by the caller's token.
+            // Only treat as transient if the associated token has actually been canceled.
+            if (ex is TaskCanceledException tce
+                && tce.CancellationToken != cancellationToken
+                && tce.CancellationToken.CanBeCanceled
+                && tce.CancellationToken.IsCancellationRequested)
             {
                 return true;
             }

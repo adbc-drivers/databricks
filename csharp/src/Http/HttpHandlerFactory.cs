@@ -311,7 +311,9 @@ namespace AdbcDrivers.Databricks.Http
             }
 
             // Add retry handler (OUTSIDE tracing)
-            if (config.TemporarilyUnavailableRetry || config.RateLimitRetry)
+            // Also add when HttpRequestTimeout > 0 to enforce per-request timeout for dead connection detection,
+            // even if HTTP status code retries are disabled.
+            if (config.TemporarilyUnavailableRetry || config.RateLimitRetry || config.HttpRequestTimeout > 0)
             {
                 handler = new RetryHttpHandler(
                     handler,
