@@ -97,8 +97,6 @@ namespace AdbcDrivers.Databricks.Reader
                     // Track poll count for telemetry
                     _pollCount++;
 
-                    await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
-
                     // end the heartbeat if the command has terminated
                     if (response.OperationState == TOperationState.CANCELED_STATE ||
                         response.OperationState == TOperationState.ERROR_STATE ||
@@ -126,17 +124,12 @@ namespace AdbcDrivers.Databricks.Reader
                             { "error.message", ex.Message },
                             { "poll_count", _pollCount }
                         }));
-
-                    // Wait before retrying to avoid tight error loops
-                    try
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
                 }
+
+                // Wait before next poll — shared by both success and error paths.
+                // On cancellation this throws OperationCanceledException which propagates
+                // up to the caller (Dispose catches it).
+                await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
             }
 
             // Add telemetry tags to current activity when polling completes
