@@ -84,27 +84,58 @@ namespace AdbcDrivers.Databricks.Reader
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                TOperationHandle? operationHandle = _response.OperationHandle;
-                if (operationHandle == null) break;
-
-                CancellationToken GetOperationStatusTimeoutToken = ApacheUtility.GetCancellationToken(_requestTimeoutSeconds, ApacheUtility.TimeUnit.Seconds);
-
-                var request = new TGetOperationStatusReq(operationHandle);
-                var response = await _statement.Client.GetOperationStatus(request, GetOperationStatusTimeoutToken);
-
-                // Track poll count for telemetry
-                _pollCount++;
-
-                await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
-
-                // end the heartbeat if the command has terminated
-                if (response.OperationState == TOperationState.CANCELED_STATE ||
-                    response.OperationState == TOperationState.ERROR_STATE ||
-                    response.OperationState == TOperationState.CLOSED_STATE ||
-                    response.OperationState == TOperationState.TIMEDOUT_STATE ||
-                    response.OperationState == TOperationState.UKNOWN_STATE)
+                try
                 {
+                    TOperationHandle? operationHandle = _response.OperationHandle;
+                    if (operationHandle == null) break;
+
+                    CancellationToken GetOperationStatusTimeoutToken = ApacheUtility.GetCancellationToken(_requestTimeoutSeconds, ApacheUtility.TimeUnit.Seconds);
+
+                    var request = new TGetOperationStatusReq(operationHandle);
+                    var response = await _statement.Client.GetOperationStatus(request, GetOperationStatusTimeoutToken);
+
+                    // Track poll count for telemetry
+                    _pollCount++;
+
+                    await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
+
+                    // end the heartbeat if the command has terminated
+                    if (response.OperationState == TOperationState.CANCELED_STATE ||
+                        response.OperationState == TOperationState.ERROR_STATE ||
+                        response.OperationState == TOperationState.CLOSED_STATE ||
+                        response.OperationState == TOperationState.TIMEDOUT_STATE ||
+                        response.OperationState == TOperationState.UKNOWN_STATE)
+                    {
+                        break;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Cancellation was requested - exit the polling loop gracefully
                     break;
+                }
+                catch (Exception ex)
+                {
+                    // Log the error but continue polling. Transient errors (e.g. ObjectDisposedException
+                    // from TLS connection recycling) should not kill the heartbeat poller, as that would
+                    // cause the server-side command inactivity timeout to expire and terminate the query.
+                    Activity.Current?.AddEvent(new ActivityEvent("operation_status_poller.poll_error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "poll_count", _pollCount }
+                        }));
+
+                    // Wait before retrying to avoid tight error loops
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
                 }
             }
 
