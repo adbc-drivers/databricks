@@ -23,7 +23,6 @@
     <PackageReference Include="Xunit.SkippableFact" />
     <PackageReference Include="System.Net.Http" />
     <PackageReference Include="K4os.Compression.LZ4" />
-    <PackageReference Include="Moq" Version="4.20.72" />
   </ItemGroup>
 
   <ItemGroup>
