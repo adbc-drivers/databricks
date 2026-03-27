@@ -311,27 +311,24 @@ namespace AdbcDrivers.Databricks.Http
             }
 
             // Add retry handler (OUTSIDE tracing)
-            // Also add when HttpRequestTimeout > 0 to enforce per-request timeout for dead connection detection,
-            // even if HTTP status code retries are disabled.
-            if (config.TemporarilyUnavailableRetry || config.RateLimitRetry || config.HttpRequestTimeout > 0)
-            {
-                handler = new RetryHttpHandler(
-                    handler,
-                    config.ActivityTracer,
-                    config.TemporarilyUnavailableRetryTimeout,
-                    config.RateLimitRetryTimeout,
-                    config.TemporarilyUnavailableRetry,
-                    config.RateLimitRetry,
-                    httpRequestTimeoutSeconds: config.HttpRequestTimeout);
-                authHandler = new RetryHttpHandler(
-                    authHandler,
-                    config.ActivityTracer,
-                    config.TemporarilyUnavailableRetryTimeout,
-                    config.RateLimitRetryTimeout,
-                    config.TemporarilyUnavailableRetry,
-                    config.RateLimitRetry,
-                    httpRequestTimeoutSeconds: config.HttpRequestTimeout);
-            }
+            // Always add — the constructor respects individual enable/disable flags for each retry type,
+            // and the per-request timeout for dead connection detection should always be active.
+            handler = new RetryHttpHandler(
+                handler,
+                config.ActivityTracer,
+                config.TemporarilyUnavailableRetryTimeout,
+                config.RateLimitRetryTimeout,
+                config.TemporarilyUnavailableRetry,
+                config.RateLimitRetry,
+                httpRequestTimeoutSeconds: config.HttpRequestTimeout);
+            authHandler = new RetryHttpHandler(
+                authHandler,
+                config.ActivityTracer,
+                config.TemporarilyUnavailableRetryTimeout,
+                config.RateLimitRetryTimeout,
+                config.TemporarilyUnavailableRetry,
+                config.RateLimitRetry,
+                httpRequestTimeoutSeconds: config.HttpRequestTimeout);
 
             // Add Thrift error handler if requested (for Thrift connections only)
             if (config.AddThriftErrorHandler)
