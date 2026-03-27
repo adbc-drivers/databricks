@@ -100,6 +100,11 @@ namespace AdbcDrivers.Databricks.Http
             public int RateLimitRetryTimeout { get; set; }
 
             /// <summary>
+            /// Per-request timeout in seconds to detect dead connections.
+            /// </summary>
+            public int HttpRequestTimeout { get; set; } = DatabricksConstants.DefaultHttpRequestTimeout;
+
+            /// <summary>
             /// Timeout in minutes for HTTP operations.
             /// </summary>
             public int TimeoutMinutes { get; set; }
@@ -314,14 +319,16 @@ namespace AdbcDrivers.Databricks.Http
                     config.TemporarilyUnavailableRetryTimeout,
                     config.RateLimitRetryTimeout,
                     config.TemporarilyUnavailableRetry,
-                    config.RateLimitRetry);
+                    config.RateLimitRetry,
+                    httpRequestTimeoutSeconds: config.HttpRequestTimeout);
                 authHandler = new RetryHttpHandler(
                     authHandler,
                     config.ActivityTracer,
                     config.TemporarilyUnavailableRetryTimeout,
                     config.RateLimitRetryTimeout,
                     config.TemporarilyUnavailableRetry,
-                    config.RateLimitRetry);
+                    config.RateLimitRetry,
+                    httpRequestTimeoutSeconds: config.HttpRequestTimeout);
             }
 
             // Add Thrift error handler if requested (for Thrift connections only)

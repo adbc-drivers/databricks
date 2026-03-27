@@ -397,6 +397,11 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         protected int RateLimitRetryTimeout { get; private set; } = DatabricksConstants.DefaultRateLimitRetryTimeout;
 
+        /// <summary>
+        /// Gets the per-request timeout in seconds to detect dead connections.
+        /// </summary>
+        protected int HttpRequestTimeout { get; private set; } = DatabricksConstants.DefaultHttpRequestTimeout;
+
         protected override HttpMessageHandler CreateHttpHandler()
         {
             HttpMessageHandler baseHandler = base.CreateHttpHandler();
@@ -417,6 +422,7 @@ namespace AdbcDrivers.Databricks
                 TemporarilyUnavailableRetryTimeout = TemporarilyUnavailableRetryTimeout,
                 RateLimitRetry = RateLimitRetry,
                 RateLimitRetryTimeout = RateLimitRetryTimeout,
+                HttpRequestTimeout = HttpRequestTimeout,
                 TimeoutMinutes = 1,
                 AddThriftErrorHandler = true
             };
@@ -937,6 +943,17 @@ namespace AdbcDrivers.Databricks
                         $"must be a value of 0 (retry indefinitely) or a positive integer representing seconds. Default is 120 seconds (2 minutes).");
                 }
                 RateLimitRetryTimeout = rateLimitRetryTimeoutValue;
+            }
+
+            if (Properties.TryGetValue(DatabricksParameters.HttpRequestTimeout, out string? httpRequestTimeoutStr))
+            {
+                if (!int.TryParse(httpRequestTimeoutStr, out int httpRequestTimeoutValue) ||
+                    httpRequestTimeoutValue < 0)
+                {
+                    throw new ArgumentOutOfRangeException(DatabricksParameters.HttpRequestTimeout, httpRequestTimeoutStr,
+                        $"must be a value of 0 (disabled) or a positive integer representing seconds. Default is 900 seconds (15 minutes).");
+                }
+                HttpRequestTimeout = httpRequestTimeoutValue;
             }
 
             // When TemporarilyUnavailableRetry is enabled, we need to make sure connection timeout (which is used to cancel the HttpConnection) is equal
