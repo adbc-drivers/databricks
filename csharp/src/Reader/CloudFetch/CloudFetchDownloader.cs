@@ -594,7 +594,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         lastException = ex;
 
                         // Exponential backoff with jitter (80-120% of base)
-                        int waitMs = (int)Math.Max(100, currentBackoffMs * (0.8 + Random.Shared.NextDouble() * 0.4));
+                        int waitMs = (int)Math.Max(100, currentBackoffMs * (0.8 + new Random().NextDouble() * 0.4));
 
                         // Check if we would exceed the time budget
                         if (retryTimeoutMs > 0 && totalRetryWaitMs + waitMs > retryTimeoutMs)
