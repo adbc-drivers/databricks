@@ -52,9 +52,9 @@ namespace AdbcDrivers.Databricks
         public const string MaxBytesPerFile = "adbc.databricks.cloudfetch.max_bytes_per_file";
 
         /// <summary>
-        /// Maximum number of retry attempts for CloudFetch downloads.
-        /// Default value is -1 (not set, use timeout only).
-        /// When set to a non-negative value, the retry loop exits if either this count or the timeout is reached.
+        /// Maximum number of retry attempts for CloudFetch downloads (total attempts, including first try).
+        /// Default value is 0 (no limit, use timeout only).
+        /// When set to a positive value, the retry loop exits if either this count or the timeout is reached.
         /// </summary>
         public const string CloudFetchMaxRetries = "adbc.databricks.cloudfetch.max_retries";
 

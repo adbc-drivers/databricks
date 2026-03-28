@@ -33,7 +33,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         internal const int DefaultPrefetchCount = 2;
         internal const int DefaultMemoryBufferSizeMB = 200;
         internal const int DefaultTimeoutMinutes = 5;
-        internal const int DefaultMaxRetries = -1; // -1 = not set (use timeout only)
+        internal const int DefaultMaxRetries = 0; // 0 = no limit (use timeout only)
         internal const int DefaultRetryTimeoutSeconds = 300; // 5 minutes
         internal const int DefaultRetryDelayMs = 500;
         internal const int DefaultMaxUrlRefreshAttempts = 3;
@@ -60,8 +60,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         public int TimeoutMinutes { get; set; } = DefaultTimeoutMinutes;
 
         /// <summary>
-        /// Maximum retry attempts for failed downloads.
-        /// -1 means not set (use timeout only). When set to a non-negative value,
+        /// Maximum retry attempts for failed downloads (total attempts, including first try).
+        /// 0 means no limit (use timeout only). When set to a positive value,
         /// the retry loop exits if either this count or the timeout is reached.
         /// </summary>
         public int MaxRetries { get; set; } = DefaultMaxRetries;
@@ -125,16 +125,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             Schema schema,
             bool isLz4Compressed)
         {
-            // Parse MaxRetries separately: -1 (default) = not set, >= 0 = explicit limit.
-            // Throw on non-integer values to surface misconfiguration.
+            // Parse MaxRetries separately: 0 (default) = no limit, >0 = total attempt count.
+            // Throw on non-integer or negative values to surface misconfiguration.
             int parsedMaxRetries = DefaultMaxRetries;
             if (properties.TryGetValue(DatabricksParameters.CloudFetchMaxRetries, out string? maxRetriesStr))
             {
-                if (!int.TryParse(maxRetriesStr, out int maxRetries) || maxRetries < -1)
+                if (!int.TryParse(maxRetriesStr, out int maxRetries) || maxRetries < 0)
                 {
                     throw new ArgumentException(
                         $"Invalid value '{maxRetriesStr}' for {DatabricksParameters.CloudFetchMaxRetries}. " +
-                        $"Expected -1 (no limit) or a non-negative integer.");
+                        $"Expected 0 (no limit) or a positive integer.");
                 }
                 parsedMaxRetries = maxRetries;
             }
