@@ -37,7 +37,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         internal const int DefaultRetryDelayMs = 500;
         internal const int DefaultMaxUrlRefreshAttempts = 3;
         internal const int DefaultUrlExpirationBufferSeconds = 60;
-        internal const int DefaultBodyReadTimeoutMinutes = 15;
 
         /// <summary>
         /// Number of parallel downloads to perform.
@@ -78,13 +77,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// Buffer time before URL expiration to trigger refresh (in seconds).
         /// </summary>
         public int UrlExpirationBufferSeconds { get; set; } = DefaultUrlExpirationBufferSeconds;
-
-        /// <summary>
-        /// Timeout in minutes for individual body reads.
-        /// Provides explicit cancellation on body downloads to prevent permanent hangs
-        /// on dead TCP connections where HttpClient.Timeout may not propagate.
-        /// </summary>
-        public int BodyReadTimeoutMinutes { get; set; } = DefaultBodyReadTimeoutMinutes;
 
         /// <summary>
         /// Whether the result data is LZ4 compressed.
@@ -135,8 +127,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 MaxRetries = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxRetries, DefaultMaxRetries),
                 RetryDelayMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryDelayMs, DefaultRetryDelayMs),
                 MaxUrlRefreshAttempts = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, DefaultMaxUrlRefreshAttempts),
-                UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds),
-                BodyReadTimeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchBodyReadTimeoutMinutes, DefaultBodyReadTimeoutMinutes)
+                UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds)
             };
 
             return config;

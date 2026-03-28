@@ -54,7 +54,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly int _retryDelayMs;
         private readonly int _maxUrlRefreshAttempts;
         private readonly int _urlExpirationBufferSeconds;
-        private readonly int _bodyReadTimeoutMinutes;
+        private readonly int _timeoutMinutes;
         private readonly SemaphoreSlim _downloadSemaphore;
         private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
         private readonly ArrayPool<byte>? _lz4BufferPool;
@@ -98,7 +98,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _retryDelayMs = config.RetryDelayMs;
             _maxUrlRefreshAttempts = config.MaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = config.UrlExpirationBufferSeconds;
-            _bodyReadTimeoutMinutes = config.BodyReadTimeoutMinutes;
+            _timeoutMinutes = config.TimeoutMinutes;
             _memoryStreamManager = config.MemoryStreamManager;
             _lz4BufferPool = config.Lz4BufferPool;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
@@ -143,7 +143,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _retryDelayMs = retryDelayMs;
             _maxUrlRefreshAttempts = CloudFetchConfiguration.DefaultMaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = CloudFetchConfiguration.DefaultUrlExpirationBufferSeconds;
-            _bodyReadTimeoutMinutes = CloudFetchConfiguration.DefaultBodyReadTimeoutMinutes;
+            _timeoutMinutes = CloudFetchConfiguration.DefaultTimeoutMinutes;
             _memoryStreamManager = null;
             _lz4BufferPool = null;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
@@ -561,24 +561,21 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             ]);
                         }
 
-                        // Read the file data with a 15-minute timeout.
+                        // Read the file data with an explicit timeout matching HttpClient.Timeout.
                         // ReadAsByteArrayAsync() on net472 has no CancellationToken overload,
                         // and HttpClient.Timeout may not propagate to body reads on all runtimes
-                        // (e.g., Mono) when HttpCompletionOption.ResponseHeadersRead is used.
+                        // when HttpCompletionOption.ResponseHeadersRead is used.
                         // Using CopyToAsync with an explicit token ensures dead TCP connections
                         // are detected on every 81920-byte chunk read.
                         using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
                         {
-                            bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_bodyReadTimeoutMinutes));
+                            bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
 #if NET5_0_OR_GREATER
                             fileData = await response.Content.ReadAsByteArrayAsync(bodyTimeoutCts.Token).ConfigureAwait(false);
 #else
                             using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            using (var memoryStream = new MemoryStream())
                             {
-                                int capacity = contentLength.HasValue && contentLength.Value > 0
-                                    ? (int)Math.Min(contentLength.Value, int.MaxValue)
-                                    : 0;
-                                var memoryStream = new MemoryStream(capacity);
                                 await contentStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
                                 fileData = memoryStream.ToArray();
                             }
