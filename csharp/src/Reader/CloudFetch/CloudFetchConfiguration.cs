@@ -33,7 +33,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         internal const int DefaultPrefetchCount = 2;
         internal const int DefaultMemoryBufferSizeMB = 200;
         internal const int DefaultTimeoutMinutes = 5;
-        internal const int DefaultMaxRetries = 0; // 0 = no limit (use timeout only)
+        internal const int DefaultMaxRetries = -1; // -1 = not set (use timeout only)
         internal const int DefaultRetryTimeoutSeconds = 300; // 5 minutes
         internal const int DefaultRetryDelayMs = 500;
         internal const int DefaultMaxUrlRefreshAttempts = 3;
@@ -61,8 +61,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
         /// <summary>
         /// Maximum retry attempts for failed downloads.
-        /// 0 means no limit (use timeout only). When set, the retry loop exits
-        /// if either this count or the timeout is reached.
+        /// -1 means not set (use timeout only). When set to a non-negative value,
+        /// the retry loop exits if either this count or the timeout is reached.
         /// </summary>
         public int MaxRetries { get; set; } = DefaultMaxRetries;
 
@@ -133,7 +133,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 PrefetchCount = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchPrefetchCount, DefaultPrefetchCount),
                 MemoryBufferSizeMB = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMemoryBufferSize, DefaultMemoryBufferSizeMB),
                 TimeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DefaultTimeoutMinutes),
-                MaxRetries = properties.TryGetValue(DatabricksParameters.CloudFetchMaxRetries, out string? maxRetriesStr) && int.TryParse(maxRetriesStr, out int maxRetries) && maxRetries > 0 ? maxRetries : DefaultMaxRetries,
+                MaxRetries = properties.TryGetValue(DatabricksParameters.CloudFetchMaxRetries, out string? maxRetriesStr) && int.TryParse(maxRetriesStr, out int maxRetries) && maxRetries >= 0 ? maxRetries : DefaultMaxRetries,
                 RetryTimeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryTimeoutSeconds, DefaultRetryTimeoutSeconds),
                 RetryDelayMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryDelayMs, DefaultRetryDelayMs),
                 MaxUrlRefreshAttempts = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, DefaultMaxUrlRefreshAttempts),

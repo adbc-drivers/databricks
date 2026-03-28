@@ -503,7 +503,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     // Check if we've exceeded the max retry count (if set)
-                    if (_maxRetries > 0 && attemptCount >= _maxRetries)
+                    if (_maxRetries >= 0 && attemptCount >= _maxRetries)
                     {
                         activity?.AddEvent("cloudfetch.download_max_retries_exceeded", [
                             new("offset", downloadResult.StartRowOffset),
@@ -645,7 +645,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                     // Release the memory we acquired
                     _memoryManager.ReleaseMemory(size);
-                    string retryLimits = _maxRetries > 0
+                    string retryLimits = _maxRetries >= 0
                         ? $"max_retries: {_maxRetries}, timeout: {_retryTimeoutSeconds}s"
                         : $"timeout: {_retryTimeoutSeconds}s";
                     throw new InvalidOperationException(

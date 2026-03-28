@@ -178,7 +178,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                maxRetries: 0,
+                maxRetries: -1,
                 retryTimeoutSeconds: 5,
                 retryDelayMs: 10);
 
@@ -263,7 +263,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                maxRetries: 0,
+                maxRetries: -1,
                 retryTimeoutSeconds: 1,
                 retryDelayMs: 10);
 
@@ -353,7 +353,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                maxRetries: 0,
+                maxRetries: -1,
                 retryTimeoutSeconds: 1,
                 retryDelayMs: 10);
 
@@ -687,7 +687,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                maxRetries: 0,
+                maxRetries: -1,
                 retryTimeoutSeconds: 5,
                 retryDelayMs: 10);
 
