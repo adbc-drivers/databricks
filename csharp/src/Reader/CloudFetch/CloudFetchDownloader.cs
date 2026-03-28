@@ -50,6 +50,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly ICloudFetchResultFetcher _resultFetcher;
         private readonly int _maxParallelDownloads;
         private readonly bool _isLz4Compressed;
+        private readonly int _maxRetries;
         private readonly int _retryTimeoutSeconds;
         private readonly int _retryDelayMs;
         private readonly int _maxUrlRefreshAttempts;
@@ -93,6 +94,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             _maxParallelDownloads = config.ParallelDownloads;
             _isLz4Compressed = config.IsLz4Compressed;
+            _maxRetries = config.MaxRetries;
             _retryTimeoutSeconds = config.RetryTimeoutSeconds;
             _retryDelayMs = config.RetryDelayMs;
             _maxUrlRefreshAttempts = config.MaxUrlRefreshAttempts;
@@ -114,6 +116,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="resultFetcher">The result fetcher that manages URLs.</param>
         /// <param name="maxParallelDownloads">Maximum parallel downloads.</param>
         /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>
+        /// <param name="maxRetries">Maximum retry attempts (0 = no limit, use timeout only).</param>
         /// <param name="retryTimeoutSeconds">Time budget for retries in seconds (optional, default 300).</param>
         /// <param name="retryDelayMs">Initial delay between retries in ms (optional, default 500).</param>
         internal CloudFetchDownloader(
@@ -125,6 +128,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             ICloudFetchResultFetcher resultFetcher,
             int maxParallelDownloads,
             bool isLz4Compressed,
+            int maxRetries = CloudFetchConfiguration.DefaultMaxRetries,
             int retryTimeoutSeconds = CloudFetchConfiguration.DefaultRetryTimeoutSeconds,
             int retryDelayMs = CloudFetchConfiguration.DefaultRetryDelayMs)
         {
@@ -137,6 +141,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             _maxParallelDownloads = maxParallelDownloads;
             _isLz4Compressed = isLz4Compressed;
+            _maxRetries = maxRetries;
             _retryTimeoutSeconds = retryTimeoutSeconds;
             _retryDelayMs = retryDelayMs;
             _maxUrlRefreshAttempts = CloudFetchConfiguration.DefaultMaxUrlRefreshAttempts;
@@ -497,6 +502,20 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
+                    // Check if we've exceeded the max retry count (if set)
+                    if (_maxRetries > 0 && attemptCount >= _maxRetries)
+                    {
+                        activity?.AddEvent("cloudfetch.download_max_retries_exceeded", [
+                            new("offset", downloadResult.StartRowOffset),
+                            new("sanitized_url", SanitizeUrl(url)),
+                            new("total_attempts", attemptCount),
+                            new("max_retries", _maxRetries),
+                            new("last_error", lastException?.GetType().Name ?? "none"),
+                            new("last_error_message", lastException?.Message ?? "none")
+                        ]);
+                        break;
+                    }
+
                     attemptCount++;
                     try
                     {
@@ -626,8 +645,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                     // Release the memory we acquired
                     _memoryManager.ReleaseMemory(size);
+                    string retryLimits = _maxRetries > 0
+                        ? $"max_retries: {_maxRetries}, timeout: {_retryTimeoutSeconds}s"
+                        : $"timeout: {_retryTimeoutSeconds}s";
                     throw new InvalidOperationException(
-                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {totalRetryWaitMs / 1000}s (timeout: {_retryTimeoutSeconds}s).",
+                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {totalRetryWaitMs / 1000}s ({retryLimits}).",
                         lastException);
                 }
 

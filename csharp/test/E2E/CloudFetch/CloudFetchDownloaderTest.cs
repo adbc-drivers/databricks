@@ -178,8 +178,9 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                5, // retryTimeoutSeconds
-                10); // retryDelayMs
+                maxRetries: 0,
+                retryTimeoutSeconds: 5,
+                retryDelayMs: 10);
 
             // Act
             await downloader.StartAsync(CancellationToken.None);
@@ -262,8 +263,9 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                1, // retryTimeoutSeconds - short for test
-                10); // retryDelayMs
+                maxRetries: 0,
+                retryTimeoutSeconds: 1,
+                retryDelayMs: 10);
 
             // Act
             await downloader.StartAsync(CancellationToken.None);
@@ -351,8 +353,9 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                1, // retryTimeoutSeconds - short for test
-                10); // retryDelayMs
+                maxRetries: 0,
+                retryTimeoutSeconds: 1,
+                retryDelayMs: 10);
 
             // Act
             await downloader.StartAsync(CancellationToken.None);
@@ -684,8 +687,9 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                5, // retryTimeoutSeconds
-                10); // retryDelayMs
+                maxRetries: 0,
+                retryTimeoutSeconds: 5,
+                retryDelayMs: 10);
 
             // Act
             await downloader.StartAsync(CancellationToken.None);
