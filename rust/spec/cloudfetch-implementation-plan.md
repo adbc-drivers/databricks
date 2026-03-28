@@ -424,6 +424,7 @@ rust/src/
 
 - Retry transient failures (network, timeouts)
 - Refetch expired links automatically (30s buffer)
+- On HTTP 401/403/404 from cloud storage, clear cached link and call `refetch_link()` to get a fresh presigned URL from Databricks (URLs can be revoked before their timestamp expiry)
 - Propagate fatal errors to consumer via `prefetch_error`
 
 ### 6. Compression
