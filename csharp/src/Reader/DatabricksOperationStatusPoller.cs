@@ -125,11 +125,10 @@ namespace AdbcDrivers.Databricks.Reader
                             { "poll_count", _pollCount }
                         }));
                 }
-
-                // Wait before next poll — shared by both success and error paths.
-                // On cancellation this throws OperationCanceledException which propagates
-                // up to the caller (Dispose catches it).
-                await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
+                finally
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
+                }
             }
 
             // Add telemetry tags to current activity when polling completes
