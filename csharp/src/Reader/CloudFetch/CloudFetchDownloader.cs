@@ -116,7 +116,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="resultFetcher">The result fetcher that manages URLs.</param>
         /// <param name="maxParallelDownloads">Maximum parallel downloads.</param>
         /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>
-        /// <param name="maxRetries">Maximum retry attempts (0 = no limit, use timeout only).</param>
+        /// <param name="maxRetries">Maximum retry attempts. -1 = no limit (use timeout only), 0 = no retries (single attempt), positive = max retry attempts.</param>
         /// <param name="retryTimeoutSeconds">Time budget for retries in seconds (optional, default 300).</param>
         /// <param name="retryDelayMs">Initial delay between retries in ms (optional, default 500).</param>
         internal CloudFetchDownloader(
@@ -492,30 +492,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             ]);
 
                 // Retry logic with time-budget approach and exponential backoff with jitter.
-                // Similar to RetryHttpHandler: keeps retrying until the time budget is exhausted,
+                // Keeps retrying until the time budget (real elapsed time) is exhausted,
                 // rather than a fixed retry count. This gives transient issues (firewall, proxy 502,
                 // connection drops) enough time to resolve.
                 int currentBackoffMs = _retryDelayMs;
-                int totalRetryWaitMs = 0;
+                long retryTimeoutMs = Math.Min((long)_retryTimeoutSeconds, int.MaxValue / 1000L) * 1000L;
                 int attemptCount = 0;
                 Exception? lastException = null;
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    // Check if we've exceeded the max retry count (if set)
-                    if (_maxRetries >= 0 && attemptCount >= _maxRetries)
-                    {
-                        activity?.AddEvent("cloudfetch.download_max_retries_exceeded", [
-                            new("offset", downloadResult.StartRowOffset),
-                            new("sanitized_url", SanitizeUrl(url)),
-                            new("total_attempts", attemptCount),
-                            new("max_retries", _maxRetries),
-                            new("last_error", lastException?.GetType().Name ?? "none"),
-                            new("last_error_message", lastException?.Message ?? "none")
-                        ]);
-                        break;
-                    }
-
                     attemptCount++;
                     try
                     {
@@ -594,36 +580,43 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     {
                         lastException = ex;
 
-                        // Exponential backoff with jitter (80-120% of base)
-                        int waitMs = (int)Math.Max(100, currentBackoffMs * (0.8 + new Random().NextDouble() * 0.4));
+                        // Check if we've exceeded the max retry count (if set)
+                        // -1 = unlimited, 0 = no retries (single attempt), >0 = max retry attempts
+                        if (_maxRetries >= 0 && attemptCount > _maxRetries)
+                        {
+                            activity?.AddEvent("cloudfetch.download_max_retries_exceeded", [
+                                new("offset", downloadResult.StartRowOffset),
+                                new("sanitized_url", SanitizeUrl(url)),
+                                new("total_attempts", attemptCount),
+                                new("max_retries", _maxRetries)
+                            ]);
+                            break;
+                        }
 
-                        // Check if we would exceed the retry time budget
-                        int retryTimeoutMs = _retryTimeoutSeconds * 1000;
-                        if (retryTimeoutMs > 0 && totalRetryWaitMs + waitMs > retryTimeoutMs)
+                        // Check if we've exceeded the time budget (real elapsed time)
+                        if (retryTimeoutMs > 0 && stopwatch.ElapsedMilliseconds >= retryTimeoutMs)
                         {
                             activity?.AddEvent("cloudfetch.download_retry_timeout_exceeded", [
                                 new("offset", downloadResult.StartRowOffset),
                                 new("sanitized_url", SanitizeUrl(url)),
                                 new("total_attempts", attemptCount),
-                                new("total_retry_wait_ms", totalRetryWaitMs),
+                                new("elapsed_ms", stopwatch.ElapsedMilliseconds),
                                 new("retry_timeout_seconds", _retryTimeoutSeconds),
-                                new("last_error", ex.GetType().Name),
-                                new("last_error_message", ex.Message)
+                                new("last_error", ex.GetType().Name)
                             ]);
-                            break; // Exceeded time budget
+                            break;
                         }
 
-                        totalRetryWaitMs += waitMs;
+                        // Exponential backoff with jitter (80-120% of base)
+                        int waitMs = (int)Math.Max(100, currentBackoffMs * (0.8 + new Random().NextDouble() * 0.4));
 
                         activity?.AddEvent("cloudfetch.download_retry", [
-                            new("error.context", "cloudfetch.download_retry"),
                             new("offset", downloadResult.StartRowOffset),
                             new("sanitized_url", SanitizeUrl(url)),
                             new("attempt", attemptCount),
+                            new("elapsed_ms", stopwatch.ElapsedMilliseconds),
                             new("retry_timeout_seconds", _retryTimeoutSeconds),
-                            new("total_retry_wait_ms", totalRetryWaitMs),
                             new("error_type", ex.GetType().Name),
-                            new("error_message", ex.Message),
                             new("backoff_ms", waitMs)
                         ]);
 
@@ -639,7 +632,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         new("offset", downloadResult.StartRowOffset),
                         new("sanitized_url", sanitizedUrl),
                         new("total_attempts", attemptCount),
-                        new("total_retry_wait_ms", totalRetryWaitMs),
                         new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
                     ]);
 
@@ -649,7 +641,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         ? $"max_retries: {_maxRetries}, timeout: {_retryTimeoutSeconds}s"
                         : $"timeout: {_retryTimeoutSeconds}s";
                     throw new InvalidOperationException(
-                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {totalRetryWaitMs / 1000}s ({retryLimits}).",
+                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {stopwatch.ElapsedMilliseconds / 1000}s ({retryLimits}).",
                         lastException);
                 }
 

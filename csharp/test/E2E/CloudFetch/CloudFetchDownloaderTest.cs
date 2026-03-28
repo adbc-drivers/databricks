@@ -271,16 +271,22 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
             await downloader.StartAsync(CancellationToken.None);
             _downloadQueue.Add(mockDownloadResult.Object);
 
-            // Wait for retries to exhaust the time budget
-            await Task.Delay(3000);
-
             // Add the end of results guard to complete the downloader
             _downloadQueue.Add(EndOfResultsGuard.Instance);
 
+            // Wait for the download to fail - poll deterministically instead of fixed delay
+            int maxWaitMs = 5000;
+            int waitedMs = 0;
+            while (capturedException == null && waitedMs < maxWaitMs)
+            {
+                await Task.Delay(50);
+                waitedMs += 50;
+            }
+
             // Assert
             // Verify SetFailed was called
+            Assert.True(capturedException != null, $"SetFailed was not called within {maxWaitMs}ms");
             mockDownloadResult.Verify(r => r.SetFailed(It.IsAny<Exception>()), Times.Once);
-            Assert.NotNull(capturedException);
             Assert.IsType<InvalidOperationException>(capturedException);
 
             // Verify the downloader has an error
