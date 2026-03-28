@@ -33,7 +33,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         internal const int DefaultPrefetchCount = 2;
         internal const int DefaultMemoryBufferSizeMB = 200;
         internal const int DefaultTimeoutMinutes = 5;
-        internal const int DefaultMaxRetries = 3;
+        internal const int DefaultRetryTimeoutSeconds = 300; // 5 minutes
         internal const int DefaultRetryDelayMs = 500;
         internal const int DefaultMaxUrlRefreshAttempts = 3;
         internal const int DefaultUrlExpirationBufferSeconds = 60;
@@ -59,9 +59,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         public int TimeoutMinutes { get; set; } = DefaultTimeoutMinutes;
 
         /// <summary>
-        /// Maximum retry attempts for failed downloads.
+        /// Maximum time in seconds to retry failed downloads before giving up.
+        /// Uses exponential backoff with jitter within this time budget.
         /// </summary>
-        public int MaxRetries { get; set; } = DefaultMaxRetries;
+        public int RetryTimeoutSeconds { get; set; } = DefaultRetryTimeoutSeconds;
 
         /// <summary>
         /// Delay between retry attempts (in milliseconds).
@@ -124,7 +125,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 PrefetchCount = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchPrefetchCount, DefaultPrefetchCount),
                 MemoryBufferSizeMB = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMemoryBufferSize, DefaultMemoryBufferSizeMB),
                 TimeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DefaultTimeoutMinutes),
-                MaxRetries = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxRetries, DefaultMaxRetries),
+                RetryTimeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryTimeoutSeconds, DefaultRetryTimeoutSeconds),
                 RetryDelayMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryDelayMs, DefaultRetryDelayMs),
                 MaxUrlRefreshAttempts = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, DefaultMaxUrlRefreshAttempts),
                 UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds)

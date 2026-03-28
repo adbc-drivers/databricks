@@ -178,7 +178,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                1, // maxRetries
+                5, // retryTimeoutSeconds
                 10); // retryDelayMs
 
             // Act
@@ -262,15 +262,15 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                1, // maxRetries
+                1, // retryTimeoutSeconds - short for test
                 10); // retryDelayMs
 
             // Act
             await downloader.StartAsync(CancellationToken.None);
             _downloadQueue.Add(mockDownloadResult.Object);
 
-            // Wait for the download to be processed
-            await Task.Delay(100);
+            // Wait for retries to exhaust the time budget
+            await Task.Delay(3000);
 
             // Add the end of results guard to complete the downloader
             _downloadQueue.Add(EndOfResultsGuard.Instance);
@@ -279,7 +279,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
             // Verify SetFailed was called
             mockDownloadResult.Verify(r => r.SetFailed(It.IsAny<Exception>()), Times.Once);
             Assert.NotNull(capturedException);
-            Assert.IsType<HttpRequestException>(capturedException);
+            Assert.IsType<InvalidOperationException>(capturedException);
 
             // Verify the downloader has an error
             Assert.True(downloader.HasError);
@@ -351,7 +351,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                1, // maxRetries
+                1, // retryTimeoutSeconds - short for test
                 10); // retryDelayMs
 
             // Act
@@ -365,7 +365,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
             Console.WriteLine("Added end guard");
 
             // Wait for the download to fail - use a timeout to avoid hanging
-            int maxWaitMs = 2000;
+            int maxWaitMs = 5000;
             int waitedMs = 0;
             while (!downloader.HasError && !setFailedCalled && waitedMs < maxWaitMs)
             {
@@ -684,7 +684,7 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                 _mockResultFetcher.Object,
                 1, // maxParallelDownloads
                 false, // isLz4Compressed
-                2, // maxRetries
+                5, // retryTimeoutSeconds
                 10); // retryDelayMs
 
             // Act

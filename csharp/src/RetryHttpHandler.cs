@@ -25,9 +25,9 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Http;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 
@@ -136,7 +136,7 @@ namespace AdbcDrivers.Databricks
                     }
                     catch (Exception ex) when (!cancellationToken.IsCancellationRequested
                         && _transportErrorRetryEnabled
-                        && IsTransientTransportException(ex, cancellationToken))
+                        && TransportErrorHelper.IsTransientTransportException(ex, cancellationToken))
                     {
 
                         attemptCount++;
@@ -313,56 +313,6 @@ namespace AdbcDrivers.Databricks
             Random random = new Random();
             double jitterFactor = 0.8 + (random.NextDouble() * 0.4); // Between 0.8 and 1.2
             return (int)Math.Max(1, baseBackoffSeconds * jitterFactor);
-        }
-
-        /// <summary>
-        /// Determines if an exception represents a transient transport-level error
-        /// that should be retried (e.g., connection reset, DNS failure, TCP errors).
-        /// Excludes user-initiated cancellations.
-        /// </summary>
-        private static bool IsTransientTransportException(Exception ex, CancellationToken cancellationToken)
-        {
-            // Never retry if the caller explicitly cancelled
-            if (cancellationToken.IsCancellationRequested)
-            {
-                return false;
-            }
-
-            // HttpRequestException: connection refused, DNS failure, TCP reset, etc.
-            if (ex is HttpRequestException)
-            {
-                return true;
-            }
-
-            // IOException: connection dropped mid-transfer
-            if (ex is IOException)
-            {
-                return true;
-            }
-
-            // SocketException: low-level network errors (wrapped or standalone)
-            if (ex is SocketException)
-            {
-                return true;
-            }
-
-            // TaskCanceledException NOT caused by the caller's token.
-            // Only treat as transient if the associated token has actually been canceled.
-            if (ex is TaskCanceledException tce
-                && tce.CancellationToken != cancellationToken
-                && tce.CancellationToken.CanBeCanceled
-                && tce.CancellationToken.IsCancellationRequested)
-            {
-                return true;
-            }
-
-            // Check inner exceptions — transport errors are often wrapped
-            if (ex.InnerException != null)
-            {
-                return IsTransientTransportException(ex.InnerException, cancellationToken);
-            }
-
-            return false;
         }
 
         /// <summary>

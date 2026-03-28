@@ -30,6 +30,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Http;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Microsoft.IO;
@@ -50,7 +51,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly ICloudFetchResultFetcher _resultFetcher;
         private readonly int _maxParallelDownloads;
         private readonly bool _isLz4Compressed;
-        private readonly int _maxRetries;
+        private readonly int _retryTimeoutSeconds;
         private readonly int _retryDelayMs;
         private readonly int _maxUrlRefreshAttempts;
         private readonly int _urlExpirationBufferSeconds;
@@ -93,7 +94,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             _maxParallelDownloads = config.ParallelDownloads;
             _isLz4Compressed = config.IsLz4Compressed;
-            _maxRetries = config.MaxRetries;
+            _retryTimeoutSeconds = config.RetryTimeoutSeconds;
             _retryDelayMs = config.RetryDelayMs;
             _maxUrlRefreshAttempts = config.MaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = config.UrlExpirationBufferSeconds;
@@ -114,8 +115,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="resultFetcher">The result fetcher that manages URLs.</param>
         /// <param name="maxParallelDownloads">Maximum parallel downloads.</param>
         /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>
-        /// <param name="maxRetries">Maximum retry attempts (optional, default 3).</param>
-        /// <param name="retryDelayMs">Delay between retries in ms (optional, default 1000).</param>
+        /// <param name="retryTimeoutSeconds">Time budget for retries in seconds (optional, default 300).</param>
+        /// <param name="retryDelayMs">Initial delay between retries in ms (optional, default 500).</param>
         internal CloudFetchDownloader(
             IActivityTracer activityTracer,
             BlockingCollection<IDownloadResult> downloadQueue,
@@ -125,8 +126,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             ICloudFetchResultFetcher resultFetcher,
             int maxParallelDownloads,
             bool isLz4Compressed,
-            int maxRetries = 3,
-            int retryDelayMs = 1000)
+            int retryTimeoutSeconds = CloudFetchConfiguration.DefaultRetryTimeoutSeconds,
+            int retryDelayMs = CloudFetchConfiguration.DefaultRetryDelayMs)
         {
             _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
@@ -137,7 +138,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             _maxParallelDownloads = maxParallelDownloads;
             _isLz4Compressed = isLz4Compressed;
-            _maxRetries = maxRetries;
+            _retryTimeoutSeconds = retryTimeoutSeconds;
             _retryDelayMs = retryDelayMs;
             _maxUrlRefreshAttempts = CloudFetchConfiguration.DefaultMaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = CloudFetchConfiguration.DefaultUrlExpirationBufferSeconds;
@@ -486,9 +487,18 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     new("expected_size_kb", size / 1024.0)
             ]);
 
-                // Retry logic for downloading files
-                for (int retry = 0; retry < _maxRetries; retry++)
+                // Retry logic with time-budget approach and exponential backoff with jitter.
+                // Similar to RetryHttpHandler: keeps retrying until the time budget is exhausted,
+                // rather than a fixed retry count. This gives transient issues (firewall, proxy 502,
+                // connection drops) enough time to resolve.
+                int currentBackoffMs = _retryDelayMs;
+                int totalRetryWaitMs = 0;
+                int attemptCount = 0;
+                Exception? lastException = null;
+
+                while (!cancellationToken.IsCancellationRequested)
                 {
+                    attemptCount++;
                     try
                     {
                         // Create HTTP request with optional custom headers
@@ -562,18 +572,45 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         fileData = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                         break; // Success, exit retry loop
                     }
-                    catch (Exception ex) when (retry < _maxRetries - 1 && !cancellationToken.IsCancellationRequested)
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
-                        // Log the error and retry
-                        activity?.AddException(ex, [
+                        lastException = ex;
+
+                        // Calculate backoff with jitter
+                        int waitMs = CalculateBackoffWithJitter(currentBackoffMs);
+
+                        // Check if we would exceed the retry time budget
+                        int retryTimeoutMs = _retryTimeoutSeconds * 1000;
+                        if (retryTimeoutMs > 0 && totalRetryWaitMs + waitMs > retryTimeoutMs)
+                        {
+                            activity?.AddEvent("cloudfetch.download_retry_timeout_exceeded", [
+                                new("offset", downloadResult.StartRowOffset),
+                                new("sanitized_url", SanitizeUrl(url)),
+                                new("total_attempts", attemptCount),
+                                new("total_retry_wait_ms", totalRetryWaitMs),
+                                new("retry_timeout_seconds", _retryTimeoutSeconds),
+                                new("last_error", ex.GetType().Name),
+                                new("last_error_message", ex.Message)
+                            ]);
+                            break; // Exceeded time budget
+                        }
+
+                        totalRetryWaitMs += waitMs;
+
+                        activity?.AddEvent("cloudfetch.download_retry", [
                             new("error.context", "cloudfetch.download_retry"),
                             new("offset", downloadResult.StartRowOffset),
                             new("sanitized_url", SanitizeUrl(url)),
-                            new("attempt", retry + 1),
-                            new("max_retries", _maxRetries)
+                            new("attempt", attemptCount),
+                            new("retry_timeout_seconds", _retryTimeoutSeconds),
+                            new("total_retry_wait_ms", totalRetryWaitMs),
+                            new("error_type", ex.GetType().Name),
+                            new("error_message", ex.Message),
+                            new("backoff_ms", waitMs)
                         ]);
 
-                        await Task.Delay(_retryDelayMs * (retry + 1), cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(waitMs, cancellationToken).ConfigureAwait(false);
+                        currentBackoffMs = Math.Min(currentBackoffMs * 2, MaxBackoffMs);
                     }
                 }
 
@@ -583,13 +620,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     activity?.AddEvent("cloudfetch.download_failed_all_retries", [
                         new("offset", downloadResult.StartRowOffset),
                         new("sanitized_url", sanitizedUrl),
-                        new("max_retries", _maxRetries),
+                        new("total_attempts", attemptCount),
+                        new("total_retry_wait_ms", totalRetryWaitMs),
                         new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
                     ]);
 
                     // Release the memory we acquired
                     _memoryManager.ReleaseMemory(size);
-                    throw new InvalidOperationException($"Failed to download file from {url} after {_maxRetries} attempts.");
+                    throw new InvalidOperationException(
+                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {totalRetryWaitMs / 1000}s (timeout: {_retryTimeoutSeconds}s).",
+                        lastException);
                 }
 
                 // Process the downloaded file data
@@ -696,6 +736,22 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 activity?.AddException(ex, [new("error.context", "cloudfetch.complete_with_error_failed")]);
             }
+        }
+
+        /// <summary>
+        /// Maximum backoff time in milliseconds for exponential backoff (32 seconds).
+        /// </summary>
+        private const int MaxBackoffMs = 32_000;
+
+        /// <summary>
+        /// Calculates backoff time with jitter to avoid thundering herd problem.
+        /// Same algorithm as RetryHttpHandler.
+        /// </summary>
+        private static int CalculateBackoffWithJitter(int baseBackoffMs)
+        {
+            Random random = new Random();
+            double jitterFactor = 0.8 + (random.NextDouble() * 0.4); // Between 0.8 and 1.2
+            return (int)Math.Max(100, baseBackoffMs * jitterFactor);
         }
 
         // Helper method to sanitize URLs for logging (to avoid exposing sensitive information)
