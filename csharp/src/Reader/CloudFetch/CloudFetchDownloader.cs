@@ -594,8 +594,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     {
                         lastException = ex;
 
-                        // Calculate backoff with jitter
-                        int waitMs = CalculateBackoffWithJitter(currentBackoffMs);
+                        // Exponential backoff with jitter (80-120% of base)
+                        int waitMs = (int)Math.Max(100, currentBackoffMs * (0.8 + new Random().NextDouble() * 0.4));
 
                         // Check if we would exceed the retry time budget
                         int retryTimeoutMs = _retryTimeoutSeconds * 1000;
@@ -628,7 +628,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         ]);
 
                         await Task.Delay(waitMs, cancellationToken).ConfigureAwait(false);
-                        currentBackoffMs = Math.Min(currentBackoffMs * 2, MaxBackoffMs);
+                        currentBackoffMs = Math.Min(currentBackoffMs * 2, 32_000);
                     }
                 }
 
@@ -757,22 +757,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 activity?.AddException(ex, [new("error.context", "cloudfetch.complete_with_error_failed")]);
             }
-        }
-
-        /// <summary>
-        /// Maximum backoff time in milliseconds for exponential backoff (32 seconds).
-        /// </summary>
-        private const int MaxBackoffMs = 32_000;
-
-        /// <summary>
-        /// Calculates backoff time with jitter to avoid thundering herd problem.
-        /// Same algorithm as RetryHttpHandler.
-        /// </summary>
-        private static int CalculateBackoffWithJitter(int baseBackoffMs)
-        {
-            Random random = new Random();
-            double jitterFactor = 0.8 + (random.NextDouble() * 0.4); // Between 0.8 and 1.2
-            return (int)Math.Max(100, baseBackoffMs * jitterFactor);
         }
 
         // Helper method to sanitize URLs for logging (to avoid exposing sensitive information)
