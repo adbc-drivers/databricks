@@ -96,10 +96,11 @@ namespace AdbcDrivers.Databricks.Reader
                     TOperationHandle? operationHandle = _response.OperationHandle;
                     if (operationHandle == null) break;
 
-                    CancellationToken GetOperationStatusTimeoutToken = ApacheUtility.GetCancellationToken(_requestTimeoutSeconds, ApacheUtility.TimeUnit.Seconds);
+                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
 
-                    var request = new TGetOperationStatusReq(operationHandle);
-                    var response = await _statement.Client.GetOperationStatus(request, GetOperationStatusTimeoutToken);
+                    TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
+                    TGetOperationStatusResp response = await _statement.Client.GetOperationStatus(request, timeoutCts.Token).ConfigureAwait(false);
 
                     // Successful poll — reset failure counter
                     consecutiveFailures = 0;
@@ -152,7 +153,7 @@ namespace AdbcDrivers.Databricks.Reader
 
                 // Wait before next poll. On cancellation this throws OperationCanceledException
                 // which propagates up to the caller (Dispose catches it).
-                await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
+                await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
             }
 
             // Add telemetry tags to current activity when polling completes
