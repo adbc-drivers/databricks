@@ -452,8 +452,11 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Default timeout in minutes for CloudFetch HTTP operations.
+        /// Covers both HttpClient.Timeout (SendAsync/headers) and body read timeout.
+        /// Set to 15 minutes because ReadAsByteArrayAsync is a separate call from SendAsync
+        /// and HttpClient.Timeout does not protect body reads when ResponseHeadersRead is used.
         /// </summary>
-        public const int DefaultCloudFetchTimeoutMinutes = 5;
+        public const int DefaultCloudFetchTimeoutMinutes = 15;
 
         /// <summary>
         /// OAuth grant type constants

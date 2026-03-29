@@ -55,6 +55,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly int _retryDelayMs;
         private readonly int _maxUrlRefreshAttempts;
         private readonly int _urlExpirationBufferSeconds;
+        private readonly int _timeoutMinutes;
         private readonly SemaphoreSlim _downloadSemaphore;
         private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
         private readonly ArrayPool<byte>? _lz4BufferPool;
@@ -99,6 +100,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _retryDelayMs = config.RetryDelayMs;
             _maxUrlRefreshAttempts = config.MaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = config.UrlExpirationBufferSeconds;
+            _timeoutMinutes = config.TimeoutMinutes;
             _memoryStreamManager = config.MemoryStreamManager;
             _lz4BufferPool = config.Lz4BufferPool;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
@@ -146,6 +148,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _retryDelayMs = retryDelayMs;
             _maxUrlRefreshAttempts = CloudFetchConfiguration.DefaultMaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = CloudFetchConfiguration.DefaultUrlExpirationBufferSeconds;
+            _timeoutMinutes = CloudFetchConfiguration.DefaultTimeoutMinutes;
             _memoryStreamManager = null;
             _lz4BufferPool = null;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
@@ -585,9 +588,43 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             ]);
                         }
 
-                        // Read the file data
-                        fileData = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                        // Read the file data with an explicit timeout.
+                        // ReadAsByteArrayAsync() on net472 has no CancellationToken overload,
+                        // and HttpClient.Timeout does not protect body reads when
+                        // HttpCompletionOption.ResponseHeadersRead is used — SendAsync returns
+                        // after headers, and the subsequent body read is a separate call on
+                        // HttpContent with no timeout coverage.
+                        // Using CopyToAsync with an explicit token ensures dead TCP connections
+                        // are detected on every 81920-byte chunk read.
+                        using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                        {
+                            bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
+#if NET5_0_OR_GREATER
+                            fileData = await response.Content.ReadAsByteArrayAsync(bodyTimeoutCts.Token).ConfigureAwait(false);
+#else
+                            using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            {
+                                // Pre-allocate with Content-Length when available, matching .NET 5+'s
+                                // LimitArrayPoolWriteStream which also sizes from Content-Length internally.
+                                // Cap at 100MB to avoid int.MaxValue allocation failures.
+                                const int MaxPreAllocBytes = 100 * 1024 * 1024;
+                                int capacity = contentLength.HasValue && contentLength.Value > 0
+                                    ? (int)Math.Min(contentLength.Value, MaxPreAllocBytes)
+                                    : 0;
+                                var memoryStream = new MemoryStream(capacity);
+                                await contentStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
+                                fileData = memoryStream.ToArray();
+                            }
+#endif
+                        }
                         break; // Success, exit retry loop
+                    }
+                    catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        // Body read timeout (from the linked CTS) fired, not a real cancellation.
+                        // Convert to a fault so the download continuation handles it correctly —
+                        // otherwise t.IsCanceled leaves DownloadCompletedTask never completing.
+                        throw new TimeoutException($"CloudFetch body read timed out after {_timeoutMinutes} minutes for offset {downloadResult.StartRowOffset}.", ex);
                     }
                     catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
