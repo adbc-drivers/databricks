@@ -495,7 +495,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 // Same pattern as RetryHttpHandler: tracks cumulative backoff sleep time against
                 // the budget. This gives transient issues (firewall, proxy 502, connection drops)
                 // enough time to resolve.
-                int currentBackoffMs = _retryDelayMs;
+                int currentBackoffMs = (int)Math.Min(Math.Max(0L, (long)_retryDelayMs), 32_000L);
                 long retryTimeoutMs = Math.Min((long)_retryTimeoutSeconds, int.MaxValue / 1000L) * 1000L;
                 long totalRetryWaitMs = 0;
                 int attemptCount = 0;
@@ -508,7 +508,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     {
                         activity?.AddEvent("cloudfetch.download_max_retries_exceeded", [
                             new("offset", downloadResult.StartRowOffset),
-                            new("sanitized_url", SanitizeUrl(url)),
+                            new("sanitized_url", sanitizedUrl),
                             new("total_attempts", attemptCount),
                             new("max_retries", _maxRetries)
                         ]);
@@ -601,7 +601,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         {
                             activity?.AddEvent("cloudfetch.download_retry_timeout_exceeded", [
                                 new("offset", downloadResult.StartRowOffset),
-                                new("sanitized_url", SanitizeUrl(url)),
+                                new("sanitized_url", sanitizedUrl),
                                 new("total_attempts", attemptCount),
                                 new("total_retry_wait_ms", totalRetryWaitMs),
                                 new("retry_timeout_seconds", _retryTimeoutSeconds),
@@ -614,7 +614,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                         activity?.AddEvent("cloudfetch.download_retry", [
                             new("offset", downloadResult.StartRowOffset),
-                            new("sanitized_url", SanitizeUrl(url)),
+                            new("sanitized_url", sanitizedUrl),
                             new("attempt", attemptCount),
                             new("total_retry_wait_ms", totalRetryWaitMs),
                             new("retry_timeout_seconds", _retryTimeoutSeconds),
@@ -644,7 +644,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         ? $"max_retries: {_maxRetries}, timeout: {_retryTimeoutSeconds}s"
                         : $"timeout: {_retryTimeoutSeconds}s";
                     throw new InvalidOperationException(
-                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {totalRetryWaitMs / 1000}s ({retryLimits}).",
+                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {stopwatch.Elapsed.TotalSeconds:F1}s ({retryLimits}).",
                         lastException);
                 }
 
