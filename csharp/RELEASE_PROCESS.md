@@ -61,6 +61,11 @@ flowchart LR
         R3 -->|cherry-pick| R4((fix A\ntag csharp/v1.1.1))
         R4 -->|cherry-pick| R5((fix B\ntag csharp/v1.1.2))
     end
+    subgraph stable/csharp
+        R3 -.->|updated at cutoff| S1((csharp/v1.1.0))
+        R4 -.->|updated after patch| S2((csharp/v1.1.1))
+        R5 -.->|updated after patch| S3((csharp/v1.1.2))
+    end
 ```
 
 ### Phase 1: Pre-Cutoff
