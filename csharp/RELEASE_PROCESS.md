@@ -18,7 +18,7 @@
 
 ## Overview
 
-The C# driver uses a release branch model because downstream consumers (e.g., PowerBI) ship a specific driver version and cannot freely upgrade. When PowerBI ships `v1.0.0`, they may remain on that version for months. If a bug is found, they need a `v1.0.1` hotfix delivered to their `v1.0.0` release line — without being forced to take any new features from `v1.1.x` or later.
+The C# driver uses a release branch model because downstream consumers (e.g., PowerBI) ship a specific driver version and cannot freely upgrade. When PowerBI ships `v1.0.0`, they may remain on that version for months. If a bug is found, they need a `v1.0.1` hotfix delivered to their `v1.0.0` release line — without being forced to take new features from `v1.1.x` or later.
 
 This means **multiple release branches coexist simultaneously**, each independently maintainable via cherry-picks:
 
@@ -28,21 +28,19 @@ release/csharp/v1.1.0:  [v1.1.0] → cherry-pick fix → [v1.1.1]
 release/csharp/v1.2.0:  [v1.2.0]
 ```
 
-This differs from the Go and Rust drivers, which tag directly on `main` and cannot hotfix a specific past version — consumers on those drivers must upgrade to get fixes.
+This differs from the Go and Rust drivers, which tag directly on `main` and cannot hotfix a specific past version — consumers must upgrade to get fixes.
 
-The ADBC driver version is included in the user agent string sent to Databricks, making it visible in query history. This allows tracing exactly which driver version a consumer is running when investigating issues.
+The ADBC driver version is included in the user agent string sent to Databricks, making it visible in query history for tracing exactly which version a consumer is running.
 
-## Branch Naming
+## Branch and Tag Naming
 
-```
-release/csharp/vX.Y.Z
-```
-
-Examples: `release/csharp/v1.0.0`, `release/csharp/v1.1.0`
+| Artifact | Pattern | Example |
+|----------|---------|---------|
+| Release branch | `release/csharp/vX.Y.Z` | `release/csharp/v1.1.0` |
+| Tag | `csharp/vX.Y.Z` | `csharp/v1.1.1` |
+| Stable branch | `stable/csharp` | — |
 
 ## Lifecycle
-
-### Full Release Lifecycle
 
 ```mermaid
 flowchart LR
@@ -58,40 +56,24 @@ flowchart LR
     end
 ```
 
-### Phase 1: Pre-Cutoff (Active Development)
+### Phase 1: Pre-Cutoff
 
 - All new commits go to `main` as usual.
-- The release branch is created early from `main`.
-- Periodically merge `main` into the release branch to keep it current.
+- The release branch is created early from `main` and periodically merged from `main` to stay current.
 - **Never commit directly to the release branch during this phase.**
 
 ### Phase 2: Cutoff
 
-When the release is ready to freeze:
-
-```mermaid
-flowchart TD
-    A[Final merge of main into release branch] --> B[Tag the cutoff point on the release branch e.g. csharp/v1.1.0]
-    B --> C[Update stable/csharp to point to this tag]
-    C --> D[Create next release branch e.g. release/csharp/v1.2.0]
-```
-
-Opening the next release branch immediately gives the team a landing place for new work, reducing the temptation to commit directly to the frozen branch.
+1. Final merge of `main` into the release branch
+2. Tag the cutoff commit (e.g., `csharp/v1.1.0`)
+3. Update `stable/csharp` to point to this tag
+4. Create the next release branch (e.g., `release/csharp/v1.2.0`) immediately, to give the team a landing place for new work
 
 ### Phase 3: Post-Cutoff (Maintenance)
 
-- Only cherry-picks allowed, with PR review.
-- Fixes go to `main` first, then cherry-picked to the release branch.
+- Fixes go to `main` first, then cherry-picked to the release branch via PR.
 - Each cherry-pick batch gets a new patch tag (e.g., `csharp/v1.1.1`, `csharp/v1.1.2`).
-- Update `stable/csharp` after each patch tag.
-
-```mermaid
-flowchart LR
-    A[Bug found] --> B[Fix on main via PR]
-    B --> C[Cherry-pick to release branch via PR]
-    C --> D[Tag new patch version]
-    D --> E[Update stable/csharp]
-```
+- Update `stable/csharp` after each patch tag: `git push origin release/csharp/v1.1.0:stable/csharp --force`
 
 ## Scope
 
@@ -105,38 +87,11 @@ This applies **only to the C# driver**. Other drivers in the monorepo are unaffe
 
 The release branch contains the full monorepo (Git doesn't support partial branches), but only C# changes are cherry-picked and built from it.
 
-## Tag Convention
-
-```
-csharp/vX.Y.Z
-```
-
-Consistent with the existing Go convention (`go/vX.Y.Z`).
-
 ## Stable Branch
 
-A `stable/csharp` branch always points to the HEAD of the current release branch. It is updated as part of the cutoff process and after each patch tag.
-
-This is for consumers that cannot specify a branch name (e.g., systems that run a plain `git clone` with no `--branch` flag). All other consumers should pin to a specific tag or release branch directly.
-
-Update `stable/csharp` after each tag:
-
-```bash
-git push origin release/csharp/v1.1.0:stable/csharp --force
-```
-
-## Branch Protection
-
-Release branches follow the same protection rules as `main`:
-
-- Require pull request to merge
-- CI must pass
-
-Cutoff is enforced by team convention (stop merging `main`, only cherry-pick), not by additional branch restrictions.
+`stable/csharp` always points to the latest release. It exists for consumers that run a plain `git clone` with no `--branch` flag. All other consumers should pin to a specific tag or release branch directly.
 
 ## CI/CD
-
-The C# build workflow triggers on both the release branch and `stable/csharp`:
 
 ```yaml
 on:
@@ -150,13 +105,10 @@ on:
       - 'csharp/v*'
 ```
 
-On tag push, the workflow publishes the NuGet package to NuGet.org in addition to running build and tests.
+On tag push, the workflow publishes the NuGet package to NuGet.org in addition to running build and tests. Release branches require PR and passing CI to merge.
 
 ## Consumer Mapping (e.g., PowerBI)
 
-PowerBI (or any consumer) tracks which C# driver version they ship. The mapping is their responsibility. They can:
-
-- Pin to a specific tag (e.g., `csharp/v1.1.0`) — most stable, no automatic updates
-- Reference the release branch for ongoing fixes (e.g., `release/csharp/v1.1.0`) — gets cherry-picks automatically
-- Clone `stable/csharp` with a plain `git clone` — always tracks the latest release, no branch name needed
-- Check the driver version via: `git show csharp/v1.1.0:csharp/path/to/Version.props`
+- **Pin to a tag** (e.g., `csharp/v1.1.0`) — most stable, no automatic updates
+- **Track a release branch** (e.g., `release/csharp/v1.1.0`) — receives cherry-picks automatically
+- **Clone `stable/csharp`** — always tracks the latest release, no branch name needed
