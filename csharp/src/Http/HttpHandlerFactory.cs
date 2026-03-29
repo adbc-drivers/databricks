@@ -95,9 +95,19 @@ namespace AdbcDrivers.Databricks.Http
             public bool RateLimitRetry { get; set; } = true;
 
             /// <summary>
+            /// Whether to enable transport error retry (connection refused, TCP reset, DNS failure, etc.).
+            /// </summary>
+            public bool TransportErrorRetry { get; set; } = true;
+
+            /// <summary>
             /// Timeout for rate limit retry in seconds.
             /// </summary>
             public int RateLimitRetryTimeout { get; set; }
+
+            /// <summary>
+            /// Per-request timeout in seconds to detect dead connections.
+            /// </summary>
+            public int HttpRequestTimeout { get; set; } = DatabricksConstants.DefaultHttpRequestTimeout;
 
             /// <summary>
             /// Timeout in minutes for HTTP operations.
@@ -305,8 +315,8 @@ namespace AdbcDrivers.Databricks.Http
                 authHandler = new TracingDelegatingHandler(authHandler, config.ActivityTracer, config.TraceParentHeaderName, config.TraceStateEnabled);
             }
 
-            // Add retry handler (OUTSIDE tracing)
-            if (config.TemporarilyUnavailableRetry || config.RateLimitRetry)
+            // Add retry handler (OUTSIDE tracing) if any retry type is enabled
+            if (config.TemporarilyUnavailableRetry || config.RateLimitRetry || config.TransportErrorRetry)
             {
                 handler = new RetryHttpHandler(
                     handler,
@@ -314,14 +324,18 @@ namespace AdbcDrivers.Databricks.Http
                     config.TemporarilyUnavailableRetryTimeout,
                     config.RateLimitRetryTimeout,
                     config.TemporarilyUnavailableRetry,
-                    config.RateLimitRetry);
+                    config.RateLimitRetry,
+                    transportErrorRetryEnabled: config.TransportErrorRetry,
+                    httpRequestTimeoutSeconds: config.HttpRequestTimeout);
                 authHandler = new RetryHttpHandler(
                     authHandler,
                     config.ActivityTracer,
                     config.TemporarilyUnavailableRetryTimeout,
                     config.RateLimitRetryTimeout,
                     config.TemporarilyUnavailableRetry,
-                    config.RateLimitRetry);
+                    config.RateLimitRetry,
+                    transportErrorRetryEnabled: config.TransportErrorRetry,
+                    httpRequestTimeoutSeconds: config.HttpRequestTimeout);
             }
 
             // Add Thrift error handler if requested (for Thrift connections only)

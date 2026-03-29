@@ -87,6 +87,7 @@ namespace AdbcDrivers.Databricks
         private long _maxBytesPerFetchRequest = DefaultMaxBytesPerFetchRequest;
         private const bool DefaultRetryOnUnavailable = true;
         private const bool DefaultRateLimitRetry = true;
+        private const bool DefaultTransportErrorRetry = true;
         private bool _useDescTableExtended = false;
 
         // Trace propagation configuration
@@ -397,6 +398,16 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         protected int RateLimitRetryTimeout { get; private set; } = DatabricksConstants.DefaultRateLimitRetryTimeout;
 
+        /// <summary>
+        /// Gets a value indicating whether to retry requests that fail due to transport-level errors.
+        /// </summary>
+        protected bool TransportErrorRetry { get; private set; } = DefaultTransportErrorRetry;
+
+        /// <summary>
+        /// Gets the per-request timeout in seconds to detect dead connections.
+        /// </summary>
+        protected int HttpRequestTimeout { get; private set; } = DatabricksConstants.DefaultHttpRequestTimeout;
+
         protected override HttpMessageHandler CreateHttpHandler()
         {
             HttpMessageHandler baseHandler = base.CreateHttpHandler();
@@ -417,6 +428,8 @@ namespace AdbcDrivers.Databricks
                 TemporarilyUnavailableRetryTimeout = TemporarilyUnavailableRetryTimeout,
                 RateLimitRetry = RateLimitRetry,
                 RateLimitRetryTimeout = RateLimitRetryTimeout,
+                TransportErrorRetry = TransportErrorRetry,
+                HttpRequestTimeout = HttpRequestTimeout,
                 TimeoutMinutes = 1,
                 AddThriftErrorHandler = true
             };
@@ -937,6 +950,28 @@ namespace AdbcDrivers.Databricks
                         $"must be a value of 0 (retry indefinitely) or a positive integer representing seconds. Default is 120 seconds (2 minutes).");
                 }
                 RateLimitRetryTimeout = rateLimitRetryTimeoutValue;
+            }
+
+            if (Properties.TryGetValue(DatabricksParameters.TransportErrorRetry, out string? transportErrorRetryStr))
+            {
+                if (!bool.TryParse(transportErrorRetryStr, out bool transportErrorRetryValue))
+                {
+                    throw new ArgumentOutOfRangeException(DatabricksParameters.TransportErrorRetry, transportErrorRetryStr,
+                        $"must be a value of false (disabled) or true (enabled). Default is true.");
+                }
+
+                TransportErrorRetry = transportErrorRetryValue;
+            }
+
+            if (Properties.TryGetValue(DatabricksParameters.HttpRequestTimeout, out string? httpRequestTimeoutStr))
+            {
+                if (!int.TryParse(httpRequestTimeoutStr, out int httpRequestTimeoutValue) ||
+                    httpRequestTimeoutValue < 0)
+                {
+                    throw new ArgumentOutOfRangeException(DatabricksParameters.HttpRequestTimeout, httpRequestTimeoutStr,
+                        $"must be a value of 0 (disabled) or a positive integer representing seconds. Default is 900 seconds (15 minutes).");
+                }
+                HttpRequestTimeout = httpRequestTimeoutValue;
             }
 
             // When TemporarilyUnavailableRetry is enabled, we need to make sure connection timeout (which is used to cancel the HttpConnection) is equal

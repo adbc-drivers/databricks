@@ -25,6 +25,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
@@ -33,8 +34,11 @@ using Apache.Arrow.Adbc.Tracing;
 namespace AdbcDrivers.Databricks
 {
     /// <summary>
-    /// HTTP handler that implements retry behavior for 408, 429, 502, 503, and 504 responses.
-    /// Uses Retry-After header if present, otherwise uses exponential backoff.
+    /// HTTP handler that implements retry behavior for retryable HTTP responses and transient transport errors.
+    /// Retries 408, 429, 502, 503, and 504 responses using Retry-After header if present, otherwise exponential backoff.
+    /// Also retries transient transport-level errors (connection refused, TCP reset, DNS failure, etc.)
+    /// with exponential backoff. A per-request timeout detects dead connections (e.g., half-open TCP)
+    /// that would otherwise hang indefinitely.
     /// </summary>
     internal class RetryHttpHandler : DelegatingHandler, IActivityTracer
     {
@@ -43,6 +47,8 @@ namespace AdbcDrivers.Databricks
         private readonly int _rateLimitRetryTimeoutSeconds;
         private readonly bool _retryTemporarilyUnavailableEnabled;
         private readonly bool _rateLimitRetryEnabled;
+        private readonly bool _transportErrorRetryEnabled;
+        private readonly int _httpRequestTimeoutSeconds;
         private readonly int _initialBackoffSeconds = 1;
         private readonly int _maxBackoffSeconds = 32;
 
@@ -54,7 +60,7 @@ namespace AdbcDrivers.Databricks
         /// <param name="retryTimeoutSeconds">Maximum total time in seconds to retry retryable responses (408, 502, 503, 504) before failing.</param>
         /// <param name="rateLimitRetryTimeoutSeconds">Maximum total time in seconds to retry HTTP 429 responses before failing.</param>
         public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds)
-            : this(innerHandler, activityTracer, retryTimeoutSeconds, rateLimitRetryTimeoutSeconds, true, true)
+            : this(innerHandler, activityTracer, retryTimeoutSeconds, rateLimitRetryTimeoutSeconds, true, true, true, DatabricksConstants.DefaultHttpRequestTimeout)
         {
         }
 
@@ -67,7 +73,9 @@ namespace AdbcDrivers.Databricks
         /// <param name="rateLimitRetryTimeoutSeconds">Maximum total time in seconds to retry 429 (rate limit) responses before failing.</param>
         /// <param name="retryTemporarilyUnavailableEnabled">Whether to retry temporarily unavailable (408, 502, 503, 504) responses.</param>
         /// <param name="rateLimitRetryEnabled">Whether to retry HTTP 429 responses.</param>
-        public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled)
+        /// <param name="transportErrorRetryEnabled">Whether to retry transport-level errors (connection reset, DNS failure, etc.).</param>
+        /// <param name="httpRequestTimeoutSeconds">Per-request timeout in seconds to detect dead connections. Default 900s (15 min) matches JDBC socketTimeout.</param>
+        public RetryHttpHandler(HttpMessageHandler innerHandler, IActivityTracer activityTracer, int retryTimeoutSeconds, int rateLimitRetryTimeoutSeconds, bool retryTemporarilyUnavailableEnabled, bool rateLimitRetryEnabled, bool transportErrorRetryEnabled = true, int httpRequestTimeoutSeconds = DatabricksConstants.DefaultHttpRequestTimeout)
             : base(innerHandler)
         {
             _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
@@ -75,6 +83,8 @@ namespace AdbcDrivers.Databricks
             _rateLimitRetryTimeoutSeconds = rateLimitRetryTimeoutSeconds;
             _retryTemporarilyUnavailableEnabled = retryTemporarilyUnavailableEnabled;
             _rateLimitRetryEnabled = rateLimitRetryEnabled;
+            _transportErrorRetryEnabled = transportErrorRetryEnabled;
+            _httpRequestTimeoutSeconds = httpRequestTimeoutSeconds;
         }
 
         /// <summary>
@@ -91,10 +101,12 @@ namespace AdbcDrivers.Databricks
 
             HttpResponseMessage response;
             string? lastErrorMessage = null;
+            Exception? lastTransportException = null;
             int attemptCount = 0;
             int currentBackoffSeconds = _initialBackoffSeconds;
             int totalServiceUnavailableRetrySeconds = 0;
             int totalTooManyRequestsRetrySeconds = 0;
+            int totalTransportErrorRetrySeconds = 0;
 
             // Use TraceActivityAsync to wrap the entire retry logic
             return await this.TraceActivityAsync(async activity =>
@@ -107,7 +119,57 @@ namespace AdbcDrivers.Databricks
                         request.Content = await CloneHttpContentAsync(requestContentClone);
                     }
 
-                    response = await base.SendAsync(request, cancellationToken);
+                    // Try to send the request, catching transport-level errors for retry.
+                    // Use a per-request timeout to detect dead connections (e.g., TCP half-open).
+                    // This is separate from the caller's cancellation token (query timeout).
+                    using var requestTimeoutCts = _httpRequestTimeoutSeconds > 0
+                        ? new CancellationTokenSource(TimeSpan.FromSeconds(_httpRequestTimeoutSeconds))
+                        : null;
+                    using var linkedCts = requestTimeoutCts != null
+                        ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestTimeoutCts.Token)
+                        : null;
+                    var requestToken = linkedCts?.Token ?? cancellationToken;
+
+                    try
+                    {
+                        response = await base.SendAsync(request, requestToken);
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested
+                        && _transportErrorRetryEnabled
+                        && IsTransientTransportException(ex, cancellationToken))
+                    {
+
+                        attemptCount++;
+                        lastTransportException = ex;
+
+                        activity?.SetTag("http.retry.attempt", attemptCount);
+                        activity?.SetTag("http.retry.transport_error", ex.GetType().Name);
+                        activity?.SetTag("http.retry.transport_error_message", ex.Message);
+
+                        int transportWaitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
+                        lastErrorMessage = $"Transport error ({ex.GetType().Name}: {ex.Message}). Using exponential backoff of {transportWaitSeconds} seconds. Attempt {attemptCount}.";
+
+                        // Reset the request content for the next attempt
+                        request.Content = null;
+
+                        // Check if we would exceed the transport error retry timeout
+                        if (_retryTimeoutSeconds > 0 && totalTransportErrorRetrySeconds + transportWaitSeconds > _retryTimeoutSeconds)
+                        {
+                            activity?.SetTag("http.retry.outcome", "transport_error_timeout_exceeded");
+                            activity?.SetTag("http.retry.total_attempts", attemptCount);
+                            break;
+                        }
+                        totalTransportErrorRetrySeconds += transportWaitSeconds;
+
+                        await Task.Delay(TimeSpan.FromSeconds(transportWaitSeconds), cancellationToken);
+                        currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
+                        continue;
+                    }
+
+                    // We got a response — clear any earlier transport error so the final
+                    // exception (if we later exceed the HTTP retry budget) reflects the
+                    // actual HTTP failure, not a stale transport error.
+                    lastTransportException = null;
 
                     // If it's not a retryable status code, return immediately
                     if (!IsRetryableStatusCode(response.StatusCode))
@@ -199,6 +261,16 @@ namespace AdbcDrivers.Databricks
                     throw new OperationCanceledException("Request cancelled during retry wait", cancellationToken);
                 }
 
+                // If the last error was a transport error, wrap and rethrow the original exception
+                if (lastTransportException != null)
+                {
+                    throw new DatabricksException(
+                        lastErrorMessage ?? $"Transport error and retry timeout exceeded: {lastTransportException.Message}",
+                        AdbcStatusCode.IOError,
+                        lastTransportException)
+                        .SetSqlState("08001");
+                }
+
                 throw new DatabricksException(lastErrorMessage ?? "Service temporarily unavailable and retry timeout exceeded", AdbcStatusCode.IOError)
                     .SetSqlState("08001");
             });
@@ -241,6 +313,56 @@ namespace AdbcDrivers.Databricks
             Random random = new Random();
             double jitterFactor = 0.8 + (random.NextDouble() * 0.4); // Between 0.8 and 1.2
             return (int)Math.Max(1, baseBackoffSeconds * jitterFactor);
+        }
+
+        /// <summary>
+        /// Determines if an exception represents a transient transport-level error
+        /// that should be retried (e.g., connection reset, DNS failure, TCP errors).
+        /// Excludes user-initiated cancellations.
+        /// </summary>
+        private static bool IsTransientTransportException(Exception ex, CancellationToken cancellationToken)
+        {
+            // Never retry if the caller explicitly cancelled
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            // HttpRequestException: connection refused, DNS failure, TCP reset, etc.
+            if (ex is HttpRequestException)
+            {
+                return true;
+            }
+
+            // IOException: connection dropped mid-transfer
+            if (ex is IOException)
+            {
+                return true;
+            }
+
+            // SocketException: low-level network errors (wrapped or standalone)
+            if (ex is SocketException)
+            {
+                return true;
+            }
+
+            // TaskCanceledException NOT caused by the caller's token.
+            // Only treat as transient if the associated token has actually been canceled.
+            if (ex is TaskCanceledException tce
+                && tce.CancellationToken != cancellationToken
+                && tce.CancellationToken.CanBeCanceled
+                && tce.CancellationToken.IsCancellationRequested)
+            {
+                return true;
+            }
+
+            // Check inner exceptions — transport errors are often wrapped
+            if (ex.InnerException != null)
+            {
+                return IsTransientTransportException(ex.InnerException, cancellationToken);
+            }
+
+            return false;
         }
 
         /// <summary>
