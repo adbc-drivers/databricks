@@ -250,6 +250,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// Gets the error encountered by the downloader, if any.
         /// </summary>
         Exception? Error { get; }
+
+        /// <summary>
+        /// Gets the aggregated chunk metrics for this downloader.
+        /// Returns a snapshot of current metrics that can be safely passed to telemetry.
+        /// </summary>
+        /// <returns>A ChunkMetrics object containing aggregated metrics.</returns>
+        ChunkMetrics GetChunkMetrics();
     }
 
     /// <summary>
@@ -280,5 +287,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// Gets a value indicating whether there are more results available.
         /// </summary>
         bool HasMoreResults { get; }
+
+        /// <summary>
+        /// Gets the aggregated chunk metrics from the downloader.
+        /// Returns a snapshot of current metrics that can be safely passed to telemetry.
+        /// </summary>
+        /// <returns>A ChunkMetrics object containing aggregated metrics.</returns>
+        ChunkMetrics GetChunkMetrics();
     }
 }

@@ -292,3 +292,6 @@ generated_task_specs.json
 
 # Git worktrees
 .worktrees/
+
+# Demo directory (local only)
+demo/
