@@ -18,7 +18,17 @@
 
 ## Overview
 
-The C# driver uses a release branch model to provide stable, hotfixable releases. Downstream consumers (e.g., PowerBI) pin to a specific version and receive cherry-picked fixes without pulling in all new development work.
+The C# driver uses a release branch model because downstream consumers (e.g., PowerBI) ship a specific driver version and cannot freely upgrade. When PowerBI ships `v1.0.0`, they may remain on that version for months. If a bug is found, they need a `v1.0.1` hotfix delivered to their `v1.0.0` release line — without being forced to take any new features from `v1.1.x` or later.
+
+This means **multiple release branches coexist simultaneously**, each independently maintainable via cherry-picks:
+
+```
+release/csharp/v1.0.0:  [v1.0.0] → cherry-pick fix → [v1.0.1] → cherry-pick fix → [v1.0.2]
+release/csharp/v1.1.0:  [v1.1.0] → cherry-pick fix → [v1.1.1]
+release/csharp/v1.2.0:  [v1.2.0]
+```
+
+This differs from the Go and Rust drivers, which tag directly on `main` and cannot hotfix a specific past version — consumers on those drivers must upgrade to get fixes.
 
 The ADBC driver version is included in the user agent string sent to Databricks, making it visible in query history. This allows tracing exactly which driver version a consumer is running when investigating issues.
 
@@ -87,10 +97,10 @@ flowchart LR
 
 This applies **only to the C# driver**. Other drivers in the monorepo are unaffected:
 
-| Driver | Release Mechanism | Status |
-|--------|------------------|--------|
-| **C#** | Release branches + tags | Current |
-| **Go** | Tags on `main` (`go/v0.1.x`) | Existing |
+| Driver | Release Mechanism | Can hotfix old patch? |
+|--------|------------------|-----------------------|
+| **C#** | Release branches + tags | Yes — each minor version has its own branch |
+| **Go** | Tags on `main` (`go/v0.1.x`) | No — consumers must upgrade |
 | **Rust** | None | — |
 
 The release branch contains the full monorepo (Git doesn't support partial branches), but only C# changes are cherry-picked and built from it.
