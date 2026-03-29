@@ -561,10 +561,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             ]);
                         }
 
-                        // Read the file data with an explicit timeout matching HttpClient.Timeout.
+                        // Read the file data with an explicit timeout.
                         // ReadAsByteArrayAsync() on net472 has no CancellationToken overload,
-                        // and HttpClient.Timeout may not propagate to body reads on all runtimes
-                        // when HttpCompletionOption.ResponseHeadersRead is used.
+                        // and HttpClient.Timeout does not protect body reads when
+                        // HttpCompletionOption.ResponseHeadersRead is used — SendAsync returns
+                        // after headers, and the subsequent body read is a separate call on
+                        // HttpContent with no timeout coverage.
                         // Using CopyToAsync with an explicit token ensures dead TCP connections
                         // are detected on every 81920-byte chunk read.
                         using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
@@ -582,6 +584,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 #endif
                         }
                         break; // Success, exit retry loop
+                    }
+                    catch (OperationCanceledException oce) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        // Body read timeout (from the linked CTS) fired, not a real cancellation.
+                        // Convert to a fault so the download continuation handles it correctly —
+                        // otherwise t.IsCanceled leaves DownloadCompletedTask never completing.
+                        throw new TimeoutException($"CloudFetch body read timed out after {_timeoutMinutes} minutes for offset {downloadResult.StartRowOffset}.", oce);
                     }
                     catch (Exception ex) when (retry < _maxRetries - 1 && !cancellationToken.IsCancellationRequested)
                     {
