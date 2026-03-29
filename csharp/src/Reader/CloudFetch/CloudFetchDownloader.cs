@@ -644,8 +644,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         ? $"max_retries: {_maxRetries}, timeout: {_retryTimeoutSeconds}s"
                         : $"timeout: {_retryTimeoutSeconds}s";
                     throw new InvalidOperationException(
-                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {stopwatch.Elapsed.TotalSeconds:F1}s ({retryLimits}).",
-                        lastException);
+                        $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {stopwatch.Elapsed.TotalSeconds:F1}s ({retryLimits}). Last error: {lastException?.GetType().Name ?? "unknown"}");
                 }
 
                 // Process the downloaded file data
