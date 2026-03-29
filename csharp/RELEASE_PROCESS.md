@@ -41,12 +41,10 @@ flowchart LR
     end
     subgraph release/csharp/v1.1.0
         B -.->|branch| R1((start))
-        C -.->|merge| R2((merge C))
-        R1 --> R2
-        D -.->|merge + tag v1.1.0| R3((cutoff))
-        R2 --> R3
-        R3 -->|cherry-pick| R4((fix A\ntag v1.1.1))
-        R4 -->|cherry-pick| R5((fix B\ntag v1.1.2))
+        R1 --> R2((merges\nfrom main))
+        R2 -->|final merge + tag csharp/v1.1.0| R3((cutoff))
+        R3 -->|cherry-pick| R4((fix A\ntag csharp/v1.1.1))
+        R4 -->|cherry-pick| R5((fix B\ntag csharp/v1.1.2))
     end
 ```
 
@@ -64,20 +62,25 @@ When the release is ready to freeze:
 ```mermaid
 flowchart TD
     A[Final merge of main into release branch] --> B[Tag the cutoff point on the release branch e.g. csharp/v1.1.0]
-    B --> C[Create next release branch e.g. release/csharp/v1.2.0]
+    B --> C[Update stable/csharp to point to this tag]
+    C --> D[Create next release branch e.g. release/csharp/v1.2.0]
 ```
+
+Opening the next release branch immediately gives the team a landing place for new work, reducing the temptation to commit directly to the frozen branch.
 
 ### Phase 3: Post-Cutoff (Maintenance)
 
 - Only cherry-picks allowed, with PR review.
 - Fixes go to `main` first, then cherry-picked to the release branch.
 - Each cherry-pick batch gets a new patch tag (e.g., `csharp/v1.1.1`, `csharp/v1.1.2`).
+- Update `stable/csharp` after each patch tag.
 
 ```mermaid
 flowchart LR
     A[Bug found] --> B[Fix on main via PR]
     B --> C[Cherry-pick to release branch via PR]
     C --> D[Tag new patch version]
+    D --> E[Update stable/csharp]
 ```
 
 ## Scope
@@ -100,6 +103,18 @@ csharp/vX.Y.Z
 
 Consistent with the existing Go convention (`go/vX.Y.Z`).
 
+## Stable Branch
+
+A `stable/csharp` branch always points to the HEAD of the current release branch. It is updated as part of the cutoff process and after each patch tag.
+
+This is for consumers that cannot specify a branch name (e.g., systems that run a plain `git clone` with no `--branch` flag). All other consumers should pin to a specific tag or release branch directly.
+
+Update `stable/csharp` after each tag:
+
+```bash
+git push origin release/csharp/v1.1.0:stable/csharp --force
+```
+
 ## Branch Protection
 
 Release branches follow the same protection rules as `main`:
@@ -111,19 +126,27 @@ Cutoff is enforced by team convention (stop merging `main`, only cherry-pick), n
 
 ## CI/CD
 
-Scope the C# build/publish workflow to trigger on the release branch:
+The C# build workflow triggers on both the release branch and `stable/csharp`:
 
 ```yaml
 on:
   push:
-    branches: ['release/csharp/*']
+    branches:
+      - 'release/csharp/*'
+      - 'stable/csharp'
     paths: ['csharp/**']
+  push:
+    tags:
+      - 'csharp/v*'
 ```
+
+On tag push, the workflow publishes the NuGet package to NuGet.org in addition to running build and tests.
 
 ## Consumer Mapping (e.g., PowerBI)
 
 PowerBI (or any consumer) tracks which C# driver version they ship. The mapping is their responsibility. They can:
 
-- Pin to a specific tag (e.g., `csharp/v1.1.0`)
-- Reference the release branch for ongoing fixes (e.g., `release/csharp/v1.1.0`)
+- Pin to a specific tag (e.g., `csharp/v1.1.0`) — most stable, no automatic updates
+- Reference the release branch for ongoing fixes (e.g., `release/csharp/v1.1.0`) — gets cherry-picks automatically
+- Clone `stable/csharp` with a plain `git clone` — always tracks the latest release, no branch name needed
 - Check the driver version via: `git show csharp/v1.1.0:csharp/path/to/Version.props`
