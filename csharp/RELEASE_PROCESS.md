@@ -55,31 +55,24 @@ flowchart LR
         A((A)) --> B((B)) --> C((C)) --> D((D)) --> E((E)) --> F((F))
     end
     subgraph release/csharp/v1.1.0
-        B -.->|branch| R1((start))
-        R1 --> R2((merges\nfrom main))
-        R2 -->|final merge + tag csharp/v1.1.0| R3((cutoff))
-        R3 -->|cherry-pick| R4((fix A\ntag csharp/v1.1.1))
-        R4 -->|cherry-pick| R5((fix B\ntag csharp/v1.1.2))
+        D -.->|branch + tag csharp/v1.1.0| R1((cutoff))
+        R1 -->|cherry-pick| R2((fix A\ntag csharp/v1.1.1))
+        R2 -->|cherry-pick| R3((fix B\ntag csharp/v1.1.2))
     end
-    R3 -.->|update| STABLE[stable/csharp]
-    R4 -.->|update| STABLE
-    R5 -.->|update| STABLE
+    R1 -.->|update| STABLE[stable/csharp]
+    R2 -.->|update| STABLE
+    R3 -.->|update| STABLE
 ```
 
-### Phase 1: Pre-Cutoff
+### Cutoff
 
-- All new commits go to `main` as usual.
-- The release branch is created early from `main` and periodically merged from `main` to stay current.
-- **Never commit directly to the release branch during this phase.**
+When ready to release, branch off `main` and tag immediately:
 
-### Phase 2: Cutoff
-
-1. Final merge of `main` into the release branch
-2. Tag the cutoff commit (e.g., `csharp/v1.1.0`)
+1. Create `release/csharp/v1.1.0` from the desired commit on `main`
+2. Tag that commit `csharp/v1.1.0`
 3. Update `stable/csharp` to point to this tag
-4. Create the next release branch (e.g., `release/csharp/v1.2.0`) immediately, to give the team a landing place for new work
 
-### Phase 3: Post-Cutoff (Maintenance)
+### Post-Cutoff (Maintenance)
 
 - Fixes go to `main` first, then cherry-picked to the release branch via PR.
 - Each cherry-pick batch gets a new patch tag (e.g., `csharp/v1.1.1`, `csharp/v1.1.2`).
