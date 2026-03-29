@@ -40,6 +40,13 @@ The ADBC driver version is included in the user agent string sent to Databricks,
 | Tag | `csharp/vX.Y.Z` | `csharp/v1.1.1` |
 | Stable branch | `stable/csharp` | — |
 
+## Versioning Rules
+
+- **New release branch** (cutoff): bump the **minor** version — `v1.1.0` → `v1.2.0`
+- **Hotfix on existing release branch**: bump the **patch** version — `v1.1.0` → `v1.1.1` → `v1.1.2`
+
+The major version is reserved for breaking changes.
+
 ## Lifecycle
 
 ```mermaid
