@@ -172,10 +172,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public async Task StopsPollingOnException()
+        public async Task ContinuesPollingOnException()
         {
             // Arrange
-            var poller = new DatabricksOperationStatusPoller(_mockStatement.Object, _mockResponse.Object, _heartbeatIntervalSeconds);
+            using var poller = new DatabricksOperationStatusPoller(_mockStatement.Object, _mockResponse.Object, _heartbeatIntervalSeconds);
             var pollCount = 0;
             _mockClient.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new Exception("Test exception"))
@@ -186,15 +186,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds * 3)); // Wait longer than heartbeat interval
 
             // Assert
-            // Should stop polling after the exception
-            Assert.Equal(1, pollCount);
-            try
-            {
-                poller.Dispose();
-            }
-            catch (Exception)
-            {
-            }
+            // Should continue polling despite the exception (transient error resilience)
+            Assert.True(pollCount > 1, $"Expected multiple polls despite exceptions but got {pollCount}");
         }
 
         [Fact]
