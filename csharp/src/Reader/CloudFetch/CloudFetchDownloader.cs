@@ -599,23 +599,20 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
                         {
                             bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
-#if NET5_0_OR_GREATER
-                            fileData = await response.Content.ReadAsByteArrayAsync(bodyTimeoutCts.Token).ConfigureAwait(false);
-#else
                             using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                             {
-                                // Pre-allocate with Content-Length when available, matching .NET 5+'s
-                                // LimitArrayPoolWriteStream which also sizes from Content-Length internally.
-                                // Cap at 100MB to avoid int.MaxValue allocation failures.
+                                // Pre-allocate with Content-Length when available (CloudFetch always provides it).
+                                // Cap at 100MB to avoid excessive memory pressure on constrained hosts.
                                 const int MaxPreAllocBytes = 100 * 1024 * 1024;
                                 int capacity = contentLength.HasValue && contentLength.Value > 0
                                     ? (int)Math.Min(contentLength.Value, MaxPreAllocBytes)
                                     : 0;
-                                var memoryStream = new MemoryStream(capacity);
-                                await contentStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
-                                fileData = memoryStream.ToArray();
+                                using (var memoryStream = new MemoryStream(capacity))
+                                {
+                                    await contentStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
+                                    fileData = memoryStream.ToArray();
+                                }
                             }
-#endif
                         }
                         break; // Success, exit retry loop
                     }
