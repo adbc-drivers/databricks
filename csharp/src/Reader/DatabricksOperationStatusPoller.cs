@@ -108,6 +108,13 @@ namespace AdbcDrivers.Databricks.Reader
                     // Track poll count for telemetry
                     _pollCount++;
 
+                    Activity.Current?.AddEvent(new ActivityEvent("operation_status_poller.poll_success",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "poll_count", _pollCount },
+                            { "operation_state", response.OperationState.ToString() }
+                        }));
+
                     // end the heartbeat if the command has terminated
                     if (response.OperationState == TOperationState.CANCELED_STATE ||
                         response.OperationState == TOperationState.ERROR_STATE ||
