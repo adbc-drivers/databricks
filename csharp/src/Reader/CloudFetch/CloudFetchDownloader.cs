@@ -621,13 +621,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         }
                         break; // Success, exit retry loop
                     }
-                    catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        // Body read timeout (from the linked CTS) fired, not a real cancellation.
-                        // Convert to a fault so the download continuation handles it correctly —
-                        // otherwise t.IsCanceled leaves DownloadCompletedTask never completing.
-                        throw new TimeoutException($"CloudFetch body read timed out after {_timeoutMinutes} minutes for offset {downloadResult.StartRowOffset}.", ex);
-                    }
                     catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
                         lastException = ex;
