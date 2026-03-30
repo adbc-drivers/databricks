@@ -8,6 +8,14 @@
     "category": "large-wide"
   },
   {
+    "name": "catalog_sales_sf10",
+    "description": "Catalog sales SF10 - 14.4M rows, 34 columns (CloudFetch parity benchmark with JDBC)",
+    "query": "select * from main.tpcds_sf10_delta.catalog_sales",
+    "expected_rows": 14400425,
+    "columns": 34,
+    "category": "large-wide"
+  },
+  {
     "name": "catalog_sales",
     "description": "Catalog sales - 1.4M rows, 34 columns (current default)",
     "query": "select * from main.tpcds_sf1_delta.catalog_sales",

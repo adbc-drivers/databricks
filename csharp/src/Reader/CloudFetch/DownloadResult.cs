@@ -25,6 +25,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using Apache.Arrow;
 using Apache.Hive.Service.Rpc.Thrift;
 
 namespace AdbcDrivers.Databricks.Reader.CloudFetch
@@ -42,6 +43,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private string _fileUrl;
         private DateTime _expirationTime;
         private IReadOnlyDictionary<string, string>? _httpHeaders;
+
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DownloadResult"/> class.
@@ -136,6 +138,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
         }
 
+        /// <summary>
+        /// Gets pre-parsed Arrow record batches. When populated, the reader should iterate
+        /// these directly instead of creating an ArrowStreamReader from DataStream.
+        /// This moves Arrow IPC parsing from the reader thread to the download thread,
+        /// matching JDBC's architecture where download threads pre-parse all batches.
+        /// </summary>
+        internal IReadOnlyList<RecordBatch>? PreParsedBatches { get; private set; }
+
         /// <inheritdoc />
         public long Size => _size;
 
@@ -149,6 +159,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// Gets the number of URL refresh attempts for this download.
         /// </summary>
         public int RefreshAttempts { get; private set; } = 0;
+
 
         /// <summary>
         /// Checks if the URL is expired or about to expire.
@@ -185,6 +196,18 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _size = size;
         }
 
+        /// <summary>
+        /// Sets the download as completed with pre-parsed Arrow record batches.
+        /// The download thread parses Arrow IPC so the reader thread just iterates batches.
+        /// </summary>
+        internal void SetCompletedWithBatches(IReadOnlyList<RecordBatch> batches, long size)
+        {
+            ThrowIfDisposed();
+            PreParsedBatches = batches ?? throw new ArgumentNullException(nameof(batches));
+            _downloadCompletionSource.TrySetResult(true);
+            _size = size;
+        }
+
         /// <inheritdoc />
         public void SetFailed(Exception exception)
         {
@@ -204,12 +227,22 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 _dataStream.Dispose();
                 _dataStream = null;
+            }
 
-                // Release memory back to the manager
-                if (_size > 0)
+            // Dispose pre-parsed batches if present
+            if (PreParsedBatches != null)
+            {
+                foreach (var batch in PreParsedBatches)
                 {
-                    _memoryManager.ReleaseMemory(_size);
+                    batch.Dispose();
                 }
+                PreParsedBatches = null;
+            }
+
+            // Release memory back to the manager
+            if (_size > 0)
+            {
+                _memoryManager.ReleaseMemory(_size);
             }
 
             // Ensure any waiting tasks are completed if not already

@@ -27,6 +27,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
+using System.Collections.Generic;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -47,6 +48,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private ICloudFetchDownloadManager? downloadManager;
         private ArrowStreamReader? currentReader;
         private IDownloadResult? currentDownloadResult;
+
+        // JDBC/Rust-style chunk map: indexed by chunk number, no queue serialization.
+        // Used on .NET Framework for true parallel downloads.
+        private JdbcStyleChunkMap? _chunkMap;
+        private long _currentChunkIndex;
+
+        // Pre-parsed batch iteration (JDBC parity): when download threads pre-parse
+        // Arrow IPC, the reader iterates these directly instead of parsing on-the-fly.
+        private IReadOnlyList<RecordBatch>? _preParsedBatches;
+        private int _preParsedBatchIndex;
 
         // Row count limiting supports two modes:
         // 1. Global limiting (SEA/REST): Uses manifest.TotalRowCount for total expected rows
@@ -88,6 +99,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         }
 
         /// <summary>
+        /// Sets the JDBC/Rust-style chunk map for indexed parallel downloads.
+        /// When set, the reader uses WaitForChunk(index) instead of the queue-based download manager.
+        /// </summary>
+        internal void SetChunkMap(JdbcStyleChunkMap chunkMap)
+        {
+            _chunkMap = chunkMap ?? throw new ArgumentNullException(nameof(chunkMap));
+        }
+
+        /// <summary>
         /// Reads the next record batch from the result set.
         /// </summary>
         /// <param name="cancellationToken">The cancellation token.</param>
@@ -122,7 +142,30 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         CleanupCurrentReaderAndDownloadResult();
                     }
 
-                    // If we have a current reader, try to read the next batch
+                    // If we have pre-parsed batches (Arrow parsing done on download thread),
+                    // iterate them directly — pure memory access, no IPC parsing on reader thread.
+                    if (_preParsedBatches != null)
+                    {
+                        if (_preParsedBatchIndex < _preParsedBatches.Count)
+                        {
+                            RecordBatch? next = _preParsedBatches[_preParsedBatchIndex++];
+                            next = ApplyRowCountLimit(next);
+                            if (next != null)
+                            {
+                                return next;
+                            }
+                            continue;
+                        }
+                        else
+                        {
+                            // All pre-parsed batches consumed — clean up
+                            _preParsedBatches = null;
+                            _preParsedBatchIndex = 0;
+                            CleanupCurrentReaderAndDownloadResult();
+                        }
+                    }
+
+                    // Fallback: if we have a streaming reader, parse on-the-fly
                     if (this.currentReader != null)
                     {
                         RecordBatch? next = await this.currentReader.ReadNextRecordBatchAsync(cancellationToken);
@@ -144,7 +187,24 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         }
                     }
 
-                    // If we don't have a current reader, get the next downloaded file
+                    // JDBC/Rust-style: get next chunk by INDEX from the concurrent map.
+                    // No queue serialization — chunks complete in any order, consumer reads in order.
+                    if (_chunkMap != null)
+                    {
+                        var batches = _chunkMap.WaitForChunk(_currentChunkIndex, cancellationToken);
+                        if (batches == null || batches.Count == 0)
+                        {
+                            _chunkMap.Dispose();
+                            _chunkMap = null;
+                            return null;
+                        }
+                        _preParsedBatches = batches;
+                        _preParsedBatchIndex = 0;
+                        _currentChunkIndex++;
+                        continue;
+                    }
+
+                    // Queue-based path (used on .NET 8 with async download manager)
                     if (this.downloadManager != null)
                     {
                         try
@@ -183,9 +243,20 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 new("chunk_bytes", this.currentDownloadResult.Size)
                             ]);
 
-                            // Create a new reader for the downloaded file
+                            // Use pre-parsed batches if available (Arrow parsing done on download thread).
+                            // This matches JDBC's architecture where download threads pre-parse all
+                            // Arrow batches, so the reader just iterates — pure memory access.
                             try
                             {
+                                var concreteResult = this.currentDownloadResult as DownloadResult;
+                                if (concreteResult?.PreParsedBatches != null)
+                                {
+                                    this._preParsedBatches = concreteResult.PreParsedBatches;
+                                    this._preParsedBatchIndex = 0;
+                                    continue;
+                                }
+
+                                // Fallback: parse on reader thread (for non-DownloadResult implementations)
                                 this.currentReader = new ArrowStreamReader(this.currentDownloadResult.DataStream);
                                 continue;
                             }
@@ -324,6 +395,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 this.currentDownloadResult.Dispose();
                 this.currentDownloadResult = null;
+            }
+
+            if (_chunkMap != null)
+            {
+                _chunkMap.Stop();
+                _chunkMap.Dispose();
+                _chunkMap = null;
             }
 
             if (this.downloadManager != null)
