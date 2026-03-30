@@ -86,24 +86,22 @@ namespace AdbcDrivers.Databricks.Reader
             _internalCts = new CancellationTokenSource();
             // create a linked token to the external token so that the external token can cancel the operation status polling task if needed
             var linkedToken = CancellationTokenSource.CreateLinkedTokenSource(_internalCts.Token, externalToken).Token;
-            _operationStatusPollingTask = Task.Run(() => PollOperationStatus(linkedToken));
+            _operationStatusPollingTask = Task.Run(async () =>
+            {
+                if (_activityTracer != null)
+                {
+                    await _activityTracer.Trace.TraceActivityAsync(
+                        activity => PollOperationStatus(linkedToken, activity),
+                        activityName: "PollOperationStatus").ConfigureAwait(false);
+                }
+                else
+                {
+                    await PollOperationStatus(linkedToken, null).ConfigureAwait(false);
+                }
+            });
         }
 
-        private async Task PollOperationStatus(CancellationToken cancellationToken)
-        {
-            if (_activityTracer == null)
-            {
-                await PollOperationStatusCore(null, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await _activityTracer.Trace.TraceActivityAsync(
-                    activity => PollOperationStatusCore(activity, cancellationToken),
-                    activityName: "PollOperationStatus").ConfigureAwait(false);
-            }
-        }
-
-        private async Task PollOperationStatusCore(Activity? activity, CancellationToken cancellationToken)
+        private async Task PollOperationStatus(CancellationToken cancellationToken, Activity? activity)
         {
             int consecutiveFailures = 0;
 
