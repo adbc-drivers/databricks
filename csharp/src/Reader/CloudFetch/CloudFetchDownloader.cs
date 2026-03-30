@@ -576,7 +576,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                         response.EnsureSuccessStatusCode();
 
-                        // Log the download size if available from response headers
+                        // Log the download size from response headers
                         long? contentLength = response.Content.Headers.ContentLength;
                         if (contentLength.HasValue && contentLength.Value > 0)
                         {
@@ -585,6 +585,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 new("sanitized_url", sanitizedUrl),
                                 new("content_length_bytes", contentLength.Value),
                                 new("content_length_mb", contentLength.Value / 1024.0 / 1024.0)
+                            ]);
+                        }
+                        else
+                        {
+                            activity?.AddEvent("cloudfetch.content_length_missing", [
+                                new("offset", downloadResult.StartRowOffset),
+                                new("sanitized_url", sanitizedUrl)
                             ]);
                         }
 
@@ -602,10 +609,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                             {
                                 // Pre-allocate with Content-Length when available (CloudFetch always provides it).
-                                // Cap at 100MB to avoid excessive memory pressure on constrained hosts.
-                                const int MaxPreAllocBytes = 100 * 1024 * 1024;
                                 int capacity = contentLength.HasValue && contentLength.Value > 0
-                                    ? (int)Math.Min(contentLength.Value, MaxPreAllocBytes)
+                                    ? (int)contentLength.Value
                                     : 0;
                                 using (var memoryStream = new MemoryStream(capacity))
                                 {
