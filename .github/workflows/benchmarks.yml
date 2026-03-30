@@ -224,7 +224,7 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark'))
-    runs-on: ubuntu-latest
+    runs-on: windows-2022  # Temporarily use Windows to compare .NET 8 vs .NET Framework on SAME runner
     timeout-minutes: 180
     environment: azure-prod
     env:

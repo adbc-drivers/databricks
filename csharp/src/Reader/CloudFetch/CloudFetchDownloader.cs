@@ -24,6 +24,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -59,9 +60,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly SemaphoreSlim _downloadSemaphore;
         private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
         private readonly ArrayPool<byte>? _lz4BufferPool;
+
         private Task? _downloadTask;
         private CancellationTokenSource? _cancellationTokenSource;
-        private bool _isCompleted;
+        private volatile bool _isCompleted;
         private Exception? _error;
         private readonly object _errorLock = new object();
 
@@ -173,9 +175,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
 
             _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            // Note: When JdbcStyleChunkMap is used, this downloader's async loop is not started.
+            // The factory calls resultFetcher.StartAsync() directly and creates chunk map workers instead.
             _downloadTask = DownloadFilesAsync(_cancellationTokenSource.Token);
-
-            // Wait for the download task to start
             await Task.Yield();
         }
 
@@ -354,7 +356,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             }
                         }
 
-                        // Acquire a download slot
+                        // Acquire a download slot (limits HTTP concurrency)
                         await _downloadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
                         // Acquire memory for this download (FIFO - acquired in sequential loop)
@@ -475,6 +477,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 string sanitizedUrl = SanitizeUrl(downloadResult.FileUrl);
                 byte[]? fileData = null;
 
+                // On .NET Framework, ensure the ServicePoint for this cloud storage host
+                // has a high connection limit. DefaultConnectionLimit may have been set too
+                // late (after a ServicePoint was already created with limit=2).
+                // This explicitly overrides the per-host limit on first download.
+                // ServicePoint tuning handled by JdbcStyleChunkMap
+
+
                 // Use the size directly from the download result
                 long size = downloadResult.Size;
 
@@ -521,28 +530,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     attemptCount++;
                     try
                     {
-                        // Create HTTP request with optional custom headers
-                        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-
-                        // Add custom headers if provided
-                        if (downloadResult.HttpHeaders != null)
-                        {
-                            foreach (var header in downloadResult.HttpHeaders)
-                            {
-                                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                            }
-                        }
-
-                        // Download the file directly
-                        using HttpResponseMessage response = await _httpClient.SendAsync(
-                            request,
-                            HttpCompletionOption.ResponseHeadersRead,
-                            cancellationToken).ConfigureAwait(false);
+                        // Download the file data and get HTTP status
+                        System.Net.HttpStatusCode statusCode;
+                        (fileData, statusCode) = await DownloadBytesAsync(url, downloadResult.HttpHeaders, cancellationToken).ConfigureAwait(false);
 
                         // Check if the response indicates an expired URL (typically 403 or 401)
-                        if (response.StatusCode == System.Net.HttpStatusCode.Forbidden ||
-                            response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                        if (statusCode == System.Net.HttpStatusCode.Forbidden ||
+                            statusCode == System.Net.HttpStatusCode.Unauthorized)
                         {
+                            fileData = null; // Don't use the error response body
+
                             // If we've already tried refreshing too many times, fail
                             if (downloadResult.RefreshAttempts >= _maxUrlRefreshAttempts)
                             {
@@ -554,7 +551,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             var refreshedResult = refreshedResults.FirstOrDefault(r => r.StartRowOffset == downloadResult.StartRowOffset);
                             if (refreshedResult != null)
                             {
-                                // Update the download result with the refreshed URL
                                 downloadResult.UpdateWithRefreshedUrl(refreshedResult.FileUrl, refreshedResult.ExpirationTime, refreshedResult.HttpHeaders);
                                 url = refreshedResult.FileUrl;
                                 sanitizedUrl = SanitizeUrl(url);
@@ -563,62 +559,19 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     new("offset", refreshedResult.StartRowOffset),
                                     new("sanitized_url", sanitizedUrl)
                                 ]);
-
-                                // Continue to the next retry attempt with the refreshed URL
                                 continue;
                             }
                             else
                             {
-                                // If refresh failed, throw an exception
                                 throw new InvalidOperationException("Failed to refresh expired URL.");
                             }
                         }
 
-                        response.EnsureSuccessStatusCode();
-
-                        // Log the download size from response headers
-                        long? contentLength = response.Content.Headers.ContentLength;
-                        if (contentLength.HasValue && contentLength.Value > 0)
+                        if ((int)statusCode >= 400)
                         {
-                            activity?.AddEvent("cloudfetch.content_length", [
-                                new("offset", downloadResult.StartRowOffset),
-                                new("sanitized_url", sanitizedUrl),
-                                new("content_length_bytes", contentLength.Value),
-                                new("content_length_mb", contentLength.Value / 1024.0 / 1024.0)
-                            ]);
-                        }
-                        else
-                        {
-                            activity?.AddEvent("cloudfetch.content_length_missing", [
-                                new("offset", downloadResult.StartRowOffset),
-                                new("sanitized_url", sanitizedUrl)
-                            ]);
+                            throw new HttpRequestException($"HTTP {(int)statusCode} from {sanitizedUrl}");
                         }
 
-                        // Read the file data with an explicit timeout.
-                        // ReadAsByteArrayAsync() on net472 has no CancellationToken overload,
-                        // and HttpClient.Timeout does not protect body reads when
-                        // HttpCompletionOption.ResponseHeadersRead is used — SendAsync returns
-                        // after headers, and the subsequent body read is a separate call on
-                        // HttpContent with no timeout coverage.
-                        // Using CopyToAsync with an explicit token ensures dead TCP connections
-                        // are detected on every 81920-byte chunk read.
-                        using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                        {
-                            bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
-                            using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                            {
-                                // Pre-allocate with Content-Length when available (CloudFetch always provides it).
-                                int capacity = contentLength.HasValue && contentLength.Value > 0
-                                    ? (int)contentLength.Value
-                                    : 0;
-                                using (var memoryStream = new MemoryStream(capacity))
-                                {
-                                    await contentStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
-                                    fileData = memoryStream.ToArray();
-                                }
-                            }
-                        }
                         break; // Success, exit retry loop
                     }
                     catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -679,81 +632,72 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         $"Failed to download file from {sanitizedUrl} after {attemptCount} attempts over {stopwatch.Elapsed.TotalSeconds:F1}s ({retryLimits}). Last error: {lastException?.GetType().Name ?? "unknown"}");
                 }
 
-                // Process the downloaded file data
-                Stream dataStream;
-                long actualSize = fileData.Length;
-
-                // If the data is LZ4 compressed, decompress it
+                // Decompress if LZ4-compressed, then feed to Arrow parser
+                Stream arrowInputStream;
                 if (_isLz4Compressed)
                 {
-                    try
-                    {
-                        var decompressStopwatch = Stopwatch.StartNew();
-
-                        // Use shared Lz4Utilities for decompression with both RecyclableMemoryStream and ArrayPool
-                        // The returned stream must be disposed by Arrow after reading
-                        // Protocol-agnostic: use resources from config (populated by caller from connection)
-                        // Falls back to creating new instances if not provided (less efficient but works)
-                        var memoryStreamManager = _memoryStreamManager ?? new RecyclableMemoryStreamManager();
-                        var lz4BufferPool = _lz4BufferPool ?? ArrayPool<byte>.Shared;
-                        dataStream = await Lz4Utilities.DecompressLz4Async(
-                            fileData,
-                            memoryStreamManager,
-                            lz4BufferPool,
-                            cancellationToken).ConfigureAwait(false);
-
-                        decompressStopwatch.Stop();
-
-                        // Calculate throughput metrics
-                        double compressionRatio = (double)dataStream.Length / actualSize;
-
-                        activity?.AddEvent("cloudfetch.decompression_complete", [
-                            new("offset", downloadResult.StartRowOffset),
-                            new("sanitized_url", sanitizedUrl),
-                            new("decompression_time_ms", decompressStopwatch.ElapsedMilliseconds),
-                            new("compressed_size_bytes", actualSize),
-                            new("compressed_size_kb", actualSize / 1024.0),
-                            new("decompressed_size_bytes", dataStream.Length),
-                            new("decompressed_size_kb", dataStream.Length / 1024.0),
-                            new("compression_ratio", compressionRatio)
-                        ]);
-
-                        actualSize = dataStream.Length;
-                    }
-                    catch (Exception ex)
-                    {
-                        stopwatch.Stop();
-                        activity?.AddException(ex, [
-                            new("error.context", "cloudfetch.decompression"),
-                            new("offset", downloadResult.StartRowOffset),
-                            new("sanitized_url", sanitizedUrl),
-                            new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
-                        ]);
-
-                        // Release the memory we acquired
-                        _memoryManager.ReleaseMemory(size);
-                        throw new InvalidOperationException($"Error decompressing data: {ex.Message}", ex);
-                    }
+                    var memoryStreamManager = _memoryStreamManager ?? new RecyclableMemoryStreamManager();
+                    var lz4BufferPool = _lz4BufferPool ?? ArrayPool<byte>.Shared;
+                    arrowInputStream = await Lz4Utilities.DecompressLz4Async(
+                        fileData,
+                        memoryStreamManager,
+                        lz4BufferPool,
+                        cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    dataStream = new MemoryStream(fileData);
+                    arrowInputStream = new MemoryStream(fileData);
+                }
+
+                // Pre-parse Arrow IPC on the download thread (JDBC parity).
+                // Arrow parsing happens directly from the streaming decompression pipeline.
+                // With 16 download threads doing HTTP→LZ4→Arrow in parallel, the single
+                // reader thread just iterates pre-parsed RecordBatch objects (pure memory access).
+                var preParsedBatches = new List<Apache.Arrow.RecordBatch>();
+                try
+                {
+                    using (var arrowReader = new Apache.Arrow.Ipc.ArrowStreamReader(arrowInputStream, leaveOpen: false))
+                    {
+                        while (true)
+                        {
+                            var batch = await arrowReader.ReadNextRecordBatchAsync(cancellationToken);
+                            if (batch == null) break;
+                            preParsedBatches.Add(batch);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Clean up any batches already parsed before the error
+                    foreach (var batch in preParsedBatches) batch.Dispose();
+                    _memoryManager.ReleaseMemory(size);
+                    throw new InvalidOperationException($"Error parsing Arrow data: {ex.Message}", ex);
                 }
 
                 // Stop the stopwatch and log download completion
                 stopwatch.Stop();
-                double throughputMBps = (actualSize / 1024.0 / 1024.0) / (stopwatch.ElapsedMilliseconds / 1000.0);
+                long actualSize = preParsedBatches.Sum(b => (long)b.Length * b.ColumnCount * 8); // rough estimate
+                double throughputMBps = (size / 1024.0 / 1024.0) / (stopwatch.ElapsedMilliseconds / 1000.0);
                 activity?.AddEvent("cloudfetch.download_complete", [
                     new("offset", downloadResult.StartRowOffset),
                     new("sanitized_url", sanitizedUrl),
                     new("actual_size_bytes", actualSize),
                     new("actual_size_kb", actualSize / 1024.0),
                     new("latency_ms", stopwatch.ElapsedMilliseconds),
-                    new("throughput_mbps", throughputMBps)
+                    new("throughput_mbps", throughputMBps),
+                    new("pre_parsed_batches", preParsedBatches.Count)
                 ]);
 
-                // Set the download as completed with the original size
-                downloadResult.SetCompleted(dataStream, size);
+                // Set the download as completed with pre-parsed batches
+                if (downloadResult is DownloadResult concreteResult)
+                {
+                    concreteResult.SetCompletedWithBatches(preParsedBatches, size);
+                }
+                else
+                {
+                    // Fallback for non-DownloadResult implementations
+                    downloadResult.SetCompleted(new MemoryStream(), size);
+                }
             }, activityName: "DownloadFile");
         }
 
@@ -784,6 +728,316 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 activity?.AddException(ex, [new("error.context", "cloudfetch.complete_with_error_failed")]);
             }
         }
+
+#if !NET8_0_OR_GREATER
+        /// <summary>
+        /// JDBC-style worker thread loop. Each dedicated thread independently pulls chunks
+        /// from the download queue and processes them synchronously: HTTP GET → decompress → Arrow parse.
+        /// Multiple threads run concurrently — true parallelism without ThreadPool or async overhead.
+        /// This matches JDBC's ExecutorService.submit(new ChunkDownloadTask(chunk)) pattern.
+        /// </summary>
+        private void WorkerThreadLoop(int workerId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                foreach (var downloadResult in _downloadQueue.GetConsumingEnumerable(cancellationToken))
+                {
+                    if (HasError || cancellationToken.IsCancellationRequested) break;
+
+                    // EndOfResultsGuard: pass through to result queue and stop
+                    if (downloadResult == EndOfResultsGuard.Instance)
+                    {
+                        _resultQueue.Add(EndOfResultsGuard.Instance, cancellationToken);
+                        _isCompleted = true;
+                        break;
+                    }
+
+                    try
+                    {
+                        string url = downloadResult.FileUrl;
+                        long size = downloadResult.Size;
+
+                        // ServicePoint tuning handled by JdbcStyleChunkMap
+
+                        // Acquire memory before download (same as async path)
+                        _memoryManager.AcquireMemoryAsync(size, cancellationToken).Wait(cancellationToken);
+
+                        // Check URL expiration
+                        if (downloadResult.IsExpiredOrExpiringSoon(_urlExpirationBufferSeconds))
+                        {
+                            var refreshed = _resultFetcher.RefreshUrlsAsync(downloadResult.StartRowOffset, cancellationToken)
+                                .ConfigureAwait(false).GetAwaiter().GetResult();
+                            var match = refreshed.FirstOrDefault(r => r.StartRowOffset == downloadResult.StartRowOffset);
+                            if (match != null)
+                            {
+                                downloadResult.UpdateWithRefreshedUrl(match.FileUrl, match.ExpirationTime, match.HttpHeaders);
+                                url = match.FileUrl;
+                            }
+                        }
+
+                        // Synchronous HTTP download (the whole point — no async overhead)
+                        var webRequest = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                        webRequest.Method = "GET";
+                        webRequest.Timeout = (int)TimeSpan.FromMinutes(_timeoutMinutes).TotalMilliseconds;
+                        webRequest.ReadWriteTimeout = (int)TimeSpan.FromMinutes(_timeoutMinutes).TotalMilliseconds;
+                        webRequest.ServicePoint.Expect100Continue = false;
+                        webRequest.ServicePoint.UseNagleAlgorithm = false;
+                        webRequest.ServicePoint.ConnectionLimit = Math.Max(webRequest.ServicePoint.ConnectionLimit, _maxParallelDownloads);
+
+                        if (downloadResult.HttpHeaders != null)
+                        {
+                            foreach (var header in downloadResult.HttpHeaders)
+                                webRequest.Headers[header.Key] = header.Value;
+                        }
+
+                        byte[] fileData;
+                        System.Net.HttpWebResponse? webResponse = null;
+                        try
+                        {
+                            webResponse = (System.Net.HttpWebResponse)webRequest.GetResponse();
+                        }
+                        catch (System.Net.WebException ex) when (ex.Response is System.Net.HttpWebResponse errResp)
+                        {
+                            if (errResp.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+                                errResp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                            {
+                                // URL refresh + retry (simplified — one attempt)
+                                var refreshed2 = _resultFetcher.RefreshUrlsAsync(downloadResult.StartRowOffset, cancellationToken)
+                                    .ConfigureAwait(false).GetAwaiter().GetResult();
+                                var match2 = refreshed2.FirstOrDefault(r => r.StartRowOffset == downloadResult.StartRowOffset);
+                                if (match2 != null)
+                                {
+                                    downloadResult.UpdateWithRefreshedUrl(match2.FileUrl, match2.ExpirationTime, match2.HttpHeaders);
+                                    var retryReq = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(match2.FileUrl);
+                                    retryReq.Method = "GET";
+                                    retryReq.Timeout = webRequest.Timeout;
+                                    retryReq.ReadWriteTimeout = webRequest.ReadWriteTimeout;
+                                    if (downloadResult.HttpHeaders != null)
+                                        foreach (var h in downloadResult.HttpHeaders)
+                                            retryReq.Headers[h.Key] = h.Value;
+                                    webResponse = (System.Net.HttpWebResponse)retryReq.GetResponse();
+                                }
+                                else throw;
+                            }
+                            else throw;
+                        }
+
+                        using (webResponse)
+                        {
+                            long contentLength = webResponse.ContentLength;
+                            int capacity = (contentLength > 0 && contentLength <= 100 * 1024 * 1024)
+                                ? (int)contentLength : 0;
+                            using (var responseStream = webResponse.GetResponseStream())
+                            {
+                                var ms = capacity > 0 ? new MemoryStream(capacity) : new MemoryStream();
+                                responseStream.CopyTo(ms, 81920);
+                                if (ms.TryGetBuffer(out ArraySegment<byte> buf) && buf.Count == (int)ms.Length)
+                                    fileData = buf.Array!;
+                                else
+                                    fileData = ms.ToArray();
+                            }
+                        }
+
+                        // Decompress — use SYNCHRONOUS LZ4 decompression on dedicated threads.
+                        // The async DecompressLz4Async uses CopyToAsync internally which causes
+                        // TaskCanceledException on .NET Framework when called from a synchronous
+                        // thread via .GetAwaiter().GetResult(). The sync version avoids this entirely.
+                        Stream arrowStream;
+                        if (_isLz4Compressed)
+                        {
+                            var bufPool = _lz4BufferPool ?? ArrayPool<byte>.Shared;
+                            ReadOnlyMemory<byte> decompressed = Lz4Utilities.DecompressLz4(fileData, bufPool);
+                            // Use MemoryMarshal to get the underlying array without copying
+                            if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(decompressed, out ArraySegment<byte> segment))
+                                arrowStream = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false);
+                            else
+                                arrowStream = new MemoryStream(decompressed.ToArray());
+                        }
+                        else
+                        {
+                            arrowStream = new MemoryStream(fileData);
+                        }
+
+                        // Pre-parse Arrow IPC (JDBC parity — parsing on download thread)
+                        var batches = new System.Collections.Generic.List<Apache.Arrow.RecordBatch>();
+                        using (var arrowReader = new Apache.Arrow.Ipc.ArrowStreamReader(arrowStream, leaveOpen: false))
+                        {
+                            while (true)
+                            {
+                                // Use synchronous read on dedicated thread
+                                var batch = arrowReader.ReadNextRecordBatch();
+                                if (batch == null) break;
+                                batches.Add(batch);
+                            }
+                        }
+
+                        // Complete the download result with pre-parsed batches
+                        if (downloadResult is DownloadResult concrete)
+                            concrete.SetCompletedWithBatches(batches, size);
+                        else
+                            downloadResult.SetCompleted(new MemoryStream(), size);
+
+                        // Add to result queue (may block if queue full — this IS the sliding window)
+                        _resultQueue.Add(downloadResult, cancellationToken);
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        _memoryManager.ReleaseMemory(downloadResult.Size);
+                        downloadResult.SetFailed(ex);
+                        _resultQueue.Add(downloadResult, cancellationToken);
+                        SetError(ex);
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { /* Expected on shutdown */ }
+            catch (InvalidOperationException) when (_downloadQueue.IsCompleted) { /* Queue completed */ }
+        }
+#endif
+
+        /// <summary>
+        /// Downloads bytes from a URL. On .NET Framework / netstandard2.0, uses synchronous
+        /// HttpWebRequest on a dedicated ThreadPool thread (via Task.Run) — matching JDBC's
+        /// approach of dedicated threads with synchronous HttpGet.execute(). This avoids
+        /// .NET Framework's HttpClient async pitfalls: internal sync-over-async in
+        /// HttpWebRequest.GetResponseAsync(), ThreadPool starvation from blocked continuations,
+        /// and state machine allocation overhead.
+        ///
+        /// On .NET 8+, uses the truly-async HttpClient.SendAsync() which has none of these issues.
+        /// </summary>
+        private async Task<(byte[] data, System.Net.HttpStatusCode statusCode)> DownloadBytesAsync(
+            string url, IReadOnlyDictionary<string, string>? headers, CancellationToken cancellationToken)
+        {
+#if NET8_0_OR_GREATER
+            // .NET 8+: truly async HttpClient — no ThreadPool thread blocking
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (headers != null)
+            {
+                foreach (var header in headers)
+                {
+                    request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+
+            using HttpResponseMessage response = await _httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+                response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                (int)response.StatusCode >= 400)
+            {
+                return (Array.Empty<byte>(), response.StatusCode);
+            }
+
+            // Body read with explicit timeout — HttpClient.Timeout only covers SendAsync
+            // (header phase with ResponseHeadersRead). The body read is a separate call
+            // with no timeout coverage. (Ported from PR #374)
+            using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
+                try
+                {
+                    using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                    {
+                        long? contentLength = response.Content.Headers.ContentLength;
+                        int capacity = (contentLength.HasValue && contentLength.Value > 0)
+                            ? (int)Math.Min(contentLength.Value, 100 * 1024 * 1024) : 0;
+                        using (var ms = new MemoryStream(capacity))
+                        {
+                            await contentStream.CopyToAsync(ms, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
+                            return (ms.ToArray(), response.StatusCode);
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException("Timed out while reading the response body.");
+                }
+            }
+#else
+            // .NET Framework / netstandard2.0: synchronous HttpWebRequest on dedicated thread.
+            // This is the JDBC pattern — each download gets a real thread doing blocking I/O,
+            // avoiding all async overhead and ThreadPool starvation issues.
+            return await Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var webRequest = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                webRequest.Method = "GET";
+                webRequest.Timeout = (int)TimeSpan.FromMinutes(5).TotalMilliseconds;
+                webRequest.ReadWriteTimeout = (int)TimeSpan.FromMinutes(5).TotalMilliseconds;
+
+                // Disable expect-100 and Nagle for each request
+                webRequest.ServicePoint.Expect100Continue = false;
+                webRequest.ServicePoint.UseNagleAlgorithm = false;
+
+                if (headers != null)
+                {
+                    foreach (var header in headers)
+                    {
+                        webRequest.Headers[header.Key] = header.Value;
+                    }
+                }
+
+                System.Net.HttpWebResponse? webResponse = null;
+                try
+                {
+                    webResponse = (System.Net.HttpWebResponse)webRequest.GetResponse();
+                }
+                catch (System.Net.WebException ex) when (ex.Response is System.Net.HttpWebResponse errorResponse)
+                {
+                    // Capture 403/401 responses instead of throwing
+                    return (Array.Empty<byte>(), errorResponse.StatusCode);
+                }
+
+                using (webResponse)
+                {
+                    var statusCode = webResponse.StatusCode;
+                    if ((int)statusCode >= 400)
+                    {
+                        return (Array.Empty<byte>(), statusCode);
+                    }
+
+                    // Pre-size MemoryStream from Content-Length to avoid repeated
+                    // internal buffer resize+copy operations (256→512→...→32MB for a 20MB file).
+                    // Then use GetBuffer() to avoid the extra ToArray() copy.
+                    long contentLength = webResponse.ContentLength;
+                    int capacity = (contentLength > 0 && contentLength <= 100 * 1024 * 1024)
+                        ? (int)contentLength : 0;
+
+                    using (var responseStream = webResponse.GetResponseStream())
+                    {
+                        var memoryStream = capacity > 0 ? new MemoryStream(capacity) : new MemoryStream();
+                        responseStream.CopyTo(memoryStream, 81920);
+
+                        // Use GetBuffer + length to avoid ToArray() which allocates a new byte[].
+                        // This eliminates one full copy of the download data (~20MB per chunk).
+                        if (memoryStream.TryGetBuffer(out ArraySegment<byte> buffer))
+                        {
+                            // Buffer may be larger than actual data — slice to actual length
+                            if (buffer.Count == (int)memoryStream.Length)
+                            {
+                                return (buffer.Array!, statusCode);
+                            }
+                        }
+                        // Fallback: exact-size copy (only if TryGetBuffer fails or buffer is oversized)
+                        return (memoryStream.ToArray(), statusCode);
+                    }
+                }
+            }, cancellationToken).ConfigureAwait(false);
+#endif
+        }
+
+        /// <summary>
+        /// On .NET Framework, sets ConnectionLimit on the specific ServicePoint for this
+        /// cloud storage host. This is critical because:
+        /// 1. DefaultConnectionLimit only affects ServicePoints created AFTER it's set
+        /// 2. If any HTTP request was made before our tuning, the ServicePoint exists with limit=2
+        /// 3. This explicitly overrides the per-host limit regardless of creation order
+        /// Also disables Nagle algorithm and Expect:100-Continue for lower latency.
+        /// Runs once per downloader instance (first URL seen).
+        /// </summary>
+        // ServicePoint tuning is handled by JdbcStyleChunkMap.DownloadBytes()
 
         // Helper method to sanitize URLs for logging (to avoid exposing sensitive information)
         private string SanitizeUrl(string url)

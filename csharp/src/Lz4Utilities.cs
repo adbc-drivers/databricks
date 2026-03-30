@@ -170,5 +170,45 @@ namespace AdbcDrivers.Databricks
                 throw new AdbcException($"Failed to decompress LZ4 data: {ex.Message}", ex);
             }
         }
+        /// <summary>
+        /// Decompresses LZ4 data from a stream (e.g., HTTP response stream) without
+        /// buffering the compressed data as a byte[]. This saves one memory copy vs
+        /// DecompressLz4Async(byte[]) when the caller already has a stream.
+        /// </summary>
+        public static async Task<RecyclableMemoryStream> DecompressLz4FromStreamAsync(
+            Stream compressedStream,
+            RecyclableMemoryStreamManager memoryStreamManager,
+            ArrayPool<byte> bufferPool,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var outputStream = memoryStreamManager.GetStream();
+                try
+                {
+                    using (var decompressor = new CustomLZ4DecoderStream(
+                        compressedStream,
+                        descriptor => descriptor.CreateDecoder(),
+                        bufferPool,
+                        leaveOpen: false,
+                        interactive: false))
+                    {
+                        await decompressor.CopyToAsync(outputStream, DefaultBufferSize, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    outputStream.Position = 0;
+                    return outputStream;
+                }
+                catch
+                {
+                    outputStream?.Dispose();
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new AdbcException($"Failed to decompress LZ4 stream: {ex.Message}", ex);
+            }
+        }
     }
 }

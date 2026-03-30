@@ -28,10 +28,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
     /// </summary>
     internal sealed class CloudFetchConfiguration
     {
-        // Default values
-        internal const int DefaultParallelDownloads = 3;
-        internal const int DefaultPrefetchCount = 2;
+        // Default values — tuned for CloudFetch JDBC/Rust parity.
+        // Uses dedicated threads + ConcurrentDictionary (JDBC pattern) on all platforms.
+        internal const int DefaultParallelDownloads = 8;
+        internal const int DefaultPrefetchCount = 8;
         internal const int DefaultMemoryBufferSizeMB = 200;
+        internal const int DefaultLinkPrefetchWindowSize = 128;
         internal const int DefaultTimeoutMinutes = 5;
         internal const int DefaultMaxRetries = 0; // 0 = no limit (use timeout only)
         internal const int DefaultRetryTimeoutSeconds = 300; // 5 minutes
@@ -45,9 +47,17 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         public int ParallelDownloads { get; set; } = DefaultParallelDownloads;
 
         /// <summary>
-        /// Number of files to prefetch ahead of the reader.
+        /// Number of files to prefetch ahead of the reader (controls download window / result queue size).
         /// </summary>
         public int PrefetchCount { get; set; } = DefaultPrefetchCount;
+
+        /// <summary>
+        /// Size of the link prefetch window — how many chunk links to fetch ahead of downloads.
+        /// The fetcher runs on a background task and can fetch links far ahead while downloads
+        /// are paced by memory and download slots. This matches JDBC's LinkPrefetchWindow=128.
+        /// Links are lightweight metadata (URL + offsets), so a large window uses minimal memory.
+        /// </summary>
+        public int LinkPrefetchWindowSize { get; set; } = DefaultLinkPrefetchWindowSize;
 
         /// <summary>
         /// Memory buffer size limit in MB for buffered files.
@@ -151,7 +161,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 RetryTimeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryTimeoutSeconds, DefaultRetryTimeoutSeconds),
                 RetryDelayMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryDelayMs, DefaultRetryDelayMs),
                 MaxUrlRefreshAttempts = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, DefaultMaxUrlRefreshAttempts),
-                UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds)
+                UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds),
+                LinkPrefetchWindowSize = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchLinkPrefetchWindowSize, DefaultLinkPrefetchWindowSize)
             };
 
             return config;
