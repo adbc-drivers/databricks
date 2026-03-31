@@ -43,6 +43,9 @@ pub struct CloudFetchConfig {
     pub max_chunks_in_memory: usize,
     /// Maximum number of retry attempts for failed downloads.
     pub max_retries: u32,
+    /// Maximum number of presigned URL refresh attempts (e.g. link expired or revoked).
+    /// Mirrors C# `maxUrlRefreshAttempts`. Bounded independently from `max_retries`.
+    pub max_refresh_retries: u32,
     /// Delay between retry attempts.
     pub retry_delay: Duration,
     /// Timeout for waiting for a chunk to be ready.
@@ -61,6 +64,7 @@ impl Default for CloudFetchConfig {
             // Match JDBC default: cloudFetchThreadPoolSize = 16
             max_chunks_in_memory: 16,
             max_retries: 5,
+            max_refresh_retries: 3,
             retry_delay: Duration::from_millis(1500),
             chunk_ready_timeout: Some(Duration::from_secs(30)),
             speed_threshold_mbps: 0.1,
@@ -202,6 +206,7 @@ mod tests {
         assert_eq!(config.link_prefetch_window, 128); // Matches JDBC default
         assert_eq!(config.max_chunks_in_memory, 16); // Matches JDBC cloudFetchThreadPoolSize
         assert_eq!(config.max_retries, 5);
+        assert_eq!(config.max_refresh_retries, 3);
         assert!(config.enabled);
     }
 

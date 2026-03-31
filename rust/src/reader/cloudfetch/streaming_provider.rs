@@ -20,7 +20,7 @@
 //! - Memory management via chunk limits
 //! - Consumer API via RecordBatchReader trait
 
-use crate::error::{DatabricksErrorHelper, Result};
+use crate::error::{DatabricksErrorHelper, Error, Result};
 use crate::reader::cloudfetch::chunk_downloader::ChunkDownloader;
 use crate::reader::cloudfetch::link_fetcher::ChunkLinkFetcher;
 use crate::types::cloudfetch::{
@@ -356,6 +356,7 @@ impl StreamingCloudFetchProvider {
             let chunk_state_changed = Arc::clone(&self.chunk_state_changed);
             let cancel_token = self.cancel_token.clone();
             let max_retries = self.config.max_retries;
+            let max_refresh_retries = self.config.max_refresh_retries;
             let retry_delay = self.config.retry_delay;
 
             self.runtime_handle.spawn(async move {
@@ -365,6 +366,7 @@ impl StreamingCloudFetchProvider {
                     &link_fetcher,
                     &chunks,
                     max_retries,
+                    max_refresh_retries,
                     retry_delay,
                     &cancel_token,
                 )
@@ -397,35 +399,59 @@ impl StreamingCloudFetchProvider {
         link_fetcher: &Arc<dyn ChunkLinkFetcher>,
         chunks: &Arc<DashMap<i64, ChunkEntry>>,
         max_retries: u32,
+        max_refresh_retries: u32,
         retry_delay: std::time::Duration,
         cancel_token: &CancellationToken,
     ) -> Result<Vec<RecordBatch>> {
-        let mut attempts = 0;
+        let mut attempts = 0u32;
+        let mut refresh_attempts = 0u32;
 
         loop {
             if cancel_token.is_cancelled() {
                 return Err(DatabricksErrorHelper::invalid_state().message("Download cancelled"));
             }
 
-            // Get link (may need to refetch if expired)
-            let link = {
+            // Get link (may need to refetch if expired).
+            //
+            // IMPORTANT: The DashMap read guard (`entry`) must be dropped BEFORE
+            // calling `refetch_link().await` and `chunks.get_mut()`. If `entry`
+            // is still alive (holding the shard read lock) when `get_mut()` tries
+            // to acquire the exclusive write lock on the same shard, the task
+            // deadlocks with itself — it can never release the read lock because
+            // it is blocked waiting for the write lock.
+            let stored_link = {
                 let entry = chunks.get(&chunk_index);
-                let stored_link = entry.as_ref().and_then(|e| e.link.clone());
+                entry.as_ref().and_then(|e| e.link.clone())
+                // `entry` (and its read lock) is dropped here
+            };
 
-                match stored_link {
-                    Some(link) if !link.is_expired() => link,
-                    _ => {
-                        // Link missing or expired - refetch it
-                        debug!("Refetching expired link for chunk {}", chunk_index);
-                        let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
-
-                        // Store the new link
-                        if let Some(mut entry) = chunks.get_mut(&chunk_index) {
-                            entry.link = Some(new_link.clone());
-                        }
-
-                        new_link
+            let link = match stored_link {
+                Some(link) if !link.is_expired() => link,
+                _ => {
+                    // Link missing or expired - refetch it (no read lock held).
+                    // Bounded independently by max_refresh_retries (mirrors C# maxUrlRefreshAttempts).
+                    if refresh_attempts >= max_refresh_retries {
+                        return Err(DatabricksErrorHelper::io().message(format!(
+                            "Chunk {} link repeatedly expired after {} refresh attempts",
+                            chunk_index, refresh_attempts
+                        )));
                     }
+                    debug!("Refetching expired link for chunk {}", chunk_index);
+                    // row_offset=0: the SEA backend is chunk-index based and ignores this
+                    // parameter; it would be meaningful for a Thrift (row-offset based) backend.
+                    let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
+                    refresh_attempts += 1;
+
+                    // Store the new link (safe: no read lock held)
+                    if let Some(mut entry) = chunks.get_mut(&chunk_index) {
+                        entry.link = Some(new_link.clone());
+                    }
+
+                    // Reset download attempt counter: the previous failures were against a
+                    // stale URL; the fresh URL gets its own full retry budget.
+                    attempts = 0;
+
+                    new_link
                 }
             };
 
@@ -442,15 +468,55 @@ impl StreamingCloudFetchProvider {
                         chunk_index, attempts, max_retries, e
                     );
 
-                    // Update state to retry
+                    // Update state (guard dropped at end of block — must not hold it
+                    // across any .await below, or we risk a deadlock on the same shard).
                     if let Some(mut entry) = chunks.get_mut(&chunk_index) {
                         entry.state = ChunkState::DownloadRetry;
+                    } // ← write lock released here
+
+                    if Self::is_cloud_storage_auth_error(&e) {
+                        // HTTP 401/403/404: the presigned URL was revoked or expired early.
+                        // Refetch inline (same iteration, no sleep) — mirrors C# behaviour.
+                        if refresh_attempts >= max_refresh_retries {
+                            return Err(DatabricksErrorHelper::io().message(format!(
+                                "Chunk {} presigned URL repeatedly rejected after {} refresh attempts",
+                                chunk_index, refresh_attempts
+                            )));
+                        }
+                        debug!(
+                            "Chunk {} got auth/not-found error, refetching presigned URL",
+                            chunk_index
+                        );
+                        // row_offset=0: SEA backend ignores this; meaningful for Thrift.
+                        let new_link = link_fetcher.refetch_link(chunk_index, 0).await?;
+                        refresh_attempts += 1;
+                        if let Some(mut entry) = chunks.get_mut(&chunk_index) {
+                            entry.link = Some(new_link.clone());
+                        }
+                        attempts = 0;
+                        // Loop back with the fresh link already stored — no sleep needed.
+                        continue;
                     }
 
-                    tokio::time::sleep(retry_delay).await;
+                    tokio::select! {
+                        _ = cancel_token.cancelled() => {
+                            return Err(DatabricksErrorHelper::invalid_state().message("Download cancelled"));
+                        }
+                        _ = tokio::time::sleep(retry_delay) => {}
+                    }
                 }
             }
         }
+    }
+
+    /// Returns true if the error indicates the presigned URL is no longer valid
+    /// (HTTP 401 Unauthorized, HTTP 403 Forbidden, or HTTP 404 Not Found from cloud storage).
+    ///
+    /// These errors mean the URL was revoked or expired before its timestamp,
+    /// so we should refetch a fresh URL from Databricks rather than retrying
+    /// the same invalid URL.
+    fn is_cloud_storage_auth_error(e: &Error) -> bool {
+        matches!(e.get_vendor_code(), 401 | 403 | 404)
     }
 
     /// Wait for a specific chunk to be ready (Downloaded state).
@@ -635,6 +701,57 @@ mod tests {
         assert!(result.next_chunk_index.is_none());
     }
 
-    // Note: Full streaming provider tests require integration test setup
-    // with mock HTTP responses for the chunk downloader
+    #[test]
+    fn test_is_cloud_storage_auth_error_detects_401() {
+        let err = DatabricksErrorHelper::io()
+            .vendor_code(401)
+            .message("HTTP 401 - Unauthorized");
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(&err));
+    }
+
+    #[test]
+    fn test_is_cloud_storage_auth_error_detects_403() {
+        let err = DatabricksErrorHelper::io()
+            .vendor_code(403)
+            .message("HTTP 403 - Forbidden");
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(&err));
+    }
+
+    #[test]
+    fn test_is_cloud_storage_auth_error_detects_404() {
+        let err = DatabricksErrorHelper::io()
+            .vendor_code(404)
+            .message("HTTP 404 - Not Found");
+        assert!(StreamingCloudFetchProvider::is_cloud_storage_auth_error(&err));
+    }
+
+    #[test]
+    fn test_is_cloud_storage_auth_error_ignores_other_statuses() {
+        let err_500 = DatabricksErrorHelper::io()
+            .vendor_code(500)
+            .message("HTTP 500 - Internal Server Error");
+        assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            &err_500
+        ));
+
+        let err_429 = DatabricksErrorHelper::io()
+            .vendor_code(429)
+            .message("HTTP 429 - Too Many Requests");
+        assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            &err_429
+        ));
+
+        let err_network = DatabricksErrorHelper::io().message("network timeout");
+        assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            &err_network
+        ));
+
+        let err_empty = DatabricksErrorHelper::io().message("");
+        assert!(!StreamingCloudFetchProvider::is_cloud_storage_auth_error(
+            &err_empty
+        ));
+    }
+
+    // Note: Full download_chunk_with_retry tests require a mockable ChunkDownloader
+    // (integration tests cover end-to-end 401/403/404 scenarios)
 }
