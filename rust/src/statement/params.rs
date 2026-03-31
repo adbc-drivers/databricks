@@ -175,6 +175,10 @@ pub fn arrow_type_to_databricks_type(dt: &DataType) -> String {
         DataType::Int16 => "SMALLINT".to_string(),
         DataType::Int32 => "INT".to_string(),
         DataType::Int64 => "BIGINT".to_string(),
+        DataType::UInt8 => "SMALLINT".to_string(),
+        DataType::UInt16 => "INT".to_string(),
+        DataType::UInt32 => "BIGINT".to_string(),
+        DataType::UInt64 => "BIGINT".to_string(),
         DataType::Float16 => "FLOAT".to_string(),
         DataType::Float32 => "FLOAT".to_string(),
         DataType::Float64 => "DOUBLE".to_string(),
@@ -201,6 +205,10 @@ fn arrow_value_to_string(array: &dyn Array, index: usize) -> Result<String> {
         DataType::Int16 => Ok(array.as_primitive::<Int16Type>().value(index).to_string()),
         DataType::Int32 => Ok(array.as_primitive::<Int32Type>().value(index).to_string()),
         DataType::Int64 => Ok(array.as_primitive::<Int64Type>().value(index).to_string()),
+        DataType::UInt8 => Ok(array.as_primitive::<UInt8Type>().value(index).to_string()),
+        DataType::UInt16 => Ok(array.as_primitive::<UInt16Type>().value(index).to_string()),
+        DataType::UInt32 => Ok(array.as_primitive::<UInt32Type>().value(index).to_string()),
+        DataType::UInt64 => Ok(array.as_primitive::<UInt64Type>().value(index).to_string()),
         DataType::Float16 => Ok(array
             .as_primitive::<Float16Type>()
             .value(index)
@@ -256,8 +264,8 @@ fn arrow_value_to_string(array: &dyn Array, index: usize) -> Result<String> {
                     let arr = array.as_primitive::<TimestampNanosecondType>();
                     let nanos = arr.value(index);
                     chrono::DateTime::from_timestamp(
-                        nanos / 1_000_000_000,
-                        (nanos % 1_000_000_000) as u32,
+                        nanos.div_euclid(1_000_000_000),
+                        nanos.rem_euclid(1_000_000_000) as u32,
                     )
                 }
             };
@@ -281,9 +289,11 @@ fn format_decimal128(raw: i128, scale: i8) -> String {
     }
     let scale = scale as u32;
     let divisor = 10_i128.pow(scale);
-    let whole = raw / divisor;
-    let frac = (raw % divisor).unsigned_abs();
-    format!("{whole}.{frac:0>width$}", width = scale as usize)
+    let sign = if raw < 0 { "-" } else { "" };
+    let abs_raw = raw.unsigned_abs();
+    let whole = abs_raw / divisor as u128;
+    let frac = abs_raw % divisor as u128;
+    format!("{sign}{whole}.{frac:0>width$}", width = scale as usize)
 }
 
 // ---------------------------------------------------------------------------
@@ -672,7 +682,10 @@ mod tests {
         assert_eq!(format_decimal128(100, 2), "1.00");
         assert_eq!(format_decimal128(5, 3), "0.005");
         assert_eq!(format_decimal128(-12345, 2), "-123.45");
+        assert_eq!(format_decimal128(-5, 2), "-0.05");
+        assert_eq!(format_decimal128(-1, 3), "-0.001");
         assert_eq!(format_decimal128(42, 0), "42");
+        assert_eq!(format_decimal128(0, 2), "0.00");
     }
 
     // --- DESCRIBE QUERY result parsing tests ---

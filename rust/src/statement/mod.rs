@@ -63,11 +63,6 @@ pub struct Statement {
     bound_stream: Option<Box<dyn RecordBatchReader + Send>>,
 }
 
-// Statement holds a Box<dyn RecordBatchReader + Send> which is Send but
-// the compiler can't verify it automatically through the trait object.
-// The field is only accessed from the thread that owns the Statement.
-unsafe impl Send for Statement {}
-
 impl std::fmt::Debug for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Statement")
@@ -130,6 +125,10 @@ impl Statement {
     ///
     /// Each row in the stream becomes a separate SEA API call with its own
     /// set of parameters. Results from all executions are collected.
+    ///
+    /// Note: All results are buffered in memory since each row triggers a
+    /// separate server execution. For large streams with large result sets,
+    /// this may consume significant memory.
     fn execute_with_stream(
         &mut self,
         query: &str,
@@ -157,6 +156,7 @@ impl Statement {
                 };
 
                 let reader = self.execute_single(query, &exec_params)?;
+                let statement_id = self.current_statement_id.take();
 
                 if result_schema.is_none() {
                     result_schema = Some(reader.schema());
@@ -169,6 +169,13 @@ impl Statement {
                             .to_adbc()
                     })?;
                     all_batches.push(rb);
+                }
+
+                // Close the server-side statement after draining results
+                if let Some(ref id) = statement_id {
+                    let _ = self
+                        .runtime_handle
+                        .block_on(self.client.close_statement(id));
                 }
             }
         }
@@ -320,37 +327,28 @@ impl adbc_core::Statement for Statement {
 
         debug!("Executing query: {}", query);
 
-        // Collect results into (schema, batches) — same type for both paths.
-        let (schema, batches) = if let Some(stream) = self.bound_stream.take() {
-            self.execute_with_stream(&query, stream)?
-        } else {
-            // Convert bound parameters (if any) to SEA format
-            let parameters = match self.bound_params.take() {
-                Some(batch) => record_batch_to_sea_parameters(&batch).map_err(|e| e.to_adbc())?,
-                None => vec![],
-            };
+        // bind_stream path: execute once per row, collect results (inherently buffered).
+        if let Some(stream) = self.bound_stream.take() {
+            let (schema, batches) = self.execute_with_stream(&query, stream)?;
+            return Ok(Box::new(arrow_array::RecordBatchIterator::new(
+                batches.into_iter().map(Ok),
+                schema,
+            )) as Box<dyn RecordBatchReader + Send>);
+        }
 
-            let exec_params = ExecuteParams {
-                parameters,
-                ..ExecuteParams::default()
-            };
-
-            let reader = self.execute_single(&query, &exec_params)?;
-            let schema = reader.schema();
-            let batches: Vec<RecordBatch> = reader
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|e| {
-                    DatabricksErrorHelper::io()
-                        .message(format!("Error reading results: {e}"))
-                        .to_adbc()
-                })?;
-            (schema, batches)
+        // Single execution path: stream results lazily from the server.
+        let parameters = match self.bound_params.take() {
+            Some(batch) => record_batch_to_sea_parameters(&batch).map_err(|e| e.to_adbc())?,
+            None => vec![],
         };
 
-        Ok(arrow_array::RecordBatchIterator::new(
-            batches.into_iter().map(Ok),
-            schema,
-        ))
+        let exec_params = ExecuteParams {
+            parameters,
+            ..ExecuteParams::default()
+        };
+
+        let reader = self.execute_single(&query, &exec_params)?;
+        Ok(Box::new(reader) as Box<dyn RecordBatchReader + Send>)
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {
