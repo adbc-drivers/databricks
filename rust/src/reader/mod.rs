@@ -393,6 +393,34 @@ pub mod metadata_keys {
     pub const TYPE_INTERVAL_TYPE: &str = "databricks.type_interval_type";
 }
 
+/// A simple ResultReader backed by a Vec of RecordBatches.
+///
+/// Used by `ResultReaderAdapter::from_batches()` to wrap pre-collected results.
+struct VecBatchReader {
+    batches: Vec<RecordBatch>,
+    index: usize,
+}
+
+impl ResultReader for VecBatchReader {
+    fn schema(&self) -> Result<SchemaRef> {
+        if self.batches.is_empty() {
+            Ok(Arc::new(Schema::empty()))
+        } else {
+            Ok(self.batches[0].schema())
+        }
+    }
+
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.index >= self.batches.len() {
+            Ok(None)
+        } else {
+            let batch = self.batches[self.index].clone();
+            self.index += 1;
+            Ok(Some(batch))
+        }
+    }
+}
+
 /// Adapter to make ResultReader work as arrow's RecordBatchReader.
 pub struct ResultReaderAdapter {
     inner: Box<dyn ResultReader + Send>,
@@ -412,6 +440,18 @@ impl ResultReaderAdapter {
             None => schema,
         };
         Ok(Self { inner, schema })
+    }
+
+    /// Create an adapter from pre-collected RecordBatches and a schema.
+    ///
+    /// Used when results have already been collected (e.g., from `bind_stream`
+    /// execution) and need to be wrapped as a `RecordBatchReader`.
+    pub fn from_batches(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
+        let reader: Box<dyn ResultReader + Send> = Box::new(VecBatchReader { batches, index: 0 });
+        Self {
+            inner: reader,
+            schema,
+        }
     }
 
     /// Augment an Arrow schema with Databricks column metadata from the manifest.
