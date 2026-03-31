@@ -484,7 +484,95 @@ fn execute_with_stream(
 }
 ```
 
-### 5. SeaClient Changes
+### 5. `execute_schema()` — Fix with `DESCRIBE QUERY`
+
+The current `execute_schema()` implementation is broken — it does a full `execute()` and extracts the schema from the result reader. This violates the ADBC spec which states:
+
+> Get the schema of the result set of a query **without executing it**.
+
+For DML statements (INSERT/UPDATE/DELETE), this causes unintended data mutations. It also wastes resources for SELECT queries.
+
+**Fix**: Use Databricks' `DESCRIBE QUERY` statement to get result metadata without execution.
+
+```rust
+fn execute_schema(&mut self) -> Result<Schema> {
+    let query = self.query.as_ref().ok_or_else(|| {
+        DatabricksErrorHelper::invalid_state()
+            .message("No query set")
+            .to_adbc()
+    })?;
+
+    // Build DESCRIBE QUERY, replacing ? markers with '?' to avoid parse errors
+    let safe_query = replace_parameter_markers_with_literals(query);
+    let describe_sql = format!("DESCRIBE QUERY {}", safe_query);
+
+    let result = self
+        .runtime_handle
+        .block_on(self.client.execute_statement(
+            &self.session_id,
+            &describe_sql,
+            &ExecuteParams::default(),
+        ))
+        .map_err(|e| e.to_adbc())?;
+
+    // DESCRIBE QUERY returns rows with (col_name, data_type) columns.
+    // Convert these into an Arrow Schema.
+    let reader = ResultReaderAdapter::new(result.reader, result.manifest.as_ref())
+        .map_err(|e| e.to_adbc())?;
+
+    describe_result_to_schema(reader)
+}
+```
+
+#### `replace_parameter_markers_with_literals()`
+
+Reuses the same SQL parser state machine from `count_parameter_markers()`, but instead of counting, replaces each `?` in normal context with `'?'` (a string literal). This prevents the server from rejecting the DESCRIBE QUERY due to unbound parameter markers.
+
+```rust
+/// Replace parameter markers (?) with string literals ('?') for DESCRIBE QUERY.
+/// Uses the same state machine as count_parameter_markers() to skip
+/// markers inside string literals and comments.
+fn replace_parameter_markers_with_literals(sql: &str) -> String { ... }
+```
+
+Reference: JDBC's `DatabricksPreparedStatement.surroundPlaceholdersWithQuotes()` does the same transformation.
+
+#### `describe_result_to_schema()`
+
+Converts the DESCRIBE QUERY result (rows of `col_name STRING, data_type STRING`) into an Arrow `Schema`:
+
+```rust
+/// Convert DESCRIBE QUERY result rows into an Arrow Schema.
+///
+/// Each row has (col_name, data_type). Map Databricks type names
+/// back to Arrow DataTypes (reverse of the arrow_type_to_databricks_type mapping).
+fn describe_result_to_schema(
+    reader: impl RecordBatchReader,
+) -> Result<Schema> { ... }
+```
+
+This requires a reverse mapping from Databricks type names to Arrow types:
+
+| Databricks Type | Arrow DataType |
+|---|---|
+| `BOOLEAN` | `Boolean` |
+| `TINYINT` | `Int8` |
+| `SMALLINT` | `Int16` |
+| `INT` | `Int32` |
+| `BIGINT` | `Int64` |
+| `FLOAT` | `Float32` |
+| `DOUBLE` | `Float64` |
+| `DECIMAL(p,s)` | `Decimal128(p, s)` |
+| `STRING` | `Utf8` |
+| `BINARY` | `Binary` |
+| `DATE` | `Date32` |
+| `TIMESTAMP` | `Timestamp(Microsecond, None)` |
+| `TIMESTAMP_NTZ` | `Timestamp(Microsecond, None)` |
+| `ARRAY<...>` | `Utf8` (opaque) |
+| `MAP<...>` | `Utf8` (opaque) |
+| `STRUCT<...>` | `Utf8` (opaque) |
+
+### 6. SeaClient Changes
 
 The `call_execute_api` method needs to pass parameters through to the request body. This is minimal — just plumb the `parameters` from `ExecuteParams` into `ExecuteStatementRequest`.
 
@@ -656,6 +744,14 @@ The bridge already handles `AdbcStatementPrepare()` returning `NOT_IMPLEMENTED` 
 
 4. **Request serialization**: `ExecuteStatementRequest` with parameters serializes correctly to JSON.
 
+5. **`replace_parameter_markers_with_literals()`**:
+   - `SELECT * FROM t WHERE id = ?` → `SELECT * FROM t WHERE id = '?'`
+   - `SELECT '?' FROM t WHERE id = ?` → `SELECT '?' FROM t WHERE id = '?'` (literal stays, marker replaced)
+   - No markers: `SELECT 1` → `SELECT 1` (unchanged)
+
+6. **`describe_result_to_schema()`**: Databricks type strings → Arrow DataTypes:
+   - `INT` → `Int32`, `STRING` → `Utf8`, `DECIMAL(10,2)` → `Decimal128(10,2)`, etc.
+
 ### E2E Tests (Ignored, Require Databricks Connection)
 
 1. Simple parameterized SELECT: `SELECT ? AS value` with INT parameter
@@ -664,14 +760,16 @@ The bridge already handles `AdbcStatementPrepare()` returning `NOT_IMPLEMENTED` 
 4. NULL parameter: bind a null value
 5. `bind_stream()` with multiple rows → multiple results
 6. Type coverage: BOOLEAN, INT, BIGINT, DOUBLE, STRING, DATE, TIMESTAMP, DECIMAL
+7. `execute_schema()` returns correct schema via DESCRIBE QUERY (no side effects)
+8. `execute_schema()` on a parameterized query returns schema with `?` markers safely handled
 
 ## Files Changed
 
 | File | Change |
 |---|---|
 | `src/types/sea.rs` | Add `StatementParameter`, `parameters` field on `ExecuteStatementRequest` and `ExecuteParams` |
-| `src/statement.rs` | Add fields, implement `prepare`/`bind`/`bind_stream`/`get_parameter_schema`, update `execute` |
-| `src/statement/params.rs` (new) | `count_parameter_markers()`, `record_batch_to_sea_parameters()`, Arrow type mapping |
+| `src/statement.rs` | Add fields, implement `prepare`/`bind`/`bind_stream`/`get_parameter_schema`, fix `execute_schema`, update `execute` |
+| `src/statement/params.rs` (new) | `count_parameter_markers()`, `replace_parameter_markers_with_literals()`, `record_batch_to_sea_parameters()`, `describe_result_to_schema()`, Arrow type mapping (forward + reverse) |
 | `src/client/sea.rs` | Pass `parameters` from `ExecuteParams` to `ExecuteStatementRequest` |
 
 ## Out of Scope
