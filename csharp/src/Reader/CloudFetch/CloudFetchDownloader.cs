@@ -66,7 +66,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         // Chunk metrics aggregation
         private int _totalChunksPresent = 0;
         private int _totalChunksIterated = 0;
-        private long _initialChunkLatencyMs = 0;
+        private long _initialChunkLatencyMs = -1;
         private long _slowestChunkLatencyMs = 0;
         private long _sumChunksDownloadTimeMs = 0;
         private readonly object _metricsLock = new object();
@@ -726,7 +726,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 _totalChunksIterated++;
 
                 // Record initial chunk latency (first successful download)
-                if (_initialChunkLatencyMs == 0)
+                if (_initialChunkLatencyMs == -1)
                 {
                     _initialChunkLatencyMs = downloadTimeMs;
                 }

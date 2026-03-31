@@ -109,13 +109,9 @@ namespace AdbcDrivers.Databricks
         // Shared OAuth token provider for connection-wide token caching
         private OAuthClientCredentialsProvider? _oauthTokenProvider;
 
-        // Captures x-databricks-org-id from HTTP response headers
-        private Http.OrgIdCaptureHandler? _orgIdCaptureHandler;
-
         // Telemetry fields
         private ITelemetryClient? _telemetryClient;
         private string? _host;
-        private TOpenSessionResp? _openSessionResp;
         internal TelemetrySessionContext? TelemetrySession { get; private set; }
 
         /// <summary>
@@ -425,12 +421,6 @@ namespace AdbcDrivers.Databricks
                 AddThriftErrorHandler = true
             };
 
-            // Add org ID capture handler between base and the rest of the chain.
-            // This captures x-databricks-org-id from the first successful HTTP response
-            // (e.g., OpenSession), which works for both SPOG and legacy URLs.
-            _orgIdCaptureHandler = new Http.OrgIdCaptureHandler(config.BaseHandler);
-            config.BaseHandler = _orgIdCaptureHandler;
-
             var result = HttpHandlerFactory.CreateHandlersWithTokenProvider(config);
             _oauthTokenProvider = result.TokenProvider;
             return result.Handler;
@@ -675,9 +665,6 @@ namespace AdbcDrivers.Databricks
                 return;
             }
 
-            // Store session response for later use (e.g., extracting workspace ID)
-            _openSessionResp = session;
-
             var version = session.ServerProtocolVersion;
 
             // Log server protocol version
@@ -796,25 +783,12 @@ namespace AdbcDrivers.Databricks
                     true, // unauthed failure will be report separately
                     telemetryConfig);
 
-                // Extract workspace ID from x-databricks-org-id response header
-                // This works for both SPOG and legacy URLs, unlike parsing from the HTTP path.
-                long workspaceId = 0;
-                string? orgId = _orgIdCaptureHandler?.CapturedOrgId;
-                if (!string.IsNullOrEmpty(orgId) && long.TryParse(orgId, out long parsedOrgId))
-                {
-                    workspaceId = parsedOrgId;
-                    activity?.AddEvent(new ActivityEvent("telemetry.workspace_id.from_response_header",
-                        tags: new ActivityTagsCollection { { "workspace_id", workspaceId } }));
-                }
-
                 // Create session-level telemetry context for V3 direct-object pipeline
                 TelemetrySession = new TelemetrySessionContext
                 {
                     SessionId = SessionHandle?.SessionId?.Guid != null
                         ? new Guid(SessionHandle.SessionId.Guid).ToString()
                         : null,
-                    WorkspaceId = workspaceId,
-
                     TelemetryClient = _telemetryClient,
                     SystemConfiguration = BuildSystemConfiguration(),
                     DriverConnectionParams = BuildDriverConnectionParams(true),

@@ -160,6 +160,19 @@ namespace AdbcDrivers.Databricks
                 ? ExecutionResultFormat.ExternalLinks
                 : ExecutionResultFormat.InlineArrow;
             ctx.StatementId = StatementId;
+            CaptureRetryCount(ctx);
+        }
+
+        private void CaptureRetryCount(StatementTelemetryContext ctx)
+        {
+            if (Activity.Current != null)
+            {
+                var retryCountTag = Activity.Current.GetTagItem("http.retry.total_attempts");
+                if (retryCountTag is int retryCount)
+                {
+                    ctx.RetryCount = retryCount;
+                }
+            }
         }
 
         private void RecordError(StatementTelemetryContext ctx, Exception ex)
@@ -167,6 +180,7 @@ namespace AdbcDrivers.Databricks
             ctx.HasError = true;
             ctx.ErrorName = ex.GetType().Name;
             ctx.ErrorMessage = ex.Message;
+            CaptureRetryCount(ctx);
         }
 
         public override QueryResult ExecuteQuery()
@@ -268,16 +282,6 @@ namespace AdbcDrivers.Databricks
             try
             {
                 ctx.RecordResultsConsumed();
-
-                // Extract retry count from Activity if available
-                if (Activity.Current != null)
-                {
-                    var retryCountTag = Activity.Current.GetTagItem("http.retry.total_attempts");
-                    if (retryCountTag is int retryCount)
-                    {
-                        ctx.RetryCount = retryCount;
-                    }
-                }
 
                 // Extract chunk metrics if this was a CloudFetch query
                 // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped)

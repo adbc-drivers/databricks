@@ -26,30 +26,30 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// Gets or sets the total number of chunks present in the result.
         /// This represents the total number of download links provided by the server.
         /// </summary>
-        public int TotalChunksPresent { get; set; }
+        public int TotalChunksPresent { get; internal set; }
 
         /// <summary>
-        /// Gets or sets the number of chunks actually iterated by the client.
+        /// Gets the number of chunks actually iterated by the client.
         /// This may be less than TotalChunksPresent if the client stops reading early.
         /// </summary>
-        public int TotalChunksIterated { get; set; }
+        public int TotalChunksIterated { get; internal set; }
 
         /// <summary>
-        /// Gets or sets the time taken to download the first chunk in milliseconds.
+        /// Gets the time taken to download the first chunk in milliseconds.
         /// Represents the initial latency before the first data is available to the client.
         /// </summary>
-        public long InitialChunkLatencyMs { get; set; }
+        public long InitialChunkLatencyMs { get; internal set; }
 
         /// <summary>
-        /// Gets or sets the maximum time taken to download any single chunk in milliseconds.
+        /// Gets the maximum time taken to download any single chunk in milliseconds.
         /// Identifies the slowest chunk download, useful for identifying performance outliers.
         /// </summary>
-        public long SlowestChunkLatencyMs { get; set; }
+        public long SlowestChunkLatencyMs { get; internal set; }
 
         /// <summary>
-        /// Gets or sets the sum of download times for all chunks in milliseconds.
+        /// Gets the sum of download times for all chunks in milliseconds.
         /// This is the total time spent downloading (excluding parallel overlap).
         /// </summary>
-        public long SumChunksDownloadTimeMs { get; set; }
+        public long SumChunksDownloadTimeMs { get; internal set; }
     }
 }
