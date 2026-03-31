@@ -129,12 +129,12 @@ impl Statement {
     /// Execute a parameterized query once per row in the bound stream.
     ///
     /// Each row in the stream becomes a separate SEA API call with its own
-    /// set of parameters. Results from all executions are concatenated.
+    /// set of parameters. Results from all executions are collected.
     fn execute_with_stream(
         &mut self,
         query: &str,
         stream: Box<dyn RecordBatchReader + Send>,
-    ) -> Result<impl RecordBatchReader + Send> {
+    ) -> Result<(Arc<Schema>, Vec<RecordBatch>)> {
         let mut all_batches: Vec<RecordBatch> = Vec::new();
         let mut result_schema: Option<Arc<Schema>> = None;
 
@@ -174,10 +174,7 @@ impl Statement {
         }
 
         let schema = result_schema.unwrap_or_else(|| Arc::new(Schema::empty()));
-        Ok(arrow_array::RecordBatchIterator::new(
-            all_batches.into_iter().map(Ok),
-            schema,
-        ))
+        Ok((schema, all_batches))
     }
 }
 
@@ -323,33 +320,37 @@ impl adbc_core::Statement for Statement {
 
         debug!("Executing query: {}", query);
 
-        // Handle bind_stream: execute once per row in the stream
-        if let Some(stream) = self.bound_stream.take() {
-            let iter_reader = self.execute_with_stream(&query, stream)?;
-            // Collect into batches so both branches return the same type
-            let schema = iter_reader.schema();
-            let batches: Vec<RecordBatch> = iter_reader
+        // Collect results into (schema, batches) — same type for both paths.
+        let (schema, batches) = if let Some(stream) = self.bound_stream.take() {
+            self.execute_with_stream(&query, stream)?
+        } else {
+            // Convert bound parameters (if any) to SEA format
+            let parameters = match self.bound_params.take() {
+                Some(batch) => record_batch_to_sea_parameters(&batch).map_err(|e| e.to_adbc())?,
+                None => vec![],
+            };
+
+            let exec_params = ExecuteParams {
+                parameters,
+                ..ExecuteParams::default()
+            };
+
+            let reader = self.execute_single(&query, &exec_params)?;
+            let schema = reader.schema();
+            let batches: Vec<RecordBatch> = reader
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|e| {
                     DatabricksErrorHelper::io()
-                        .message(format!("Error collecting stream results: {e}"))
+                        .message(format!("Error reading results: {e}"))
                         .to_adbc()
                 })?;
-            return Ok(ResultReaderAdapter::from_batches(schema, batches));
-        }
-
-        // Convert bound parameters (if any) to SEA format
-        let parameters = match self.bound_params.take() {
-            Some(batch) => record_batch_to_sea_parameters(&batch).map_err(|e| e.to_adbc())?,
-            None => vec![],
+            (schema, batches)
         };
 
-        let exec_params = ExecuteParams {
-            parameters,
-            ..ExecuteParams::default()
-        };
-
-        self.execute_single(&query, &exec_params)
+        Ok(arrow_array::RecordBatchIterator::new(
+            batches.into_iter().map(Ok),
+            schema,
+        ))
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {
