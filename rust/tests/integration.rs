@@ -41,6 +41,12 @@ fn test_database_configuration() {
         .expect("Failed to set http_path");
     database
         .set_option(
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("access_token".into()),
+        )
+        .expect("Failed to set auth type");
+    database
+        .set_option(
             OptionDatabase::Other("databricks.access_token".into()),
             OptionValue::String("test-token".into()),
         )
@@ -170,8 +176,13 @@ fn test_real_connection() {
     let mut driver = Driver::new();
     let mut database = driver.new_database().expect("Failed to create database");
 
+    let uri = if host.starts_with("https://") || host.starts_with("http://") {
+        host
+    } else {
+        format!("https://{host}")
+    };
     database
-        .set_option(OptionDatabase::Uri, OptionValue::String(host))
+        .set_option(OptionDatabase::Uri, OptionValue::String(uri))
         .expect("Failed to set uri");
     database
         .set_option(
@@ -179,6 +190,12 @@ fn test_real_connection() {
             OptionValue::String(http_path),
         )
         .expect("Failed to set http_path");
+    database
+        .set_option(
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("access_token".into()),
+        )
+        .expect("Failed to set auth type");
     database
         .set_option(
             OptionDatabase::Other("databricks.access_token".into()),

@@ -277,6 +277,7 @@ impl SeaClient {
             wait_timeout: params.wait_timeout.clone(),
             on_wait_timeout: params.on_wait_timeout.clone(),
             row_limit: params.row_limit,
+            parameters: params.parameters.clone(),
         };
 
         debug!("Executing statement at {}: {}", url, sql);
