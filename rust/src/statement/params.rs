@@ -21,6 +21,7 @@
 //! - `DESCRIBE QUERY` result parsing for `execute_schema()`
 
 use crate::error::{DatabricksErrorHelper, Result};
+use crate::metadata::type_mapping::{arrow_type_to_databricks, databricks_type_to_arrow};
 use crate::types::sea::StatementParameter;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -150,7 +151,7 @@ pub fn record_batch_to_sea_parameters(batch: &RecordBatch) -> Result<Vec<Stateme
 
     let mut params = Vec::with_capacity(batch.num_columns());
     for (i, column) in batch.columns().iter().enumerate() {
-        let param_type = arrow_type_to_databricks_type(column.data_type());
+        let param_type = arrow_type_to_databricks(column.data_type());
         let value = if column.is_null(0) {
             None
         } else {
@@ -165,33 +166,6 @@ pub fn record_batch_to_sea_parameters(batch: &RecordBatch) -> Result<Vec<Stateme
     }
 
     Ok(params)
-}
-
-/// Map an Arrow DataType to a Databricks SQL type name.
-pub fn arrow_type_to_databricks_type(dt: &DataType) -> String {
-    match dt {
-        DataType::Boolean => "BOOLEAN".to_string(),
-        DataType::Int8 => "TINYINT".to_string(),
-        DataType::Int16 => "SMALLINT".to_string(),
-        DataType::Int32 => "INT".to_string(),
-        DataType::Int64 => "BIGINT".to_string(),
-        DataType::UInt8 => "SMALLINT".to_string(),
-        DataType::UInt16 => "INT".to_string(),
-        DataType::UInt32 => "BIGINT".to_string(),
-        DataType::UInt64 => "BIGINT".to_string(),
-        DataType::Float16 => "FLOAT".to_string(),
-        DataType::Float32 => "FLOAT".to_string(),
-        DataType::Float64 => "DOUBLE".to_string(),
-        DataType::Decimal128(p, s) => format!("DECIMAL({p},{s})"),
-        DataType::Utf8 | DataType::LargeUtf8 => "STRING".to_string(),
-        DataType::Binary | DataType::LargeBinary => "BINARY".to_string(),
-        DataType::Date32 => "DATE".to_string(),
-        DataType::Date64 => "DATE".to_string(),
-        DataType::Timestamp(_, _) => "TIMESTAMP".to_string(),
-        DataType::Null => "STRING".to_string(),
-        // Fallback: use STRING for unsupported types
-        _ => "STRING".to_string(),
-    }
 }
 
 /// Extract a scalar value from an Arrow array at the given index as a string.
@@ -343,62 +317,12 @@ pub fn describe_result_to_schema(
         for row in 0..batch.num_rows() {
             let col_name = names.value(row);
             let data_type_str = types.value(row);
-            let arrow_type = databricks_type_to_arrow_type(data_type_str);
+            let arrow_type = databricks_type_to_arrow(data_type_str);
             fields.push(Field::new(col_name, arrow_type, true));
         }
     }
 
     Ok(Schema::new(fields))
-}
-
-/// Map a Databricks SQL type name to an Arrow DataType.
-///
-/// Handles types like `INT`, `STRING`, `DECIMAL(10,2)`, `ARRAY<INT>`, etc.
-pub fn databricks_type_to_arrow_type(type_name: &str) -> DataType {
-    let upper = type_name.trim().to_uppercase();
-
-    match upper.as_str() {
-        "BOOLEAN" => DataType::Boolean,
-        "TINYINT" | "BYTE" => DataType::Int8,
-        "SMALLINT" | "SHORT" => DataType::Int16,
-        "INT" | "INTEGER" => DataType::Int32,
-        "BIGINT" | "LONG" => DataType::Int64,
-        "FLOAT" | "REAL" => DataType::Float32,
-        "DOUBLE" => DataType::Float64,
-        "STRING" | "VARCHAR" | "CHAR" => DataType::Utf8,
-        "BINARY" => DataType::Binary,
-        "DATE" => DataType::Date32,
-        "TIMESTAMP" | "TIMESTAMP_NTZ" => DataType::Timestamp(TimeUnit::Microsecond, None),
-        "VOID" | "NULL" => DataType::Null,
-        _ => {
-            // Check for parameterized types like DECIMAL(p,s)
-            if let Some(inner) = upper.strip_prefix("DECIMAL") {
-                if let Some((p, s)) = parse_decimal_params(inner) {
-                    return DataType::Decimal128(p, s);
-                }
-                // Plain DECIMAL without params
-                return DataType::Decimal128(38, 18);
-            }
-            // Complex types (ARRAY<...>, MAP<...>, STRUCT<...>) → opaque Utf8
-            if upper.starts_with("ARRAY") || upper.starts_with("MAP") || upper.starts_with("STRUCT")
-            {
-                return DataType::Utf8;
-            }
-            // Unknown type → Utf8 fallback
-            DataType::Utf8
-        }
-    }
-}
-
-/// Parse `(precision, scale)` from a string like `(10,2)`.
-fn parse_decimal_params(s: &str) -> Option<(u8, i8)> {
-    let s = s.trim();
-    let s = s.strip_prefix('(')?;
-    let s = s.strip_suffix(')')?;
-    let mut parts = s.split(',');
-    let p: u8 = parts.next()?.trim().parse().ok()?;
-    let s: i8 = parts.next()?.trim().parse().ok()?;
-    Some((p, s))
 }
 
 /// Encode bytes as a hex string. Avoids adding a `hex` crate dependency.
@@ -611,67 +535,6 @@ mod tests {
         let params = record_batch_to_sea_parameters(&batch).unwrap();
         assert_eq!(params[0].param_type, "DECIMAL(10,2)");
         assert_eq!(params[0].value, Some("123.45".to_string()));
-    }
-
-    // --- Type mapping tests ---
-
-    #[test]
-    fn test_arrow_to_databricks_types() {
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Boolean), "BOOLEAN");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Int8), "TINYINT");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Int16), "SMALLINT");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Int32), "INT");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Int64), "BIGINT");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Float32), "FLOAT");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Float64), "DOUBLE");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Utf8), "STRING");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Binary), "BINARY");
-        assert_eq!(arrow_type_to_databricks_type(&DataType::Date32), "DATE");
-        assert_eq!(
-            arrow_type_to_databricks_type(&DataType::Decimal128(10, 2)),
-            "DECIMAL(10,2)"
-        );
-    }
-
-    #[test]
-    fn test_databricks_to_arrow_types() {
-        assert_eq!(databricks_type_to_arrow_type("BOOLEAN"), DataType::Boolean);
-        assert_eq!(databricks_type_to_arrow_type("TINYINT"), DataType::Int8);
-        assert_eq!(databricks_type_to_arrow_type("SMALLINT"), DataType::Int16);
-        assert_eq!(databricks_type_to_arrow_type("INT"), DataType::Int32);
-        assert_eq!(databricks_type_to_arrow_type("INTEGER"), DataType::Int32);
-        assert_eq!(databricks_type_to_arrow_type("BIGINT"), DataType::Int64);
-        assert_eq!(databricks_type_to_arrow_type("FLOAT"), DataType::Float32);
-        assert_eq!(databricks_type_to_arrow_type("DOUBLE"), DataType::Float64);
-        assert_eq!(databricks_type_to_arrow_type("STRING"), DataType::Utf8);
-        assert_eq!(databricks_type_to_arrow_type("BINARY"), DataType::Binary);
-        assert_eq!(databricks_type_to_arrow_type("DATE"), DataType::Date32);
-        assert_eq!(
-            databricks_type_to_arrow_type("TIMESTAMP"),
-            DataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-        assert_eq!(
-            databricks_type_to_arrow_type("TIMESTAMP_NTZ"),
-            DataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-        assert_eq!(
-            databricks_type_to_arrow_type("DECIMAL(10,2)"),
-            DataType::Decimal128(10, 2)
-        );
-        assert_eq!(
-            databricks_type_to_arrow_type("DECIMAL"),
-            DataType::Decimal128(38, 18)
-        );
-        // Complex types → Utf8
-        assert_eq!(databricks_type_to_arrow_type("ARRAY<INT>"), DataType::Utf8);
-        assert_eq!(
-            databricks_type_to_arrow_type("MAP<STRING,INT>"),
-            DataType::Utf8
-        );
-        assert_eq!(
-            databricks_type_to_arrow_type("STRUCT<a:INT,b:STRING>"),
-            DataType::Utf8
-        );
     }
 
     // --- Decimal formatting tests ---
