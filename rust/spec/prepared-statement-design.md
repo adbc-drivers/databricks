@@ -675,7 +675,7 @@ This mapping follows the JDBC driver's `DatabricksTypeUtil` patterns and the SEA
         │
         ▼  (can re-bind and re-execute)
 ┌─ bind(new_batch) → execute() ──────────────────────────────────┐
-│  Same flow — re-uses prepared state, new parameters             │
+│  Same flow — reuses prepared state, new parameters              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
