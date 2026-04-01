@@ -20,6 +20,7 @@
 //! the `oauth2::BasicClient`.
 
 use crate::client::http::DatabricksHttpClient;
+use crate::client::retry::RequestType;
 use crate::error::{DatabricksErrorHelper, Result};
 use driverbase::error::ErrorHelper;
 use serde::Deserialize;
@@ -84,7 +85,7 @@ impl OidcEndpoints {
     /// use std::sync::Arc;
     ///
     /// # async fn example() -> databricks_adbc::error::Result<()> {
-    /// let http_client = Arc::new(DatabricksHttpClient::new(HttpClientConfig::default())?);
+    /// let http_client = Arc::new(DatabricksHttpClient::with_default_retry(HttpClientConfig::default())?);
     /// let endpoints = OidcEndpoints::discover(
     ///     "https://my-workspace.cloud.databricks.com",
     ///     &http_client
@@ -111,7 +112,9 @@ impl OidcEndpoints {
             })?;
 
         // Execute the request without authentication (discovery endpoint is public)
-        let response = http_client.execute_without_auth(request).await?;
+        let response = http_client
+            .execute_without_auth(request, RequestType::AuthDiscovery)
+            .await?;
 
         // Check if the response status is successful
         let status = response.status();
@@ -168,7 +171,7 @@ mod tests {
 
         // Create HTTP client
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 
@@ -202,7 +205,7 @@ mod tests {
 
         // Create HTTP client
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 
@@ -238,7 +241,7 @@ mod tests {
 
         // Create HTTP client
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 
@@ -268,7 +271,7 @@ mod tests {
 
         // Create HTTP client
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 
@@ -298,7 +301,7 @@ mod tests {
 
         // Create HTTP client
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 
@@ -339,7 +342,7 @@ mod tests {
 
         // Create HTTP client
         let http_client = Arc::new(
-            DatabricksHttpClient::new(HttpClientConfig::default())
+            DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
                 .expect("Failed to create HTTP client"),
         );
 

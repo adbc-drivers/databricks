@@ -16,6 +16,9 @@
 
 use crate::auth::config::{AuthConfig, AuthType};
 use crate::auth::{AuthProvider, AuthorizationCodeProvider, PersonalAccessToken};
+use crate::client::retry::{
+    build_retry_configs, RequestCategory, RetryConfig, RetryConfigOverrides,
+};
 use crate::client::{
     DatabricksClient, DatabricksClientConfig, DatabricksHttpClient, HttpClientConfig, SeaClient,
 };
@@ -28,6 +31,7 @@ use adbc_core::error::Result;
 use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
 use adbc_core::Optionable;
 use driverbase::error::ErrorHelper;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,7 +40,7 @@ use std::time::Duration;
 /// A Database is created from a Driver and is used to establish Connections.
 /// Configuration options like host, credentials, and HTTP path are set on
 /// the Database before creating connections.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Database {
     // Core configuration
     uri: Option<String>,
@@ -57,6 +61,40 @@ pub struct Database {
 
     // Authentication configuration
     auth_config: AuthConfig,
+
+    // Retry configuration
+    retry_config: RetryConfig,
+    retry_overrides: HashMap<RequestCategory, RetryConfigOverrides>,
+}
+
+impl Default for Database {
+    fn default() -> Self {
+        let mut retry_overrides = HashMap::new();
+        // Auth requests should fail fast — shorter timeout and fewer retries
+        // than the 900s/5-retry global default used for query execution.
+        retry_overrides.insert(
+            RequestCategory::Auth,
+            RetryConfigOverrides {
+                overall_timeout: Some(Duration::from_secs(30)),
+                max_retries: Some(3),
+                ..Default::default()
+            },
+        );
+        Self {
+            uri: None,
+            warehouse_id: None,
+            access_token: None,
+            catalog: None,
+            schema: None,
+            http_config: HttpClientConfig::default(),
+            cloudfetch_config: CloudFetchConfig::default(),
+            log_level: None,
+            log_file: None,
+            auth_config: AuthConfig::default(),
+            retry_config: RetryConfig::default(),
+            retry_overrides,
+        }
+    }
 }
 
 impl Database {
@@ -120,6 +158,67 @@ impl Database {
             OptionValue::String(s) => s.parse().ok(),
             OptionValue::Int(i) => Some(*i),
             _ => None,
+        }
+    }
+
+    /// Parse a per-category retry option like `databricks.retry.auth.max_retries`.
+    fn set_retry_category_option(
+        &mut self,
+        option_name: &str,
+        key: &OptionDatabase,
+        value: OptionValue,
+    ) -> Result<()> {
+        // Parse "databricks.retry.<category>.<field>"
+        let rest = option_name
+            .strip_prefix("databricks.retry.")
+            .expect("caller verified prefix");
+        let (cat_str, field) = rest
+            .split_once('.')
+            .ok_or_else(|| DatabricksErrorHelper::set_unknown_option(key).to_adbc())?;
+
+        let category = match cat_str {
+            "sea" => RequestCategory::Sea,
+            "auth" => RequestCategory::Auth,
+            "cloudfetch" => RequestCategory::CloudFetch,
+            _ => return Err(DatabricksErrorHelper::set_unknown_option(key).to_adbc()),
+        };
+
+        let ovr = self.retry_overrides.entry(category).or_default();
+
+        match field {
+            "min_wait_ms" => {
+                if let Some(v) = Self::parse_int_option(&value) {
+                    ovr.min_wait = Some(Duration::from_millis(v as u64));
+                    Ok(())
+                } else {
+                    Err(DatabricksErrorHelper::set_invalid_option(key, &value).to_adbc())
+                }
+            }
+            "max_wait_ms" => {
+                if let Some(v) = Self::parse_int_option(&value) {
+                    ovr.max_wait = Some(Duration::from_millis(v as u64));
+                    Ok(())
+                } else {
+                    Err(DatabricksErrorHelper::set_invalid_option(key, &value).to_adbc())
+                }
+            }
+            "overall_timeout_ms" => {
+                if let Some(v) = Self::parse_int_option(&value) {
+                    ovr.overall_timeout = Some(Duration::from_millis(v as u64));
+                    Ok(())
+                } else {
+                    Err(DatabricksErrorHelper::set_invalid_option(key, &value).to_adbc())
+                }
+            }
+            "max_retries" => {
+                if let Some(v) = Self::parse_int_option(&value) {
+                    ovr.max_retries = Some(v as u32);
+                    Ok(())
+                } else {
+                    Err(DatabricksErrorHelper::set_invalid_option(key, &value).to_adbc())
+                }
+            }
+            _ => Err(DatabricksErrorHelper::set_unknown_option(key).to_adbc()),
         }
     }
 
@@ -395,6 +494,48 @@ impl Optionable for Database {
                     }
                 }
 
+                // Retry configuration — global defaults
+                "databricks.retry.min_wait_ms" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.retry_config.min_wait = Duration::from_millis(v as u64);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.retry.max_wait_ms" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.retry_config.max_wait = Duration::from_millis(v as u64);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.retry.overall_timeout_ms" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.retry_config.overall_timeout = Duration::from_millis(v as u64);
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+                "databricks.retry.max_retries" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.retry_config.max_retries = v as u32;
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
+
+                // Retry configuration — per-category overrides
+                s if s.starts_with("databricks.retry.sea.")
+                    || s.starts_with("databricks.retry.auth.")
+                    || s.starts_with("databricks.retry.cloudfetch.") =>
+                {
+                    self.set_retry_category_option(s, &key, value)
+                }
+
                 // HTTP client options
                 "databricks.http.connect_timeout_ms" => {
                     if let Some(v) = Self::parse_int_option(&value) {
@@ -412,15 +553,6 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
-                "databricks.http.max_retries" => {
-                    if let Some(v) = Self::parse_int_option(&value) {
-                        self.http_config.max_retries = v as u32;
-                        Ok(())
-                    } else {
-                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
-                    }
-                }
-
                 _ => Err(DatabricksErrorHelper::set_unknown_option(&key).to_adbc()),
             },
             _ => Err(DatabricksErrorHelper::set_unknown_option(&key).to_adbc()),
@@ -581,6 +713,12 @@ impl Optionable for Database {
                             .to_adbc()
                     })
                     .map(|p| p as i64),
+                "databricks.retry.min_wait_ms" => Ok(self.retry_config.min_wait.as_millis() as i64),
+                "databricks.retry.max_wait_ms" => Ok(self.retry_config.max_wait.as_millis() as i64),
+                "databricks.retry.overall_timeout_ms" => {
+                    Ok(self.retry_config.overall_timeout.as_millis() as i64)
+                }
+                "databricks.retry.max_retries" => Ok(self.retry_config.max_retries as i64),
                 _ => Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
             },
             _ => Err(DatabricksErrorHelper::get_unknown_option(&key).to_adbc()),
@@ -632,8 +770,11 @@ impl adbc_core::Database for Database {
         let access_token = self.access_token.as_ref();
 
         // Create HTTP client (without auth provider - two-phase initialization)
-        let http_client =
-            Arc::new(DatabricksHttpClient::new(self.http_config.clone()).map_err(|e| e.to_adbc())?);
+        let retry_configs = build_retry_configs(&self.retry_config, &self.retry_overrides);
+        let http_client = Arc::new(
+            DatabricksHttpClient::new(self.http_config.clone(), retry_configs)
+                .map_err(|e| e.to_adbc())?,
+        );
 
         // Create tokio runtime for async operations (needed before auth provider creation for U2M)
         let runtime = tokio::runtime::Runtime::new().map_err(|e| {
@@ -1762,5 +1903,144 @@ mod tests {
             db.auth_config.token_endpoint,
             Some("https://custom.endpoint/token".to_string())
         );
+    }
+
+    #[test]
+    fn test_database_retry_defaults() {
+        let db = Database::new();
+        assert_eq!(db.retry_config.min_wait, Duration::from_secs(1));
+        assert_eq!(db.retry_config.max_wait, Duration::from_secs(60));
+        assert_eq!(db.retry_config.overall_timeout, Duration::from_secs(900));
+        assert_eq!(db.retry_config.max_retries, 5);
+
+        // Auth should have shorter defaults
+        let auth_ovr = db.retry_overrides.get(&RequestCategory::Auth).unwrap();
+        assert_eq!(auth_ovr.overall_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(auth_ovr.max_retries, Some(3));
+    }
+
+    #[test]
+    fn test_database_retry_global_options() {
+        let mut db = Database::new();
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.min_wait_ms".into()),
+            OptionValue::Int(500),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.max_wait_ms".into()),
+            OptionValue::Int(30000),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.overall_timeout_ms".into()),
+            OptionValue::Int(60000),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.max_retries".into()),
+            OptionValue::Int(10),
+        )
+        .unwrap();
+
+        assert_eq!(db.retry_config.min_wait, Duration::from_millis(500));
+        assert_eq!(db.retry_config.max_wait, Duration::from_millis(30000));
+        assert_eq!(
+            db.retry_config.overall_timeout,
+            Duration::from_millis(60000)
+        );
+        assert_eq!(db.retry_config.max_retries, 10);
+
+        // Round-trip via get_option_int
+        assert_eq!(
+            db.get_option_int(OptionDatabase::Other("databricks.retry.min_wait_ms".into()))
+                .unwrap(),
+            500
+        );
+        assert_eq!(
+            db.get_option_int(OptionDatabase::Other("databricks.retry.max_retries".into()))
+                .unwrap(),
+            10
+        );
+    }
+
+    #[test]
+    fn test_database_retry_category_overrides() {
+        let mut db = Database::new();
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.auth.overall_timeout_ms".into()),
+            OptionValue::Int(15000),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.auth.max_retries".into()),
+            OptionValue::Int(2),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.sea.max_retries".into()),
+            OptionValue::Int(8),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.cloudfetch.min_wait_ms".into()),
+            OptionValue::Int(200),
+        )
+        .unwrap();
+
+        let auth_ovr = db.retry_overrides.get(&RequestCategory::Auth).unwrap();
+        assert_eq!(auth_ovr.overall_timeout, Some(Duration::from_millis(15000)));
+        assert_eq!(auth_ovr.max_retries, Some(2));
+
+        let sea_ovr = db.retry_overrides.get(&RequestCategory::Sea).unwrap();
+        assert_eq!(sea_ovr.max_retries, Some(8));
+
+        let cf_ovr = db
+            .retry_overrides
+            .get(&RequestCategory::CloudFetch)
+            .unwrap();
+        assert_eq!(cf_ovr.min_wait, Some(Duration::from_millis(200)));
+    }
+
+    #[test]
+    fn test_database_retry_unknown_category_rejected() {
+        let mut db = Database::new();
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.retry.unknown.max_retries".into()),
+            OptionValue::Int(5),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_database_retry_unknown_field_rejected() {
+        let mut db = Database::new();
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.retry.auth.unknown_field".into()),
+            OptionValue::Int(5),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_database_retry_rejects_non_int() {
+        let mut db = Database::new();
+        let result = db.set_option(
+            OptionDatabase::Other("databricks.retry.max_retries".into()),
+            OptionValue::String("not_a_number".into()),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_database_retry_string_int_accepted() {
+        let mut db = Database::new();
+        // String values that parse as integers should be accepted
+        db.set_option(
+            OptionDatabase::Other("databricks.retry.max_retries".into()),
+            OptionValue::String("7".into()),
+        )
+        .unwrap();
+        assert_eq!(db.retry_config.max_retries, 7);
     }
 }

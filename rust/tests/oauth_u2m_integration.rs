@@ -77,7 +77,7 @@ async fn test_u2m_refresh_token_full_flow() {
 
     // Step 3: Create HTTP client
     let http_client = Arc::new(
-        DatabricksHttpClient::new(HttpClientConfig::default())
+        DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
             .expect("Failed to create HTTP client"),
     );
 
@@ -145,7 +145,7 @@ async fn test_u2m_refresh_token_stale_immediate_return() {
     mock_oidc_discovery(&mock_server).await;
 
     let http_client = Arc::new(
-        DatabricksHttpClient::new(HttpClientConfig::default())
+        DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
             .expect("Failed to create HTTP client"),
     );
 
@@ -229,7 +229,7 @@ async fn test_u2m_refresh_token_expired_fallback() {
         .await;
 
     let http_client = Arc::new(
-        DatabricksHttpClient::new(HttpClientConfig::default())
+        DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
             .expect("Failed to create HTTP client"),
     );
 
@@ -301,7 +301,7 @@ async fn test_u2m_refresh_updates_cache() {
         .await;
 
     let http_client = Arc::new(
-        DatabricksHttpClient::new(HttpClientConfig::default())
+        DatabricksHttpClient::with_default_retry(HttpClientConfig::default())
             .expect("Failed to create HTTP client"),
     );
 
