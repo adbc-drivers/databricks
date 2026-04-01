@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +81,13 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+
+	// Staging options for bulk ingest
+	stagingVolumePath string
+	stagingPrefix     string
+
+	// HTTP client for staging operations (Files API)
+	httpClient *http.Client
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -223,6 +231,80 @@ func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, e
 	return db, nil
 }
 
+// parseURIForStaging extracts hostname, port, and access token from the
+// databricks:// URI so the staging client can make Files API requests.
+// URI format: databricks://token:<token>@<host>:<port><httpPath>
+func (d *databaseImpl) parseURIForStaging(rawURI string) error {
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return adbc.Error{
+			Code: adbc.StatusInvalidArgument,
+			Msg:  fmt.Sprintf("failed to parse URI for staging: %v", err),
+		}
+	}
+
+	if parsed.Hostname() != "" {
+		d.serverHostname = parsed.Hostname()
+	}
+	if parsed.Port() != "" {
+		port, err := strconv.Atoi(parsed.Port())
+		if err == nil && port > 0 {
+			d.port = port
+		}
+	}
+	if parsed.User != nil {
+		if password, ok := parsed.User.Password(); ok && password != "" {
+			d.accessToken = password
+		}
+	}
+
+	return nil
+}
+
+func (d *databaseImpl) getOrCreateHTTPClient() *http.Client {
+	if d.httpClient != nil {
+		return d.httpClient
+	}
+
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       180 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	if d.sslCertPool != nil || d.sslInsecure {
+		transport.TLSClientConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			RootCAs:            d.sslCertPool,
+			InsecureSkipVerify: d.sslInsecure,
+		}
+	}
+
+	d.httpClient = &http.Client{Transport: transport}
+	return d.httpClient
+}
+
+func (d *databaseImpl) newStagingClient() *stagingClient {
+	if d.stagingVolumePath == "" {
+		return nil
+	}
+	return &stagingClient{
+		httpClient:     d.getOrCreateHTTPClient(),
+		serverHostname: d.serverHostname,
+		port:           d.port,
+		accessToken:    d.accessToken,
+		volumePath:     d.stagingVolumePath,
+		prefix:         d.stagingPrefix,
+	}
+}
+
 func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 	// Re-initialize the connection pool and settings if anything
 	// has changed, or we have not initialized yet
@@ -255,6 +337,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		catalog:            d.catalog,
 		dbSchema:           d.schema,
 		conn:               c,
+		stagingClient:      d.newStagingClient(),
 	}
 
 	return driverbase.NewConnectionBuilder(conn).
@@ -320,6 +403,10 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 		return d.oauthClientSecret, nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionStagingVolumePath:
+		return d.stagingVolumePath, nil
+	case OptionStagingPrefix:
+		return d.stagingPrefix, nil
 	default:
 		return d.DatabaseImplBase.GetOption(key)
 	}
@@ -330,17 +417,21 @@ func (d *databaseImpl) SetOptions(options map[string]string) error {
 	d.needsRefresh = true
 
 	hasURI := false
-	hasOtherOptions := false
+	hasConnectionOptions := false
 
 	if _, ok := options[adbc.OptionKeyURI]; ok {
 		hasURI = true
 	}
 
-	if len(options) > 1 || (len(options) == 1 && !hasURI) {
-		hasOtherOptions = true
+	// Staging options are orthogonal to connection options and can coexist with URI
+	for k := range options {
+		if k != adbc.OptionKeyURI && k != OptionStagingVolumePath && k != OptionStagingPrefix {
+			hasConnectionOptions = true
+			break
+		}
 	}
 
-	if hasURI && hasOtherOptions {
+	if hasURI && hasConnectionOptions {
 		return adbc.Error{
 			Code: adbc.StatusInvalidArgument,
 			Msg:  "cannot specify both URI and individual connection options",
@@ -369,6 +460,11 @@ func (d *databaseImpl) SetOption(key, value string) error {
 				Code: adbc.StatusInvalidArgument,
 				Msg:  fmt.Sprintf("invalid URI scheme: expected 'databricks://', got '%s'", value),
 			}
+		}
+		// Parse the URI to extract hostname, port, and token for the staging client.
+		// URI format: databricks://token:<token>@<host>:<port><httpPath>
+		if err := d.parseURIForStaging(value); err != nil {
+			return err
 		}
 	case OptionServerHostname:
 		d.serverHostname = value
@@ -486,6 +582,10 @@ func (d *databaseImpl) SetOption(key, value string) error {
 		d.oauthClientSecret = value
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionStagingVolumePath:
+		d.stagingVolumePath = value
+	case OptionStagingPrefix:
+		d.stagingPrefix = value
 	default:
 		return d.DatabaseImplBase.SetOption(key, value)
 	}
