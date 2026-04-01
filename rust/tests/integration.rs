@@ -181,6 +181,12 @@ fn test_real_connection() {
         .expect("Failed to set http_path");
     database
         .set_option(
+            OptionDatabase::Other("databricks.auth.type".into()),
+            OptionValue::String("access_token".into()),
+        )
+        .expect("Failed to set auth type");
+    database
+        .set_option(
             OptionDatabase::Other("databricks.access_token".into()),
             OptionValue::String(token),
         )

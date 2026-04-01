@@ -106,6 +106,9 @@ pub struct HttpClientConfig {
     pub proxy: ProxyConfig,
     /// TLS configuration.
     pub tls: TlsConfig,
+    /// Databricks organization ID for multi-tenant workspace routing.
+    /// When set, sent as the `x-databricks-org-id` header on all authenticated requests.
+    pub org_id: Option<String>,
 }
 
 impl Default for HttpClientConfig {
@@ -123,6 +126,7 @@ impl Default for HttpClientConfig {
             user_agent: format!("DatabricksJDBCDriverOSS/{}", env!("CARGO_PKG_VERSION")),
             proxy: ProxyConfig::default(),
             tls: TlsConfig::default(),
+            org_id: None,
         }
     }
 }
@@ -358,6 +362,11 @@ impl DatabricksHttpClient {
             if with_auth {
                 let auth_header = self.auth_header()?;
                 req_builder = req_builder.header("Authorization", auth_header);
+            }
+
+            // Add org ID header for multi-tenant workspace routing
+            if let Some(ref org_id) = self.config.org_id {
+                req_builder = req_builder.header("x-databricks-org-id", org_id);
             }
 
             // Add body if present
