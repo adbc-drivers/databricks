@@ -43,6 +43,8 @@ pub struct Statement {
     runtime: Arc<tokio::runtime::Runtime>,
     /// Current statement ID (set after execution).
     current_statement_id: Option<String>,
+    /// Whether to convert geometry structs to GeoArrow WKB encoding.
+    use_arrow_native_geospatial: bool,
 }
 
 impl Statement {
@@ -51,6 +53,7 @@ impl Statement {
         client: Arc<dyn DatabricksClient>,
         session_id: String,
         runtime: Arc<tokio::runtime::Runtime>,
+        use_arrow_native_geospatial: bool,
     ) -> Self {
         Self {
             query: None,
@@ -58,6 +61,7 @@ impl Statement {
             session_id,
             runtime,
             current_statement_id: None,
+            use_arrow_native_geospatial,
         }
     }
 
@@ -156,7 +160,8 @@ impl adbc_core::Statement for Statement {
         self.current_statement_id = Some(result.statement_id);
 
         // Wrap in adapter for RecordBatchReader trait
-        ResultReaderAdapter::new(result.reader).map_err(|e| e.to_adbc())
+        ResultReaderAdapter::new(result.reader, self.use_arrow_native_geospatial)
+            .map_err(|e| e.to_adbc())
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {

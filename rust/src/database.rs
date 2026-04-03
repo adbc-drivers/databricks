@@ -469,6 +469,7 @@ impl adbc_core::Database for Database {
                 schema: self.schema.clone(),
                 client,
                 session_config,
+                use_arrow_native_geospatial: self.use_arrow_native_geospatial,
             },
             runtime,
         )

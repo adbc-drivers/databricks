@@ -32,8 +32,9 @@ use crate::reader::cloudfetch::streaming_provider::StreamingCloudFetchProvider;
 use crate::reader::inline::InlineArrowProvider;
 use crate::types::cloudfetch::{CloudFetchConfig, CloudFetchLink};
 use crate::types::sea::{CompressionCodec, ResultManifest, StatementState};
-use arrow_array::RecordBatch;
+use arrow_array::{Array, RecordBatch, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+use std::collections::HashMap;
 use driverbase::error::ErrorHelper;
 use std::sync::Arc;
 
@@ -386,16 +387,194 @@ impl ResultReader for EmptyReader {
 }
 
 /// Adapter to make ResultReader work as arrow's RecordBatchReader.
+///
+/// When `use_geoarrow` is enabled, this adapter detects geometry columns
+/// (Struct { srid: Int32, wkb: Binary }) in the first batch, rewrites the
+/// schema to use GeoArrow WKB encoding (Binary with ARROW:extension:name =
+/// geoarrow.wkb), and transforms subsequent batches by extracting the wkb
+/// child from the struct (zero-copy).
 pub struct ResultReaderAdapter {
     inner: Box<dyn ResultReader + Send>,
     schema: SchemaRef,
+    /// Column indices that contain geometry structs to be converted.
+    geo_columns: Vec<usize>,
+    /// Whether the schema has been finalized with CRS info from the first batch.
+    schema_finalized: bool,
+    /// Whether GeoArrow conversion is enabled.
+    #[allow(dead_code)]
+    use_geoarrow: bool,
 }
 
 impl ResultReaderAdapter {
     /// Create a new adapter wrapping a ResultReader.
-    pub fn new(inner: Box<dyn ResultReader + Send>) -> Result<Self> {
+    ///
+    /// When `use_geoarrow` is true, geometry columns (Struct { srid: Int32, wkb: Binary })
+    /// will be automatically converted to GeoArrow WKB encoding.
+    pub fn new(inner: Box<dyn ResultReader + Send>, use_geoarrow: bool) -> Result<Self> {
         let schema = inner.schema()?;
-        Ok(Self { inner, schema })
+        let geo_columns = if use_geoarrow {
+            Self::detect_geometry_columns(&schema)
+        } else {
+            Vec::new()
+        };
+
+        // If we have geo columns, build initial schema (without CRS -- that comes from first batch)
+        let schema = if !geo_columns.is_empty() {
+            Arc::new(Self::build_geoarrow_schema(&schema, &geo_columns))
+        } else {
+            schema
+        };
+
+        Ok(Self {
+            inner,
+            schema,
+            geo_columns,
+            schema_finalized: false,
+            use_geoarrow,
+        })
+    }
+
+    /// Detect columns that are geometry structs: Struct { srid: Int32, wkb: Binary }.
+    fn detect_geometry_columns(schema: &Schema) -> Vec<usize> {
+        schema
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| Self::is_geometry_struct(f.data_type()))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Check whether a DataType is a Databricks geometry struct.
+    fn is_geometry_struct(dt: &DataType) -> bool {
+        if let DataType::Struct(fields) = dt {
+            if fields.len() == 2 {
+                let has_srid = fields
+                    .iter()
+                    .any(|f| f.name() == "srid" && f.data_type() == &DataType::Int32);
+                let has_wkb = fields
+                    .iter()
+                    .any(|f| f.name() == "wkb" && f.data_type() == &DataType::Binary);
+                return has_srid && has_wkb;
+            }
+        }
+        false
+    }
+
+    /// Build a new schema replacing geometry struct columns with GeoArrow WKB Binary.
+    fn build_geoarrow_schema(schema: &Schema, geo_columns: &[usize]) -> Schema {
+        let fields: Vec<Field> = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                if geo_columns.contains(&i) {
+                    let mut metadata = HashMap::new();
+                    metadata.insert(
+                        "ARROW:extension:name".to_string(),
+                        "geoarrow.wkb".to_string(),
+                    );
+                    Field::new(f.name(), DataType::Binary, f.is_nullable())
+                        .with_metadata(metadata)
+                } else {
+                    f.as_ref().clone()
+                }
+            })
+            .collect();
+        Schema::new(fields).with_metadata(schema.metadata().clone())
+    }
+
+    /// Finalize schema with CRS info extracted from the first batch's SRID values.
+    fn finalize_schema_with_crs(&mut self, batch: &RecordBatch) {
+        if self.schema_finalized || self.geo_columns.is_empty() {
+            return;
+        }
+        self.schema_finalized = true;
+
+        let mut fields: Vec<Field> = self.schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+
+        for &col_idx in &self.geo_columns {
+            if let Some(struct_col) = batch.column(col_idx).as_any().downcast_ref::<StructArray>() {
+                // Find the srid column
+                if let Some(srid_idx) = struct_col
+                    .fields()
+                    .iter()
+                    .position(|f| f.name() == "srid")
+                {
+                    let srid_array = struct_col.column(srid_idx);
+                    if let Some(srid_arr) = srid_array
+                        .as_any()
+                        .downcast_ref::<arrow_array::Int32Array>()
+                    {
+                        // Read SRID from first non-null row
+                        for row in 0..srid_arr.len() {
+                            if !srid_arr.is_null(row) {
+                                let srid = srid_arr.value(row);
+                                if srid != 0 {
+                                    let projjson = Self::srid_to_projjson(srid);
+                                    let mut metadata = fields[col_idx].metadata().clone();
+                                    metadata.insert(
+                                        "ARROW:extension:metadata".to_string(),
+                                        projjson,
+                                    );
+                                    fields[col_idx] = fields[col_idx]
+                                        .clone()
+                                        .with_metadata(metadata);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        self.schema = Arc::new(
+            Schema::new(fields).with_metadata(self.schema.metadata().clone()),
+        );
+    }
+
+    /// Convert an SRID to a PROJJSON string for GeoArrow metadata.
+    fn srid_to_projjson(srid: i32) -> String {
+        // Wrap the CRS info as GeoArrow extension metadata JSON
+        let crs_json = format!(
+            r#"{{"$schema":"https://proj.org/schemas/v0.7/projjson.schema.json","type":"GeographicCRS","name":"WGS 84","id":{{"authority":"EPSG","code":{}}}}}"#,
+            srid
+        );
+        format!(r#"{{"crs":{}}}"#, crs_json)
+    }
+
+    /// Transform a batch by extracting the wkb child from geometry struct columns.
+    fn transform_batch_for_geoarrow(
+        batch: &RecordBatch,
+        geo_columns: &[usize],
+        schema: &SchemaRef,
+    ) -> std::result::Result<RecordBatch, ArrowError> {
+        let columns: Vec<Arc<dyn Array>> = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(i, col)| {
+                if geo_columns.contains(&i) {
+                    // Extract the wkb child from the struct
+                    if let Some(struct_col) = col.as_any().downcast_ref::<StructArray>() {
+                        if let Some(wkb_idx) = struct_col
+                            .fields()
+                            .iter()
+                            .position(|f| f.name() == "wkb")
+                        {
+                            return struct_col.column(wkb_idx).clone();
+                        }
+                    }
+                    // Fallback: return original column if extraction fails
+                    col.clone()
+                } else {
+                    col.clone()
+                }
+            })
+            .collect();
+
+        RecordBatch::try_new(schema.clone(), columns)
     }
 }
 
@@ -410,7 +589,21 @@ impl Iterator for ResultReaderAdapter {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.inner.next_batch() {
-            Ok(Some(batch)) => Some(Ok(batch)),
+            Ok(Some(batch)) => {
+                if !self.geo_columns.is_empty() {
+                    // Finalize schema with CRS from first batch
+                    if !self.schema_finalized {
+                        self.finalize_schema_with_crs(&batch);
+                    }
+                    Some(Self::transform_batch_for_geoarrow(
+                        &batch,
+                        &self.geo_columns,
+                        &self.schema,
+                    ))
+                } else {
+                    Some(Ok(batch))
+                }
+            }
             Ok(None) => None,
             Err(e) => Some(Err(ArrowError::ExternalError(Box::new(
                 std::io::Error::other(e.to_string()),
@@ -436,7 +629,7 @@ mod tests {
     fn test_adapter_schema() {
         let batch = make_test_batch(vec!["a"]);
         let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch]));
-        let adapter = ResultReaderAdapter::new(reader).unwrap();
+        let adapter = ResultReaderAdapter::new(reader, false).unwrap();
         let schema = arrow_array::RecordBatchReader::schema(&adapter);
         assert_eq!(schema.fields().len(), 1);
         assert_eq!(schema.field(0).name(), "name");
@@ -447,7 +640,7 @@ mod tests {
         let batch1 = make_test_batch(vec!["a", "b"]);
         let batch2 = make_test_batch(vec!["c"]);
         let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![batch1, batch2]));
-        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+        let mut adapter = ResultReaderAdapter::new(reader, false).unwrap();
 
         let first = adapter.next().unwrap().unwrap();
         assert_eq!(first.num_rows(), 2);
@@ -461,7 +654,7 @@ mod tests {
     #[test]
     fn test_adapter_empty_reader() {
         let reader: Box<dyn ResultReader + Send> = Box::new(MockReader::new(vec![]));
-        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+        let mut adapter = ResultReaderAdapter::new(reader, false).unwrap();
         assert!(adapter.next().is_none());
     }
 
@@ -469,7 +662,7 @@ mod tests {
     fn test_adapter_propagates_error() {
         let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8, false)]));
         let reader: Box<dyn ResultReader + Send> = Box::new(ErrorReader { schema });
-        let mut adapter = ResultReaderAdapter::new(reader).unwrap();
+        let mut adapter = ResultReaderAdapter::new(reader, false).unwrap();
 
         let result = adapter.next().unwrap();
         assert!(result.is_err());
@@ -478,7 +671,7 @@ mod tests {
     #[test]
     fn test_adapter_schema_error() {
         let reader: Box<dyn ResultReader + Send> = Box::new(SchemaErrorReader);
-        let result = ResultReaderAdapter::new(reader);
+        let result = ResultReaderAdapter::new(reader, false);
         assert!(result.is_err());
     }
 

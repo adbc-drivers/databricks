@@ -45,6 +45,7 @@ pub struct ConnectionConfig {
     pub schema: Option<String>,
     pub client: Arc<dyn DatabricksClient>,
     pub session_config: HashMap<String, String>,
+    pub use_arrow_native_geospatial: bool,
 }
 
 /// Represents an active connection to a Databricks SQL endpoint.
@@ -66,6 +67,9 @@ pub struct Connection {
 
     // Tokio runtime for async operations (Arc so readers can keep it alive)
     runtime: Arc<tokio::runtime::Runtime>,
+
+    // Whether to convert geometry structs to GeoArrow WKB encoding
+    use_arrow_native_geospatial: bool,
 
     // Tracing span that attaches session_id to all log lines within this connection
     _log_span: EnteredSpan,
@@ -110,6 +114,7 @@ impl Connection {
             client: config.client,
             session_id: session_info.session_id,
             runtime,
+            use_arrow_native_geospatial: config.use_arrow_native_geospatial,
             _log_span: entered,
         })
     }
@@ -181,6 +186,7 @@ impl adbc_core::Connection for Connection {
             self.client.clone(),
             self.session_id.clone(),
             self.runtime.clone(),
+            self.use_arrow_native_geospatial,
         ))
     }
 
