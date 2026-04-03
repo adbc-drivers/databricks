@@ -73,7 +73,7 @@ wiremock = "0.6"
 adbc_driver_manager = "0.22"
 
 [features]
-default = ["metadata-ffi"]
+default = ["ffi"]
 ffi = ["adbc_ffi"]
 metadata-ffi = ["ffi", "dep:arrow"]
 
