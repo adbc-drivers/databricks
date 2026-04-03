@@ -111,5 +111,98 @@ pub(crate) mod ffi;
 
 // FFI export — produces AdbcDatabricksInit and AdbcDriverInit symbols
 // when built with `cargo build --features ffi`
+//
+// We provide our own init instead of using `adbc_ffi::export_driver!` because
+// the macro hard-rejects ADBC 1.0.0 callers. DuckDB's adbc_scanner (as of v1.5)
+// allocates a 1.0.0-sized AdbcDriver struct; writing the full 1.1.0 struct into
+// that buffer causes a heap overflow. Our init accepts both versions and only
+// writes the fields the caller's buffer can hold.
 #[cfg(feature = "ffi")]
-adbc_ffi::export_driver!(AdbcDatabricksInit, crate::driver::Driver);
+mod ffi_init {
+    use adbc_ffi::FFIDriver;
+    use std::os::raw::{c_int, c_void};
+
+    /// Number of pointer-sized fields in the ADBC 1.0.0 AdbcDriver struct.
+    /// Fields: private_data, private_manager, release, then 26 function pointers
+    /// (DatabaseInit..StatementSetSubstraitPlan).
+    const ADBC_DRIVER_1_0_0_FIELDS: usize = 29;
+    const ADBC_DRIVER_1_0_0_SIZE: usize = ADBC_DRIVER_1_0_0_FIELDS * std::mem::size_of::<usize>();
+
+    // ADBC version constants (from the C header)
+    const ADBC_VERSION_1_0_0: c_int = 1_000_000;
+    const ADBC_VERSION_1_1_0: c_int = 1_001_000;
+
+    unsafe fn driver_init(
+        version: c_int,
+        driver: *mut c_void,
+        error: *mut adbc_ffi::FFI_AdbcError,
+    ) -> adbc_core::error::AdbcStatusCode {
+        if driver.is_null() {
+            return adbc_core::constants::ADBC_STATUS_INVALID_ARGUMENT;
+        }
+
+        let ffi_driver = <crate::driver::Driver as FFIDriver>::ffi_driver();
+
+        match version {
+            ADBC_VERSION_1_1_0 => {
+                // Caller expects full 1.1.0 struct — write everything.
+                unsafe {
+                    std::ptr::write_unaligned(
+                        driver as *mut adbc_ffi::FFI_AdbcDriver,
+                        ffi_driver,
+                    );
+                }
+            }
+            ADBC_VERSION_1_0_0 => {
+                // Caller allocated a 1.0.0-sized buffer — only copy the first
+                // 29 fields so we don't overflow.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        &ffi_driver as *const adbc_ffi::FFI_AdbcDriver as *const u8,
+                        driver as *mut u8,
+                        ADBC_DRIVER_1_0_0_SIZE,
+                    );
+                }
+                // Prevent ffi_driver's Drop from running (it would call release())
+                std::mem::forget(ffi_driver);
+            }
+            _ => {
+                if !error.is_null() {
+                    let err = adbc_core::error::Error::with_message_and_status(
+                        format!(
+                            "Unsupported ADBC version: {}. Supported: 1.0.0 and 1.1.0",
+                            version,
+                        ),
+                        adbc_core::error::Status::NotImplemented,
+                    );
+                    if let Ok(ffi_err) = adbc_ffi::FFI_AdbcError::try_from(err) {
+                        unsafe { std::ptr::write_unaligned(error, ffi_err) };
+                    }
+                }
+                return adbc_core::constants::ADBC_STATUS_NOT_IMPLEMENTED;
+            }
+        }
+
+        adbc_core::constants::ADBC_STATUS_OK
+    }
+
+    #[allow(non_snake_case)]
+    #[no_mangle]
+    pub unsafe extern "C" fn AdbcDatabricksInit(
+        version: c_int,
+        driver: *mut c_void,
+        error: *mut adbc_ffi::FFI_AdbcError,
+    ) -> adbc_core::error::AdbcStatusCode {
+        unsafe { driver_init(version, driver, error) }
+    }
+
+    #[allow(non_snake_case)]
+    #[no_mangle]
+    pub unsafe extern "C" fn AdbcDriverInit(
+        version: c_int,
+        driver: *mut c_void,
+        error: *mut adbc_ffi::FFI_AdbcError,
+    ) -> adbc_core::error::AdbcStatusCode {
+        unsafe { driver_init(version, driver, error) }
+    }
+}
