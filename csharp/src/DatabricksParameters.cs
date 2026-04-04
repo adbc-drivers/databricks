@@ -183,6 +183,14 @@ namespace AdbcDrivers.Databricks
         public const string CloudFetchPrefetchEnabled = "adbc.databricks.cloudfetch.prefetch_enabled";
 
         /// <summary>
+        /// Size of the link prefetch window — how many chunk links to fetch ahead of downloads.
+        /// Links are lightweight metadata, so a large window uses minimal memory while ensuring
+        /// the download pipeline never starves. Matches JDBC's LinkPrefetchWindow=128 default.
+        /// Default value is 128.
+        /// </summary>
+        public const string CloudFetchLinkPrefetchWindowSize = "adbc.databricks.cloudfetch.link_prefetch_window_size";
+
+        /// <summary>
         /// Maximum bytes per fetch request when retrieving query results from servers.
         /// The value can be specified with unit suffixes: B (bytes), KB (kilobytes), MB (megabytes), GB (gigabytes).
         /// If no unit is specified, the value is treated as bytes.
