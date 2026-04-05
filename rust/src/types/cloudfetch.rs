@@ -51,6 +51,10 @@ pub struct CloudFetchConfig {
     pub speed_threshold_mbps: f64,
     /// Whether CloudFetch is enabled.
     pub enabled: bool,
+    /// Target number of rows per merged batch. 0 = disabled (pass through as-is).
+    /// When > 0, consecutive small batches are concatenated into larger batches
+    /// of approximately this many rows before being served to consumers.
+    pub batch_merge_target_rows: usize,
 }
 
 impl Default for CloudFetchConfig {
@@ -65,6 +69,7 @@ impl Default for CloudFetchConfig {
             chunk_ready_timeout: Some(Duration::from_secs(30)),
             speed_threshold_mbps: 0.1,
             enabled: true,
+            batch_merge_target_rows: 0,
         }
     }
 }
@@ -203,6 +208,7 @@ mod tests {
         assert_eq!(config.max_chunks_in_memory, 16); // Matches JDBC cloudFetchThreadPoolSize
         assert_eq!(config.max_retries, 5);
         assert!(config.enabled);
+        assert_eq!(config.batch_merge_target_rows, 0); // Disabled by default
     }
 
     #[test]

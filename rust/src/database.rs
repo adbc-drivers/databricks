@@ -273,6 +273,14 @@ impl Optionable for Database {
                         Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
                     }
                 }
+                "databricks.cloudfetch.batch_merge_target_rows" => {
+                    if let Some(v) = Self::parse_int_option(&value) {
+                        self.cloudfetch_config.batch_merge_target_rows = v as usize;
+                        Ok(())
+                    } else {
+                        Err(DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc())
+                    }
+                }
 
                 // Logging options
                 "databricks.log_level" => {
@@ -594,6 +602,9 @@ impl Optionable for Database {
                 }
                 "databricks.cloudfetch.max_retries" => {
                     Ok(self.cloudfetch_config.max_retries as i64)
+                }
+                "databricks.cloudfetch.batch_merge_target_rows" => {
+                    Ok(self.cloudfetch_config.batch_merge_target_rows as i64)
                 }
                 "databricks.auth.redirect_port" => self
                     .auth_config
