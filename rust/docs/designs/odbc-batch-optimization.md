@@ -108,60 +108,59 @@ CloudFetch options:
 }
 ```
 
-### Batch accumulation in `next_batch()`
+### Batch merging in the download pipeline
 
-Modify `StreamingCloudFetchProvider::next_batch()` in
-`src/reader/cloudfetch/streaming_provider.rs`.
+Merging happens in the background download tasks inside
+`StreamingCloudFetchProvider::schedule_downloads()` in
+`src/reader/cloudfetch/streaming_provider.rs`. After a chunk is downloaded and
+parsed into `Vec<RecordBatch>`, the batches are merged before being stored in
+the chunks map.
 
-Current behavior:
+This design means the merge cost is hidden behind download latency — the
+consumer always receives pre-merged batches with no additional blocking.
+
+Two helper functions handle the merge:
 
 ```rust
-pub async fn next_batch(&self) -> Result<Option<RecordBatch>> {
-    // Pop one batch from buffer, or fetch next chunk
-    // Return single batch (~556 rows)
+/// Merge batches into larger batches up to `target_rows` each.
+fn merge_batches_to_target(
+    batches: Vec<RecordBatch>,
+    target_rows: usize,
+) -> Result<Vec<RecordBatch>> {
+    // Accumulates consecutive batches until target_rows is reached,
+    // then flushes (concat_batches) and starts a new accumulator.
+    // Last batch may be smaller than target. Single batches that
+    // exceed the target are passed through as-is.
 }
+
+/// Concatenate pending batches into a single batch.
+fn flush_pending(schema: &SchemaRef, pending: &mut Vec<RecordBatch>) -> Result<RecordBatch>
 ```
 
-New behavior (when `batch_merge_target_rows > 0`):
+In the download task:
 
 ```rust
-pub async fn next_batch(&self) -> Result<Option<RecordBatch>> {
-    let target = self.config.batch_merge_target_rows;
-    if target == 0 {
-        return self.next_single_batch().await;
-    }
-
-    let mut pending: Vec<RecordBatch> = Vec::new();
-    let mut accumulated_rows: usize = 0;
-
-    while accumulated_rows < target {
-        match self.next_single_batch().await? {
-            Some(batch) => {
-                accumulated_rows += batch.num_rows();
-                pending.push(batch);
-            }
-            None => break, // end of stream
+self.runtime_handle.spawn(async move {
+    let result = Self::download_chunk_with_retry(...).await;
+    match result {
+        Ok(batches) => {
+            // Merge in the download task — async, parallel with consumer
+            let batches = if batch_merge_target_rows > 0 {
+                merge_batches_to_target(batches, batch_merge_target_rows)?
+            } else {
+                batches
+            };
+            entry.batches = Some(batches);
+            entry.state = ChunkState::Downloaded;
         }
+        ...
     }
-
-    if pending.is_empty() {
-        return Ok(None);
-    }
-    if pending.len() == 1 {
-        return Ok(pending.pop());
-    }
-
-    // Concatenate into a single batch
-    let schema = pending[0].schema();
-    let merged = arrow::compute::concat_batches(&schema, &pending)?;
-    Ok(Some(merged))
-}
-
-// Renamed from the original next_batch() — fetches exactly one batch
-async fn next_single_batch(&self) -> Result<Option<RecordBatch>> {
-    // ... existing next_batch() logic (drain buffer, fetch chunk, pop) ...
-}
+});
 ```
+
+The existing `next_batch()` is unchanged — it simply drains `current_batch_buffer`
+as before. Since each chunk's batches are already merged, the buffer contains
+fewer, larger batches.
 
 ### Key considerations
 
@@ -171,23 +170,26 @@ async fn next_single_batch(&self) -> Result<Option<RecordBatch>> {
 - Cost is proportional to data size: ~12 MB for 8000 rows of 89 columns,
   taking ~1-2ms — negligible vs the 102s overhead it eliminates
 
-**Memory management.** After merging, the source batches are dropped (they've
-been copied into the merged batch). The `chunks_in_memory` counter should be
-decremented for each consumed chunk as usual — the merging doesn't hold extra
-chunks in memory, it just concatenates their already-downloaded batches.
+**Async merging.** Because merging runs in the download task (a tokio spawn),
+it overlaps with downloading of other chunks and with the consumer processing
+previous batches. The merge latency is fully hidden.
 
-**Schema initialization.** The `schema` OnceLock must be initialized from the
-first batch before any merging occurs. The current code already does this in
-`next_batch()` — the refactored `next_single_batch()` should preserve this.
+**Row-target configurability.** The `batch_merge_target_rows` setting controls
+the maximum rows per merged batch, not "merge all batches in a chunk". If a
+chunk has 24K rows across 44 batches and the target is 20K, it produces two
+batches (one ~20K, one ~4K). This keeps the optimization general-purpose
+rather than tied to a specific workload's chunk sizes.
 
-**Last batch.** When the stream is exhausted, the final merged batch may have
-fewer than `batch_merge_target_rows` rows. This is expected and correct.
+**Memory management.** After merging, the source batches are dropped (copied
+into the merged batch). The `chunks_in_memory` counter is decremented per
+consumed chunk as usual — merging doesn't affect the memory accounting.
+
+**Last batch.** The final merged batch within a chunk may have fewer than
+`batch_merge_target_rows` rows. This is expected and correct.
 
 **Inline provider.** The inline result provider (for small result sets returned
-directly in the API response) can also benefit from merging, but its batches
-are typically already consolidated. The merging code should be shared or at
-least called from the same path — `ResultReaderAdapter::next()` could be a
-natural place if both providers need it.
+directly in the API response) is unaffected — its batches are typically already
+consolidated and don't go through CloudFetch's download pipeline.
 
 ## Expected Impact
 
@@ -247,4 +249,4 @@ Verify end-to-end with the ODBC replay benchmark:
 |------|--------|
 | `src/types/cloudfetch.rs` | Add `batch_merge_target_rows: usize` to `CloudFetchConfig`, default `0` |
 | `src/database.rs` | Parse `databricks.cloudfetch.batch_merge_target_rows` in `set_option` |
-| `src/reader/cloudfetch/streaming_provider.rs` | Refactor `next_batch()` → `next_single_batch()`, add merging logic |
+| `src/reader/cloudfetch/streaming_provider.rs` | Add `merge_batches_to_target()` + `flush_pending()`, merge in download task |

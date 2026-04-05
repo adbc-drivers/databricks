@@ -38,28 +38,66 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
-/// Merge a list of record batches into a single batch using `concat_batches`.
+/// Merge a list of record batches into larger batches up to `target_rows` each.
 ///
-/// Returns `None` if the input is empty. Returns the single batch as-is if
-/// there's only one. Otherwise concatenates all batches into one contiguous batch.
-fn merge_batches(pending: Vec<RecordBatch>) -> Result<Option<RecordBatch>> {
-    match pending.len() {
-        0 => Ok(None),
-        1 => Ok(Some(pending.into_iter().next().unwrap())),
-        n => {
-            let schema = pending[0].schema();
-            let total_rows: usize = pending.iter().map(|b| b.num_rows()).sum();
-            let merged = concat_batches(&schema, &pending).map_err(|e| {
-                DatabricksErrorHelper::invalid_state()
-                    .message(format!("Failed to merge batches: {}", e))
-            })?;
-            debug!(
-                "Merged {} batches ({} rows) into single batch",
-                n, total_rows
-            );
-            Ok(Some(merged))
+/// Accumulates consecutive batches until the target row count is reached, then
+/// starts a new accumulator. Returns the merged batches in order.
+///
+/// - If input is empty, returns an empty vec.
+/// - A single batch that already exceeds the target is passed through as-is.
+/// - The last merged batch may be smaller than the target.
+fn merge_batches_to_target(
+    batches: Vec<RecordBatch>,
+    target_rows: usize,
+) -> Result<Vec<RecordBatch>> {
+    if batches.is_empty() {
+        return Ok(vec![]);
+    }
+    if batches.len() == 1 {
+        return Ok(batches);
+    }
+
+    let schema = batches[0].schema();
+    let mut result: Vec<RecordBatch> = Vec::new();
+    let mut pending: Vec<RecordBatch> = Vec::new();
+    let mut accumulated_rows: usize = 0;
+
+    for batch in batches {
+        accumulated_rows += batch.num_rows();
+        pending.push(batch);
+
+        if accumulated_rows >= target_rows {
+            let merged = flush_pending(&schema, &mut pending)?;
+            result.push(merged);
+            accumulated_rows = 0;
         }
     }
+
+    // Flush any remaining batches
+    if !pending.is_empty() {
+        let merged = flush_pending(&schema, &mut pending)?;
+        result.push(merged);
+    }
+
+    debug!(
+        "Batch merge: produced {} batches (target {} rows/batch)",
+        result.len(),
+        target_rows
+    );
+
+    Ok(result)
+}
+
+/// Concatenate pending batches into a single batch and clear the pending vec.
+fn flush_pending(schema: &SchemaRef, pending: &mut Vec<RecordBatch>) -> Result<RecordBatch> {
+    if pending.len() == 1 {
+        return Ok(pending.drain(..).next().unwrap());
+    }
+    let merged = concat_batches(schema, &*pending).map_err(|e| {
+        DatabricksErrorHelper::invalid_state().message(format!("Failed to merge batches: {}", e))
+    })?;
+    pending.clear();
+    Ok(merged)
 }
 
 /// Orchestrates link fetching and chunk downloading for CloudFetch.
@@ -198,36 +236,13 @@ impl StreamingCloudFetchProvider {
 
     /// Get next record batch. Main consumer interface.
     ///
-    /// When `batch_merge_target_rows > 0`, accumulates consecutive small batches
-    /// and concatenates them into larger batches of approximately the target size.
-    /// Otherwise, returns individual batches as-is.
-    pub async fn next_batch(&self) -> Result<Option<RecordBatch>> {
-        let target = self.config.batch_merge_target_rows;
-        if target == 0 {
-            return self.next_single_batch().await;
-        }
-
-        let mut pending: Vec<RecordBatch> = Vec::new();
-        let mut accumulated_rows: usize = 0;
-
-        while accumulated_rows < target {
-            match self.next_single_batch().await? {
-                Some(batch) => {
-                    accumulated_rows += batch.num_rows();
-                    pending.push(batch);
-                }
-                None => break,
-            }
-        }
-
-        merge_batches(pending)
-    }
-
-    /// Get next individual record batch from the download pipeline.
-    ///
     /// Blocks until the next batch is available or end of stream.
     /// First drains current_batch_buffer, then fetches next chunk.
-    async fn next_single_batch(&self) -> Result<Option<RecordBatch>> {
+    ///
+    /// When `batch_merge_target_rows > 0`, batches within each chunk are
+    /// pre-merged during download (in background tasks), so each chunk
+    /// typically yields a single large batch.
+    pub async fn next_batch(&self) -> Result<Option<RecordBatch>> {
         // Check for cancellation
         if self.cancel_token.is_cancelled() {
             return Err(DatabricksErrorHelper::invalid_state().message("Operation cancelled"));
@@ -409,6 +424,7 @@ impl StreamingCloudFetchProvider {
             let cancel_token = self.cancel_token.clone();
             let max_retries = self.config.max_retries;
             let retry_delay = self.config.retry_delay;
+            let batch_merge_target_rows = self.config.batch_merge_target_rows;
 
             self.runtime_handle.spawn(async move {
                 let result = Self::download_chunk_with_retry(
@@ -424,6 +440,29 @@ impl StreamingCloudFetchProvider {
 
                 match result {
                     Ok(batches) => {
+                        // When batch merging is enabled, merge small batches within
+                        // this chunk into larger ones up to the target row count.
+                        // This runs on the download task so the merge cost is
+                        // hidden behind download latency.
+                        let batches = if batch_merge_target_rows > 0 {
+                            match merge_batches_to_target(batches, batch_merge_target_rows) {
+                                Ok(merged) => merged,
+                                Err(e) => {
+                                    error!(
+                                        "Failed to merge batches for chunk {}: {}",
+                                        chunk_index, e
+                                    );
+                                    if let Some(mut entry) = chunks.get_mut(&chunk_index) {
+                                        entry.state = ChunkState::ProcessingFailed(e.to_string());
+                                    }
+                                    chunk_state_changed.notify_one();
+                                    return;
+                                }
+                            }
+                        } else {
+                            batches
+                        };
+
                         if let Some(mut entry) = chunks.get_mut(&chunk_index) {
                             entry.batches = Some(batches);
                             entry.state = ChunkState::Downloaded;
@@ -690,7 +729,7 @@ mod tests {
     // Note: Full streaming provider tests require integration test setup
     // with mock HTTP responses for the chunk downloader
 
-    // --- merge_batches unit tests ---
+    // --- merge_batches_to_target unit tests ---
 
     use arrow_array::{Int32Array, StringArray};
     use arrow_schema::{DataType, Field, Schema};
@@ -711,55 +750,93 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_batches_empty() {
-        let result = merge_batches(vec![]).unwrap();
-        assert!(result.is_none());
+    fn test_merge_empty() {
+        let result = merge_batches_to_target(vec![], 100).unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]
-    fn test_merge_batches_single() {
+    fn test_merge_single_batch_passthrough() {
         let batch = make_batch(&[1, 2, 3]);
-        let result = merge_batches(vec![batch.clone()]).unwrap().unwrap();
-        assert_eq!(result.num_rows(), 3);
-        assert_eq!(result.num_columns(), 2);
+        let result = merge_batches_to_target(vec![batch], 100).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].num_rows(), 3);
     }
 
     #[test]
-    fn test_merge_batches_multiple() {
+    fn test_merge_all_fit_in_one_target() {
+        // 3 batches totaling 9 rows, target=100 → all merge into 1
         let b1 = make_batch(&[1, 2, 3]);
         let b2 = make_batch(&[4, 5]);
         let b3 = make_batch(&[6, 7, 8, 9]);
 
-        let result = merge_batches(vec![b1, b2, b3]).unwrap().unwrap();
-        assert_eq!(result.num_rows(), 9);
-        assert_eq!(result.num_columns(), 2);
+        let result = merge_batches_to_target(vec![b1, b2, b3], 100).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].num_rows(), 9);
 
         // Verify data order is preserved
-        let ids = result
+        let ids = result[0]
             .column(0)
             .as_any()
             .downcast_ref::<Int32Array>()
             .unwrap();
-        let expected: Vec<i32> = (1..=9).collect();
         let actual: Vec<i32> = (0..ids.len()).map(|i| ids.value(i)).collect();
-        assert_eq!(actual, expected);
-
-        let names = result
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert_eq!(names.value(0), "row_1");
-        assert_eq!(names.value(8), "row_9");
+        assert_eq!(actual, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
     #[test]
-    fn test_merge_batches_preserves_schema() {
+    fn test_merge_splits_at_target() {
+        // 5 batches of 3 rows each (15 total), target=7 → expect 3 merged batches
+        // Batch 1-3: 3+3+3=9 rows (>=7, flush) → 9 rows
+        // Batch 4-5: 3+3=6 rows (end, flush) → 6 rows
+        let batches: Vec<RecordBatch> = (0..5)
+            .map(|i| {
+                let start = i * 3 + 1;
+                make_batch(&[start, start + 1, start + 2])
+            })
+            .collect();
+
+        let result = merge_batches_to_target(batches, 7).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].num_rows(), 9); // first 3 batches
+        assert_eq!(result[1].num_rows(), 6); // last 2 batches
+
+        // Verify ordering across merged batches
+        let ids0 = result[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let ids1 = result[1]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let all: Vec<i32> = (0..ids0.len())
+            .map(|i| ids0.value(i))
+            .chain((0..ids1.len()).map(|i| ids1.value(i)))
+            .collect();
+        let expected: Vec<i32> = (1..=15).collect();
+        assert_eq!(all, expected);
+    }
+
+    #[test]
+    fn test_merge_single_large_batch_exceeds_target() {
+        // A single batch with 200 rows and target=100 → passed through as-is
+        let values: Vec<i32> = (1..=200).collect();
+        let batch = make_batch(&values);
+        let result = merge_batches_to_target(vec![batch], 100).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].num_rows(), 200);
+    }
+
+    #[test]
+    fn test_merge_preserves_schema() {
         let b1 = make_batch(&[1]);
         let b2 = make_batch(&[2]);
         let original_schema = b1.schema();
 
-        let result = merge_batches(vec![b1, b2]).unwrap().unwrap();
-        assert_eq!(result.schema(), original_schema);
+        let result = merge_batches_to_target(vec![b1, b2], 100).unwrap();
+        assert_eq!(result[0].schema(), original_schema);
     }
 }
