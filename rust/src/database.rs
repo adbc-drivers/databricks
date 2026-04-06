@@ -275,6 +275,11 @@ impl Optionable for Database {
                 }
                 "databricks.cloudfetch.batch_merge_target_rows" => {
                     if let Some(v) = Self::parse_int_option(&value) {
+                        if v < 0 {
+                            return Err(
+                                DatabricksErrorHelper::set_invalid_option(&key, &value).to_adbc()
+                            );
+                        }
                         self.cloudfetch_config.batch_merge_target_rows = v as usize;
                         Ok(())
                     } else {
