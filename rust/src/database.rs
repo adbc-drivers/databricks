@@ -41,6 +41,7 @@ pub struct Database {
     // Core configuration
     uri: Option<String>,
     warehouse_id: Option<String>,
+    org_id: Option<String>,
     access_token: Option<String>,
     catalog: Option<String>,
     schema: Option<String>,
@@ -88,13 +89,31 @@ impl Database {
     /// Extract warehouse ID from HTTP path if provided.
     /// Supports both `/sql/1.0/warehouses/{id}` and `/sql/1.0/endpoints/{id}`
     /// formats (they are equivalent on the server side).
+    /// Query parameters (e.g., `?o=12345`) are stripped from the warehouse ID.
     fn extract_warehouse_id(http_path: &str) -> Option<String> {
         http_path
             .strip_prefix("/sql/1.0/warehouses/")
             .or_else(|| http_path.strip_prefix("sql/1.0/warehouses/"))
             .or_else(|| http_path.strip_prefix("/sql/1.0/endpoints/"))
             .or_else(|| http_path.strip_prefix("sql/1.0/endpoints/"))
-            .map(|s| s.trim_end_matches('/').to_string())
+            .map(|s| {
+                let s = s.trim_end_matches('/');
+                // Strip query string (e.g., "abc123?o=12345" → "abc123")
+                s.split('?').next().unwrap_or(s).to_string()
+            })
+    }
+
+    /// Extract the organization ID from the `?o=` query parameter in an HTTP path.
+    ///
+    /// Multi-tenant Databricks deployments require the org ID for request routing.
+    /// It is passed as an `x-databricks-org-id` HTTP header on all API requests.
+    fn extract_org_id(http_path: &str) -> Option<String> {
+        let query = http_path.split('?').nth(1)?;
+        query
+            .split('&')
+            .find_map(|param| param.strip_prefix("o="))
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
     }
 
     /// Parse a boolean option value.
@@ -150,7 +169,11 @@ impl Optionable for Database {
                 // Core options
                 "databricks.http_path" => {
                     if let OptionValue::String(v) = value {
-                        // Extract warehouse ID from HTTP path
+                        // Extract org ID from query params (e.g., ?o=12345) for multi-tenant routing
+                        if let Some(oid) = Self::extract_org_id(&v) {
+                            self.org_id = Some(oid);
+                        }
+                        // Extract warehouse ID from HTTP path (query params are stripped)
                         if let Some(wid) = Self::extract_warehouse_id(&v) {
                             self.warehouse_id = Some(wid);
                         }
@@ -632,8 +655,10 @@ impl adbc_core::Database for Database {
         let access_token = self.access_token.as_ref();
 
         // Create HTTP client (without auth provider - two-phase initialization)
+        let mut http_config = self.http_config.clone();
+        http_config.org_id = self.org_id.clone();
         let http_client =
-            Arc::new(DatabricksHttpClient::new(self.http_config.clone()).map_err(|e| e.to_adbc())?);
+            Arc::new(DatabricksHttpClient::new(http_config).map_err(|e| e.to_adbc())?);
 
         // Create tokio runtime for async operations (needed before auth provider creation for U2M)
         let runtime = tokio::runtime::Runtime::new().map_err(|e| {
@@ -829,6 +854,59 @@ mod tests {
             Database::extract_warehouse_id("/sql/1.0/endpoints/abc123/"),
             Some("abc123".to_string())
         );
+
+        // Query parameters are stripped from the warehouse ID
+        assert_eq!(
+            Database::extract_warehouse_id("/sql/1.0/warehouses/abc123?o=987654"),
+            Some("abc123".to_string())
+        );
+        assert_eq!(
+            Database::extract_warehouse_id("/sql/1.0/endpoints/abc123?o=987654&foo=bar"),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_database_extract_org_id() {
+        // Basic extraction
+        assert_eq!(
+            Database::extract_org_id("/sql/1.0/warehouses/abc123?o=987654"),
+            Some("987654".to_string())
+        );
+
+        // Multiple query params
+        assert_eq!(
+            Database::extract_org_id("/sql/1.0/warehouses/abc123?foo=bar&o=987654&baz=qux"),
+            Some("987654".to_string())
+        );
+
+        // No query string
+        assert_eq!(Database::extract_org_id("/sql/1.0/warehouses/abc123"), None);
+
+        // Query string without o= parameter
+        assert_eq!(
+            Database::extract_org_id("/sql/1.0/warehouses/abc123?foo=bar"),
+            None
+        );
+
+        // Empty o= value
+        assert_eq!(
+            Database::extract_org_id("/sql/1.0/warehouses/abc123?o="),
+            None
+        );
+    }
+
+    #[test]
+    fn test_database_http_path_with_org_id() {
+        let mut db = Database::new();
+        db.set_option(
+            OptionDatabase::Other("databricks.http_path".into()),
+            OptionValue::String("/sql/1.0/warehouses/abc123?o=987654".into()),
+        )
+        .unwrap();
+
+        assert_eq!(db.warehouse_id, Some("abc123".to_string()));
+        assert_eq!(db.org_id, Some("987654".to_string()));
     }
 
     #[test]
