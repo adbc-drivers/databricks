@@ -20,6 +20,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
+using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
@@ -70,11 +71,17 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             config.MemoryStreamManager = connection.RecyclableMemoryStreamManager;
             config.Lz4BufferPool = connection.Lz4BufferPool;
 
-            // Create shared resources
+            // Create shared resources.
+            // The downloadQueue acts as the link prefetch buffer — it can hold up to
+            // LinkPrefetchWindowSize links (128 by default). Links are lightweight metadata
+            // (URL + offsets), so a large buffer uses minimal memory while ensuring the
+            // fetcher can run far ahead of downloads. This matches JDBC's LinkPrefetchWindow=128.
+            // The resultQueue holds downloaded chunks waiting for the reader, bounded by
+            // PrefetchCount to control actual memory usage.
             var memoryManager = new CloudFetchMemoryBufferManager(config.MemoryBufferSizeMB);
             var downloadQueue = new BlockingCollection<IDownloadResult>(
                 new ConcurrentQueue<IDownloadResult>(),
-                config.PrefetchCount * 2);
+                config.LinkPrefetchWindowSize);
             var resultQueue = new BlockingCollection<IDownloadResult>(
                 new ConcurrentQueue<IDownloadResult>(),
                 config.PrefetchCount * 2);
@@ -108,15 +115,20 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 resultQueue,
                 config);
 
-            // Start the download manager
-            downloadManager.StartAsync().Wait();
-
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);
 
-            // For Thrift, use chunk-level row count limiting (pass 0 for totalExpectedRows)
-            // because we don't know the total upfront - the fetcher accumulates as it goes
-            return new CloudFetchReader(statement, schema, response, downloadManager, totalExpectedRows: 0);
+            // JDBC/Rust-style: dedicated threads + ConcurrentDictionary indexed by chunk number.
+            // Only start the fetcher (populates downloadQueue with links).
+            // JdbcStyleChunkMap workers are the sole consumers of downloadQueue.
+            // Start fetcher on ThreadPool to avoid SynchronizationContext deadlock on .NET Framework
+            Task.Run(() => resultFetcher.StartAsync(System.Threading.CancellationToken.None)).Wait();
+            var reader = new CloudFetchReader(statement, schema, response, downloadManager, totalExpectedRows: 0);
+            var chunkMap = new JdbcStyleChunkMap(downloadQueue, memoryManager, resultFetcher, httpClient, config);
+            chunkMap.Start(config.ParallelDownloads, System.Threading.CancellationToken.None);
+            reader.SetChunkMap(chunkMap);
+
+            return reader;
         }
 
         /// <summary>
@@ -166,11 +178,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             config.MemoryStreamManager = memoryStreamManager;
             config.Lz4BufferPool = lz4BufferPool;
 
-            // Create shared resources
+            // Create shared resources — same link prefetch window design as Thrift path.
             var memoryManager = new CloudFetchMemoryBufferManager(config.MemoryBufferSizeMB);
             var downloadQueue = new BlockingCollection<IDownloadResult>(
                 new ConcurrentQueue<IDownloadResult>(),
-                config.PrefetchCount * 2);
+                config.LinkPrefetchWindowSize);
             var resultQueue = new BlockingCollection<IDownloadResult>(
                 new ConcurrentQueue<IDownloadResult>(),
                 config.PrefetchCount * 2);
@@ -203,15 +215,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 resultQueue,
                 config);
 
-            // Start the download manager
-            downloadManager.StartAsync().Wait();
-
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);
 
-            // For REST API (SEA), use global row count limiting from manifest.TotalRowCount.
-            // The manifest contains the adjusted total row count that respects LIMIT queries.
-            return new CloudFetchReader(statement, schema, response: null, downloadManager, totalExpectedRows: manifest.TotalRowCount);
+            resultFetcher.StartAsync(System.Threading.CancellationToken.None).Wait();
+            var reader = new CloudFetchReader(statement, schema, response: null, downloadManager, totalExpectedRows: manifest.TotalRowCount);
+            var chunkMap = new JdbcStyleChunkMap(downloadQueue, memoryManager, resultFetcher, httpClient, config);
+            chunkMap.Start(config.ParallelDownloads, System.Threading.CancellationToken.None);
+            reader.SetChunkMap(chunkMap);
+
+            return reader;
         }
     }
 }

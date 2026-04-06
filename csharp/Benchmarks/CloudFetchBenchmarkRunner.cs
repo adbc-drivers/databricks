@@ -43,6 +43,13 @@ namespace Apache.Arrow.Adbc.Benchmarks
             // Enable TLS 1.2/1.3 for .NET Framework 4.7.2 (required for modern HTTPS endpoints)
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | (SecurityProtocolType)3072; // 3072 = Tls13
 #endif
+            // Quick validation mode: run a single query to verify CloudFetch correctness
+            if (args.Length > 0 && args[0] == "--validate")
+            {
+                QuickValidation.RunValidation();
+                return;
+            }
+
             // Configure with custom columns for CloudFetch-specific metrics + built-in GC columns
             var config = DefaultConfig.Instance
                 .AddColumn(new ColumnsColumn())
