@@ -49,6 +49,11 @@ namespace AdbcDrivers.Databricks.Reader
         // Telemetry tracking
         private int _pollCount = 0;
 
+        // Maximum number of consecutive poll failures before giving up.
+        // At the default 60s heartbeat interval this allows ~10 minutes of transient errors
+        // before the poller stops itself.
+        private const int MaxConsecutiveFailures = 10;
+
         public DatabricksOperationStatusPoller(
             IHiveServer2Statement statement,
             IResponse response,
@@ -82,30 +87,73 @@ namespace AdbcDrivers.Databricks.Reader
 
         private async Task PollOperationStatus(CancellationToken cancellationToken)
         {
+            int consecutiveFailures = 0;
+
             while (!cancellationToken.IsCancellationRequested)
             {
-                TOperationHandle? operationHandle = _response.OperationHandle;
-                if (operationHandle == null) break;
-
-                CancellationToken GetOperationStatusTimeoutToken = ApacheUtility.GetCancellationToken(_requestTimeoutSeconds, ApacheUtility.TimeUnit.Seconds);
-
-                var request = new TGetOperationStatusReq(operationHandle);
-                var response = await _statement.Client.GetOperationStatus(request, GetOperationStatusTimeoutToken);
-
-                // Track poll count for telemetry
-                _pollCount++;
-
-                await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken);
-
-                // end the heartbeat if the command has terminated
-                if (response.OperationState == TOperationState.CANCELED_STATE ||
-                    response.OperationState == TOperationState.ERROR_STATE ||
-                    response.OperationState == TOperationState.CLOSED_STATE ||
-                    response.OperationState == TOperationState.TIMEDOUT_STATE ||
-                    response.OperationState == TOperationState.UKNOWN_STATE)
+                try
                 {
+                    TOperationHandle? operationHandle = _response.OperationHandle;
+                    if (operationHandle == null) break;
+
+                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
+
+                    TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
+                    TGetOperationStatusResp response = await _statement.Client.GetOperationStatus(request, timeoutCts.Token).ConfigureAwait(false);
+
+                    // Successful poll — reset failure counter
+                    consecutiveFailures = 0;
+
+                    // Track poll count for telemetry
+                    _pollCount++;
+
+                    // end the heartbeat if the command has terminated
+                    if (response.OperationState == TOperationState.CANCELED_STATE ||
+                        response.OperationState == TOperationState.ERROR_STATE ||
+                        response.OperationState == TOperationState.CLOSED_STATE ||
+                        response.OperationState == TOperationState.TIMEDOUT_STATE ||
+                        response.OperationState == TOperationState.UKNOWN_STATE)
+                    {
+                        break;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Cancellation was requested - exit the polling loop gracefully
                     break;
                 }
+                catch (Exception ex)
+                {
+                    consecutiveFailures++;
+
+                    // Log the error but continue polling. Transient errors (e.g. ObjectDisposedException
+                    // from TLS connection recycling) should not kill the heartbeat poller, as that would
+                    // cause the server-side command inactivity timeout to expire and terminate the query.
+                    Activity.Current?.AddEvent(new ActivityEvent("operation_status_poller.poll_error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "poll_count", _pollCount },
+                            { "consecutive_failures", consecutiveFailures }
+                        }));
+
+                    if (consecutiveFailures >= MaxConsecutiveFailures)
+                    {
+                        Activity.Current?.AddEvent(new ActivityEvent("operation_status_poller.max_failures_reached",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "consecutive_failures", consecutiveFailures },
+                                { "poll_count", _pollCount }
+                            }));
+                        break;
+                    }
+                }
+
+                // Wait before next poll. On cancellation this throws OperationCanceledException
+                // which propagates up to the caller (Dispose catches it).
+                await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
             }
 
             // Add telemetry tags to current activity when polling completes

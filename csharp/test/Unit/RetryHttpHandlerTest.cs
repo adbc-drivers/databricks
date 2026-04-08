@@ -21,8 +21,11 @@
 * limitations under the License.
 */
 
+using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
@@ -444,6 +447,225 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
+        /// Tests that transport errors (HttpRequestException) are retried and succeed after recovery.
+        /// </summary>
+        [Fact]
+        public async Task TransportError_HttpRequestException_RetriesAndSucceeds()
+        {
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            // Throw HttpRequestException for the first 2 attempts, then succeed
+            mockHandler.SetExceptionForRequestCount(2, new HttpRequestException("Connection refused"));
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
+
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(3, mockHandler.RequestCount); // 2 failures + 1 success
+        }
+
+        /// <summary>
+        /// Tests that transport errors (SocketException) are retried.
+        /// </summary>
+        [Fact]
+        public async Task TransportError_SocketException_RetriesAndSucceeds()
+        {
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            mockHandler.SetExceptionForRequestCount(1, new SocketException((int)SocketError.ConnectionRefused));
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
+
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(2, mockHandler.RequestCount);
+        }
+
+        /// <summary>
+        /// Tests that transport errors (IOException) are retried.
+        /// </summary>
+        [Fact]
+        public async Task TransportError_IOException_RetriesAndSucceeds()
+        {
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            mockHandler.SetExceptionForRequestCount(1, new IOException("Connection reset by peer"));
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
+
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(2, mockHandler.RequestCount);
+        }
+
+        /// <summary>
+        /// Tests that wrapped transport errors (HttpRequestException wrapping SocketException) are retried.
+        /// </summary>
+        [Fact]
+        public async Task TransportError_WrappedException_RetriesAndSucceeds()
+        {
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            // Simulate the real exception chain: HttpRequestException -> WebException -> SocketException
+            var innerException = new SocketException((int)SocketError.ConnectionRefused);
+            var outerException = new HttpRequestException("An error occurred while sending the request.", innerException);
+            mockHandler.SetExceptionForRequestCount(1, outerException);
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
+
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(2, mockHandler.RequestCount);
+        }
+
+        /// <summary>
+        /// Tests that transport error retry throws DatabricksException when timeout is exceeded.
+        /// </summary>
+        [Fact]
+        public async Task TransportError_ThrowsWhenTimeoutExceeded()
+        {
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            // Always throw — never recover
+            mockHandler.SetExceptionForRequestCount(int.MaxValue, new HttpRequestException("Connection refused"));
+
+            var mockTracer = new MockActivityTracer();
+            // Use a very short transport error timeout so it exceeds quickly
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 1, 1, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
+
+            var httpClient = new HttpClient(retryHandler);
+
+            var exception = await Assert.ThrowsAsync<DatabricksException>(async () =>
+                await httpClient.GetAsync("http://test.com"));
+
+            Assert.Contains("08001", exception.SqlState);
+            Assert.Equal(AdbcStatusCode.IOError, exception.Status);
+            Assert.NotNull(exception.InnerException);
+            Assert.IsType<HttpRequestException>(exception.InnerException);
+            Assert.True(mockHandler.RequestCount >= 1);
+        }
+
+        /// <summary>
+        /// Tests that transport error retry is disabled when transportErrorRetryEnabled is false.
+        /// </summary>
+        [Fact]
+        public async Task TransportError_NotRetriedWhenDisabled()
+        {
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            mockHandler.SetExceptionForRequestCount(1, new HttpRequestException("Connection refused"));
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
+                transportErrorRetryEnabled: false, httpRequestTimeoutSeconds: 0);
+
+            var httpClient = new HttpClient(retryHandler);
+
+            // Should throw immediately without retry
+            await Assert.ThrowsAsync<HttpRequestException>(async () =>
+                await httpClient.GetAsync("http://test.com"));
+
+            Assert.Equal(1, mockHandler.RequestCount);
+        }
+
+        /// <summary>
+        /// Tests that user cancellation is NOT retried even when it looks like a transport error.
+        /// </summary>
+        [Fact]
+        public async Task TransportError_UserCancellationNotRetried()
+        {
+            var cts = new CancellationTokenSource();
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            // Simulate: the handler throws TaskCanceledException because the user's token was cancelled
+            mockHandler.SetCancelOnRequest(1, cts);
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
+
+            var httpClient = new HttpClient(retryHandler);
+
+            var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await httpClient.GetAsync("http://test.com", cts.Token));
+
+            Assert.True(cts.IsCancellationRequested);
+            Assert.Equal(1, mockHandler.RequestCount);
+        }
+
+        /// <summary>
+        /// Tests that per-request timeout (TaskCanceledException from internal CTS) is retried.
+        /// </summary>
+        [Fact]
+        public async Task TransportError_PerRequestTimeoutIsRetried()
+        {
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            // Simulate a dead connection by delaying longer than the per-request timeout
+            mockHandler.SetDelayForRequestCount(1, TimeSpan.FromSeconds(5));
+
+            var mockTracer = new MockActivityTracer();
+            // Set a very short per-request timeout (1 second) to trigger quickly
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 1);
+
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(2, mockHandler.RequestCount); // 1 timeout + 1 success
+        }
+
+        /// <summary>
         /// Mock HttpMessageHandler for testing the RetryHttpHandler.
         /// </summary>
         private class MockHttpMessageHandler : HttpMessageHandler
@@ -451,6 +673,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             private readonly HttpResponseMessage _defaultResponse;
             private HttpResponseMessage? _responseAfterRetryCount;
             private int _retryCountForResponse;
+            private Exception? _exception;
+            private int _exceptionRequestCount;
+            private int _delayRequestCount;
+            private TimeSpan _delay;
+            private int _cancelOnRequest;
+            private CancellationTokenSource? _cancelCts;
 
             public int RequestCount { get; private set; }
 
@@ -465,15 +693,61 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 _responseAfterRetryCount = response;
             }
 
-            protected override Task<HttpResponseMessage> SendAsync(
+            /// <summary>
+            /// Throw the specified exception for the first N requests, then return the default response.
+            /// </summary>
+            public void SetExceptionForRequestCount(int count, Exception exception)
+            {
+                _exceptionRequestCount = count;
+                _exception = exception;
+            }
+
+            /// <summary>
+            /// Delay the response for the first N requests (to trigger per-request timeout).
+            /// </summary>
+            public void SetDelayForRequestCount(int count, TimeSpan delay)
+            {
+                _delayRequestCount = count;
+                _delay = delay;
+            }
+
+            /// <summary>
+            /// Cancel the given CTS on request N to simulate user cancellation.
+            /// </summary>
+            public void SetCancelOnRequest(int requestNumber, CancellationTokenSource cts)
+            {
+                _cancelOnRequest = requestNumber;
+                _cancelCts = cts;
+            }
+
+            protected override async Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
             {
                 RequestCount++;
 
+                // Simulate user cancellation
+                if (_cancelCts != null && RequestCount == _cancelOnRequest)
+                {
+                    _cancelCts.Cancel();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                // Simulate transport error
+                if (_exception != null && RequestCount <= _exceptionRequestCount)
+                {
+                    throw _exception;
+                }
+
+                // Simulate dead connection (delay to trigger per-request timeout)
+                if (_delayRequestCount > 0 && RequestCount <= _delayRequestCount)
+                {
+                    await Task.Delay(_delay, cancellationToken);
+                }
+
                 if (_responseAfterRetryCount != null && RequestCount > _retryCountForResponse)
                 {
-                    return Task.FromResult(_responseAfterRetryCount);
+                    return _responseAfterRetryCount;
                 }
 
                 // Create a new response instance to avoid modifying the original
@@ -492,7 +766,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                     }
                 }
 
-                return Task.FromResult(response);
+                return response;
             }
         }
     }
