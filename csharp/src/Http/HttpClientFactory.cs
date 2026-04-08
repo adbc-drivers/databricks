@@ -76,9 +76,9 @@ namespace AdbcDrivers.Databricks.Http
                 DatabricksParameters.CloudFetchTimeoutMinutes,
                 DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
 
-            #pragma warning disable CA1416
-            try { var wh = new System.Net.Http.WinHttpHandler { MaxConnectionsPerServer = 128, SendTimeout = TimeSpan.FromMinutes(timeoutMinutes), ReceiveHeadersTimeout = TimeSpan.FromMinutes(timeoutMinutes), ReceiveDataTimeout = TimeSpan.FromMinutes(timeoutMinutes) }; return new HttpClient(wh) { Timeout = TimeSpan.FromMinutes(timeoutMinutes) }; } catch { return CreateBasicHttpClient(properties, TimeSpan.FromMinutes(timeoutMinutes)); }
-#pragma warning restore CA1416
+            System.Net.ServicePointManager.DefaultConnectionLimit = 128;
+            System.Net.ServicePointManager.Expect100Continue = false;
+            return CreateBasicHttpClient(properties, TimeSpan.FromMinutes(timeoutMinutes));
         }
 
         /// <summary>
