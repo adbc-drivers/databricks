@@ -105,7 +105,7 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606  # v1.15.4
         with:
           components: "clippy"
 
@@ -215,7 +215,7 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606  # v1.15.4
         with:
           components: "clippy"
 
@@ -251,7 +251,7 @@ jobs:
           set +a
           pixi run adbc-make check CI=true VERBOSE=true DRIVER=databricks IMPL_LANG=rust TARGET_NAME=databricks_adbc
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: drivers-${{ matrix.platform }}-${{ matrix.arch }}
           path: "rust/build/libadbc_driver_databricks.*"
@@ -282,7 +282,7 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606  # v1.15.4
         with:
           components: "clippy"
 
@@ -291,7 +291,7 @@ jobs:
           pixi-version: v0.63.2
           run-install: false
 
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           pattern: "drivers-*"
           path: "~/drivers"
@@ -316,7 +316,7 @@ jobs:
 
           ls ~/packages
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: all-packages
           path: ~/packages
@@ -336,14 +336,14 @@ jobs:
           - { platform: windows, arch: amd64, runner: windows-latest }
     steps:
       # for now, install dbc from main
-      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417  # v6.3.0
         with:
           go-version: 'stable'
       - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
           pixi-version: v0.63.2
           run-install: false
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: "all-packages"
           path: "~/packages"
@@ -425,7 +425,7 @@ jobs:
           pixi-version: v0.63.2
           run-install: false
 
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: "all-packages"
           path: "~/packages"
@@ -454,7 +454,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606  # v1.15.4
         with:
           components: "llvm-tools-preview"
 
@@ -469,7 +469,7 @@ jobs:
             --lcov --output-path lcov.info
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: rust-coverage
           path: rust/lcov.info
