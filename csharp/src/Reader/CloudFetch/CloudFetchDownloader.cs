@@ -57,6 +57,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly int _retryDelayMs;
         private readonly int _maxUrlRefreshAttempts;
         private readonly int _urlExpirationBufferSeconds;
+        private readonly int _timeoutMinutes;
         private readonly SemaphoreSlim _downloadSemaphore;
         private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
         private readonly ArrayPool<byte>? _lz4BufferPool;
@@ -102,6 +103,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _retryDelayMs = config.RetryDelayMs;
             _maxUrlRefreshAttempts = config.MaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = config.UrlExpirationBufferSeconds;
+            _timeoutMinutes = config.TimeoutMinutes;
             _memoryStreamManager = config.MemoryStreamManager;
             _lz4BufferPool = config.Lz4BufferPool;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
@@ -158,6 +160,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _retryDelayMs = retryDelayMs;
             _maxUrlRefreshAttempts = CloudFetchConfiguration.DefaultMaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = CloudFetchConfiguration.DefaultUrlExpirationBufferSeconds;
+            _timeoutMinutes = CloudFetchConfiguration.DefaultTimeoutMinutes;
             _memoryStreamManager = null;
             _lz4BufferPool = null;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
@@ -624,7 +627,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                         response.EnsureSuccessStatusCode();
 
-                        // Log the download size if available from response headers
+                        // Log the download size from response headers
                         long? contentLength = response.Content.Headers.ContentLength;
                         if (contentLength.HasValue && contentLength.Value > 0)
                         {
@@ -635,20 +638,35 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 new("content_length_mb", contentLength.Value / 1024.0 / 1024.0)
                             ]);
                         }
-
-                        // CopyToAsync passes the cancellation token to each 81920-byte chunk read,
-                        // ensuring body reads are cancellable across all target frameworks.
-                        // When straggler detection is enabled, effectiveToken carries the straggler
-                        // deadline so cancellation propagates during the body transfer.
-                        CancellationToken downloadToken = _stragglerDetector != null ? effectiveToken : cancellationToken;
-                        using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                        else
                         {
-                            int capacity = contentLength.HasValue && contentLength.Value > 0
-                                ? (int)Math.Min(contentLength.Value, int.MaxValue)
-                                : 0;
-                            var memoryStream = new MemoryStream(capacity);
-                            await contentStream.CopyToAsync(memoryStream, 81920, downloadToken).ConfigureAwait(false);
-                            fileData = memoryStream.ToArray();
+                            activity?.AddEvent("cloudfetch.content_length_missing", [
+                                new("offset", downloadResult.StartRowOffset),
+                                new("sanitized_url", sanitizedUrl)
+                            ]);
+                        }
+
+                        // Read the file data with an explicit timeout.
+                        // Using CopyToAsync with an explicit token ensures dead TCP connections
+                        // are detected on every 81920-byte chunk read.
+                        // When straggler detection is enabled, link from effectiveToken so both
+                        // the straggler deadline and the body timeout are respected.
+                        CancellationToken baseToken = _stragglerDetector != null ? effectiveToken : cancellationToken;
+                        using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(baseToken))
+                        {
+                            bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
+                            using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            {
+                                // Pre-allocate with Content-Length when available (CloudFetch always provides it).
+                                int capacity = contentLength.HasValue && contentLength.Value > 0
+                                    ? (int)contentLength.Value
+                                    : 0;
+                                using (var memoryStream = new MemoryStream(capacity))
+                                {
+                                    await contentStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
+                                    fileData = memoryStream.ToArray();
+                                }
+                            }
                         }
                         break; // Success, exit retry loop
                     }

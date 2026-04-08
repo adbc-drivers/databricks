@@ -20,6 +20,7 @@
 //! - `SeaClient`: Implementation using the Statement Execution API (REST)
 
 pub mod http;
+pub mod retry;
 pub mod sea;
 
 use crate::error::Result;
@@ -31,6 +32,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 pub use http::{DatabricksHttpClient, HttpClientConfig, ProxyConfig};
+pub use retry::{
+    build_retry_configs, RequestCategory, RequestType, RetryConfig, RetryConfigOverrides,
+};
 pub use sea::SeaClient;
 
 /// Backend-agnostic configuration for DatabricksClient implementations.

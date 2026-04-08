@@ -28,6 +28,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
+using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
 
 namespace AdbcDrivers.Databricks.Reader
@@ -42,6 +43,7 @@ namespace AdbcDrivers.Databricks.Reader
         private readonly int _heartbeatIntervalSeconds;
         private readonly int _requestTimeoutSeconds;
         private readonly IResponse _response;
+        private readonly IActivityTracer? _activityTracer;
         // internal cancellation token source - won't affect the external token
         private CancellationTokenSource? _internalCts;
         private Task? _operationStatusPollingTask;
@@ -58,12 +60,14 @@ namespace AdbcDrivers.Databricks.Reader
             IHiveServer2Statement statement,
             IResponse response,
             int heartbeatIntervalSeconds = DatabricksConstants.DefaultOperationStatusPollingIntervalSeconds,
-            int requestTimeoutSeconds = DatabricksConstants.DefaultOperationStatusRequestTimeoutSeconds)
+            int requestTimeoutSeconds = DatabricksConstants.DefaultOperationStatusRequestTimeoutSeconds,
+            IActivityTracer? activityTracer = null)
         {
             _statement = statement ?? throw new ArgumentNullException(nameof(statement));
             _response = response;
             _heartbeatIntervalSeconds = heartbeatIntervalSeconds;
             _requestTimeoutSeconds = requestTimeoutSeconds;
+            _activityTracer = activityTracer;
         }
 
         public bool IsStarted => _operationStatusPollingTask != null;
@@ -82,10 +86,22 @@ namespace AdbcDrivers.Databricks.Reader
             _internalCts = new CancellationTokenSource();
             // create a linked token to the external token so that the external token can cancel the operation status polling task if needed
             var linkedToken = CancellationTokenSource.CreateLinkedTokenSource(_internalCts.Token, externalToken).Token;
-            _operationStatusPollingTask = Task.Run(() => PollOperationStatus(linkedToken));
+            _operationStatusPollingTask = Task.Run(async () =>
+            {
+                if (_activityTracer != null)
+                {
+                    await _activityTracer.Trace.TraceActivityAsync(
+                        activity => PollOperationStatus(linkedToken, activity),
+                        activityName: "PollOperationStatus").ConfigureAwait(false);
+                }
+                else
+                {
+                    await PollOperationStatus(linkedToken, null).ConfigureAwait(false);
+                }
+            });
         }
 
-        private async Task PollOperationStatus(CancellationToken cancellationToken)
+        private async Task PollOperationStatus(CancellationToken cancellationToken, Activity? activity)
         {
             int consecutiveFailures = 0;
 
@@ -107,6 +123,13 @@ namespace AdbcDrivers.Databricks.Reader
 
                     // Track poll count for telemetry
                     _pollCount++;
+
+                    activity?.AddEvent(new ActivityEvent("operation_status_poller.poll_success",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "poll_count", _pollCount },
+                            { "operation_state", response.OperationState.ToString() }
+                        }));
 
                     // end the heartbeat if the command has terminated
                     if (response.OperationState == TOperationState.CANCELED_STATE ||
@@ -130,7 +153,7 @@ namespace AdbcDrivers.Databricks.Reader
                     // Log the error but continue polling. Transient errors (e.g. ObjectDisposedException
                     // from TLS connection recycling) should not kill the heartbeat poller, as that would
                     // cause the server-side command inactivity timeout to expire and terminate the query.
-                    Activity.Current?.AddEvent(new ActivityEvent("operation_status_poller.poll_error",
+                    activity?.AddEvent(new ActivityEvent("operation_status_poller.poll_error",
                         tags: new ActivityTagsCollection
                         {
                             { "error.type", ex.GetType().Name },
@@ -141,7 +164,7 @@ namespace AdbcDrivers.Databricks.Reader
 
                     if (consecutiveFailures >= MaxConsecutiveFailures)
                     {
-                        Activity.Current?.AddEvent(new ActivityEvent("operation_status_poller.max_failures_reached",
+                        activity?.AddEvent(new ActivityEvent("operation_status_poller.max_failures_reached",
                             tags: new ActivityTagsCollection
                             {
                                 { "consecutive_failures", consecutiveFailures },
@@ -151,13 +174,20 @@ namespace AdbcDrivers.Databricks.Reader
                     }
                 }
 
-                // Wait before next poll. On cancellation this throws OperationCanceledException
-                // which propagates up to the caller (Dispose catches it).
-                await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
+                // Wait before next poll.
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Normal shutdown — don't let this propagate as an error through TraceActivityAsync
+                    break;
+                }
             }
 
             // Add telemetry tags to current activity when polling completes
-            Activity.Current?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
+            activity?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
         }
 
         public void Stop()
