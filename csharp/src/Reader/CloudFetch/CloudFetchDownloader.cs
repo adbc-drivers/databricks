@@ -647,6 +647,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         }
 
                         // Read the file data with an explicit timeout.
+                        // ReadAsByteArrayAsync() on net472 has no CancellationToken overload,
+                        // and HttpClient.Timeout does not protect body reads when
+                        // HttpCompletionOption.ResponseHeadersRead is used — SendAsync returns
+                        // after headers, and the subsequent body read is a separate call on
+                        // HttpContent with no timeout coverage.
                         // Using CopyToAsync with an explicit token ensures dead TCP connections
                         // are detected on every 81920-byte chunk read.
                         // When straggler detection is enabled, link from effectiveToken so both
