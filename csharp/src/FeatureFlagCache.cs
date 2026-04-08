@@ -135,7 +135,9 @@ namespace AdbcDrivers.Databricks
                 }
 
                 // Create HttpClient only on cache miss (lazy creation)
-                using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
+                // Note: do NOT use "using" here — the FeatureFlagContext takes ownership
+                // of the HttpClient for background refresh and disposes it in its own Dispose().
+                var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
 
                 // Create context asynchronously - this waits for initial fetch to complete
                 context = await FeatureFlagContext.CreateAsync(
