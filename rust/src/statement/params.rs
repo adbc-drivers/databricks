@@ -38,6 +38,8 @@ use driverbase::error::ErrorHelper;
 enum SqlParserState {
     Normal,
     InSingleQuote,
+    InDoubleQuote,
+    InBacktickQuote,
     InLineComment,
     InBlockComment,
 }
@@ -59,6 +61,12 @@ fn walk_sql(sql: &str, mut on_marker: impl FnMut(usize)) {
                 } else if bytes[i] == b'\'' {
                     state = SqlParserState::InSingleQuote;
                     i += 1;
+                } else if bytes[i] == b'"' {
+                    state = SqlParserState::InDoubleQuote;
+                    i += 1;
+                } else if bytes[i] == b'`' {
+                    state = SqlParserState::InBacktickQuote;
+                    i += 1;
                 } else if i + 1 < len && bytes[i] == b'-' && bytes[i + 1] == b'-' {
                     state = SqlParserState::InLineComment;
                     i += 2;
@@ -74,6 +82,25 @@ fn walk_sql(sql: &str, mut on_marker: impl FnMut(usize)) {
                     // Escaped single quote ('')
                     i += 2;
                 } else if bytes[i] == b'\'' {
+                    state = SqlParserState::Normal;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            SqlParserState::InDoubleQuote => {
+                if i + 1 < len && bytes[i] == b'"' && bytes[i + 1] == b'"' {
+                    // Escaped double quote ("")
+                    i += 2;
+                } else if bytes[i] == b'"' {
+                    state = SqlParserState::Normal;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            SqlParserState::InBacktickQuote => {
+                if bytes[i] == b'`' {
                     state = SqlParserState::Normal;
                     i += 1;
                 } else {
@@ -207,43 +234,30 @@ fn arrow_value_to_string(array: &dyn Array, index: usize) -> Result<String> {
         }
         DataType::Date32 => {
             let arr = array.as_primitive::<Date32Type>();
-            let days = arr.value(index);
-            let date = chrono::NaiveDate::from_num_days_from_ce_opt(days + 719_163)
-                .unwrap_or(chrono::NaiveDate::MIN);
+            let date = arr.value_as_date(index).unwrap_or(chrono::NaiveDate::MIN);
             Ok(date.format("%Y-%m-%d").to_string())
         }
         DataType::Date64 => {
             let arr = array.as_primitive::<Date64Type>();
-            let ms = arr.value(index);
-            let date = chrono::DateTime::from_timestamp_millis(ms)
-                .map(|dt| dt.date_naive())
-                .unwrap_or(chrono::NaiveDate::MIN);
+            let date = arr.value_as_date(index).unwrap_or(chrono::NaiveDate::MIN);
             Ok(date.format("%Y-%m-%d").to_string())
         }
         DataType::Timestamp(unit, _tz) => {
-            let ts = match unit {
-                TimeUnit::Second => {
-                    let arr = array.as_primitive::<TimestampSecondType>();
-                    chrono::DateTime::from_timestamp(arr.value(index), 0)
-                }
-                TimeUnit::Millisecond => {
-                    let arr = array.as_primitive::<TimestampMillisecondType>();
-                    chrono::DateTime::from_timestamp_millis(arr.value(index))
-                }
-                TimeUnit::Microsecond => {
-                    let arr = array.as_primitive::<TimestampMicrosecondType>();
-                    chrono::DateTime::from_timestamp_micros(arr.value(index))
-                }
-                TimeUnit::Nanosecond => {
-                    let arr = array.as_primitive::<TimestampNanosecondType>();
-                    let nanos = arr.value(index);
-                    chrono::DateTime::from_timestamp(
-                        nanos.div_euclid(1_000_000_000),
-                        nanos.rem_euclid(1_000_000_000) as u32,
-                    )
-                }
+            let dt = match unit {
+                TimeUnit::Second => array
+                    .as_primitive::<TimestampSecondType>()
+                    .value_as_datetime(index),
+                TimeUnit::Millisecond => array
+                    .as_primitive::<TimestampMillisecondType>()
+                    .value_as_datetime(index),
+                TimeUnit::Microsecond => array
+                    .as_primitive::<TimestampMicrosecondType>()
+                    .value_as_datetime(index),
+                TimeUnit::Nanosecond => array
+                    .as_primitive::<TimestampNanosecondType>()
+                    .value_as_datetime(index),
             };
-            let dt = ts.unwrap_or(chrono::DateTime::UNIX_EPOCH);
+            let dt = dt.unwrap_or(chrono::DateTime::UNIX_EPOCH.naive_utc());
             Ok(dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
         }
         _ => {
@@ -389,6 +403,30 @@ mod tests {
     }
 
     #[test]
+    fn test_count_in_double_quote() {
+        assert_eq!(
+            count_parameter_markers(r#"SELECT * FROM t WHERE "col?" = ?"#),
+            1
+        );
+    }
+
+    #[test]
+    fn test_count_in_backtick_quote() {
+        assert_eq!(
+            count_parameter_markers("SELECT * FROM `col?` WHERE id = ?"),
+            1
+        );
+    }
+
+    #[test]
+    fn test_count_escaped_double_quote() {
+        assert_eq!(
+            count_parameter_markers(r#"SELECT * FROM t WHERE "a""?" = ?"#),
+            1
+        );
+    }
+
+    #[test]
     fn test_count_no_markers() {
         assert_eq!(count_parameter_markers("SELECT 1"), 0);
     }
@@ -421,6 +459,22 @@ mod tests {
         assert_eq!(
             replace_parameter_markers_with_literals("SELECT '?' FROM t WHERE id = ?"),
             "SELECT '?' FROM t WHERE id = '?'"
+        );
+    }
+
+    #[test]
+    fn test_replace_in_double_quote_untouched() {
+        assert_eq!(
+            replace_parameter_markers_with_literals(r#"SELECT "col?" FROM t WHERE id = ?"#),
+            r#"SELECT "col?" FROM t WHERE id = '?'"#
+        );
+    }
+
+    #[test]
+    fn test_replace_in_backtick_untouched() {
+        assert_eq!(
+            replace_parameter_markers_with_literals("SELECT `col?` FROM t WHERE id = ?"),
+            "SELECT `col?` FROM t WHERE id = '?'"
         );
     }
 
