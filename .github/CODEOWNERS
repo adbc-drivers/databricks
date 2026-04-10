@@ -13,5 +13,5 @@
 # limitations under the License.
 
 # Require review for changes to GitHub Actions workflows and CI configuration
-.github/workflows/ @databricks/eng-oss-sql-driver @lidavidm
-.github/CODEOWNERS @databricks/eng-oss-sql-driver @lidavidm
+.github/workflows/ @eric-wang-1990 @vikrantpuppala @lidavidm
+.github/CODEOWNERS @eric-wang-1990 @vikrantpuppala @lidavidm
