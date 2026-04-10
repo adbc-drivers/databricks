@@ -32,8 +32,8 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  # Must share concurrency group with release workflow since it also builds/tests
-  group: ${{ github.repository }}-${{ github.ref }}-azure-prod
+  # Must share concurrency group with go_test workflow since it also builds/tests
+  group: ${{ github.repository }}-${{ github.ref }}-go-azure-prod
   cancel-in-progress: true
 
 defaults:

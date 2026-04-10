@@ -59,8 +59,8 @@ on:
         required: true
 
 concurrency:
-  # Must share concurrency group with release workflow since it also builds/tests
-  group: ${{ github.repository }}-${{ github.ref }}-azure-prod
+  # Must share concurrency group with rust_release workflow since it also builds/tests
+  group: ${{ github.repository }}-${{ github.ref }}-rust-azure-prod
   cancel-in-progress: true
 
 defaults:
