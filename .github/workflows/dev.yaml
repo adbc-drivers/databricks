@@ -57,7 +57,7 @@ jobs:
           python-version: "3.x"
 
       - name: Install
-        run: pip install pre-commit
+        run: pip install pre-commit==4.2.0
 
       - name: pre-commit (cache)
         uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7  # v5.0.2

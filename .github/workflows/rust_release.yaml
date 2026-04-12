@@ -32,8 +32,8 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  # Must share concurrency group with release workflow since it also builds/tests
-  group: ${{ github.repository }}-${{ github.ref }}-azure-prod
+  # Must share concurrency group with rust_test workflow since it also builds/tests
+  group: ${{ github.repository }}-${{ github.ref }}-rust-azure-prod
   cancel-in-progress: true
 
 defaults:
@@ -240,7 +240,7 @@ jobs:
       - name: Install tools
         working-directory: rust
         run: |
-          cargo install cargo-about
+          cargo install cargo-about --version 0.8.4 --locked
 
       - name: Generate packages
         working-directory: rust
@@ -293,7 +293,7 @@ jobs:
         # dbc uses the filename as the driver name
         run: |
           echo "Installing dbc"
-          git clone --depth 1 https://github.com/columnar-tech/dbc
+          git clone https://github.com/columnar-tech/dbc && git -C dbc checkout 96a28b1718e25bf258fff5b7ebcf936cc05a3bdf
           cd dbc
           go build ./cmd/dbc
           echo "Installed dbc"
