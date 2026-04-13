@@ -41,7 +41,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
     {
         private readonly long _maxMemory;
         private long _usedMemory;
-        private readonly SemaphoreSlim _memorySemaphore;
+
+        // Async signal: when memory is released, this semaphore is released to wake
+        // any tasks blocked in AcquireMemoryAsync. Uses SemaphoreSlim (not ManualResetEventSlim)
+        // because SemaphoreSlim.WaitAsync() is truly async and doesn't block a ThreadPool thread.
+        private readonly SemaphoreSlim _memoryReleased;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchMemoryBufferManager"/> class.
@@ -57,7 +61,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             // Convert MB to bytes
             _maxMemory = maxMemoryMB * 1024L * 1024L;
             _usedMemory = 0;
-            _memorySemaphore = new SemaphoreSlim(1, 1);
+            _memoryReleased = new SemaphoreSlim(0);
         }
 
         /// <inheritdoc />
@@ -116,8 +120,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     return;
                 }
 
-                // If we couldn't acquire memory, wait for some to be released
-                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+                // Wait for memory to become available via async signal from ReleaseMemory.
+                // SemaphoreSlim.WaitAsync is truly async — no ThreadPool thread blocked.
+                // Falls back to 50ms timeout to handle edge cases where signal might race.
+                await _memoryReleased.WaitAsync(50, cancellationToken).ConfigureAwait(false);
             }
 
             // If we get here, cancellation was requested
@@ -142,6 +148,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 Interlocked.Exchange(ref _usedMemory, 0);
                 throw new InvalidOperationException("Memory buffer manager released more memory than was acquired.");
             }
+
+            // Signal any tasks blocked in AcquireMemoryAsync that memory is now available.
+            // SemaphoreSlim.Release() wakes one waiting WaitAsync() call immediately.
+            _memoryReleased.Release();
         }
     }
 }
