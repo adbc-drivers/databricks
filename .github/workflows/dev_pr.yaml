@@ -50,7 +50,7 @@ jobs:
 
       - name: Check PR title format
         run: |
-          git clone --depth 1 https://github.com/adbc-drivers/dev && git -C dev checkout 9d4550a2a9fb2133a86cf16e9f7bfbc32ffb8c48
+          git clone --depth 1 https://github.com/adbc-drivers/dev && git -C dev fetch --depth 1 origin 9d4550a2a9fb2133a86cf16e9f7bfbc32ffb8c48 && git -C dev checkout 9d4550a2a9fb2133a86cf16e9f7bfbc32ffb8c48
           python dev/adbc_drivers_dev/title_check.py $(pwd) "$PR_TITLE"
         env:
           # Set as env var to avoid direct shell interpolation of untrusted input
