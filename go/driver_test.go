@@ -269,7 +269,7 @@ func (d *DatabricksQuirks) GetMetadata(code adbc.InfoCode) any {
 	case adbc.InfoDriverArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoVendorVersion:
-		return "2025.35"
+		return "2025.40"
 	case adbc.InfoVendorArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoDriverADBCVersion:

@@ -49,12 +49,12 @@ jobs:
     services:
       # Unauthenticated forward proxy (no volume mounts needed)
       squid:
-        image: ubuntu/squid:latest
+        image: ubuntu/squid:latest@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
         ports:
           - 3128:3128
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -66,7 +66,7 @@ jobs:
             -p 3129:3128 \
             -v ${{ github.workspace }}/rust/ci/proxy/squid-auth.conf:/etc/squid/squid.conf \
             -v ${{ github.workspace }}/rust/ci/proxy/htpasswd:/etc/squid/htpasswd \
-            ubuntu/squid:latest
+            ubuntu/squid:latest@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
           # Wait for squid to be ready
           for i in $(seq 1 10); do
             if docker exec squid-auth squid -k check 2>/dev/null; then
@@ -77,7 +77,7 @@ jobs:
             sleep 1
           done
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
 
       - name: Run proxy E2E tests
         working-directory: rust
@@ -111,7 +111,7 @@ jobs:
       DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -121,7 +121,7 @@ jobs:
         run: |
           docker run -d --name mitmproxy \
             -p 8080:8080 \
-            mitmproxy/mitmproxy:latest \
+            mitmproxy/mitmproxy:12.2.1@sha256:743b6cdc817211d64bc269f5defacca8d14e76e647fc474e5c7244dbcb645141 \
             mitmdump --set stream_large_bodies=0
           # Wait for mitmproxy to generate its CA cert
           for i in $(seq 1 15); do
@@ -141,7 +141,7 @@ jobs:
           echo "Extracted mitmproxy CA cert:"
           openssl x509 -in /tmp/mitmproxy-ca-cert.pem -noout -subject -issuer
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
 
       - name: Run TLS E2E tests
         working-directory: rust
