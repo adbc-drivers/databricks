@@ -442,6 +442,7 @@ namespace AdbcDrivers.Databricks
         protected override bool GetObjectsPatternsRequireLowerCase => true;
 
         protected override string DriverName => DatabricksDriverName;
+        protected override string ProductVersionDefault => "1.1.0";
 
         internal override IArrowArrayStream NewReader<T>(T statement, Schema schema, IResponse response, TGetResultSetMetadataResp? metadataResp = null)
         {
