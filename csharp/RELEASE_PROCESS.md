@@ -32,13 +32,12 @@ This differs from the Go and Rust drivers, which tag directly on `main` and cann
 
 The ADBC driver version is included in the user agent string sent to Databricks, making it visible in query history for tracing exactly which version a consumer is running.
 
-## Branch and Tag Naming
+## Branch Naming
 
 | Artifact | Pattern | Example |
 |----------|---------|---------|
 | Release branch | `release/csharp/vX.Y.Z` | `release/csharp/v1.1.0` |
-| Tag | `csharp/vX.Y.Z` | `csharp/v1.1.1` |
-| Stable branch | `stable/csharp` | — |
+| Latest branch | `release/csharp/latest` | — |
 
 ## Versioning Rules
 
@@ -55,28 +54,34 @@ flowchart LR
         A((A)) --> B((B)) --> C((C)) --> D((D)) --> E((E)) --> F((F))
     end
     subgraph release/csharp/v1.1.0
-        D -.->|branch + tag csharp/v1.1.0| R1((cutoff))
-        R1 -->|cherry-pick| R2((fix A\ntag csharp/v1.1.1))
-        R2 -->|cherry-pick| R3((fix B\ntag csharp/v1.1.2))
+        D -.->|branch| R1((cutoff))
+        R1 -->|cherry-pick| R2((fix A))
+        R2 -->|cherry-pick| R3((fix B))
     end
-    R1 -.->|update| STABLE[stable/csharp]
-    R2 -.->|update| STABLE
-    R3 -.->|update| STABLE
+    R1 -.->|update| LATEST[release/csharp/latest]
+    R2 -.->|update| LATEST
+    R3 -.->|update| LATEST
 ```
 
 ### Cutoff
 
-When ready to release, branch off `main` and tag immediately:
+When ready to release, branch off `main`:
 
 1. Create `release/csharp/v1.1.0` from the desired commit on `main`
-2. Tag that commit `csharp/v1.1.0`
-3. Update `stable/csharp` to point to this tag
+2. Update `release/csharp/latest`: `git push origin release/csharp/v1.1.0:release/csharp/latest --force`
 
 ### Post-Cutoff (Maintenance)
 
 - Fixes go to `main` first, then cherry-picked to the release branch via PR.
-- Each cherry-pick batch gets a new patch tag (e.g., `csharp/v1.1.1`, `csharp/v1.1.2`).
-- Update `stable/csharp` after each patch tag: `git push origin release/csharp/v1.1.0:stable/csharp --force`
+- Update `release/csharp/latest` after each patch: `git push origin release/csharp/v1.1.0:release/csharp/latest --force`
+
+## Branch Protection
+
+All `release/csharp/*` branches (including `release/csharp/latest`) are protected by a single branch protection rule with pattern `release/csharp/*`:
+
+- Deletion blocked
+- 1 PR approval required
+- Force pushes allowed (required for updating `release/csharp/latest`)
 
 ## Scope
 
@@ -84,34 +89,37 @@ This applies **only to the C# driver**. Other drivers in the monorepo are unaffe
 
 | Driver | Release Mechanism | Can hotfix old patch? |
 |--------|------------------|-----------------------|
-| **C#** | Release branches + tags | Yes — each minor version has its own branch |
+| **C#** | Release branches | Yes — each minor version has its own branch |
 | **Go** | Tags on `main` (`go/v0.1.x`) | No — consumers must upgrade |
 | **Rust** | None | — |
 
 The release branch contains the full monorepo (Git doesn't support partial branches), but only C# changes are cherry-picked and built from it.
 
-## Stable Branch
+## Latest Branch
 
-`stable/csharp` always points to the latest release. It exists for consumers that run a plain `git clone` with no `--branch` flag. All other consumers should pin to a specific tag or release branch directly.
+`release/csharp/latest` always points to the latest release. It exists for consumers that want to track the latest release without knowing the specific version branch name.
 
 ## CI/CD
 
+The `csharp.yml` workflow currently triggers on `main` and `maint-*` branches. To run CI on release branches, add `release/csharp/*` to the trigger:
+
 ```yaml
 on:
+  pull_request:
+    branches:
+      - main
+      - 'release/csharp/*'
+    paths:
+      - 'csharp/**'
   push:
     branches:
+      - main
       - 'release/csharp/*'
-      - 'stable/csharp'
-    paths: ['csharp/**']
-  push:
-    tags:
-      - 'csharp/v*'
+    paths:
+      - 'csharp/**'
 ```
-
-On tag push, the workflow publishes the NuGet package to NuGet.org in addition to running build and tests. Release branches require PR and passing CI to merge.
 
 ## Consumer Mapping (e.g., PowerBI)
 
-- **Pin to a tag** (e.g., `csharp/v1.1.0`) — most stable, no automatic updates
-- **Track a release branch** (e.g., `release/csharp/v1.1.0`) — receives cherry-picks automatically
-- **Clone `stable/csharp`** — always tracks the latest release, no branch name needed
+- **Track a release branch** (e.g., `release/csharp/v1.1.0`) — receives cherry-picks automatically, pinned to a specific minor version
+- **Track `release/csharp/latest`** — always tracks the latest release
