@@ -234,7 +234,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 catch
                 {
                     Skip.If(true, "Connection requires authentication - cannot test 'other' auth type");
-                    return;
                 }
 
                 // Execute a simple query to trigger telemetry

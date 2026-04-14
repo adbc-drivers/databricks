@@ -17,9 +17,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using AdbcDrivers.HiveServer2.Spark;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2;
-using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
 using Xunit;
@@ -129,7 +129,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
-        /// Tests that socket_timeout is populated from connection properties.
+        /// Tests that socket_timeout is populated from connection properties (converted from ms to seconds).
         /// </summary>
         [SkippableFact]
         public async Task ConnectionParams_SocketTimeout_IsPopulated()
@@ -141,9 +141,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             {
                 var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
 
-                // Set custom socket timeout (in milliseconds)
-                int customTimeout = 120000; // 120 seconds
-                properties[SparkParameters.ConnectTimeoutMilliseconds] = customTimeout.ToString();
+                // Set custom timeout (in milliseconds)
+                int customTimeoutMs = 120000; // 120 seconds
+                properties[SparkParameters.ConnectTimeoutMilliseconds] = customTimeoutMs.ToString();
 
                 (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
 
@@ -161,11 +161,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
 
-                // Assert socket_timeout is populated
+                // Assert socket_timeout is populated and converted to seconds
                 Assert.NotNull(protoLog.DriverConnectionParams);
-                Assert.Equal(customTimeout, protoLog.DriverConnectionParams.SocketTimeout);
+                Assert.Equal(customTimeoutMs / 1000, protoLog.DriverConnectionParams.SocketTimeout);
 
-                OutputHelper?.WriteLine($"✓ socket_timeout: {protoLog.DriverConnectionParams.SocketTimeout}");
+                OutputHelper?.WriteLine($"✓ socket_timeout: {protoLog.DriverConnectionParams.SocketTimeout}s (from {customTimeoutMs}ms)");
             }
             finally
             {

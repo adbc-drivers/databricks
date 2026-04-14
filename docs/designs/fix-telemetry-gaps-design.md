@@ -390,7 +390,7 @@ return new DriverConnectionParameters
     // NEW fields:
     EnableArrow = true,  // Always true for ADBC driver
     RowsFetchedPerBlock = GetBatchSize(),
-    SocketTimeout = GetSocketTimeout(),
+    SocketTimeout = ConnectTimeoutMilliseconds / 1000,  // Convert ms to seconds per proto spec
     EnableDirectResults = true,
     EnableComplexDatatypeSupport = GetComplexTypeSupport(),
     AutoCommit = GetAutoCommit(),

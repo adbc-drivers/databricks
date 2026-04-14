@@ -309,8 +309,9 @@ namespace AdbcDrivers.Databricks
                     }
                 }
 
-                // Set chunk details if we have metrics
-                if (metrics != null)
+                // Set chunk details if we have metrics and at least one chunk was iterated
+                // (avoids leaking the -1 sentinel from InitialChunkLatencyMs when no chunks were downloaded)
+                if (metrics != null && metrics.TotalChunksIterated > 0)
                 {
                     ctx.SetChunkDetails(
                         metrics.TotalChunksPresent,

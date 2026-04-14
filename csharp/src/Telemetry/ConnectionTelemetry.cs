@@ -346,7 +346,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 AuthFlow = authFlow,
                 EnableArrow = true,
                 RowsFetchedPerBlock = batchSize,
-                SocketTimeout = connectTimeoutMilliseconds,
+                SocketTimeout = connectTimeoutMilliseconds / 1000,
                 EnableDirectResults = enableDirectResults,
                 EnableComplexDatatypeSupport = useDescTableExtended,
                 AutoCommit = true,
