@@ -17,6 +17,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload;
 using Apache.Arrow;
 using Microsoft.IO;
 
@@ -112,6 +113,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         public ArrayPool<byte>? Lz4BufferPool { get; set; }
 
         /// <summary>
+        /// Straggler mitigation configuration for CloudFetch downloads.
+        /// If null or Enabled is false, straggler detection is disabled.
+        /// </summary>
+        public CloudFetchStragglerMitigationConfig? StragglerMitigationConfig { get; set; }
+
+        /// <summary>
         /// Creates configuration from connection properties.
         /// Works with UNIFIED properties that are shared across ALL protocols (Thrift, REST, future protocols).
         /// Same property names (e.g., "adbc.databricks.cloudfetch.parallel_downloads") work for all protocols.
@@ -151,7 +158,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 RetryTimeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryTimeoutSeconds, DefaultRetryTimeoutSeconds),
                 RetryDelayMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchRetryDelayMs, DefaultRetryDelayMs),
                 MaxUrlRefreshAttempts = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, DefaultMaxUrlRefreshAttempts),
-                UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds)
+                UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds),
+                StragglerMitigationConfig = CloudFetchStragglerMitigationConfig.Parse(properties)
             };
 
             return config;

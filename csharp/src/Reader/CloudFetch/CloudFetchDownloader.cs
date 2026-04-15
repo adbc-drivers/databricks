@@ -24,12 +24,14 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Microsoft.IO;
@@ -64,6 +66,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private bool _isCompleted;
         private Exception? _error;
         private readonly object _errorLock = new object();
+        private readonly StragglerDownloadDetector? _stragglerDetector;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchDownloader"/> class.
@@ -105,6 +108,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _lz4BufferPool = config.Lz4BufferPool;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
             _isCompleted = false;
+
+            // Initialize straggler mitigation from config object
+            var stragglerConfig = config.StragglerMitigationConfig ?? CloudFetchStragglerMitigationConfig.Disabled;
+            if (stragglerConfig.Enabled)
+            {
+                _stragglerDetector = new StragglerDownloadDetector(stragglerConfig, _activityTracer);
+            }
         }
 
         /// <summary>
@@ -121,6 +131,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="maxRetries">Total number of attempts. 0 = no limit (use timeout only), positive = max total attempts.</param>
         /// <param name="retryTimeoutSeconds">Time budget for retries in seconds (optional, default 300).</param>
         /// <param name="retryDelayMs">Initial delay between retries in ms (optional, default 500).</param>
+        /// <param name="stragglerConfig">Optional configuration for straggler mitigation (null = disabled).</param>
         internal CloudFetchDownloader(
             IActivityTracer activityTracer,
             BlockingCollection<IDownloadResult> downloadQueue,
@@ -132,7 +143,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             bool isLz4Compressed,
             int maxRetries = CloudFetchConfiguration.DefaultMaxRetries,
             int retryTimeoutSeconds = CloudFetchConfiguration.DefaultRetryTimeoutSeconds,
-            int retryDelayMs = CloudFetchConfiguration.DefaultRetryDelayMs)
+            int retryDelayMs = CloudFetchConfiguration.DefaultRetryDelayMs,
+            CloudFetchStragglerMitigationConfig? stragglerConfig = null)
         {
             _activityTracer = activityTracer ?? throw new ArgumentNullException(nameof(activityTracer));
             _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
@@ -153,6 +165,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _lz4BufferPool = null;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
             _isCompleted = false;
+
+            // Initialize straggler mitigation from config object
+            var config = stragglerConfig ?? CloudFetchStragglerMitigationConfig.Disabled;
+            if (config.Enabled)
+            {
+                _stragglerDetector = new StragglerDownloadDetector(config, _activityTracer);
+            }
         }
 
         /// <inheritdoc />
@@ -174,8 +193,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _downloadTask = DownloadFilesAsync(_cancellationTokenSource.Token);
+            _stragglerDetector?.StartMonitoring(cancellationToken);
 
-            // Wait for the download task to start
             await Task.Yield();
         }
 
@@ -188,6 +207,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
 
             _cancellationTokenSource?.Cancel();
+
+            if (_stragglerDetector != null)
+            {
+                await _stragglerDetector.StopMonitoring().ConfigureAwait(false);
+            }
 
             try
             {
@@ -209,6 +233,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 _cancellationTokenSource?.Dispose();
                 _cancellationTokenSource = null;
                 _downloadTask = null;
+
+                // Dispose the straggler detector after all download tasks have completed,
+                // so in-flight SequentialDownloadPermits can safely release the semaphore.
+                if (_stragglerDetector is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
             }
         }
 
@@ -361,16 +392,29 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         long size = downloadResult.Size;
                         await _memoryManager.AcquireMemoryAsync(size, cancellationToken).ConfigureAwait(false);
 
+                        // Acquire sequential permit if in fallback mode (serialization)
+                        SequentialDownloadPermit? sequentialPermit = null;
+                        if (_stragglerDetector != null)
+                        {
+                            sequentialPermit = await _stragglerDetector.AcquireSequentialPermitIfNeeded(cancellationToken, activity)
+                                .ConfigureAwait(false);
+                        }
+
                         activity?.AddEvent("cloudfetch.download_slot_acquired", [
-                            new("chunk_index", downloadResult.ChunkIndex)
+                            new("chunk_index", downloadResult.ChunkIndex),
+                            new("is_sequential_mode", sequentialPermit != null && sequentialPermit != SequentialDownloadPermit.NoOp)
                         ]);
 
-                        // Start the download task
-                        Task downloadTask = DownloadFileAsync(downloadResult, cancellationToken)
-                            .ContinueWith(t =>
-                            {
-                                // Release the download slot
-                                _downloadSemaphore.Release();
+                        Task downloadTask;
+                        try
+                        {
+                            // Start the download task
+                            downloadTask = DownloadFileAsync(downloadResult, cancellationToken)
+                                .ContinueWith(t =>
+                                {
+                                    // Release in reverse order (LIFO)
+                                    sequentialPermit?.Dispose();
+                                    _downloadSemaphore.Release();
 
                                 // Remove the task from the dictionary
                                 downloadTasks.TryRemove(t, out _);
@@ -401,10 +445,20 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     successfulDownloads++;
                                     totalBytes += downloadResult.Size;
                                 }
-                            }, cancellationToken);
+                            });
 
-                        // Add the task to the dictionary
-                        downloadTasks[downloadTask] = downloadResult;
+                            // Add the task to the dictionary
+                            downloadTasks[downloadTask] = downloadResult;
+                        }
+                        catch (Exception ex)
+                        {
+                            // If task creation fails, release all acquired resources to prevent leak
+                            sequentialPermit?.Dispose();
+                            _downloadSemaphore.Release();
+                            _memoryManager.ReleaseMemory(size);
+                            SetError(ex, activity);
+                            break;
+                        }
 
                         // Add the result to the result queue add the result here to assure the download sequence.
                         _resultQueue.Add(downloadResult, cancellationToken);
@@ -494,6 +548,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     new("expected_size_kb", size / 1024.0)
             ]);
 
+                long fileOffset = downloadResult.StartRowOffset;
+                CancellationToken effectiveToken = _stragglerDetector?.RegisterDownload(fileOffset, size, cancellationToken, activity)
+                                                   ?? cancellationToken;
+
                 // Retry logic with time-budget approach and exponential backoff with jitter.
                 // Same pattern as RetryHttpHandler: tracks cumulative backoff sleep time against
                 // the budget. This gives transient issues (firewall, proxy 502, connection drops)
@@ -537,7 +595,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         using HttpResponseMessage response = await _httpClient.SendAsync(
                             request,
                             HttpCompletionOption.ResponseHeadersRead,
-                            cancellationToken).ConfigureAwait(false);
+                            effectiveToken).ConfigureAwait(false);
 
                         // Check if the response indicates an expired URL (typically 403 or 401)
                         if (response.StatusCode == System.Net.HttpStatusCode.Forbidden ||
@@ -603,7 +661,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         // HttpContent with no timeout coverage.
                         // Using CopyToAsync with an explicit token ensures dead TCP connections
                         // are detected on every 81920-byte chunk read.
-                        using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                        // When straggler detection is enabled, link from effectiveToken so both
+                        // the straggler deadline and the body timeout are respected.
+                        CancellationToken baseToken = _stragglerDetector != null ? effectiveToken : cancellationToken;
+                        using (var bodyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(baseToken))
                         {
                             bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
                             using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
@@ -620,6 +681,54 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             }
                         }
                         break; // Success, exit retry loop
+                    }
+                    catch (OperationCanceledException) when (
+                        effectiveToken.IsCancellationRequested
+                        && !cancellationToken.IsCancellationRequested)
+                    {
+                        if (fileData != null)
+                        {
+                            activity?.AddEvent("cloudfetch.straggler_cancelled_but_completed", [
+                                new("offset", downloadResult.StartRowOffset),
+                                new("sanitized_url", sanitizedUrl),
+                                new("file_size_mb", size / 1024.0 / 1024.0)
+                            ]);
+                            break;
+                        }
+
+                        activity?.AddEvent("cloudfetch.straggler_cancelled", [
+                            new("offset", downloadResult.StartRowOffset),
+                            new("sanitized_url", sanitizedUrl),
+                            new("file_size_mb", size / 1024.0 / 1024.0),
+                            new("elapsed_seconds", stopwatch.ElapsedMilliseconds / 1000.0),
+                            new("attempt", attemptCount),
+                            new("max_retries", _maxRetries)
+                        ]);
+
+                        _stragglerDetector?.MarkCancelledAsStragler(fileOffset, activity);
+                        effectiveToken = _stragglerDetector?.RegisterDownload(fileOffset, size, cancellationToken, activity)
+                                       ?? cancellationToken;
+
+                        // Exponential backoff with jitter (80-120% of base)
+                        int waitMs = (int)Math.Max(100, currentBackoffMs * (0.8 + new Random().NextDouble() * 0.4));
+
+                        // Check if we would exceed the time budget
+                        if (retryTimeoutMs > 0 && totalRetryWaitMs + waitMs > retryTimeoutMs)
+                        {
+                            activity?.AddEvent("cloudfetch.straggler_retry_timeout_exceeded", [
+                                new("offset", downloadResult.StartRowOffset),
+                                new("sanitized_url", sanitizedUrl),
+                                new("total_attempts", attemptCount),
+                                new("total_retry_wait_ms", totalRetryWaitMs)
+                            ]);
+                            lastException = new OperationCanceledException(
+                                $"Straggler retry budget exhausted at offset {downloadResult.StartRowOffset} after {attemptCount} cancellation(s).");
+                            break;
+                        }
+
+                        totalRetryWaitMs += waitMs;
+                        await Task.Delay(waitMs, cancellationToken).ConfigureAwait(false);
+                        currentBackoffMs = (int)Math.Min((long)currentBackoffMs * 2L, 32_000L);
                     }
                     catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
@@ -752,8 +861,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     new("throughput_mbps", throughputMBps)
                 ]);
 
-                // Set the download as completed with the original size
                 downloadResult.SetCompleted(dataStream, size);
+                _stragglerDetector?.MarkCompleted(fileOffset, activity);
             }, activityName: "DownloadFile");
         }
 
