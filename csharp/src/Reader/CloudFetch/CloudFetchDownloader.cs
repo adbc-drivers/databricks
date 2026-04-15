@@ -233,6 +233,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 _cancellationTokenSource?.Dispose();
                 _cancellationTokenSource = null;
                 _downloadTask = null;
+
+                // Dispose the straggler detector after all download tasks have completed,
+                // so in-flight SequentialDownloadPermits can safely release the semaphore.
+                if (_stragglerDetector is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
             }
         }
 
@@ -438,7 +445,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     successfulDownloads++;
                                     totalBytes += downloadResult.Size;
                                 }
-                            }, cancellationToken);
+                            });
 
                             // Add the task to the dictionary
                             downloadTasks[downloadTask] = downloadResult;
@@ -714,6 +721,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 new("total_attempts", attemptCount),
                                 new("total_retry_wait_ms", totalRetryWaitMs)
                             ]);
+                            lastException = new OperationCanceledException(
+                                $"Straggler retry budget exhausted at offset {downloadResult.StartRowOffset} after {attemptCount} cancellation(s).");
                             break;
                         }
 
