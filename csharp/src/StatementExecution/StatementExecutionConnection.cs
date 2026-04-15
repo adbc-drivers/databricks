@@ -352,7 +352,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             // Use DatabricksJDBCDriverOSS prefix for server-side feature compatibility
             // (e.g., INLINE_OR_EXTERNAL_LINKS disposition support)
-            string baseUserAgent = $"DatabricksJDBCDriverOSS/{AssemblyVersion} (ADBC)";
+            string baseUserAgent = $"DatabricksJDBCDriverOSS/{DatabricksConnection.DriverVersion} (ADBC)";
 
             // Check if a client has provided a user-agent entry
             string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
