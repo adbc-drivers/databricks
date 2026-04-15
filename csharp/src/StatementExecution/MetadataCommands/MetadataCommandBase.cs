@@ -37,7 +37,7 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
 
         protected static string ConvertPattern(string? pattern)
         {
-            if (string.IsNullOrEmpty(pattern))
+            if (pattern == null)
                 return "*";
 
             var result = new StringBuilder(pattern!.Length);
