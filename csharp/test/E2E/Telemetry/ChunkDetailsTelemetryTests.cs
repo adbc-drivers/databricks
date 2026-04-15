@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.Proto;
@@ -55,14 +56,23 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
 
                 // Execute a query that will trigger CloudFetch
                 // Use a large result set to ensure CloudFetch is used
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -84,12 +94,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
 
                 Assert.NotNull(protoLog.SqlOperation);
-
-                // Skip test if CloudFetch was not used (inline results)
-                if (protoLog.SqlOperation.ExecutionResult != ExecutionResult.Types.Format.ExternalLinks)
-                {
-                    Skip.If(true, "Test skipped: CloudFetch not used for this query (inline results used instead)");
-                }
 
                 Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
                 var chunkDetails = protoLog.SqlOperation.ChunkDetails;
@@ -133,11 +137,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -157,12 +170,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-
-                // Skip if not CloudFetch
-                if (protoLog.SqlOperation.ExecutionResult != ExecutionResult.Types.Format.ExternalLinks)
-                {
-                    Skip.If(true, "Test skipped: CloudFetch not used");
-                }
 
                 Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
                 var chunkDetails = protoLog.SqlOperation.ChunkDetails;
@@ -192,11 +199,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -216,12 +232,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-
-                // Skip if not CloudFetch
-                if (protoLog.SqlOperation.ExecutionResult != ExecutionResult.Types.Format.ExternalLinks)
-                {
-                    Skip.If(true, "Test skipped: CloudFetch not used");
-                }
 
                 Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
                 var chunkDetails = protoLog.SqlOperation.ChunkDetails;
@@ -253,11 +263,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -277,12 +296,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-
-                // Skip if not CloudFetch
-                if (protoLog.SqlOperation.ExecutionResult != ExecutionResult.Types.Format.ExternalLinks)
-                {
-                    Skip.If(true, "Test skipped: CloudFetch not used");
-                }
 
                 Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
                 var chunkDetails = protoLog.SqlOperation.ChunkDetails;
@@ -314,11 +327,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -338,12 +360,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-
-                // Skip if not CloudFetch
-                if (protoLog.SqlOperation.ExecutionResult != ExecutionResult.Types.Format.ExternalLinks)
-                {
-                    Skip.If(true, "Test skipped: CloudFetch not used");
-                }
 
                 Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
                 var chunkDetails = protoLog.SqlOperation.ChunkDetails;
@@ -438,11 +454,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -497,13 +522,22 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
 
                 // Use a large result set to ensure multiple chunks
-                statement.SqlQuery = "SELECT * FROM range(500000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -525,12 +559,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-
-                // Skip if not CloudFetch
-                if (protoLog.SqlOperation.ExecutionResult != ExecutionResult.Types.Format.ExternalLinks)
-                {
-                    Skip.If(true, "Test skipped: CloudFetch not used");
-                }
 
                 Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
                 var cd = protoLog.SqlOperation.ChunkDetails;

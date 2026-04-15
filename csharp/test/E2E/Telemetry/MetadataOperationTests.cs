@@ -210,11 +210,12 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
 
                 // Execute GetObjects with depth=All (includes columns)
+                // Scope to information_schema to avoid tables with unsupported types (e.g., GEOMETRY)
                 using var stream = connection.GetObjects(
                     depth: AdbcConnection.GetObjectsDepth.All,
-                    catalogPattern: null,
-                    dbSchemaPattern: null,
-                    tableNamePattern: null,
+                    catalogPattern: "main",
+                    dbSchemaPattern: "information_schema",
+                    tableNamePattern: "columns",
                     tableTypes: null,
                     columnNamePattern: null);
 
@@ -322,11 +323,16 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 {
                     exporter.Reset(); // Clear previous logs
 
+                    // Scope to information_schema for depth=All to avoid tables with unsupported types (e.g., GEOMETRY)
+                    string? catalogPattern = mapping.Depth == AdbcConnection.GetObjectsDepth.All ? "main" : null;
+                    string? schemaPattern = mapping.Depth == AdbcConnection.GetObjectsDepth.All ? "information_schema" : null;
+                    string? tablePattern = mapping.Depth == AdbcConnection.GetObjectsDepth.All ? "columns" : null;
+
                     using var stream = connection.GetObjects(
                         depth: mapping.Depth,
-                        catalogPattern: null,
-                        dbSchemaPattern: null,
-                        tableNamePattern: null,
+                        catalogPattern: catalogPattern,
+                        dbSchemaPattern: schemaPattern,
+                        tableNamePattern: tablePattern,
                         tableTypes: null,
                         columnNamePattern: null);
 

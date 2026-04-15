@@ -145,6 +145,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 int customTimeoutMs = 120000; // 120 seconds
                 properties[SparkParameters.ConnectTimeoutMilliseconds] = customTimeoutMs.ToString();
 
+                // Disable TemporarilyUnavailableRetry so it doesn't override ConnectTimeoutMilliseconds
+                // (default retry timeout of 900s would bump the connect timeout above our custom value)
+                properties[DatabricksParameters.TemporarilyUnavailableRetry] = "false";
+
                 (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
 
                 // Execute a simple query to trigger telemetry

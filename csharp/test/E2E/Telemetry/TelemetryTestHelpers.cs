@@ -42,8 +42,26 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public static (AdbcConnection Connection, CapturingTelemetryExporter Exporter) CreateConnectionWithCapturingTelemetry(
             Dictionary<string, string> properties)
         {
-            // Enable telemetry
+            return CreateConnectionWithCapturingTelemetry(properties, connectionOptions: null);
+        }
+
+        /// <summary>
+        /// Creates a connection with a capturing exporter, using separate connection options.
+        /// This mirrors the NewConnection pattern used by CloudFetchE2ETest where driver params
+        /// go to Open() and connection-specific options go to Connect().
+        /// </summary>
+        public static (AdbcConnection Connection, CapturingTelemetryExporter Exporter) CreateConnectionWithCapturingTelemetry(
+            Dictionary<string, string> properties,
+            Dictionary<string, string>? connectionOptions)
+        {
+            // Enable telemetry in driver properties
             properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+
+            // Also enable telemetry in connection options if provided separately
+            if (connectionOptions != null)
+            {
+                connectionOptions[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+            }
 
             // Create and set the capturing exporter
             var exporter = new CapturingTelemetryExporter();
@@ -53,8 +71,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             AdbcDriver driver = new DatabricksDriver();
             AdbcDatabase database = driver.Open(properties);
 
-            // Create and open connection
-            AdbcConnection connection = database.Connect(properties);
+            // Create and open connection with optional separate connection options
+            AdbcConnection connection = database.Connect(connectionOptions ?? properties);
 
             return (connection, exporter);
         }

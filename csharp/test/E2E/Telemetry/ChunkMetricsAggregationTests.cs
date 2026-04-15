@@ -50,15 +50,23 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             try
             {
-                // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // Arrange - use same setup as CloudFetchE2ETest
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                    [TelemetryConfiguration.PropertyKeyEnabled] = "true",
+                };
+
+                exporter = new CapturingTelemetryExporter();
+                TelemetryClientManager.ExporterOverride = exporter;
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-
-                // Execute a query that will trigger CloudFetch (large result set)
-                // This query generates multiple chunks to test chunking behavior
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
@@ -69,6 +77,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     // Process batches
                 }
 
+                // Explicitly dispose statement to trigger telemetry emission
+                statement.Dispose();
+
                 // Act - wait for telemetry to be exported
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
 
@@ -77,6 +88,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
 
                 Assert.NotNull(protoLog.SqlOperation);
+
                 Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
 
                 var chunkDetails = protoLog.SqlOperation.ChunkDetails;
@@ -107,14 +119,26 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             try
             {
                 // Arrange
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
                 while (await reader.ReadNextRecordBatchAsync() != null) { }
+
+                // Explicitly dispose statement to trigger telemetry emission
+                statement.Dispose();
 
                 // Act
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
@@ -122,9 +146,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
-                Assert.NotNull(chunkDetails);
+                Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
+                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
                 // Verify slowest >= initial
                 Assert.True(chunkDetails.SlowestChunkLatencyMillis >= chunkDetails.InitialChunkLatencyMillis,
@@ -151,15 +175,27 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             try
             {
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
                 while (await reader.ReadNextRecordBatchAsync() != null) { }
+
+                // Explicitly dispose statement to trigger telemetry emission
+                statement.Dispose();
 
                 // Act
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
@@ -167,9 +203,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
-                Assert.NotNull(chunkDetails);
+                Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
+                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
                 // Verify sum >= slowest
                 Assert.True(chunkDetails.SumChunksDownloadTimeMillis >= chunkDetails.SlowestChunkLatencyMillis,
@@ -196,15 +232,27 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             try
             {
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
                 while (await reader.ReadNextRecordBatchAsync() != null) { }
+
+                // Explicitly dispose statement to trigger telemetry emission
+                statement.Dispose();
 
                 // Act
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
@@ -212,9 +260,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
-                Assert.NotNull(chunkDetails);
+                Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
+                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
                 // Verify total_chunks_present > 0 (should have at least one chunk)
                 Assert.True(chunkDetails.TotalChunksPresent > 0,
@@ -241,15 +289,27 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             try
             {
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
                 while (await reader.ReadNextRecordBatchAsync() != null) { }
+
+                // Explicitly dispose statement to trigger telemetry emission
+                statement.Dispose();
 
                 // Act
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
@@ -257,9 +317,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
-                Assert.NotNull(chunkDetails);
+                Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
+                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
                 // Verify iterated <= present
                 Assert.True(chunkDetails.TotalChunksIterated <= chunkDetails.TotalChunksPresent,
@@ -286,15 +346,27 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
             try
             {
-                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+                // CloudFetch connection options (same setup as CloudFetchE2ETest)
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
 
                 using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM range(100000)";
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
                 var result = statement.ExecuteQuery();
                 using var reader = result.Stream;
                 while (await reader.ReadNextRecordBatchAsync() != null) { }
+
+                // Explicitly dispose statement to trigger telemetry emission
+                statement.Dispose();
 
                 // Act
                 var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
@@ -302,9 +374,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert
                 Assert.NotEmpty(logs);
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
-                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
-                Assert.NotNull(chunkDetails);
+                Assert.NotNull(protoLog.SqlOperation.ChunkDetails);
+                var chunkDetails = protoLog.SqlOperation.ChunkDetails;
 
                 // Verify all 5 fields are populated
                 Assert.True(chunkDetails.TotalChunksPresent > 0, "total_chunks_present should be > 0");
