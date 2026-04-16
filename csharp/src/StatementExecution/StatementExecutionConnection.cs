@@ -597,7 +597,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // IGetObjectsDataProvider interface), the value passed to ShowSchemasCommand is used
             // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return System.Array.Empty<(string, string)>();
+            }
 
             // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
@@ -636,7 +645,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, CancellationToken cancellationToken)
         {
             string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return System.Array.Empty<(string, string, string, string)>();
+            }
             var result = new List<(string, string, string, string)>();
             foreach (var batch in batches)
             {
@@ -674,7 +692,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            var batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return;
+            }
 
             var tablePositions = new Dictionary<string, int>();
 

@@ -930,7 +930,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName)).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    activity?.AddEvent("statement.get_schemas.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
+                    return MetadataSchemaFactory.CreateEmptySchemasResult();
+                }
 
                 // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
                 // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
@@ -995,7 +1007,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     EscapePatternWildcardsInName(_metadataSchemaName),
                     EscapePatternWildcardsInName(_metadataTableName)).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    activity?.AddEvent("statement.get_tables.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
+                    return MetadataSchemaFactory.CreateEmptyTablesResult();
+                }
 
                 var tableCatBuilder = new StringArray.Builder();
                 var tableSchemaBuilder = new StringArray.Builder();
@@ -1073,12 +1097,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return FlatColumnsResultBuilder.BuildFlatColumnsResult(
                         System.Array.Empty<(string, string, string, TableInfo)>());
 
-                var batches = await _connection.ExecuteShowColumnsAsync(
-                    catalog,
-                    EscapePatternWildcardsInName(_metadataSchemaName),
-                    EscapePatternWildcardsInName(_metadataTableName),
-                    EscapePatternWildcardsInName(_metadataColumnName),
-                    cancellationToken).ConfigureAwait(false);
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteShowColumnsAsync(
+                        catalog,
+                        EscapePatternWildcardsInName(_metadataSchemaName),
+                        EscapePatternWildcardsInName(_metadataTableName),
+                        EscapePatternWildcardsInName(_metadataColumnName),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    activity?.AddEvent("statement.get_columns.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
+                    return FlatColumnsResultBuilder.BuildFlatColumnsResult(
+                        System.Array.Empty<(string, string, string, TableInfo)>());
+                }
 
                 var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
 
@@ -1166,7 +1202,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 catalogForTableName, _metadataSchemaName, _metadataTableName);
 
             string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
-            var batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
+            }
 
             string? resultJson = null;
             foreach (var batch in batches)
@@ -1281,7 +1326,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
                 activity?.SetTag("sql_query", sql);
-                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    activity?.AddEvent("statement.get_primary_keys.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
+                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
+                }
 
                 var keys = new List<(string, string, string, string, int, string)>();
                 int seq = 0;
@@ -1345,7 +1402,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
             string sql = new ShowForeignKeysCommand(fkCatalog!, fkSchema!, fkTable!).Build();
-            List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+            }
 
             var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
             int seq = 0;
