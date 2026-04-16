@@ -82,12 +82,16 @@ namespace AdbcDrivers.Databricks.Tests
                     samples.Add((i, mem));
 
                     int alive = httpClientWeakRefs.Count(wr => wr.IsAlive);
+                    string extraInfo = "";
+#if NET
                     var gcInfo = GC.GetGCMemoryInfo();
+                    extraInfo = $" | LOH={gcInfo.GenerationInfo[3].SizeAfterBytes / 1024.0 / 1024.0:F2} MB" +
+                                $" | Finalization pending={gcInfo.FinalizationPendingCount}";
+#endif
                     OutputHelper?.WriteLine(
                         $"Iteration {i,4}: {mem / 1024.0 / 1024.0:F2} MB | " +
-                        $"LOH={gcInfo.GenerationInfo[3].SizeAfterBytes / 1024.0 / 1024.0:F2} MB | " +
-                        $"HttpClient alive={alive}/{httpClientWeakRefs.Count} | " +
-                        $"Finalization pending={gcInfo.FinalizationPendingCount}");
+                        $"HttpClient alive={alive}/{httpClientWeakRefs.Count}" +
+                        extraInfo);
                 }
             }
 
@@ -265,14 +269,16 @@ namespace AdbcDrivers.Databricks.Tests
 
         private void LogEnvironmentInfo()
         {
-            var gcInfo = GC.GetGCMemoryInfo();
             OutputHelper?.WriteLine($"--- Environment ---");
             OutputHelper?.WriteLine($"GC.IsServerGC: {System.Runtime.GCSettings.IsServerGC}");
             OutputHelper?.WriteLine($"GC.LatencyMode: {System.Runtime.GCSettings.LatencyMode}");
             OutputHelper?.WriteLine($"ProcessorCount: {Environment.ProcessorCount}");
+            OutputHelper?.WriteLine($"Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
+#if NET
+            var gcInfo = GC.GetGCMemoryInfo();
             OutputHelper?.WriteLine($"TotalAvailableMemory: {gcInfo.TotalAvailableMemoryBytes / 1024.0 / 1024.0:F0} MB");
             OutputHelper?.WriteLine($"HeapSize: {gcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
-            OutputHelper?.WriteLine($"Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
+#endif
         }
     }
 }

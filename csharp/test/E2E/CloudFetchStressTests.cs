@@ -153,14 +153,16 @@ namespace AdbcDrivers.Databricks.Tests
             var handlerWeakRefs = new List<WeakReference>();
 
             // Log GC and environment info upfront
-            var gcInfo = GC.GetGCMemoryInfo();
             OutputHelper?.WriteLine($"--- Environment ---");
             OutputHelper?.WriteLine($"GC.IsServerGC: {System.Runtime.GCSettings.IsServerGC}");
             OutputHelper?.WriteLine($"GC.LatencyMode: {System.Runtime.GCSettings.LatencyMode}");
             OutputHelper?.WriteLine($"ProcessorCount: {Environment.ProcessorCount}");
+#if NET
+            var gcInfo = GC.GetGCMemoryInfo();
             OutputHelper?.WriteLine($"TotalAvailableMemory: {gcInfo.TotalAvailableMemoryBytes / 1024.0 / 1024.0:F0} MB");
             OutputHelper?.WriteLine($"HighMemoryLoadThreshold: {gcInfo.HighMemoryLoadThresholdBytes / 1024.0 / 1024.0:F0} MB");
             OutputHelper?.WriteLine($"HeapSize: {gcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
+#endif
 
             for (int i = 1; i <= iterations; i++)
             {
@@ -212,7 +214,6 @@ namespace AdbcDrivers.Databricks.Tests
                 int gen2After = GC.CollectionCount(2);
 
                 long memAfterGC = GC.GetTotalMemory(true);
-                var iterGcInfo = GC.GetGCMemoryInfo();
 
                 int clientsAlive = httpClientWeakRefs.Count(wr => wr.IsAlive);
                 int handlersAlive = handlerWeakRefs.Count(wr => wr.IsAlive);
@@ -226,10 +227,13 @@ namespace AdbcDrivers.Databricks.Tests
                 OutputHelper?.WriteLine($"  Memory after GC: {memAfterGC / 1024.0 / 1024.0:F2} MB");
                 OutputHelper?.WriteLine($"  GC freed: {(memAfterRead - memAfterGC) / 1024.0 / 1024.0:F2} MB");
                 OutputHelper?.WriteLine($"  GC collections triggered: gen0={gen0After - gen0Before} gen1={gen1After - gen1Before} gen2={gen2After - gen2Before}");
+#if NET
+                var iterGcInfo = GC.GetGCMemoryInfo();
                 OutputHelper?.WriteLine($"  Heap: {iterGcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
                 OutputHelper?.WriteLine($"  LOH size: {iterGcInfo.GenerationInfo[3].SizeAfterBytes / 1024.0 / 1024.0:F2} MB");
                 OutputHelper?.WriteLine($"  POH size: {iterGcInfo.GenerationInfo[4].SizeAfterBytes / 1024.0 / 1024.0:F2} MB");
                 OutputHelper?.WriteLine($"  Finalization pending: {iterGcInfo.FinalizationPendingCount}");
+#endif
                 OutputHelper?.WriteLine($"  HttpClient alive: {clientsAlive}/{httpClientWeakRefs.Count}");
                 OutputHelper?.WriteLine($"  HttpClientHandler alive: {handlersAlive}/{handlerWeakRefs.Count}");
 
