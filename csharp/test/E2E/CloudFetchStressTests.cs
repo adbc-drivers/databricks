@@ -494,20 +494,23 @@ namespace AdbcDrivers.Databricks.Tests
             int alive = weakRefs.Count(wr => wr.IsAlive);
             int collected = weakRefs.Count - alive;
 
+            // Count distinct instances
+            var distinctHashes = new HashSet<int>();
+            foreach (var wr in weakRefs)
+            {
+                if (wr.Target != null)
+                    distinctHashes.Add(wr.Target.GetHashCode());
+            }
+
             Log($"--- HttpClient leak analysis ---");
-            Log($"Total HttpClient instances tracked: {weakRefs.Count}");
+            Log($"Total HttpClient references tracked: {weakRefs.Count}");
+            Log($"Distinct HttpClient instances: {distinctHashes.Count}");
             Log($"Still alive after GC: {alive}");
             Log($"Collected by GC: {collected}");
 
-            if (alive > 0)
-            {
-                Log($"LEAK CONFIRMED: {alive} HttpClient instances survived GC.");
-                Log("These are created per-query in DatabricksConnection.NewReader() " +
-                    "but never disposed in DatabricksCompositeReader.Dispose().");
-            }
-
-            // Don't assert-fail — this is diagnostic. Just report.
-            // Uncomment to enforce: Assert.Equal(0, alive);
+            // After fix: all refs should point to the same shared HttpClient (1 distinct instance)
+            // owned by the connection. It's alive because the connection is still open — that's correct.
+            Assert.Single(distinctHashes);
         }
 
         /// <summary>
