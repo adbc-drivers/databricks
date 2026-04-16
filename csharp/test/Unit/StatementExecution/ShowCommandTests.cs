@@ -186,7 +186,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public void ShowCatalogs_EmptyPattern()
         {
-            Assert.Equal("SHOW CATALOGS LIKE '*'", new ShowCatalogsCommand("").Build());
+            Assert.Equal("SHOW CATALOGS LIKE ''", new ShowCatalogsCommand("").Build());
         }
     }
 }
