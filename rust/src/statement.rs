@@ -105,9 +105,15 @@ impl adbc_core::Statement for Statement {
     }
 
     fn prepare(&mut self) -> Result<()> {
-        Err(DatabricksErrorHelper::not_implemented()
-            .message("prepare")
-            .to_adbc())
+        // Databricks doesn't have server-side prepared statements, but
+        // ADBC consumers (e.g. DuckDB's adbc_scanner) call prepare before
+        // execute. Accept it as a no-op as long as a query has been set.
+        if self.query.is_none() {
+            return Err(DatabricksErrorHelper::invalid_state()
+                .message("No query set before prepare")
+                .to_adbc());
+        }
+        Ok(())
     }
 
     fn get_parameter_schema(&self) -> Result<Schema> {
