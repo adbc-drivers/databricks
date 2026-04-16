@@ -35,6 +35,13 @@ namespace AdbcDrivers.Databricks.Tests
     /// </summary>
     public class MemoryStressTests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
+        /// <summary>Writes to both xUnit output and stderr so CI logs capture it even for passing tests.</summary>
+        private void Log(string message)
+        {
+            OutputHelper?.WriteLine(message);
+            Console.Error.WriteLine($"[DIAG] {message}");
+        }
+
         public MemoryStressTests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
@@ -88,7 +95,7 @@ namespace AdbcDrivers.Databricks.Tests
                     extraInfo = $" | LOH={gcInfo.GenerationInfo[3].SizeAfterBytes / 1024.0 / 1024.0:F2} MB" +
                                 $" | Finalization pending={gcInfo.FinalizationPendingCount}";
 #endif
-                    OutputHelper?.WriteLine(
+                    Log(
                         $"Iteration {i,4}: {mem / 1024.0 / 1024.0:F2} MB | " +
                         $"HttpClient alive={alive}/{httpClientWeakRefs.Count}" +
                         extraInfo);
@@ -248,11 +255,11 @@ namespace AdbcDrivers.Databricks.Tests
             double lastBytes = postWarmup[postWarmup.Count - 1].bytes;
             double totalGrowthMB = (lastBytes - baselineBytes) / 1024.0 / 1024.0;
 
-            OutputHelper?.WriteLine($"--- Memory trend analysis ---");
-            OutputHelper?.WriteLine($"Post-warmup baseline: {baselineBytes / 1024.0 / 1024.0:F2} MB");
-            OutputHelper?.WriteLine($"Final:                {lastBytes / 1024.0 / 1024.0:F2} MB");
-            OutputHelper?.WriteLine($"Total growth:         {totalGrowthMB:F2} MB");
-            OutputHelper?.WriteLine($"Slope:                {slopePer100 / 1024.0 / 1024.0:F4} MB per 100 iterations");
+            Log($"--- Memory trend analysis ---");
+            Log($"Post-warmup baseline: {baselineBytes / 1024.0 / 1024.0:F2} MB");
+            Log($"Final:                {lastBytes / 1024.0 / 1024.0:F2} MB");
+            Log($"Total growth:         {totalGrowthMB:F2} MB");
+            Log($"Slope:                {slopePer100 / 1024.0 / 1024.0:F4} MB per 100 iterations");
 
             // Threshold: relaxed to 50 MB/100 for investigation run — we want the diagnostic
             // output even when there's growth. Will tighten after fixing the root cause.
@@ -269,15 +276,15 @@ namespace AdbcDrivers.Databricks.Tests
 
         private void LogEnvironmentInfo()
         {
-            OutputHelper?.WriteLine($"--- Environment ---");
-            OutputHelper?.WriteLine($"GC.IsServerGC: {System.Runtime.GCSettings.IsServerGC}");
-            OutputHelper?.WriteLine($"GC.LatencyMode: {System.Runtime.GCSettings.LatencyMode}");
-            OutputHelper?.WriteLine($"ProcessorCount: {Environment.ProcessorCount}");
-            OutputHelper?.WriteLine($"Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
+            Log($"--- Environment ---");
+            Log($"GC.IsServerGC: {System.Runtime.GCSettings.IsServerGC}");
+            Log($"GC.LatencyMode: {System.Runtime.GCSettings.LatencyMode}");
+            Log($"ProcessorCount: {Environment.ProcessorCount}");
+            Log($"Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
 #if NET
             var gcInfo = GC.GetGCMemoryInfo();
-            OutputHelper?.WriteLine($"TotalAvailableMemory: {gcInfo.TotalAvailableMemoryBytes / 1024.0 / 1024.0:F0} MB");
-            OutputHelper?.WriteLine($"HeapSize: {gcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
+            Log($"TotalAvailableMemory: {gcInfo.TotalAvailableMemoryBytes / 1024.0 / 1024.0:F0} MB");
+            Log($"HeapSize: {gcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
 #endif
         }
     }

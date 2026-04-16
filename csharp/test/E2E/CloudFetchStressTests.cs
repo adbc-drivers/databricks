@@ -44,6 +44,13 @@ namespace AdbcDrivers.Databricks.Tests
         private const string LargeQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
         private const int LargeQueryExpectedRows = 1_000_000;
 
+        /// <summary>Writes to both xUnit output and stderr so CI logs capture it even for passing tests.</summary>
+        private void Log(string message)
+        {
+            OutputHelper?.WriteLine(message);
+            Console.Error.WriteLine($"[DIAG] {message}");
+        }
+
         public CloudFetchStressTests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
@@ -153,15 +160,15 @@ namespace AdbcDrivers.Databricks.Tests
             var handlerWeakRefs = new List<WeakReference>();
 
             // Log GC and environment info upfront
-            OutputHelper?.WriteLine($"--- Environment ---");
-            OutputHelper?.WriteLine($"GC.IsServerGC: {System.Runtime.GCSettings.IsServerGC}");
-            OutputHelper?.WriteLine($"GC.LatencyMode: {System.Runtime.GCSettings.LatencyMode}");
-            OutputHelper?.WriteLine($"ProcessorCount: {Environment.ProcessorCount}");
+            Log($"--- Environment ---");
+            Log($"GC.IsServerGC: {System.Runtime.GCSettings.IsServerGC}");
+            Log($"GC.LatencyMode: {System.Runtime.GCSettings.LatencyMode}");
+            Log($"ProcessorCount: {Environment.ProcessorCount}");
 #if NET
             var gcInfo = GC.GetGCMemoryInfo();
-            OutputHelper?.WriteLine($"TotalAvailableMemory: {gcInfo.TotalAvailableMemoryBytes / 1024.0 / 1024.0:F0} MB");
-            OutputHelper?.WriteLine($"HighMemoryLoadThreshold: {gcInfo.HighMemoryLoadThresholdBytes / 1024.0 / 1024.0:F0} MB");
-            OutputHelper?.WriteLine($"HeapSize: {gcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
+            Log($"TotalAvailableMemory: {gcInfo.TotalAvailableMemoryBytes / 1024.0 / 1024.0:F0} MB");
+            Log($"HighMemoryLoadThreshold: {gcInfo.HighMemoryLoadThresholdBytes / 1024.0 / 1024.0:F0} MB");
+            Log($"HeapSize: {gcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
 #endif
 
             for (int i = 1; i <= iterations; i++)
@@ -220,22 +227,22 @@ namespace AdbcDrivers.Databricks.Tests
 
                 samples.Add((i, memAfterGC, rows));
 
-                OutputHelper?.WriteLine($"--- Iteration {i} ---");
-                OutputHelper?.WriteLine($"  Rows: {rows:N0}");
-                OutputHelper?.WriteLine($"  Memory before query: {memBefore / 1024.0 / 1024.0:F2} MB");
-                OutputHelper?.WriteLine($"  Memory after read (pre-GC): {memAfterRead / 1024.0 / 1024.0:F2} MB");
-                OutputHelper?.WriteLine($"  Memory after GC: {memAfterGC / 1024.0 / 1024.0:F2} MB");
-                OutputHelper?.WriteLine($"  GC freed: {(memAfterRead - memAfterGC) / 1024.0 / 1024.0:F2} MB");
-                OutputHelper?.WriteLine($"  GC collections triggered: gen0={gen0After - gen0Before} gen1={gen1After - gen1Before} gen2={gen2After - gen2Before}");
+                Log($"--- Iteration {i} ---");
+                Log($"  Rows: {rows:N0}");
+                Log($"  Memory before query: {memBefore / 1024.0 / 1024.0:F2} MB");
+                Log($"  Memory after read (pre-GC): {memAfterRead / 1024.0 / 1024.0:F2} MB");
+                Log($"  Memory after GC: {memAfterGC / 1024.0 / 1024.0:F2} MB");
+                Log($"  GC freed: {(memAfterRead - memAfterGC) / 1024.0 / 1024.0:F2} MB");
+                Log($"  GC collections triggered: gen0={gen0After - gen0Before} gen1={gen1After - gen1Before} gen2={gen2After - gen2Before}");
 #if NET
                 var iterGcInfo = GC.GetGCMemoryInfo();
-                OutputHelper?.WriteLine($"  Heap: {iterGcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
-                OutputHelper?.WriteLine($"  LOH size: {iterGcInfo.GenerationInfo[3].SizeAfterBytes / 1024.0 / 1024.0:F2} MB");
-                OutputHelper?.WriteLine($"  POH size: {iterGcInfo.GenerationInfo[4].SizeAfterBytes / 1024.0 / 1024.0:F2} MB");
-                OutputHelper?.WriteLine($"  Finalization pending: {iterGcInfo.FinalizationPendingCount}");
+                Log($"  Heap: {iterGcInfo.HeapSizeBytes / 1024.0 / 1024.0:F2} MB");
+                Log($"  LOH size: {iterGcInfo.GenerationInfo[3].SizeAfterBytes / 1024.0 / 1024.0:F2} MB");
+                Log($"  POH size: {iterGcInfo.GenerationInfo[4].SizeAfterBytes / 1024.0 / 1024.0:F2} MB");
+                Log($"  Finalization pending: {iterGcInfo.FinalizationPendingCount}");
 #endif
-                OutputHelper?.WriteLine($"  HttpClient alive: {clientsAlive}/{httpClientWeakRefs.Count}");
-                OutputHelper?.WriteLine($"  HttpClientHandler alive: {handlersAlive}/{handlerWeakRefs.Count}");
+                Log($"  HttpClient alive: {clientsAlive}/{httpClientWeakRefs.Count}");
+                Log($"  HttpClientHandler alive: {handlersAlive}/{handlerWeakRefs.Count}");
 
                 Assert.Equal(LargeQueryExpectedRows, rows);
             }
@@ -246,10 +253,10 @@ namespace AdbcDrivers.Databricks.Tests
             double finalMB = postWarmup.Last().bytes / 1024.0 / 1024.0;
             double growthMB = finalMB - baselineMB;
 
-            OutputHelper?.WriteLine($"--- CloudFetch memory analysis ---");
-            OutputHelper?.WriteLine($"Post-warmup baseline: {baselineMB:F2} MB");
-            OutputHelper?.WriteLine($"Final: {finalMB:F2} MB");
-            OutputHelper?.WriteLine($"Growth: {growthMB:F2} MB over {postWarmup.Count} iterations");
+            Log($"--- CloudFetch memory analysis ---");
+            Log($"Post-warmup baseline: {baselineMB:F2} MB");
+            Log($"Final: {finalMB:F2} MB");
+            Log($"Growth: {growthMB:F2} MB over {postWarmup.Count} iterations");
 
             // Relaxed threshold — we're investigating, not gating
             Assert.True(growthMB < 50.0,
@@ -461,18 +468,18 @@ namespace AdbcDrivers.Databricks.Tests
                     if (httpClient != null)
                     {
                         weakRefs.Add(new WeakReference(httpClient));
-                        OutputHelper?.WriteLine($"Iteration {i}: captured WeakReference to HttpClient (hash={httpClient.GetHashCode()})");
+                        Log($"Iteration {i}: captured WeakReference to HttpClient (hash={httpClient.GetHashCode()})");
                     }
                     else
                     {
-                        OutputHelper?.WriteLine($"Iteration {i}: _httpClient field is null");
+                        Log($"Iteration {i}: _httpClient field is null");
                     }
                 }
                 else
                 {
-                    OutputHelper?.WriteLine($"Iteration {i}: _httpClient field not found on {reader.GetType().Name}");
+                    Log($"Iteration {i}: _httpClient field not found on {reader.GetType().Name}");
                     // Try walking the reader chain — the composite reader may wrap inner readers
-                    OutputHelper?.WriteLine($"  Reader type: {reader.GetType().FullName}");
+                    Log($"  Reader type: {reader.GetType().FullName}");
                 }
 
                 while (await reader.ReadNextRecordBatchAsync() != null) { }
@@ -487,15 +494,15 @@ namespace AdbcDrivers.Databricks.Tests
             int alive = weakRefs.Count(wr => wr.IsAlive);
             int collected = weakRefs.Count - alive;
 
-            OutputHelper?.WriteLine($"--- HttpClient leak analysis ---");
-            OutputHelper?.WriteLine($"Total HttpClient instances tracked: {weakRefs.Count}");
-            OutputHelper?.WriteLine($"Still alive after GC: {alive}");
-            OutputHelper?.WriteLine($"Collected by GC: {collected}");
+            Log($"--- HttpClient leak analysis ---");
+            Log($"Total HttpClient instances tracked: {weakRefs.Count}");
+            Log($"Still alive after GC: {alive}");
+            Log($"Collected by GC: {collected}");
 
             if (alive > 0)
             {
-                OutputHelper?.WriteLine($"LEAK CONFIRMED: {alive} HttpClient instances survived GC.");
-                OutputHelper?.WriteLine("These are created per-query in DatabricksConnection.NewReader() " +
+                Log($"LEAK CONFIRMED: {alive} HttpClient instances survived GC.");
+                Log("These are created per-query in DatabricksConnection.NewReader() " +
                     "but never disposed in DatabricksCompositeReader.Dispose().");
             }
 
@@ -517,7 +524,7 @@ namespace AdbcDrivers.Databricks.Tests
         {
             const int iterations = 6;
 
-            OutputHelper?.WriteLine("=== WITHOUT HttpClient.Dispose (current behavior) ===");
+            Log("=== WITHOUT HttpClient.Dispose (current behavior) ===");
             var samplesWithout = await RunIterationsWithDispose(iterations, disposeHttpClient: false);
 
             // Force cleanup between runs
@@ -526,14 +533,14 @@ namespace AdbcDrivers.Databricks.Tests
             GC.Collect(2, GCCollectionMode.Forced, true);
             await Task.Delay(2000); // let finalizers settle
 
-            OutputHelper?.WriteLine("=== WITH HttpClient.Dispose (proposed fix) ===");
+            Log("=== WITH HttpClient.Dispose (proposed fix) ===");
             var samplesWith = await RunIterationsWithDispose(iterations, disposeHttpClient: true);
 
-            OutputHelper?.WriteLine("=== COMPARISON ===");
+            Log("=== COMPARISON ===");
             double growthWithout = (samplesWithout[^1].memBytes - samplesWithout[0].memBytes) / 1024.0 / 1024.0;
             double growthWith = (samplesWith[^1].memBytes - samplesWith[0].memBytes) / 1024.0 / 1024.0;
-            OutputHelper?.WriteLine($"Without dispose: {growthWithout:F2} MB growth over {iterations} iters");
-            OutputHelper?.WriteLine($"With dispose:    {growthWith:F2} MB growth over {iterations} iters");
+            Log($"Without dispose: {growthWithout:F2} MB growth over {iterations} iters");
+            Log($"With dispose:    {growthWith:F2} MB growth over {iterations} iters");
         }
 
         private async Task<List<(int iter, long memBytes)>> RunIterationsWithDispose(int iterations, bool disposeHttpClient)
@@ -575,7 +582,7 @@ namespace AdbcDrivers.Databricks.Tests
                 GC.Collect(2, GCCollectionMode.Forced, true);
                 long mem = GC.GetTotalMemory(true);
                 samples.Add((i, mem));
-                OutputHelper?.WriteLine($"  Iteration {i}: {mem / 1024.0 / 1024.0:F2} MB ({rows:N0} rows)");
+                Log($"  Iteration {i}: {mem / 1024.0 / 1024.0:F2} MB ({rows:N0} rows)");
             }
 
             return samples;
