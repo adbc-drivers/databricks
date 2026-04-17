@@ -153,12 +153,16 @@ namespace AdbcDrivers.Databricks.Tests
                     samples.Add((i, mem));
 
                     int alive = httpClientWeakRefs.Count(wr => wr.IsAlive);
+                    string extraInfo = "";
+#if NET
                     var gcInfo = GC.GetGCMemoryInfo();
-                    OutputHelper?.WriteLine(
+                    extraInfo = $" | LOH={gcInfo.GenerationInfo[3].SizeAfterBytes / 1024.0 / 1024.0:F2} MB" +
+                                $" | Finalization pending={gcInfo.FinalizationPendingCount}";
+#endif
+                    Log(
                         $"Iteration {i,3}: {mem / 1024.0 / 1024.0:F2} MB ({rows} rows) | " +
-                        $"LOH={gcInfo.GenerationInfo[3].SizeAfterBytes / 1024.0 / 1024.0:F2} MB | " +
-                        $"HttpClient alive={alive}/{httpClientWeakRefs.Count} | " +
-                        $"Finalization pending={gcInfo.FinalizationPendingCount}");
+                        $"HttpClient alive={alive}/{httpClientWeakRefs.Count}" +
+                        extraInfo);
                 }
             }
 

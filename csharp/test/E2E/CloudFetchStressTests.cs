@@ -540,8 +540,8 @@ namespace AdbcDrivers.Databricks.Tests
             var samplesWith = await RunIterationsWithDispose(iterations, disposeHttpClient: true);
 
             Log("=== COMPARISON ===");
-            double growthWithout = (samplesWithout[^1].memBytes - samplesWithout[0].memBytes) / 1024.0 / 1024.0;
-            double growthWith = (samplesWith[^1].memBytes - samplesWith[0].memBytes) / 1024.0 / 1024.0;
+            double growthWithout = (samplesWithout[samplesWithout.Count - 1].memBytes - samplesWithout[0].memBytes) / 1024.0 / 1024.0;
+            double growthWith = (samplesWith[samplesWith.Count - 1].memBytes - samplesWith[0].memBytes) / 1024.0 / 1024.0;
             Log($"Without dispose: {growthWithout:F2} MB growth over {iterations} iters");
             Log($"With dispose:    {growthWith:F2} MB growth over {iterations} iters");
         }
