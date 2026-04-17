@@ -144,6 +144,9 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	if d.queryRetryCount >= 0 {
 		opts = append(opts, dbsql.WithRetries(d.queryRetryCount, DEFAULT_RETRY_WAIT_MIN, DEFAULT_RETRY_WAIT_MAX))
 	}
+	// Enable CloudFetch for parallel downloads from cloud storage.
+	// Without this, all data transfers go through inline Thrift IPC (single-threaded).
+	opts = append(opts, dbsql.WithCloudFetch(true))
 	if d.downloadThreadCount > 0 {
 		opts = append(opts, dbsql.WithMaxDownloadThreads(d.downloadThreadCount))
 	}
