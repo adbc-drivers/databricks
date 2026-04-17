@@ -162,5 +162,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Gets the telemetry client for exporting telemetry events.
         /// </summary>
         public ITelemetryClient? TelemetryClient { get; internal set; }
+
+        /// <summary>
+        /// Gets the authentication type for this connection.
+        /// Examples: "pat", "oauth-client_credentials", "oauth-access_token", "other"
+        /// </summary>
+        public string? AuthType { get; internal set; }
     }
 }

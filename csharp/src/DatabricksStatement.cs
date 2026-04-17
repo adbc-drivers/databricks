@@ -27,6 +27,8 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.Result;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
@@ -53,7 +55,7 @@ namespace AdbcDrivers.Databricks
         // Databricks CloudFetch supports much larger batch sizes than standard Arrow batches (1024MB vs 10MB limit).
         // Using 2M rows significantly reduces round trips for medium/large result sets compared to the base 50K default,
         // improving query performance by reducing the number of FetchResults calls needed.
-        private const long DatabricksBatchSizeDefault = 2000000;
+        internal const long DatabricksBatchSizeDefault = 2000000;
         private const string QueryTagsKey = "query_tags";
         private bool useCloudFetch;
         private bool canDecompressLz4;
@@ -65,6 +67,9 @@ namespace AdbcDrivers.Databricks
         private bool enableComplexDatatypeSupport;
         private Dictionary<string, string>? confOverlay;
         internal string? StatementId { get; set; }
+        private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
+        internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
+        private StatementTelemetryContext? _pendingTelemetryContext; // Telemetry context pending emission on Dispose
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -109,6 +114,42 @@ namespace AdbcDrivers.Databricks
             ctx.OperationType = OperationType.ExecuteStatement;
             ctx.StatementType = statementType;
             ctx.IsCompressed = canDecompressLz4;
+            ctx.IsInternalCall = IsInternalCall;
+            return ctx;
+        }
+
+        /// <summary>
+        /// Maps a metadata SQL command to the corresponding telemetry operation type.
+        /// Returns null if the command is not a recognized metadata command.
+        /// </summary>
+        internal static OperationType? GetMetadataOperationType(string? sqlQuery)
+        {
+            return sqlQuery?.ToLowerInvariant() switch
+            {
+                "getcatalogs" => OperationType.ListCatalogs,
+                "getschemas" => OperationType.ListSchemas,
+                "gettables" => OperationType.ListTables,
+                "getcolumns" or "getcolumnsextended" => OperationType.ListColumns,
+                "gettabletypes" => OperationType.ListTableTypes,
+                "getprimarykeys" => OperationType.ListPrimaryKeys,
+                "getcrossreference" => OperationType.ListCrossReferences,
+                _ => null
+            };
+        }
+
+        private StatementTelemetryContext? CreateMetadataTelemetryContext()
+        {
+            var session = ((DatabricksConnection)Connection).TelemetrySession;
+            if (session?.TelemetryClient == null) return null;
+
+            var operationType = GetMetadataOperationType(SqlQuery) ?? OperationType.Unspecified;
+
+            var ctx = new StatementTelemetryContext(session);
+            ctx.OperationType = operationType;
+            ctx.StatementType = Telemetry.Proto.Statement.Types.Type.Metadata;
+            ctx.ResultFormat = ExecutionResultFormat.InlineArrow;
+            ctx.IsCompressed = false;
+            ctx.IsInternalCall = IsInternalCall;
             return ctx;
         }
 
@@ -119,6 +160,19 @@ namespace AdbcDrivers.Databricks
                 ? ExecutionResultFormat.ExternalLinks
                 : ExecutionResultFormat.InlineArrow;
             ctx.StatementId = StatementId;
+            CaptureRetryCount(ctx);
+        }
+
+        private void CaptureRetryCount(StatementTelemetryContext ctx)
+        {
+            if (Activity.Current != null)
+            {
+                var retryCountTag = Activity.Current.GetTagItem("http.retry.total_attempts");
+                if (retryCountTag is int retryCount)
+                {
+                    ctx.RetryCount = retryCount;
+                }
+            }
         }
 
         private void RecordError(StatementTelemetryContext ctx, Exception ex)
@@ -126,36 +180,57 @@ namespace AdbcDrivers.Databricks
             ctx.HasError = true;
             ctx.ErrorName = ex.GetType().Name;
             ctx.ErrorMessage = ex.Message;
+            CaptureRetryCount(ctx);
         }
 
         public override QueryResult ExecuteQuery()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
+            var ctx = IsMetadataCommand
+                ? CreateMetadataTelemetryContext()
+                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
             if (ctx == null) return base.ExecuteQuery();
 
             try
             {
                 QueryResult result = base.ExecuteQuery();
+                _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
+                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
-            catch (Exception ex) { RecordError(ctx, ex); throw; }
-            finally { EmitTelemetry(ctx); }
+            catch (Exception ex)
+            {
+                RecordError(ctx, ex);
+                // Emit telemetry immediately on error (won't reach Dispose)
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null; // Clear to avoid double emission
+                throw;
+            }
         }
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
+            var ctx = IsMetadataCommand
+                ? CreateMetadataTelemetryContext()
+                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
             if (ctx == null) return await base.ExecuteQueryAsync();
 
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
+                _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
+                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
-            catch (Exception ex) { RecordError(ctx, ex); throw; }
-            finally { EmitTelemetry(ctx); }
+            catch (Exception ex)
+            {
+                RecordError(ctx, ex);
+                // Emit telemetry immediately on error (won't reach Dispose)
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null; // Clear to avoid double emission
+                throw;
+            }
         }
 
         public override UpdateResult ExecuteUpdate()
@@ -167,10 +242,17 @@ namespace AdbcDrivers.Databricks
             {
                 UpdateResult result = base.ExecuteUpdate();
                 RecordSuccess(ctx);
+                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
-            catch (Exception ex) { RecordError(ctx, ex); throw; }
-            finally { EmitTelemetry(ctx); }
+            catch (Exception ex)
+            {
+                RecordError(ctx, ex);
+                // Emit telemetry immediately on error (won't reach Dispose)
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null; // Clear to avoid double emission
+                throw;
+            }
         }
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
@@ -182,10 +264,17 @@ namespace AdbcDrivers.Databricks
             {
                 UpdateResult result = await base.ExecuteUpdateAsync();
                 RecordSuccess(ctx);
+                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
-            catch (Exception ex) { RecordError(ctx, ex); throw; }
-            finally { EmitTelemetry(ctx); }
+            catch (Exception ex)
+            {
+                RecordError(ctx, ex);
+                // Emit telemetry immediately on error (won't reach Dispose)
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null; // Clear to avoid double emission
+                throw;
+            }
         }
 
         private void EmitTelemetry(StatementTelemetryContext ctx)
@@ -193,6 +282,45 @@ namespace AdbcDrivers.Databricks
             try
             {
                 ctx.RecordResultsConsumed();
+
+                // Extract chunk metrics if this was a CloudFetch query
+                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped)
+                ChunkMetrics? metrics = null;
+                if (_lastQueryResult?.Stream is CloudFetchReader cfReader)
+                {
+                    try
+                    {
+                        metrics = cfReader.GetChunkMetrics();
+                    }
+                    catch
+                    {
+                        // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
+                    }
+                }
+                else if (_lastQueryResult?.Stream is DatabricksCompositeReader compositeReader)
+                {
+                    try
+                    {
+                        metrics = compositeReader.GetChunkMetrics();
+                    }
+                    catch
+                    {
+                        // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
+                    }
+                }
+
+                // Set chunk details if we have metrics and at least one chunk was iterated
+                // (avoids leaking the -1 sentinel from InitialChunkLatencyMs when no chunks were downloaded)
+                if (metrics != null && metrics.TotalChunksIterated > 0)
+                {
+                    ctx.SetChunkDetails(
+                        metrics.TotalChunksPresent,
+                        metrics.TotalChunksIterated,
+                        metrics.InitialChunkLatencyMs,
+                        metrics.SlowestChunkLatencyMs,
+                        metrics.SumChunksDownloadTimeMs);
+                }
+
                 OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
 
                 var frontendLog = new TelemetryFrontendLog
@@ -1117,6 +1245,23 @@ namespace AdbcDrivers.Databricks
             };
 
             return new QueryResult(descResult.Columns.Count, new HiveInfoArrowStream(combinedSchema, combinedData));
+        }
+
+        /// <summary>
+        /// Disposes the statement and emits any pending telemetry.
+        /// Telemetry emission is deferred to Dispose() to ensure ChunkDetails are populated
+        /// after CloudFetch results are consumed.
+        /// </summary>
+        /// <param name="disposing">True if disposing managed resources.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && _pendingTelemetryContext != null)
+            {
+                // Emit telemetry now that results have been consumed
+                EmitTelemetry(_pendingTelemetryContext);
+                _pendingTelemetryContext = null;
+            }
+            base.Dispose(disposing);
         }
     }
 }
