@@ -80,22 +80,24 @@ namespace AdbcDrivers.Databricks.Auth
         }
 
         /// <summary>
-        /// Performs token exchange if needed.
+        /// Returns the token to use for the request, performing exchange if needed.
+        /// If the token is already Databricks-issued, returns it directly without exchange.
         /// </summary>
         /// <param name="bearerToken">The bearer token to potentially exchange.</param>
         /// <param name="cancellationToken">A cancellation token.</param>
-        private async Task PerformTokenExchangeIfNeeded(string bearerToken, CancellationToken cancellationToken)
+        /// <returns>The token to use for the outgoing request.</returns>
+        private async Task<string> GetTokenAsync(string bearerToken, CancellationToken cancellationToken)
         {
-            // Check if we need exchange (no lock needed for this check)
-            bool needsExchange = NeedsTokenExchange(bearerToken);
-
-            if (!needsExchange)
+            // Token is already Databricks-issued — pass it through directly.
+            // Do not fall back to _currentToken here: upstream may have provided a fresher
+            // Databricks token (e.g. after TokenRefreshDelegatingHandler refreshed).
+            if (!NeedsTokenExchange(bearerToken))
             {
                 lock (_tokenLock)
                 {
                     _lastSeenToken = bearerToken;
                 }
-                return;
+                return bearerToken;
             }
 
             // Wait for any pending exchange to complete first (could be for a different token)
@@ -119,7 +121,7 @@ namespace AdbcDrivers.Databricks.Auth
                 // If this token was already processed (by us or another concurrent request)
                 if (_lastSeenToken == bearerToken)
                 {
-                    return;
+                    return _currentToken ?? bearerToken;
                 }
 
                 // Start new exchange for our token
@@ -129,6 +131,11 @@ namespace AdbcDrivers.Databricks.Auth
             }
 
             await exchangeToAwait;
+
+            lock (_tokenLock)
+            {
+                return _currentToken ?? bearerToken;
+            }
         }
 
         /// <summary>
@@ -174,14 +181,7 @@ namespace AdbcDrivers.Databricks.Auth
             string? bearerToken = request.Headers.Authorization?.Parameter;
             if (!string.IsNullOrEmpty(bearerToken))
             {
-                await PerformTokenExchangeIfNeeded(bearerToken!, cancellationToken);
-
-                string tokenToUse;
-                lock (_tokenLock)
-                {
-                    tokenToUse = _currentToken ?? bearerToken!;
-                }
-
+                string tokenToUse = await GetTokenAsync(bearerToken!, cancellationToken);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokenToUse);
             }
 
