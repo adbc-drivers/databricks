@@ -125,7 +125,8 @@ namespace AdbcDrivers.Databricks.Auth
             var content = new FormUrlEncodedContent(new[]
             {
                 new KeyValuePair<string, string>("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
-                new KeyValuePair<string, string>("assertion", token)
+                new KeyValuePair<string, string>("assertion", token),
+                new KeyValuePair<string, string>("scope", "sql")
             });
 
             var request = new HttpRequestMessage(HttpMethod.Post, _tokenExchangeEndpoint)

@@ -31,7 +31,7 @@ namespace AdbcDrivers.Databricks.Auth
 {
     /// <summary>
     /// HTTP message handler that automatically refreshes OAuth tokens before they expire.
-    /// Uses a non-blocking approach to refresh tokens in the background.
+    /// Blocks the request while refreshing to ensure a fresh token is always used.
     /// </summary>
     internal class TokenRefreshDelegatingHandler : DelegatingHandler
     {
@@ -43,7 +43,7 @@ namespace AdbcDrivers.Databricks.Auth
         private string _currentToken;
         private DateTime _tokenExpiryTime;
         private bool _tokenExchangeAttempted = false;
-        private Task? _pendingTokenTask = null;
+        private Task? _refreshTask = null;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="TokenRefreshDelegatingHandler"/> class.
@@ -71,81 +71,63 @@ namespace AdbcDrivers.Databricks.Auth
         /// <summary>
         /// Checks if the token needs to be renewed.
         /// </summary>
-        /// <returns>True if the token needs to be renewed, false otherwise.</returns>
         private bool NeedsTokenRenewal()
         {
-            // Only renew if:
-            // 1. We haven't already attempted token exchange (a token can only be renewed once)
-            // 2. The token will expire within the renewal limit
-            // 3. We don't already have a pending refresh task
             return !_tokenExchangeAttempted &&
-                   DateTime.UtcNow.AddMinutes(_tokenRenewLimitMinutes) >= _tokenExpiryTime &&
-                   _pendingTokenTask == null;
+                   DateTime.UtcNow.AddMinutes(_tokenRenewLimitMinutes) >= _tokenExpiryTime;
         }
 
         /// <summary>
-        /// Starts token renewal in the background if needed.
+        /// Ensures the token is refreshed if needed, blocking until the refresh completes.
+        /// Concurrent requests share the same refresh task so only one network call is made.
         /// </summary>
-        /// <param name="cancellationToken">A cancellation token.</param>
-        private void StartTokenRenewalIfNeeded(CancellationToken cancellationToken)
+        private async Task EnsureTokenFreshAsync(CancellationToken cancellationToken)
         {
-            if (!NeedsTokenRenewal())
-            {
-                return;
-            }
-
-            bool needsRenewal;
+            Task? taskToAwait;
             lock (_tokenLock)
             {
-                // Double-check pattern in case another thread renewed while we were waiting
-                needsRenewal = NeedsTokenRenewal();
-                if (needsRenewal)
+                if (NeedsTokenRenewal())
                 {
-                    // Mark that we've attempted token exchange to prevent multiple attempts
-                    // Specifically, NeedsTokenRenewal checks this flag
                     _tokenExchangeAttempted = true;
+                    _refreshTask = DoRefreshAsync(cancellationToken);
                 }
+                taskToAwait = _refreshTask;
             }
 
-            if (!needsRenewal)
+            if (taskToAwait != null)
             {
-                return;
+                await taskToAwait;
             }
-
-            // Start token refresh in the background
-            _pendingTokenTask = Task.Run(async () =>
-            {
-                try
-                {
-                    TokenExchangeResponse response = await _tokenExchangeClient.RefreshTokenAsync(_initialToken, cancellationToken);
-
-                    // Update the token atomically when ready
-                    lock (_tokenLock)
-                    {
-                        _currentToken = response.AccessToken;
-                        _tokenExpiryTime = response.ExpiryTime;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Log the error but continue with the current token
-                    // This is to avoid interrupting the operation if token exchange fails
-                    System.Diagnostics.Debug.WriteLine($"Token exchange failed: {ex.Message}");
-                }
-            }, cancellationToken);
         }
 
         /// <summary>
-        /// Sends an HTTP request with the current token.
+        /// Performs the token refresh network call.
         /// </summary>
-        /// <param name="request">The HTTP request message to send.</param>
-        /// <param name="cancellationToken">A cancellation token.</param>
-        /// <returns>The HTTP response message.</returns>
+        private async Task DoRefreshAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                TokenExchangeResponse response = await _tokenExchangeClient.RefreshTokenAsync(_initialToken, cancellationToken);
+                lock (_tokenLock)
+                {
+                    _currentToken = response.AccessToken;
+                    _tokenExpiryTime = response.ExpiryTime;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log the error but continue with the current token
+                System.Diagnostics.Debug.WriteLine($"Token refresh failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Sends an HTTP request, blocking to refresh the token if it is near expiry.
+        /// </summary>
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            StartTokenRenewalIfNeeded(cancellationToken);
+            await EnsureTokenFreshAsync(cancellationToken);
 
-            // Use the current token (which might be the old one while refresh is in progress)
             string tokenToUse;
             lock (_tokenLock)
             {
@@ -154,28 +136,6 @@ namespace AdbcDrivers.Databricks.Auth
 
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokenToUse);
             return await base.SendAsync(request, cancellationToken);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                // Wait for any pending token task to complete to avoid leaking tasks
-                if (_pendingTokenTask != null)
-                {
-                    try
-                    {
-                        // Try to wait for the task to complete, but don't block indefinitely
-                        _pendingTokenTask.Wait(TimeSpan.FromSeconds(10));
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Exception during token task cleanup: {ex.Message}");
-                    }
-                }
-            }
-
-            base.Dispose(disposing);
         }
     }
 }
