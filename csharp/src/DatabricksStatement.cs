@@ -836,6 +836,9 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("statement.table_name", TableName ?? "(none)");
                 activity?.SetTag("statement.feature.pk_fk_enabled", enablePKFK);
 
+                if (string.IsNullOrEmpty(TableName))
+                    throw new ArgumentException("Table name is required for GetPrimaryKeys");
+
                 if (ShouldReturnEmptyPkFkResult())
                 {
                     activity?.AddEvent("statement.get_primary_keys.returning_empty_result", [

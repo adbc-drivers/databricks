@@ -1272,11 +1272,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
                 activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
+                if (string.IsNullOrEmpty(_metadataTableName))
+                    throw new ArgumentException("Table name is required for GetPrimaryKeys");
+
                 if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName) ||
-                    string.IsNullOrEmpty(_metadataTableName))
+                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
                 string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
