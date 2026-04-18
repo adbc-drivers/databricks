@@ -607,22 +607,20 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
 
             string? firstUsedToken = null;
             string? secondUsedToken = null;
+            int callCount = 0;
 
             _mockInnerHandler.Protected()
-                .SetupSequence<Task<HttpResponseMessage>>(
+                .Setup<Task<HttpResponseMessage>>(
                     "SendAsync",
                     ItExpr.IsAny<HttpRequestMessage>(),
                     ItExpr.IsAny<CancellationToken>())
-                .Returns<HttpRequestMessage, CancellationToken>((req, ct) =>
+                .Callback<HttpRequestMessage, CancellationToken>((req, ct) =>
                 {
-                    firstUsedToken = req.Headers.Authorization?.Parameter;
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+                    callCount++;
+                    if (callCount == 1) firstUsedToken = req.Headers.Authorization?.Parameter;
+                    else secondUsedToken = req.Headers.Authorization?.Parameter;
                 })
-                .Returns<HttpRequestMessage, CancellationToken>((req, ct) =>
-                {
-                    secondUsedToken = req.Headers.Authorization?.Parameter;
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-                });
+                .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
 
             var httpClient = new HttpClient(handler);
 
