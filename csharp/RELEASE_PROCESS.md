@@ -92,10 +92,7 @@ When ready to release a new minor version:
    git tag csharp/v1.1.0
    git push origin csharp/v1.1.0
    ```
-3. Update `release/csharp/latest`:
-   ```bash
-   git push origin release/csharp/v1.1.latest:refs/heads/release/csharp/latest --force
-   ```
+3. `release/csharp/latest` is updated automatically by CI (see [CI/CD](#cicd)).
 
 ### Post-Cutoff (Maintenance)
 
@@ -106,10 +103,7 @@ When ready to release a new minor version:
    git tag csharp/v1.1.1 origin/release/csharp/v1.1.latest
    git push origin csharp/v1.1.1
    ```
-3. If you patched the newest minor version branch, keep `release/csharp/latest` in sync:
-   ```bash
-   git push origin release/csharp/v1.1.latest:refs/heads/release/csharp/latest --force
-   ```
+3. `release/csharp/latest` is updated automatically by CI (see [CI/CD](#cicd)).
 
 ## Branch Protection
 
@@ -133,7 +127,7 @@ The release branch contains the full monorepo (Git doesn't support partial branc
 
 ## Latest Branch
 
-`release/csharp/latest` always points to the tip of the most recent release branch. It exists for consumers that want to track the latest release without knowing the specific version branch name.
+`release/csharp/latest` always points to the tip of the most recent release branch. It is updated automatically by the `csharp-sync-latest.yml` workflow whenever any `release/csharp/v*.latest` branch is pushed to — the workflow determines which branch is the newest by sorting all release branch version numbers and syncs `release/csharp/latest` accordingly.
 
 ## CI/CD
 
