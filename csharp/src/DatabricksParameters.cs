@@ -381,6 +381,15 @@ namespace AdbcDrivers.Databricks
         public const string EnableSessionManagement = "adbc.databricks.rest.enable_session_management";
 
         /// <summary>
+        /// Whether to use preview API endpoints for Statement Execution API.
+        /// When true, uses "/2.0/sql/..." paths (without /api prefix).
+        /// When false (default), uses "/api/2.0/sql/..." paths.
+        /// Default: false
+        /// Only applicable when Protocol is "rest".
+        /// </summary>
+        public const string UsePreviewEndpoint = "adbc.databricks.rest.use_preview_endpoint";
+
+        /// <summary>
         /// Whether to enable the feature flag cache for fetching remote configuration from the server.
         /// When enabled, the driver fetches feature flags from the Databricks server and merges them with local properties.
         /// Default value is false if not specified.

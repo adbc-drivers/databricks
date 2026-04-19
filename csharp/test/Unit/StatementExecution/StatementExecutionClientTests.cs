@@ -86,6 +86,194 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 new StatementExecutionClient(_httpClient, null!));
         }
 
+        [Fact]
+        public void Constructor_WithPreviewEndpointTrue_CreatesClient()
+        {
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: true);
+            Assert.NotNull(client);
+        }
+
+        [Fact]
+        public void Constructor_WithPreviewEndpointFalse_CreatesClient()
+        {
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: false);
+            Assert.NotNull(client);
+        }
+
+        #endregion
+
+        #region Preview Endpoint Tests
+
+        [Fact]
+        public async Task CreateSessionAsync_WithPreviewEndpoint_UsesPreviewPath()
+        {
+            var request = new CreateSessionRequest { WarehouseId = "warehouse-123" };
+            var responseJson = JsonSerializer.Serialize(new { session_id = "test-session" });
+            HttpRequestMessage? capturedRequest = null;
+
+            SetupMockResponseWithCapture(HttpStatusCode.OK, responseJson,
+                req => capturedRequest = req,
+                _ => { });
+
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: true);
+            await client.CreateSessionAsync(request, CancellationToken.None);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal("https://test.databricks.com/2.0/preview/sql/sessions",
+                capturedRequest.RequestUri?.ToString());
+        }
+
+        [Fact]
+        public async Task CreateSessionAsync_WithoutPreviewEndpoint_UsesStandardPath()
+        {
+            var request = new CreateSessionRequest { WarehouseId = "warehouse-123" };
+            var responseJson = JsonSerializer.Serialize(new { session_id = "test-session" });
+            HttpRequestMessage? capturedRequest = null;
+
+            SetupMockResponseWithCapture(HttpStatusCode.OK, responseJson,
+                req => capturedRequest = req,
+                _ => { });
+
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: false);
+            await client.CreateSessionAsync(request, CancellationToken.None);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal("https://test.databricks.com/api/2.0/sql/sessions",
+                capturedRequest.RequestUri?.ToString());
+        }
+
+        [Fact]
+        public async Task DeleteSessionAsync_WithPreviewEndpoint_UsesPreviewPath()
+        {
+            var sessionId = "test-session-id";
+            var warehouseId = "test-warehouse-id";
+            HttpRequestMessage? capturedRequest = null;
+
+            SetupMockResponseWithCapture(HttpStatusCode.OK, "",
+                req => capturedRequest = req,
+                _ => { });
+
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: true);
+            await client.DeleteSessionAsync(sessionId, warehouseId, CancellationToken.None);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Contains("/2.0/preview/sql/sessions/", capturedRequest.RequestUri?.ToString());
+        }
+
+        [Fact]
+        public async Task ExecuteStatementAsync_WithPreviewEndpoint_UsesPreviewPath()
+        {
+            var request = new ExecuteStatementRequest
+            {
+                Statement = "SELECT 1",
+                WarehouseId = "warehouse-123"
+            };
+            var responseJson = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-123",
+                status = new { state = "SUCCEEDED" },
+                manifest = new { schema = new { columns = new object[0] } },
+                result = new { data_array = new object[0] }
+            });
+            HttpRequestMessage? capturedRequest = null;
+
+            SetupMockResponseWithCapture(HttpStatusCode.OK, responseJson,
+                req => capturedRequest = req,
+                _ => { });
+
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: true);
+            await client.ExecuteStatementAsync(request, CancellationToken.None);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal("https://test.databricks.com/2.0/preview/sql/statements",
+                capturedRequest.RequestUri?.ToString());
+        }
+
+        [Fact]
+        public async Task GetStatementAsync_WithPreviewEndpoint_UsesPreviewPath()
+        {
+            var statementId = "stmt-123";
+            var responseJson = JsonSerializer.Serialize(new
+            {
+                statement_id = statementId,
+                status = new { state = "SUCCEEDED" },
+                manifest = new { schema = new { columns = new object[0] } },
+                result = new { data_array = new object[0] }
+            });
+            HttpRequestMessage? capturedRequest = null;
+
+            SetupMockResponseWithCapture(HttpStatusCode.OK, responseJson,
+                req => capturedRequest = req,
+                _ => { });
+
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: true);
+            await client.GetStatementAsync(statementId, CancellationToken.None);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal($"https://test.databricks.com/2.0/preview/sql/statements/{statementId}",
+                capturedRequest.RequestUri?.ToString());
+        }
+
+        [Fact]
+        public async Task CancelStatementAsync_WithPreviewEndpoint_UsesPreviewPath()
+        {
+            var statementId = "stmt-123";
+            SetupMockResponse(HttpStatusCode.OK, "");
+            HttpRequestMessage? capturedRequest = null;
+
+            SetupMockResponseWithCapture(HttpStatusCode.OK, "",
+                req => capturedRequest = req,
+                _ => { });
+
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: true);
+            await client.CancelStatementAsync(statementId, CancellationToken.None);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal($"https://test.databricks.com/2.0/preview/sql/statements/{statementId}/cancel",
+                capturedRequest.RequestUri?.ToString());
+        }
+
+        [Fact]
+        public async Task CloseStatementAsync_WithPreviewEndpoint_UsesPreviewPath()
+        {
+            var statementId = "stmt-123";
+            HttpRequestMessage? capturedRequest = null;
+
+            SetupMockResponseWithCapture(HttpStatusCode.OK, "",
+                req => capturedRequest = req,
+                _ => { });
+
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: true);
+            await client.CloseStatementAsync(statementId, CancellationToken.None);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal($"https://test.databricks.com/2.0/preview/sql/statements/{statementId}",
+                capturedRequest.RequestUri?.ToString());
+        }
+
+        [Fact]
+        public async Task GetResultChunkAsync_WithPreviewEndpoint_UsesPreviewPath()
+        {
+            var statementId = "stmt-123";
+            var chunkIndex = 2;
+            var responseJson = JsonSerializer.Serialize(new
+            {
+                data_array = new object[0]
+            });
+            HttpRequestMessage? capturedRequest = null;
+
+            SetupMockResponseWithCapture(HttpStatusCode.OK, responseJson,
+                req => capturedRequest = req,
+                _ => { });
+
+            var client = new StatementExecutionClient(_httpClient, _testHost, usePreviewEndpoint: true);
+            await client.GetResultChunkAsync(statementId, chunkIndex, CancellationToken.None);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal($"https://test.databricks.com/2.0/preview/sql/statements/{statementId}/result/chunks/{chunkIndex}",
+                capturedRequest.RequestUri?.ToString());
+        }
+
         #endregion
 
         #region CreateSessionAsync Tests

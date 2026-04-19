@@ -260,7 +260,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _cloudFetchHttpClient = HttpClientFactory.CreateCloudFetchHttpClient(properties);
 
             // Create REST API client
-            _client = new StatementExecutionClient(_httpClient, baseUrl);
+            bool usePreviewEndpoint = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UsePreviewEndpoint, false);
+            _client = new StatementExecutionClient(_httpClient, baseUrl, usePreviewEndpoint);
         }
 
         /// <summary>
