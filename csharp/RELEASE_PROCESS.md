@@ -99,17 +99,18 @@ When ready to release a new minor version:
 
 ### Post-Cutoff (Maintenance)
 
-1. Fix goes to `main` first, then cherry-picked to the release branch via PR targeting `release/csharp/v1.1.latest`.
-2. After the cherry-pick PR merges, tag the new patch:
+1. Fix goes to `main` first, then synced or cherry-picked to the target release branch (see [Versioning Rules](#versioning-rules)).
+2. After the fix lands on the release branch, tag the new patch:
    ```bash
    git fetch origin
    git tag csharp/v1.1.1 origin/release/csharp/v1.1.latest
    git push origin csharp/v1.1.1
    ```
-3. Update `release/csharp/latest`:
+3. If this is the **latest** release branch, update `release/csharp/latest` to point to its tip:
    ```bash
    git push origin release/csharp/v1.1.latest:refs/heads/release/csharp/latest --force
    ```
+   If patching an **older** release branch (e.g. `v1.0.latest` while `v1.1.latest` is current), skip this step — `release/csharp/latest` always tracks the newest minor version only.
 
 ## Branch Protection
 
