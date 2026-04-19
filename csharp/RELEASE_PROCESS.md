@@ -106,11 +106,10 @@ When ready to release a new minor version:
    git tag csharp/v1.1.1 origin/release/csharp/v1.1.latest
    git push origin csharp/v1.1.1
    ```
-3. If this is the **latest** release branch, update `release/csharp/latest` to point to its tip:
+3. If you patched the newest minor version branch, keep `release/csharp/latest` in sync:
    ```bash
    git push origin release/csharp/v1.1.latest:refs/heads/release/csharp/latest --force
    ```
-   If patching an **older** release branch (e.g. `v1.0.latest` while `v1.1.latest` is current), skip this step — `release/csharp/latest` always tracks the newest minor version only.
 
 ## Branch Protection
 
