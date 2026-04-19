@@ -131,23 +131,8 @@ The release branch contains the full monorepo (Git doesn't support partial branc
 
 ## CI/CD
 
-The `csharp.yml` workflow currently triggers on `main` and `maint-*` branches. To run CI on release branches, add `release/csharp/*` to the trigger:
-
-```yaml
-on:
-  pull_request:
-    branches:
-      - main
-      - 'release/csharp/*'
-    paths:
-      - 'csharp/**'
-  push:
-    branches:
-      - main
-      - 'release/csharp/*'
-    paths:
-      - 'csharp/**'
-```
+- `csharp.yml` — runs build and tests on PRs targeting and pushes to `release/csharp/*` branches
+- `csharp-sync-latest.yml` — automatically syncs `release/csharp/latest` to the tip of the newest minor version branch on every push
 
 ## Consumer Mapping (e.g., PowerBI)
 

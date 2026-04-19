@@ -26,6 +26,7 @@ on:
     branches:
       - main
       - 'maint-*'
+      - 'release/csharp/*'
     paths:
       - '.github/workflows/csharp.yml'
       - 'csharp/**'
@@ -33,6 +34,7 @@ on:
     branches:
       - main
       - 'maint-*'
+      - 'release/csharp/*'
     paths:
       - '.github/workflows/csharp.yml'
       - 'csharp/**'
