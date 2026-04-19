@@ -46,10 +46,18 @@ The branch name uses `latest` rather than a patch version because the branch mov
 
 ## Versioning Rules
 
-- **New release branch** (cutoff): bump the **minor** version — `v1.1.x` → `v1.2.x`
-- **Hotfix on existing release branch**: bump the **patch** version — `v1.1.0` → `v1.1.1` → `v1.1.2`
+| Version bump | When to use | Examples |
+|---|---|---|
+| **Patch** `v1.1.0 → v1.1.1` | Bug fixes, security patches, performance improvements with no API changes. Safe to deliver to consumers already on `v1.1.x` with zero config changes. | Fix token refresh bug, fix connection timeout |
+| **Minor** `v1.1.x → v1.2.x` | New features, new connection parameters, new opt-in behavior. Consumers need to explicitly upgrade and may need to test. | New auth method, new query option |
+| **Major** `v1.x → v2.0.x` | Breaking changes — removed parameters, changed defaults, incompatible behavior. | Rename required parameter, change default protocol |
 
-The major version is reserved for breaking changes.
+**Practical rule**: if PowerBI can drop in the new NuGet package with zero config changes and it just works, it's a patch. If they need to test it, update config, or it changes observable behavior, it's at least a minor bump.
+
+### Current vs older release branches
+
+- **Current release branch** (e.g. `v1.1.latest` is the latest): sync directly from `main` for patch fixes, then tag.
+- **Older release branches** (e.g. `v1.0.latest` when `v1.1.latest` exists): cherry-pick specific fixes only — do not pull all of `main` as it would bring in unwanted features from newer minor versions.
 
 ## Lifecycle
 
@@ -73,15 +81,35 @@ flowchart LR
 
 When ready to release a new minor version:
 
-1. Create `release/csharp/v1.1.latest` from the desired commit on `main`
-2. Tag the cutoff commit: `git tag csharp/v1.1.0 && git push origin csharp/v1.1.0`
-3. Update `release/csharp/latest`: `git push origin release/csharp/v1.1.latest:release/csharp/latest --force`
+1. Create the release branch from the desired commit on `main`:
+   ```bash
+   git checkout main && git pull origin main
+   git checkout -b release/csharp/v1.1.latest
+   git push origin release/csharp/v1.1.latest
+   ```
+2. Tag the cutoff commit:
+   ```bash
+   git tag csharp/v1.1.0
+   git push origin csharp/v1.1.0
+   ```
+3. Update `release/csharp/latest`:
+   ```bash
+   git push origin release/csharp/v1.1.latest:refs/heads/release/csharp/latest --force
+   ```
 
 ### Post-Cutoff (Maintenance)
 
-1. Fix goes to `main` first, then cherry-picked to the release branch via PR targeting `release/csharp/v1.1.latest`
-2. After the cherry-pick PR merges, tag the new patch: `git tag csharp/v1.1.1 && git push origin csharp/v1.1.1`
-3. Update `release/csharp/latest`: `git push origin release/csharp/v1.1.latest:release/csharp/latest --force`
+1. Fix goes to `main` first, then cherry-picked to the release branch via PR targeting `release/csharp/v1.1.latest`.
+2. After the cherry-pick PR merges, tag the new patch:
+   ```bash
+   git fetch origin
+   git tag csharp/v1.1.1 origin/release/csharp/v1.1.latest
+   git push origin csharp/v1.1.1
+   ```
+3. Update `release/csharp/latest`:
+   ```bash
+   git push origin release/csharp/v1.1.latest:refs/heads/release/csharp/latest --force
+   ```
 
 ## Branch Protection
 
