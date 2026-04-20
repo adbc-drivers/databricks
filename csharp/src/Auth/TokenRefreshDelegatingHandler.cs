@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -43,7 +44,7 @@ namespace AdbcDrivers.Databricks.Auth
 
         // Maps each near-expiry token to its refreshed replacement.
         // On failure, the token is mapped to itself to prevent retrying on every request.
-        private readonly BoundedTokenCache _tokenCache = new BoundedTokenCache();
+        private readonly Dictionary<string, string> _tokenCache = new Dictionary<string, string>();
 
         private string _currentToken;
         private DateTime _tokenExpiryTime;
@@ -110,7 +111,7 @@ namespace AdbcDrivers.Databricks.Auth
             try
             {
                 TokenExchangeResponse response = await _tokenExchangeClient.RefreshTokenAsync(tokenToRefresh, cancellationToken);
-                _tokenCache.Set(tokenToRefresh, response.AccessToken);
+                _tokenCache[tokenToRefresh] = response.AccessToken;
                 _currentToken = response.AccessToken;
                 _tokenExpiryTime = response.ExpiryTime;
             }
@@ -118,7 +119,7 @@ namespace AdbcDrivers.Databricks.Auth
             {
                 System.Diagnostics.Debug.WriteLine($"Token refresh failed: {ex.Message}");
                 // Cache to prevent retrying the failed refresh for this token on every request.
-                _tokenCache.Set(tokenToRefresh, tokenToRefresh);
+                _tokenCache[tokenToRefresh] = tokenToRefresh;
             }
         }
 
