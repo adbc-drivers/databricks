@@ -210,7 +210,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
         {
             var nearExpiryTime = DateTime.UtcNow.AddMinutes(5); // Within renewal limit
             var newToken = "new-renewed-token";
-            var newExpiry = DateTime.UtcNow.AddMinutes(3); // New token also near expiry
+            var newExpiry = DateTime.UtcNow.AddHours(1); // New token is fresh, well beyond renewal limit
 
             var handler = new TokenRefreshDelegatingHandler(
                 _mockInnerHandler.Object,

@@ -40,10 +40,11 @@ namespace AdbcDrivers.Databricks.Auth
         private readonly SemaphoreSlim _exchangeLock = new SemaphoreSlim(1, 1);
         private readonly ITokenExchangeClient _tokenExchangeClient;
 
-        // Holds the token to use for outgoing requests. Set on first exchange attempt:
-        // the exchanged Databricks token on success, or the original bearer token on failure.
-        // Once set, all subsequent requests reuse it without re-exchanging.
-        private string? _currentToken;
+        // Maps each original (external) token to its exchanged Databricks token.
+        // On failure, the original token is mapped to itself to prevent repeated exchange attempts.
+        // Keyed by the original bearer token so that when the upstream token rotates
+        // (e.g. OAuthDelegatingHandler refreshes the M2M token), the new token is exchanged fresh.
+        private readonly BoundedTokenCache _tokenCache = new BoundedTokenCache();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MandatoryTokenExchangeDelegatingHandler"/> class.
@@ -84,13 +85,14 @@ namespace AdbcDrivers.Databricks.Auth
         /// <summary>
         /// Returns the token to use for the request, performing exchange if needed.
         /// If the token is already Databricks-issued, returns it directly without exchange.
-        /// Exchange is attempted at most once per handler instance; on failure, the original
-        /// token is cached to prevent repeated exchange attempts.
+        /// Results are cached per original token so that when the upstream token rotates,
+        /// the new token is exchanged fresh. On failure, the original token is cached to
+        /// prevent repeated exchange attempts for the same token.
         /// </summary>
         private async Task<string> GetTokenAsync(string bearerToken, CancellationToken cancellationToken)
         {
             // Token is already Databricks-issued — pass it through directly.
-            // Do not fall back to _currentToken here: upstream may have provided a fresher
+            // Do not fall back to cached token here: upstream may have provided a fresher
             // Databricks token (e.g. after TokenRefreshDelegatingHandler refreshed).
             if (!NeedsTokenExchange(bearerToken))
                 return bearerToken;
@@ -98,10 +100,10 @@ namespace AdbcDrivers.Databricks.Auth
             await _exchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (_currentToken == null)
+                if (!_tokenCache.TryGetValue(bearerToken, out string? cached))
                     await DoExchangeAsync(bearerToken, cancellationToken).ConfigureAwait(false);
 
-                return _currentToken!;
+                return _tokenCache[bearerToken];
             }
             finally
             {
@@ -111,8 +113,8 @@ namespace AdbcDrivers.Databricks.Auth
 
         /// <summary>
         /// Performs the actual token exchange operation.
-        /// Sets _currentToken to the exchanged token on success, or to the original bearer
-        /// token on failure so subsequent requests skip re-exchanging.
+        /// Caches the exchanged token on success, or the original bearer token on failure
+        /// to prevent repeated exchange attempts for the same token.
         /// </summary>
         private async Task DoExchangeAsync(string bearerToken, CancellationToken cancellationToken)
         {
@@ -123,13 +125,13 @@ namespace AdbcDrivers.Databricks.Auth
                     _identityFederationClientId,
                     cancellationToken);
 
-                _currentToken = response.AccessToken;
+                _tokenCache[bearerToken] = response.AccessToken;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Mandatory token exchange failed: {ex.Message}. Continuing with original token.");
-                // Cache the original token so subsequent requests don't retry the failed exchange.
-                _currentToken = bearerToken;
+                // Cache the original token so subsequent requests with the same token don't retry.
+                _tokenCache[bearerToken] = bearerToken;
             }
         }
 
