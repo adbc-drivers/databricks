@@ -312,6 +312,51 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
         }
 
         [Fact]
+        public async Task SendAsync_WithDifferentExternalTokens_ExchangesEachTokenOnce()
+        {
+            // When the upstream token rotates (e.g. OAuthDelegatingHandler refreshes M2M token),
+            // each distinct external token should be exchanged independently.
+            var handler = new MandatoryTokenExchangeDelegatingHandler(
+                _mockInnerHandler.Object,
+                _mockTokenExchangeClient.Object,
+                _identityFederationClientId);
+
+            var externalToken1 = CreateJwtToken("https://external-provider.com", DateTime.UtcNow.AddHours(1));
+            var externalToken2 = CreateJwtToken("https://another-provider.com", DateTime.UtcNow.AddHours(1));
+            var exchangedToken1 = "exchanged-token-1";
+            var exchangedToken2 = "exchanged-token-2";
+
+            _mockTokenExchangeClient
+                .Setup(x => x.ExchangeTokenAsync(externalToken1, _identityFederationClientId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TokenExchangeResponse { AccessToken = exchangedToken1, TokenType = "Bearer", ExpiresIn = 3600, ExpiryTime = DateTime.UtcNow.AddHours(1) });
+
+            _mockTokenExchangeClient
+                .Setup(x => x.ExchangeTokenAsync(externalToken2, _identityFederationClientId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TokenExchangeResponse { AccessToken = exchangedToken2, TokenType = "Bearer", ExpiresIn = 3600, ExpiryTime = DateTime.UtcNow.AddHours(1) });
+
+            _mockInnerHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
+
+            var httpClient = new HttpClient(handler);
+
+            var request1 = new HttpRequestMessage(HttpMethod.Get, "https://example.com/1");
+            request1.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", externalToken1);
+            await httpClient.SendAsync(request1);
+
+            var request2 = new HttpRequestMessage(HttpMethod.Get, "https://example.com/2");
+            request2.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", externalToken2);
+            await httpClient.SendAsync(request2);
+
+            _mockTokenExchangeClient.Verify(
+                x => x.ExchangeTokenAsync(externalToken1, _identityFederationClientId, It.IsAny<CancellationToken>()),
+                Times.Once);
+            _mockTokenExchangeClient.Verify(
+                x => x.ExchangeTokenAsync(externalToken2, _identityFederationClientId, It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
+        [Fact]
         public async Task SendAsync_WithConcurrentRequestsSameToken_ExchangesTokenOnlyOnce()
         {
             var handler = new MandatoryTokenExchangeDelegatingHandler(
