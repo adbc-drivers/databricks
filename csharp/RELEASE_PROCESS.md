@@ -30,8 +30,6 @@ release/csharp/v1.2.latest:  [v1.2.0]
 
 Each branch is a **moving pointer** — it advances with every patch. Tags (`csharp/v1.0.1`, `csharp/v1.0.2`) mark the immutable points corresponding to each published NuGet package.
 
-This differs from the Go and Rust drivers, which tag directly on `main` and cannot hotfix a specific past version — consumers must upgrade to get fixes.
-
 The ADBC driver version is included in the user agent string sent to Databricks, making it visible in query history for tracing exactly which version a consumer is running.
 
 ## Branch and Tag Naming
