@@ -186,6 +186,9 @@ namespace AdbcDrivers.Databricks.Http
             HttpClient? authHttpClient,
             OAuthClientCredentialsProvider? existingTokenProvider = null)
         {
+            // Get identity federation client ID
+            properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId);
+
             if (IsOAuthEnabled(properties))
             {
                 if (authHttpClient == null)
@@ -193,13 +196,14 @@ namespace AdbcDrivers.Databricks.Http
                     throw new ArgumentException("OAuth authentication requires an auth HTTP client.");
                 }
 
-                // For both grant types, wrap with MandatoryTokenExchangeDelegatingHandler.
-                // For client_credentials with identity federation, it exchanges the external IdP
-                // token for a Databricks token. For access_token (U2M) with a non-Databricks JWT,
-                // it does the same. For tokens already Databricks-issued, it is a no-op.
-                properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId);
                 ITokenExchangeClient tokenExchangeClient = new TokenExchangeClient(authHttpClient, host);
-                handler = new MandatoryTokenExchangeDelegatingHandler(handler, tokenExchangeClient, identityFederationClientId);
+
+                // Mandatory token exchange should be the inner handler so that it happens
+                // AFTER the OAuth handlers (e.g. after M2M sets the access token)
+                handler = new MandatoryTokenExchangeDelegatingHandler(
+                    handler,
+                    tokenExchangeClient,
+                    identityFederationClientId);
 
                 var grantType = GetOAuthGrantType(properties);
 
