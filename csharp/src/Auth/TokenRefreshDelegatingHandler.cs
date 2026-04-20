@@ -22,7 +22,7 @@
 */
 
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -44,7 +44,7 @@ namespace AdbcDrivers.Databricks.Auth
 
         // Maps each near-expiry token to its refreshed replacement.
         // On failure, the token is mapped to itself to prevent retrying on every request.
-        private readonly Dictionary<string, string> _tokenCache = new Dictionary<string, string>();
+        private readonly ConcurrentDictionary<string, string> _tokenCache = new ConcurrentDictionary<string, string>();
 
         private string _currentToken;
         private DateTime _tokenExpiryTime;

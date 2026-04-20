@@ -22,7 +22,7 @@
 */
 
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -45,7 +45,7 @@ namespace AdbcDrivers.Databricks.Auth
         // On failure, the original token is mapped to itself to prevent repeated exchange attempts.
         // Keyed by the original bearer token so that when the upstream token rotates
         // (e.g. OAuthDelegatingHandler refreshes the M2M token), the new token is exchanged fresh.
-        private readonly Dictionary<string, string> _tokenCache = new Dictionary<string, string>();
+        private readonly ConcurrentDictionary<string, string> _tokenCache = new ConcurrentDictionary<string, string>();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MandatoryTokenExchangeDelegatingHandler"/> class.
