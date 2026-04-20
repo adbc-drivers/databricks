@@ -61,6 +61,12 @@ fn test_database_set_get_options() {
     .expect("set warehouse_id failed");
 
     db.set_option(
+        OptionDatabase::Other("databricks.auth.type".into()),
+        OptionValue::String("access_token".into()),
+    )
+    .expect("set auth type failed");
+
+    db.set_option(
         OptionDatabase::Other("databricks.access_token".into()),
         OptionValue::String("dapi_test_token".into()),
     )
