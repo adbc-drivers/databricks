@@ -37,13 +37,12 @@ namespace AdbcDrivers.Databricks.Auth
     {
         private readonly string _initialToken;
         private readonly int _tokenRenewLimitMinutes;
-        private readonly object _tokenLock = new object();
+        private readonly SemaphoreSlim _refreshLock = new SemaphoreSlim(1, 1);
         private readonly ITokenExchangeClient _tokenExchangeClient;
 
         private string _currentToken;
         private DateTime _tokenExpiryTime;
         private bool _tokenExchangeAttempted = false;
-        private Task? _refreshTask = null;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="TokenRefreshDelegatingHandler"/> class.
@@ -79,24 +78,23 @@ namespace AdbcDrivers.Databricks.Auth
 
         /// <summary>
         /// Ensures the token is refreshed if needed, blocking until the refresh completes.
-        /// Concurrent requests share the same refresh task so only one network call is made.
+        /// Returns the current token to use (fresh or existing).
         /// </summary>
-        private async Task EnsureTokenFreshAsync(CancellationToken cancellationToken)
+        private async Task<string> EnsureTokenFreshAsync(CancellationToken cancellationToken)
         {
-            Task? taskToAwait;
-            lock (_tokenLock)
+            await _refreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
                 if (NeedsTokenRenewal())
                 {
                     _tokenExchangeAttempted = true;
-                    _refreshTask = DoRefreshAsync(cancellationToken);
+                    await DoRefreshAsync(cancellationToken).ConfigureAwait(false);
                 }
-                taskToAwait = _refreshTask;
+                return _currentToken;
             }
-
-            if (taskToAwait != null)
+            finally
             {
-                await taskToAwait;
+                _refreshLock.Release();
             }
         }
 
@@ -108,11 +106,8 @@ namespace AdbcDrivers.Databricks.Auth
             try
             {
                 TokenExchangeResponse response = await _tokenExchangeClient.RefreshTokenAsync(_initialToken, cancellationToken);
-                lock (_tokenLock)
-                {
-                    _currentToken = response.AccessToken;
-                    _tokenExpiryTime = response.ExpiryTime;
-                }
+                _currentToken = response.AccessToken;
+                _tokenExpiryTime = response.ExpiryTime;
             }
             catch (Exception ex)
             {
@@ -126,16 +121,19 @@ namespace AdbcDrivers.Databricks.Auth
         /// </summary>
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            await EnsureTokenFreshAsync(cancellationToken);
-
-            string tokenToUse;
-            lock (_tokenLock)
-            {
-                tokenToUse = _currentToken;
-            }
+            string tokenToUse = await EnsureTokenFreshAsync(cancellationToken);
 
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokenToUse);
             return await base.SendAsync(request, cancellationToken);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _refreshLock.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 }

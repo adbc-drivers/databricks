@@ -114,9 +114,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
             Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
             Assert.Equal(_initialToken, capturedRequest.Headers.Authorization?.Parameter);
 
-            // Wait for background task to complete
-            await Task.Delay(1000);
-
             _mockTokenExchangeClient.Verify(
                 x => x.RefreshTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
                 Times.Never);

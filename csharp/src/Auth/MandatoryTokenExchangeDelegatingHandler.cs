@@ -37,11 +37,13 @@ namespace AdbcDrivers.Databricks.Auth
     internal class MandatoryTokenExchangeDelegatingHandler : DelegatingHandler
     {
         private readonly string? _identityFederationClientId;
-        private readonly object _tokenLock = new object();
+        private readonly SemaphoreSlim _exchangeLock = new SemaphoreSlim(1, 1);
         private readonly ITokenExchangeClient _tokenExchangeClient;
+
+        // Holds the token to use for outgoing requests. Set on first exchange attempt:
+        // the exchanged Databricks token on success, or the original bearer token on failure.
+        // Once set, all subsequent requests reuse it without re-exchanging.
         private string? _currentToken;
-        private string? _lastSeenToken;
-        private Task? _pendingExchange = null;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MandatoryTokenExchangeDelegatingHandler"/> class.
@@ -82,67 +84,36 @@ namespace AdbcDrivers.Databricks.Auth
         /// <summary>
         /// Returns the token to use for the request, performing exchange if needed.
         /// If the token is already Databricks-issued, returns it directly without exchange.
+        /// Exchange is attempted at most once per handler instance; on failure, the original
+        /// token is cached to prevent repeated exchange attempts.
         /// </summary>
-        /// <param name="bearerToken">The bearer token to potentially exchange.</param>
-        /// <param name="cancellationToken">A cancellation token.</param>
-        /// <returns>The token to use for the outgoing request.</returns>
         private async Task<string> GetTokenAsync(string bearerToken, CancellationToken cancellationToken)
         {
             // Token is already Databricks-issued — pass it through directly.
             // Do not fall back to _currentToken here: upstream may have provided a fresher
             // Databricks token (e.g. after TokenRefreshDelegatingHandler refreshed).
             if (!NeedsTokenExchange(bearerToken))
-            {
-                lock (_tokenLock)
-                {
-                    _lastSeenToken = bearerToken;
-                }
                 return bearerToken;
-            }
 
-            // Wait for any pending exchange to complete first (could be for a different token)
-            Task? exchangeToAwait = null;
-            lock (_tokenLock)
+            await _exchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                if (_pendingExchange != null)
-                {
-                    exchangeToAwait = _pendingExchange;
-                }
+                if (_currentToken == null)
+                    await DoExchangeAsync(bearerToken, cancellationToken).ConfigureAwait(false);
+
+                return _currentToken!;
             }
-
-            if (exchangeToAwait != null)
+            finally
             {
-                await exchangeToAwait;
-            }
-
-            // Now check if we need to exchange our token
-            lock (_tokenLock)
-            {
-                // If this token was already processed (by us or another concurrent request)
-                if (_lastSeenToken == bearerToken)
-                {
-                    return _currentToken ?? bearerToken;
-                }
-
-                // Start new exchange for our token
-                _lastSeenToken = bearerToken;
-                _pendingExchange = DoExchangeAsync(bearerToken, cancellationToken);
-                exchangeToAwait = _pendingExchange;
-            }
-
-            await exchangeToAwait;
-
-            lock (_tokenLock)
-            {
-                return _currentToken ?? bearerToken;
+                _exchangeLock.Release();
             }
         }
 
         /// <summary>
         /// Performs the actual token exchange operation.
+        /// Sets _currentToken to the exchanged token on success, or to the original bearer
+        /// token on failure so subsequent requests skip re-exchanging.
         /// </summary>
-        /// <param name="bearerToken">The bearer token to exchange.</param>
-        /// <param name="cancellationToken">A cancellation token.</param>
         private async Task DoExchangeAsync(string bearerToken, CancellationToken cancellationToken)
         {
             try
@@ -152,30 +123,19 @@ namespace AdbcDrivers.Databricks.Auth
                     _identityFederationClientId,
                     cancellationToken);
 
-                lock (_tokenLock)
-                {
-                    _currentToken = response.AccessToken;
-                }
+                _currentToken = response.AccessToken;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Mandatory token exchange failed: {ex.Message}. Continuing with original token.");
-            }
-            finally
-            {
-                lock (_tokenLock)
-                {
-                    _pendingExchange = null;
-                }
+                // Cache the original token so subsequent requests don't retry the failed exchange.
+                _currentToken = bearerToken;
             }
         }
 
         /// <summary>
         /// Sends an HTTP request with the current token.
         /// </summary>
-        /// <param name="request">The HTTP request message to send.</param>
-        /// <param name="cancellationToken">A cancellation token.</param>
-        /// <returns>The HTTP response message.</returns>
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             string? bearerToken = request.Headers.Authorization?.Parameter;
@@ -188,5 +148,13 @@ namespace AdbcDrivers.Databricks.Auth
             return await base.SendAsync(request, cancellationToken);
         }
 
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _exchangeLock.Dispose();
+            }
+            base.Dispose(disposing);
+        }
     }
 }
