@@ -26,7 +26,6 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
-using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
