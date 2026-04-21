@@ -23,10 +23,12 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc.Tracing;
 
 namespace AdbcDrivers.Databricks.Auth
 {
@@ -40,6 +42,7 @@ namespace AdbcDrivers.Databricks.Auth
         private readonly string? _identityFederationClientId;
         private readonly SemaphoreSlim _exchangeLock = new SemaphoreSlim(1, 1);
         private readonly ITokenExchangeClient _tokenExchangeClient;
+        private readonly IActivityTracer? _activityTracer;
 
         // Maps each original (external) token to its exchanged Databricks token.
         // On failure, the original token is mapped to itself to prevent repeated exchange attempts.
@@ -56,11 +59,13 @@ namespace AdbcDrivers.Databricks.Auth
         public MandatoryTokenExchangeDelegatingHandler(
             HttpMessageHandler innerHandler,
             ITokenExchangeClient tokenExchangeClient,
-            string? identityFederationClientId = null)
+            string? identityFederationClientId = null,
+            IActivityTracer? activityTracer = null)
             : base(innerHandler)
         {
             _tokenExchangeClient = tokenExchangeClient ?? throw new ArgumentNullException(nameof(tokenExchangeClient));
             _identityFederationClientId = identityFederationClientId;
+            _activityTracer = activityTracer;
         }
 
         /// <summary>
@@ -119,6 +124,23 @@ namespace AdbcDrivers.Databricks.Auth
         /// </summary>
         private async Task DoExchangeAsync(string bearerToken, CancellationToken cancellationToken)
         {
+            if (_activityTracer != null)
+            {
+                await _activityTracer.TraceActivityAsync(async (Activity? activity) =>
+                {
+                    activity?.SetTag("auth.token_exchange.endpoint", _tokenExchangeClient.TokenExchangeEndpoint);
+                    activity?.SetTag("auth.token_exchange.has_identity_federation", !string.IsNullOrEmpty(_identityFederationClientId));
+                    await DoExchangeCoreAsync(bearerToken, activity, cancellationToken);
+                }, nameof(DoExchangeAsync));
+            }
+            else
+            {
+                await DoExchangeCoreAsync(bearerToken, null, cancellationToken);
+            }
+        }
+
+        private async Task DoExchangeCoreAsync(string bearerToken, Activity? activity, CancellationToken cancellationToken)
+        {
             try
             {
                 TokenExchangeResponse response = await _tokenExchangeClient.ExchangeTokenAsync(
@@ -127,6 +149,7 @@ namespace AdbcDrivers.Databricks.Auth
                     cancellationToken);
 
                 _tokenCache[bearerToken] = response.AccessToken;
+                activity?.SetTag("auth.token_exchange.expires_in", response.ExpiresIn);
             }
             catch (Exception ex)
             {

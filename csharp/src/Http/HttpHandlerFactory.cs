@@ -184,7 +184,8 @@ namespace AdbcDrivers.Databricks.Http
             IReadOnlyDictionary<string, string> properties,
             string host,
             HttpClient? authHttpClient,
-            OAuthClientCredentialsProvider? existingTokenProvider = null)
+            OAuthClientCredentialsProvider? existingTokenProvider = null,
+            IActivityTracer? activityTracer = null)
         {
             // Get identity federation client ID
             properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId);
@@ -203,7 +204,8 @@ namespace AdbcDrivers.Databricks.Http
                 handler = new MandatoryTokenExchangeDelegatingHandler(
                     handler,
                     tokenExchangeClient,
-                    identityFederationClientId);
+                    identityFederationClientId,
+                    activityTracer);
 
                 var grantType = GetOAuthGrantType(properties);
 
@@ -237,7 +239,8 @@ namespace AdbcDrivers.Databricks.Http
                             tokenExchangeClient,
                             accessToken,
                             expiryTime,
-                            tokenRenewLimit);
+                            tokenRenewLimit,
+                            activityTracer);
                     }
                     else
                     {
@@ -371,7 +374,8 @@ namespace AdbcDrivers.Databricks.Http
                 config.Properties,
                 config.Host,
                 authHttpClient,
-                tokenProvider);
+                tokenProvider,
+                config.ActivityTracer);
 
             return new HandlerCreationResult
             {
