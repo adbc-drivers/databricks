@@ -311,7 +311,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             bool useDescTableExtended,
             int connectTimeoutMilliseconds)
         {
-            properties.TryGetValue("adbc.spark.http_path", out string? httpPath);
+            properties.TryGetValue(SparkParameters.Path, out string? httpPath);
 
             var authMech = Proto.DriverAuthMech.Types.Type.Unspecified;
             var authFlow = Proto.DriverAuthFlow.Types.Type.Unspecified;
