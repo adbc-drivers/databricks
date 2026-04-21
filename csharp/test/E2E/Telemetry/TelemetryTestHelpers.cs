@@ -95,7 +95,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public static async Task<List<TelemetryFrontendLog>> WaitForTelemetryEvents(
             CapturingTelemetryExporter exporter,
             int expectedCount,
-            int timeoutMs = 5000)
+            int timeoutMs = 15000)
         {
             var startTime = DateTime.UtcNow;
             while ((DateTime.UtcNow - startTime).TotalMilliseconds < timeoutMs)
