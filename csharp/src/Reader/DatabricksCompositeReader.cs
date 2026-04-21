@@ -240,11 +240,9 @@ namespace AdbcDrivers.Databricks.Reader
                             // Always close the operation here at the composite level.
                             // CloudFetchReader is protocol-agnostic and does not send CloseOperation,
                             // so we must not rely on the contained reader to do it.
-                            this.TraceActivity(activity =>
-                            {
-                                HiveServer2Reader.CloseOperationAsync(_statement, _response)
-                                    .ConfigureAwait(false).GetAwaiter().GetResult();
-                            }, activityName: "CloseOperation");
+                            activity?.AddEvent("composite_reader.close_operation");
+                            _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
+                                .ConfigureAwait(false).GetAwaiter().GetResult();
                             if (_activeReader != null)
                             {
                                 activity?.AddEvent("composite_reader.disposing_active_reader", [
