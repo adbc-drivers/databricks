@@ -88,50 +88,31 @@ namespace AdbcDrivers.Databricks.Reader
             var linkedToken = CancellationTokenSource.CreateLinkedTokenSource(_internalCts.Token, externalToken).Token;
             _operationStatusPollingTask = Task.Run(async () =>
             {
-                await PollOperationStatus(linkedToken).ConfigureAwait(false);
-            });
-        }
-
-        private async Task PollOperationStatus(CancellationToken cancellationToken)
-        {
-            int consecutiveFailures = 0;
-            bool shouldStop = false;
-
-            while (!cancellationToken.IsCancellationRequested && !shouldStop)
-            {
                 if (_activityTracer != null)
                 {
                     await _activityTracer.Trace.TraceActivityAsync(
-                        activity => PollOnceAsync(cancellationToken, activity),
+                        activity => PollOperationStatus(linkedToken, activity),
                         activityName: "PollOperationStatus").ConfigureAwait(false);
                 }
                 else
                 {
-                    await PollOnceAsync(cancellationToken, null).ConfigureAwait(false);
+                    await PollOperationStatus(linkedToken, null).ConfigureAwait(false);
                 }
+            });
+        }
 
-                if (shouldStop) break;
+        private async Task PollOperationStatus(CancellationToken cancellationToken, Activity? activity)
+        {
+            int consecutiveFailures = 0;
 
-                // Wait before next poll.
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    // Normal shutdown — don't let this propagate as an error through TraceActivityAsync
-                    break;
-                }
-            }
-
-            async Task PollOnceAsync(CancellationToken ct, Activity? activity)
+            while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
                     TOperationHandle? operationHandle = _response.OperationHandle;
-                    if (operationHandle == null) return;
+                    if (operationHandle == null) break;
 
-                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
 
                     TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
@@ -157,14 +138,13 @@ namespace AdbcDrivers.Databricks.Reader
                         response.OperationState == TOperationState.TIMEDOUT_STATE ||
                         response.OperationState == TOperationState.UKNOWN_STATE)
                     {
-                        shouldStop = true;
-                        return;
+                        break;
                     }
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     // Cancellation was requested - exit the polling loop gracefully
-                    return;
+                    break;
                 }
                 catch (Exception ex)
                 {
@@ -190,11 +170,24 @@ namespace AdbcDrivers.Databricks.Reader
                                 { "consecutive_failures", consecutiveFailures },
                                 { "poll_count", _pollCount }
                             }));
-                        _internalCts?.Cancel();
-                        return;
+                        break;
                     }
                 }
+
+                // Wait before next poll.
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Normal shutdown — don't let this propagate as an error through TraceActivityAsync
+                    break;
+                }
             }
+
+            // Add telemetry tags to current activity when polling completes
+            activity?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
         }
 
         public void Stop()
