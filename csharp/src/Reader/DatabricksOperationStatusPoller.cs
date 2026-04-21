@@ -95,8 +95,9 @@ namespace AdbcDrivers.Databricks.Reader
         private async Task PollOperationStatus(CancellationToken cancellationToken)
         {
             int consecutiveFailures = 0;
+            bool shouldStop = false;
 
-            while (!cancellationToken.IsCancellationRequested)
+            while (!cancellationToken.IsCancellationRequested && !shouldStop)
             {
                 if (_activityTracer != null)
                 {
@@ -109,7 +110,7 @@ namespace AdbcDrivers.Databricks.Reader
                     await PollOnceAsync(cancellationToken, null).ConfigureAwait(false);
                 }
 
-                if (cancellationToken.IsCancellationRequested) break;
+                if (shouldStop) break;
 
                 // Wait before next poll.
                 try
@@ -156,7 +157,7 @@ namespace AdbcDrivers.Databricks.Reader
                         response.OperationState == TOperationState.TIMEDOUT_STATE ||
                         response.OperationState == TOperationState.UKNOWN_STATE)
                     {
-                        _internalCts?.Cancel();
+                        shouldStop = true;
                         return;
                     }
                 }
