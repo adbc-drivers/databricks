@@ -192,7 +192,7 @@ namespace AdbcDrivers.Databricks.Reader
                                 { "consecutive_failures", consecutiveFailures },
                                 { "poll_count", _pollCount }
                             }));
-                        _internalCts?.Cancel();
+                        shouldStop = true;
                         return;
                     }
                 }
