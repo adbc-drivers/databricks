@@ -41,6 +41,62 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
+        /// Regression test for PECO-2981: driver_connection_params.http_path was empty for
+        /// 100% of ADBC rows because <c>BuildDriverConnectionParams</c> looked up the wrong
+        /// property key ("adbc.spark.http_path") instead of <see cref="SparkParameters.Path"/>.
+        /// </summary>
+        [SkippableFact]
+        public async Task ConnectionParams_HttpPath_IsPopulated()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+                // Force use of SparkParameters.Path to match what's emitted into telemetry.
+                // The test environment may supply the path via AdbcOptions.Uri alone; in that
+                // case, extract the path so we have a deterministic expected value.
+                if (!properties.TryGetValue(SparkParameters.Path, out string? expectedHttpPath)
+                    || string.IsNullOrEmpty(expectedHttpPath))
+                {
+                    Assert.True(
+                        properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri),
+                        $"Test configuration must set {SparkParameters.Path} or {AdbcOptions.Uri}");
+                    expectedHttpPath = new Uri(uri!).AbsolutePath;
+                    properties[SparkParameters.Path] = expectedHttpPath;
+                }
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.DriverConnectionParams);
+                Assert.False(string.IsNullOrEmpty(protoLog.DriverConnectionParams.HttpPath),
+                    "http_path should be populated (regression for PECO-2981)");
+                Assert.Equal(expectedHttpPath, protoLog.DriverConnectionParams.HttpPath);
+
+                OutputHelper?.WriteLine($"✓ http_path: {protoLog.DriverConnectionParams.HttpPath}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
         /// Tests that enable_arrow is set to true for ADBC driver.
         /// </summary>
         [SkippableFact]
