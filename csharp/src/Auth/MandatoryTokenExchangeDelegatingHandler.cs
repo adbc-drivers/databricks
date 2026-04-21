@@ -57,7 +57,7 @@ namespace AdbcDrivers.Databricks.Auth
         public MandatoryTokenExchangeDelegatingHandler(
             HttpMessageHandler innerHandler,
             ITokenExchangeClient tokenExchangeClient,
-            string? identityFederationClientId)
+            string? identityFederationClientId = null)
             : base(innerHandler)
         {
             _tokenExchangeClient = tokenExchangeClient ?? throw new ArgumentNullException(nameof(tokenExchangeClient));
