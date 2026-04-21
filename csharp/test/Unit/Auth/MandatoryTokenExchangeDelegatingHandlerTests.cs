@@ -85,7 +85,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
         {
             var handler = new MandatoryTokenExchangeDelegatingHandler(
                 _mockInnerHandler.Object,
-                _mockTokenExchangeClient.Object);
+                _mockTokenExchangeClient.Object,
+                null);
 
             Assert.NotNull(handler);
         }

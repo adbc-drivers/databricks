@@ -28,7 +28,6 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
-using Apache.Arrow.Adbc.Tracing;
 
 namespace AdbcDrivers.Databricks.Auth
 {
@@ -43,7 +42,6 @@ namespace AdbcDrivers.Databricks.Auth
         private readonly int _tokenRenewLimitMinutes;
         private readonly SemaphoreSlim _refreshLock = new SemaphoreSlim(1, 1);
         private readonly ITokenExchangeClient _tokenExchangeClient;
-        private readonly IActivityTracer? _activityTracer;
 
         // Maps each near-expiry token to its refreshed replacement.
         // On failure, the token is mapped to itself to prevent retrying on every request.
@@ -65,15 +63,13 @@ namespace AdbcDrivers.Databricks.Auth
             ITokenExchangeClient tokenExchangeClient,
             string initialToken,
             DateTime tokenExpiryTime,
-            int tokenRenewLimitMinutes,
-            IActivityTracer? activityTracer = null)
+            int tokenRenewLimitMinutes)
             : base(innerHandler)
         {
             _tokenExchangeClient = tokenExchangeClient ?? throw new ArgumentNullException(nameof(tokenExchangeClient));
             _currentToken = initialToken ?? throw new ArgumentNullException(nameof(initialToken));
             _tokenExpiryTime = tokenExpiryTime;
             _tokenRenewLimitMinutes = tokenRenewLimitMinutes;
-            _activityTracer = activityTracer;
         }
 
         /// <summary>
@@ -113,30 +109,23 @@ namespace AdbcDrivers.Databricks.Auth
         /// </summary>
         private async Task DoRefreshAsync(string tokenToRefresh, CancellationToken cancellationToken)
         {
-            if (_activityTracer != null)
+            Activity.Current?.AddEvent(new ActivityEvent("auth.token_refresh", tags: new ActivityTagsCollection
             {
-                await _activityTracer.TraceActivityAsync(async (Activity? activity) =>
-                {
-                    activity?.SetTag("auth.token_refresh.endpoint", _tokenExchangeClient.TokenExchangeEndpoint);
-                    await DoRefreshCoreAsync(tokenToRefresh, activity, cancellationToken);
-                }, nameof(DoRefreshAsync));
-            }
-            else
-            {
-                await DoRefreshCoreAsync(tokenToRefresh, null, cancellationToken);
-            }
-        }
+                { "endpoint", _tokenExchangeClient.TokenExchangeEndpoint }
+            }));
 
-        private async Task DoRefreshCoreAsync(string tokenToRefresh, Activity? activity, CancellationToken cancellationToken)
-        {
             try
             {
                 TokenExchangeResponse response = await _tokenExchangeClient.RefreshTokenAsync(tokenToRefresh, cancellationToken);
                 _tokenCache[tokenToRefresh] = response.AccessToken;
                 _currentToken = response.AccessToken;
                 _tokenExpiryTime = response.ExpiryTime;
-                activity?.SetTag("auth.token_refresh.expires_in", response.ExpiresIn);
-                activity?.SetTag("auth.token_refresh.new_expiry", response.ExpiryTime.ToString("o"));
+
+                Activity.Current?.AddEvent(new ActivityEvent("auth.token_refresh.completed", tags: new ActivityTagsCollection
+                {
+                    { "expires_in", response.ExpiresIn },
+                    { "new_expiry", response.ExpiryTime.ToString("o") }
+                }));
             }
             catch (Exception ex)
             {
