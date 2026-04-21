@@ -26,6 +26,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
@@ -143,6 +144,7 @@ namespace AdbcDrivers.Databricks.Reader
                     // Track poll count for telemetry
                     _pollCount++;
 
+                    activity?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
                     activity?.AddEvent(new ActivityEvent("operation_status_poller.poll_success",
                         tags: new ActivityTagsCollection
                         {
