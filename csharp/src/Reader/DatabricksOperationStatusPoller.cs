@@ -25,6 +25,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
@@ -97,20 +98,18 @@ namespace AdbcDrivers.Databricks.Reader
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                (bool shouldBreak, int newConsecutiveFailures) result;
                 if (_activityTracer != null)
                 {
-                    result = await _activityTracer.Trace.TraceActivityAsync(
-                        activity => PollOnceAsync(cancellationToken, activity, consecutiveFailures),
+                    await _activityTracer.Trace.TraceActivityAsync(
+                        activity => PollOnceAsync(cancellationToken, activity),
                         activityName: "PollOperationStatus").ConfigureAwait(false);
                 }
                 else
                 {
-                    result = await PollOnceAsync(cancellationToken, null, consecutiveFailures).ConfigureAwait(false);
+                    await PollOnceAsync(cancellationToken, null).ConfigureAwait(false);
                 }
 
-                consecutiveFailures = result.newConsecutiveFailures;
-                if (result.shouldBreak) break;
+                if (cancellationToken.IsCancellationRequested) break;
 
                 // Wait before next poll.
                 try
@@ -119,74 +118,82 @@ namespace AdbcDrivers.Databricks.Reader
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    // Normal shutdown
+                    // Normal shutdown — don't let this propagate as an error through TraceActivityAsync
                     break;
                 }
             }
-        }
 
-        /// <summary>
-        /// Performs a single GetOperationStatus poll.
-        /// Returns (shouldBreak, updatedConsecutiveFailures).
-        /// </summary>
-        private async Task<(bool shouldBreak, int consecutiveFailures)> PollOnceAsync(CancellationToken cancellationToken, Activity? activity, int consecutiveFailures)
-        {
-            try
+            async Task PollOnceAsync(CancellationToken ct, Activity? activity)
             {
-                TOperationHandle? operationHandle = _response.OperationHandle;
-                if (operationHandle == null) return (true, consecutiveFailures);
-
-                using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
-
-                TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
-                TGetOperationStatusResp response = await _statement.Client.GetOperationStatus(request, timeoutCts.Token).ConfigureAwait(false);
-
-                // Successful poll — reset failure counter
-                consecutiveFailures = 0;
-
-                // Track poll count for telemetry
-                _pollCount++;
-
-                activity?.SetTag("poll_count", _pollCount);
-                activity?.SetTag("operation_state", response.OperationState.ToString());
-
-                // end the heartbeat if the command has terminated
-                if (response.OperationState == TOperationState.CANCELED_STATE ||
-                    response.OperationState == TOperationState.ERROR_STATE ||
-                    response.OperationState == TOperationState.CLOSED_STATE ||
-                    response.OperationState == TOperationState.TIMEDOUT_STATE ||
-                    response.OperationState == TOperationState.UKNOWN_STATE)
+                try
                 {
-                    return (true, consecutiveFailures);
+                    TOperationHandle? operationHandle = _response.OperationHandle;
+                    if (operationHandle == null) return;
+
+                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
+
+                    TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
+                    TGetOperationStatusResp response = await _statement.Client.GetOperationStatus(request, timeoutCts.Token).ConfigureAwait(false);
+
+                    // Successful poll — reset failure counter
+                    consecutiveFailures = 0;
+
+                    // Track poll count for telemetry
+                    _pollCount++;
+
+                    activity?.AddEvent(new ActivityEvent("operation_status_poller.poll_success",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "poll_count", _pollCount },
+                            { "operation_state", response.OperationState.ToString() }
+                        }));
+
+                    // end the heartbeat if the command has terminated
+                    if (response.OperationState == TOperationState.CANCELED_STATE ||
+                        response.OperationState == TOperationState.ERROR_STATE ||
+                        response.OperationState == TOperationState.CLOSED_STATE ||
+                        response.OperationState == TOperationState.TIMEDOUT_STATE ||
+                        response.OperationState == TOperationState.UKNOWN_STATE)
+                    {
+                        _internalCts?.Cancel();
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // Cancellation was requested - exit the polling loop gracefully
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    consecutiveFailures++;
+
+                    // Log the error but continue polling. Transient errors (e.g. ObjectDisposedException
+                    // from TLS connection recycling) should not kill the heartbeat poller, as that would
+                    // cause the server-side command inactivity timeout to expire and terminate the query.
+                    activity?.AddEvent(new ActivityEvent("operation_status_poller.poll_error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "poll_count", _pollCount },
+                            { "consecutive_failures", consecutiveFailures }
+                        }));
+
+                    if (consecutiveFailures >= MaxConsecutiveFailures)
+                    {
+                        activity?.AddEvent(new ActivityEvent("operation_status_poller.max_failures_reached",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "consecutive_failures", consecutiveFailures },
+                                { "poll_count", _pollCount }
+                            }));
+                        _internalCts?.Cancel();
+                        return;
+                    }
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // Cancellation was requested - exit the polling loop gracefully
-                return (true, consecutiveFailures);
-            }
-            catch (Exception ex)
-            {
-                consecutiveFailures++;
-
-                // Log the error but continue polling. Transient errors (e.g. ObjectDisposedException
-                // from TLS connection recycling) should not kill the heartbeat poller, as that would
-                // cause the server-side command inactivity timeout to expire and terminate the query.
-                activity?.SetTag("error.type", ex.GetType().Name);
-                activity?.SetTag("error.message", ex.Message);
-                activity?.SetTag("poll_count", _pollCount);
-                activity?.SetTag("consecutive_failures", consecutiveFailures);
-                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-
-                if (consecutiveFailures >= MaxConsecutiveFailures)
-                {
-                    activity?.SetTag("max_failures_reached", true);
-                    return (true, consecutiveFailures);
-                }
-            }
-
-            return (false, consecutiveFailures);
         }
 
         public void Stop()
