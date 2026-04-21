@@ -25,6 +25,7 @@ using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow.Adbc;
 using Apache.Hive.Service.Rpc.Thrift;
 
 namespace AdbcDrivers.Databricks.Telemetry
@@ -312,6 +313,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             int connectTimeoutMilliseconds)
         {
             properties.TryGetValue(SparkParameters.Path, out string? httpPath);
+            int port = ResolvePort(properties);
 
             var authMech = Proto.DriverAuthMech.Types.Type.Unspecified;
             var authFlow = Proto.DriverAuthFlow.Types.Type.Unspecified;
@@ -339,8 +341,8 @@ namespace AdbcDrivers.Databricks.Telemetry
                 Mode = Proto.DriverMode.Types.Type.Thrift,
                 HostInfo = new Proto.HostDetails
                 {
-                    HostUrl = $"https://{host}:443",
-                    Port = 0
+                    HostUrl = $"https://{host}:{port}",
+                    Port = port
                 },
                 AuthMech = authMech,
                 AuthFlow = authFlow,
@@ -379,6 +381,27 @@ namespace AdbcDrivers.Databricks.Telemetry
                 return batchSize;
             }
             return (int)DatabricksStatement.DatabricksBatchSizeDefault;
+        }
+
+        private const int DefaultHttpsPort = 443;
+
+        private static int ResolvePort(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(SparkParameters.Port, out string? portStr) &&
+                int.TryParse(portStr, out int port) && port > 0)
+            {
+                return port;
+            }
+
+            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) &&
+                !string.IsNullOrEmpty(uri) &&
+                Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri) &&
+                parsedUri.Port > 0)
+            {
+                return parsedUri.Port;
+            }
+
+            return DefaultHttpsPort;
         }
     }
 }

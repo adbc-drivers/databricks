@@ -97,6 +97,64 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
+        /// Regression test for PECO-2982: driver_connection_params.host_info.port was hard-coded
+        /// to 0 for 100% of ADBC rows. The port should be resolved from <see cref="SparkParameters.Port"/>,
+        /// then <see cref="AdbcOptions.Uri"/>, defaulting to 443.
+        /// </summary>
+        [SkippableFact]
+        public async Task ConnectionParams_HostInfoPort_IsPopulated()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+                // Determine the expected port using the same precedence as the driver.
+                int expectedPort = 443;
+                if (properties.TryGetValue(SparkParameters.Port, out string? portStr)
+                    && int.TryParse(portStr, out int configuredPort) && configuredPort > 0)
+                {
+                    expectedPort = configuredPort;
+                }
+                else if (properties.TryGetValue(AdbcOptions.Uri, out string? uri)
+                    && !string.IsNullOrEmpty(uri)
+                    && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri)
+                    && parsedUri.Port > 0)
+                {
+                    expectedPort = parsedUri.Port;
+                }
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.DriverConnectionParams);
+                Assert.NotNull(protoLog.DriverConnectionParams.HostInfo);
+                Assert.NotEqual(0, protoLog.DriverConnectionParams.HostInfo.Port);
+                Assert.Equal(expectedPort, protoLog.DriverConnectionParams.HostInfo.Port);
+
+                OutputHelper?.WriteLine($"✓ host_info.port: {protoLog.DriverConnectionParams.HostInfo.Port}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
         /// Tests that enable_arrow is set to true for ADBC driver.
         /// </summary>
         [SkippableFact]
