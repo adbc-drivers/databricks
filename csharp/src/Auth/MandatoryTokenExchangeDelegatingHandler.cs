@@ -99,10 +99,16 @@ namespace AdbcDrivers.Databricks.Auth
             if (!NeedsTokenExchange(bearerToken))
                 return bearerToken;
 
+            // Fast path: return cached token without acquiring the lock.
+            // ConcurrentDictionary reads are thread-safe.
+            if (_tokenCache.TryGetValue(bearerToken, out string? cached))
+                return cached;
+
             await _exchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (!_tokenCache.TryGetValue(bearerToken, out string? cached))
+                // Double-check after acquiring lock in case another thread exchanged while we waited.
+                if (!_tokenCache.TryGetValue(bearerToken, out cached))
                     await DoExchangeAsync(bearerToken, cancellationToken).ConfigureAwait(false);
 
                 return _tokenCache[bearerToken];

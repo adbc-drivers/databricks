@@ -86,10 +86,14 @@ namespace AdbcDrivers.Databricks.Auth
         /// </summary>
         private async Task<string> EnsureTokenFreshAsync(CancellationToken cancellationToken)
         {
+            // Fast path: token is still fresh, return without acquiring the lock.
+            if (!NeedsTokenRenewal())
+                return _currentToken;
+
             await _refreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                // Refresh only if near expiry and not already attempted for this token.
+                // Double-check after acquiring lock in case another thread refreshed while we waited.
                 if (NeedsTokenRenewal() && !_tokenCache.TryGetValue(_currentToken, out _))
                 {
                     await DoRefreshAsync(_currentToken, cancellationToken).ConfigureAwait(false);
