@@ -172,6 +172,18 @@ pub struct ExternalLink {
     pub next_chunk_index: Option<i64>,
 }
 
+/// A positional parameter for a parameterized SEA statement execution.
+#[derive(Debug, Clone, Serialize)]
+pub struct StatementParameter {
+    /// 1-based position of the parameter in the SQL statement.
+    pub ordinal: i32,
+    /// Databricks SQL type name (e.g., "INT", "STRING", "DOUBLE", "TIMESTAMP").
+    #[serde(rename = "type")]
+    pub param_type: String,
+    /// String representation of the parameter value. None for SQL NULL.
+    pub value: Option<String>,
+}
+
 /// Request body for statement execution.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecuteStatementRequest {
@@ -191,6 +203,9 @@ pub struct ExecuteStatementRequest {
     pub on_wait_timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_limit: Option<i64>,
+    /// Positional parameters for parameterized queries.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<StatementParameter>,
 }
 
 /// Parameters for statement execution (passed to client methods).
@@ -201,6 +216,8 @@ pub struct ExecuteParams {
     pub wait_timeout: Option<String>,
     pub on_wait_timeout: Option<String>, // "CONTINUE" or "CANCEL"
     pub row_limit: Option<i64>,
+    /// Parameters for parameterized query execution.
+    pub parameters: Vec<StatementParameter>,
 }
 
 /// Compression codec for result data.
@@ -302,6 +319,7 @@ mod tests {
             wait_timeout: Some("30s".to_string()),
             on_wait_timeout: None,
             row_limit: None,
+            parameters: vec![],
         };
 
         let json = serde_json::to_string(&req).unwrap();

@@ -95,6 +95,17 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         public bool IsCompressed { get; set; }
 
+        /// <summary>
+        /// Gets or sets the number of times the HTTP request was retried.
+        /// </summary>
+        public int RetryCount { get; set; }
+
+        /// <summary>
+        /// Gets or sets whether this is an internal call (e.g., USE SCHEMA from SetSchema()).
+        /// Internal calls are driver-generated operations, not user-initiated queries.
+        /// </summary>
+        public bool IsInternalCall { get; set; }
+
         // ── Timing (all derived from single Stopwatch) ──
 
         /// <summary>
@@ -231,7 +242,8 @@ namespace AdbcDrivers.Databricks.Telemetry
                 SessionId = SessionId ?? string.Empty,
                 SqlStatementId = StatementId ?? string.Empty,
                 SystemConfiguration = SystemConfiguration,
-                DriverConnectionParams = DriverConnectionParams
+                DriverConnectionParams = DriverConnectionParams,
+                AuthType = _sessionContext.AuthType ?? string.Empty
             };
 
             // Set operation latency (total elapsed time)
@@ -242,7 +254,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             {
                 StatementType = StatementType,
                 IsCompressed = IsCompressed,
-                ExecutionResult = ResultFormat
+                ExecutionResult = ResultFormat,
+                RetryCount = RetryCount
             };
 
             // Add chunk details if present
@@ -276,7 +289,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     NOperationStatusCalls = PollCount ?? 0,
                     OperationStatusLatencyMillis = PollLatencyMs ?? 0,
                     OperationType = OperationType,
-                    IsInternalCall = false
+                    IsInternalCall = IsInternalCall
                 };
             }
             else
@@ -285,7 +298,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 sqlEvent.OperationDetail = new OperationDetail
                 {
                     OperationType = OperationType,
-                    IsInternalCall = false
+                    IsInternalCall = IsInternalCall
                 };
             }
 

@@ -20,6 +20,7 @@ using System.Reflection;
 using AdbcDrivers.HiveServer2.Spark;
 using AdbcDrivers.Databricks;
 using Xunit;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 
 namespace AdbcDrivers.Databricks.Tests.Unit
 {
@@ -135,6 +136,39 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         {
             using var statement = CreateStatement();
             statement.SetOption("adbc.databricks.unknown_future_option", "some_value");
+        }
+
+        [Theory]
+        [InlineData("getcatalogs", OperationType.ListCatalogs)]
+        [InlineData("getschemas", OperationType.ListSchemas)]
+        [InlineData("gettables", OperationType.ListTables)]
+        [InlineData("getcolumns", OperationType.ListColumns)]
+        [InlineData("getcolumnsextended", OperationType.ListColumns)]
+        [InlineData("gettabletypes", OperationType.ListTableTypes)]
+        [InlineData("getprimarykeys", OperationType.ListPrimaryKeys)]
+        [InlineData("getcrossreference", OperationType.ListCrossReferences)]
+        public void GetMetadataOperationType_ReturnsCorrectType(string command, OperationType expected)
+        {
+            Assert.Equal(expected, DatabricksStatement.GetMetadataOperationType(command));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("SELECT 1")]
+        [InlineData("unknown_command")]
+        public void GetMetadataOperationType_ReturnsNull_ForNonMetadataCommands(string? command)
+        {
+            Assert.Null(DatabricksStatement.GetMetadataOperationType(command));
+        }
+
+        [Theory]
+        [InlineData("GETCATALOGS")]
+        [InlineData("GetCatalogs")]
+        [InlineData("GetTables")]
+        public void GetMetadataOperationType_IsCaseInsensitive(string command)
+        {
+            Assert.NotNull(DatabricksStatement.GetMetadataOperationType(command));
         }
     }
 }

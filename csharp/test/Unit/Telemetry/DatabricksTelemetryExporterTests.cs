@@ -551,6 +551,96 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Contains("test-event-123", protoLogJson);
         }
 
+        [Theory]
+        [InlineData(429)] // Too Many Requests
+        [InlineData(500)] // Internal Server Error
+        [InlineData(502)] // Bad Gateway
+        [InlineData(503)] // Service Unavailable
+        [InlineData(504)] // Gateway Timeout
+        public async Task DatabricksTelemetryExporter_ExportAsync_RetryableStatus_RetriesUntilExhausted(int statusCode)
+        {
+            var attemptCount = 0;
+            var handler = new MockHttpMessageHandler((request, ct) =>
+            {
+                attemptCount++;
+                return Task.FromResult(new HttpResponseMessage((HttpStatusCode)statusCode));
+            });
+
+            using var httpClient = new HttpClient(handler);
+            var config = new TelemetryConfiguration { MaxRetries = 3, RetryDelayMs = 10 };
+            var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
+
+            var logs = new List<TelemetryFrontendLog>
+            {
+                new TelemetryFrontendLog { WorkspaceId = 12345 }
+            };
+
+            var result = await exporter.ExportAsync(logs);
+
+            Assert.Equal(4, attemptCount); // 1 initial + 3 retries
+            Assert.False(result, $"ExportAsync should return false after retries exhausted on status {statusCode}");
+        }
+
+        [Theory]
+        [InlineData(429)]
+        [InlineData(503)]
+        public async Task DatabricksTelemetryExporter_ExportAsync_RetryableStatus_SucceedsAfterTransientFailure(int statusCode)
+        {
+            var attemptCount = 0;
+            var handler = new MockHttpMessageHandler((request, ct) =>
+            {
+                attemptCount++;
+                if (attemptCount < 3)
+                {
+                    return Task.FromResult(new HttpResponseMessage((HttpStatusCode)statusCode));
+                }
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            });
+
+            using var httpClient = new HttpClient(handler);
+            var config = new TelemetryConfiguration { MaxRetries = 3, RetryDelayMs = 10 };
+            var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
+
+            var logs = new List<TelemetryFrontendLog>
+            {
+                new TelemetryFrontendLog { WorkspaceId = 12345 }
+            };
+
+            var result = await exporter.ExportAsync(logs);
+
+            Assert.Equal(3, attemptCount);
+            Assert.True(result, $"ExportAsync should return true after recovering from transient {statusCode}");
+        }
+
+        [Theory]
+        [InlineData(400)] // Bad Request
+        [InlineData(401)] // Unauthorized
+        [InlineData(403)] // Forbidden
+        [InlineData(404)] // Not Found
+        public async Task DatabricksTelemetryExporter_ExportAsync_TerminalStatus_DoesNotRetry(int statusCode)
+        {
+            var attemptCount = 0;
+            var handler = new MockHttpMessageHandler((request, ct) =>
+            {
+                attemptCount++;
+                return Task.FromResult(new HttpResponseMessage((HttpStatusCode)statusCode));
+            });
+
+            using var httpClient = new HttpClient(handler);
+            var config = new TelemetryConfiguration { MaxRetries = 3, RetryDelayMs = 10 };
+            var exporter = new DatabricksTelemetryExporter(httpClient, TestHost, true, config);
+
+            var logs = new List<TelemetryFrontendLog>
+            {
+                new TelemetryFrontendLog { WorkspaceId = 12345 }
+            };
+
+            var result = await exporter.ExportAsync(logs);
+
+            Assert.Equal(1, attemptCount);
+            Assert.False(result, $"ExportAsync should return false without retrying on terminal status {statusCode}");
+        }
+
         [Fact]
         public async Task DatabricksTelemetryExporter_ExportAsync_GenericException_ReturnsFalse()
         {

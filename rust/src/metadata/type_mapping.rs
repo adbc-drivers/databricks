@@ -12,10 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Databricks type → Arrow/XDBC type mapping.
+//! Databricks ↔ Arrow type mapping (single source of truth).
 //!
-//! Maps Databricks SQL type names (from `SHOW COLUMNS` results) to
-//! Arrow `DataType` and XDBC/JDBC type codes.
+//! This module is the canonical location for all Databricks SQL type name ↔ Arrow
+//! DataType conversions. Both directions must be kept in sync:
+//!
+//! - `databricks_type_to_arrow()` — Databricks string → Arrow (for parsing server responses)
+//! - `arrow_type_to_databricks()` — Arrow → Databricks string (for serializing parameters)
+//! - `databricks_type_to_xdbc()` — Databricks string → XDBC/JDBC type code
+//!
+//! When adding a new type, update **both** mapping functions.
 
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 
@@ -47,6 +53,39 @@ pub fn databricks_type_to_arrow(type_name: &str) -> DataType {
         "STRUCT" => DataType::Utf8, // Represented as JSON string
         "VOID" | "NULL" => DataType::Null,
         _ => DataType::Utf8, // Default fallback
+    }
+}
+
+/// Map Arrow DataType to Databricks SQL type name.
+///
+/// This is the reverse of `databricks_type_to_arrow()`. It produces the canonical
+/// Databricks type name for a given Arrow type. Unsigned integer types are promoted
+/// to the next wider signed type since Databricks SQL has no unsigned integers.
+///
+/// Used for serializing Arrow parameter values into SEA API requests.
+pub fn arrow_type_to_databricks(dt: &DataType) -> String {
+    match dt {
+        DataType::Boolean => "BOOLEAN".to_string(),
+        DataType::Int8 => "TINYINT".to_string(),
+        DataType::Int16 => "SMALLINT".to_string(),
+        DataType::Int32 => "INT".to_string(),
+        DataType::Int64 => "BIGINT".to_string(),
+        // Unsigned types promoted to next wider signed type
+        DataType::UInt8 => "SMALLINT".to_string(),
+        DataType::UInt16 => "INT".to_string(),
+        DataType::UInt32 => "BIGINT".to_string(),
+        DataType::UInt64 => "BIGINT".to_string(),
+        DataType::Float16 => "FLOAT".to_string(),
+        DataType::Float32 => "FLOAT".to_string(),
+        DataType::Float64 => "DOUBLE".to_string(),
+        DataType::Decimal128(p, s) => format!("DECIMAL({p},{s})"),
+        DataType::Utf8 | DataType::LargeUtf8 => "STRING".to_string(),
+        DataType::Binary | DataType::LargeBinary => "BINARY".to_string(),
+        DataType::Date32 | DataType::Date64 => "DATE".to_string(),
+        DataType::Timestamp(_, _) => "TIMESTAMP".to_string(),
+        DataType::Interval(_) => "INTERVAL".to_string(),
+        DataType::Null => "STRING".to_string(),
+        _ => "STRING".to_string(),
     }
 }
 
@@ -231,5 +270,43 @@ mod tests {
         assert_eq!(parse_decimal_params("DECIMAL(38, 0)"), (38, 0));
         assert_eq!(parse_decimal_params("DECIMAL"), (38, 18));
         assert_eq!(parse_decimal_params("NUMERIC(5,3)"), (5, 3));
+    }
+
+    #[test]
+    fn test_arrow_to_databricks_primitives() {
+        assert_eq!(arrow_type_to_databricks(&DataType::Boolean), "BOOLEAN");
+        assert_eq!(arrow_type_to_databricks(&DataType::Int8), "TINYINT");
+        assert_eq!(arrow_type_to_databricks(&DataType::Int16), "SMALLINT");
+        assert_eq!(arrow_type_to_databricks(&DataType::Int32), "INT");
+        assert_eq!(arrow_type_to_databricks(&DataType::Int64), "BIGINT");
+        assert_eq!(arrow_type_to_databricks(&DataType::Float32), "FLOAT");
+        assert_eq!(arrow_type_to_databricks(&DataType::Float64), "DOUBLE");
+        assert_eq!(arrow_type_to_databricks(&DataType::Utf8), "STRING");
+        assert_eq!(arrow_type_to_databricks(&DataType::LargeUtf8), "STRING");
+        assert_eq!(arrow_type_to_databricks(&DataType::Binary), "BINARY");
+        assert_eq!(arrow_type_to_databricks(&DataType::LargeBinary), "BINARY");
+        assert_eq!(arrow_type_to_databricks(&DataType::Date32), "DATE");
+        assert_eq!(arrow_type_to_databricks(&DataType::Date64), "DATE");
+        assert_eq!(
+            arrow_type_to_databricks(&DataType::Timestamp(TimeUnit::Microsecond, None)),
+            "TIMESTAMP"
+        );
+        assert_eq!(
+            arrow_type_to_databricks(&DataType::Interval(IntervalUnit::DayTime)),
+            "INTERVAL"
+        );
+        assert_eq!(
+            arrow_type_to_databricks(&DataType::Decimal128(10, 2)),
+            "DECIMAL(10,2)"
+        );
+        assert_eq!(arrow_type_to_databricks(&DataType::Null), "STRING");
+    }
+
+    #[test]
+    fn test_arrow_to_databricks_unsigned_promotion() {
+        assert_eq!(arrow_type_to_databricks(&DataType::UInt8), "SMALLINT");
+        assert_eq!(arrow_type_to_databricks(&DataType::UInt16), "INT");
+        assert_eq!(arrow_type_to_databricks(&DataType::UInt32), "BIGINT");
+        assert_eq!(arrow_type_to_databricks(&DataType::UInt64), "BIGINT");
     }
 }

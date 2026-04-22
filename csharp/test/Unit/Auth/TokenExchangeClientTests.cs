@@ -156,6 +156,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
             Assert.NotNull(capturedFormContent);
             Assert.Contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer", capturedFormContent);
             Assert.Contains($"assertion={testToken}", capturedFormContent);
+            Assert.Contains("scope=sql", capturedFormContent);
         }
 
         [Fact]
