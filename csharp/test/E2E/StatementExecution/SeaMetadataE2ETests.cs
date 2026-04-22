@@ -16,7 +16,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -32,12 +31,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
     /// for the test table main.adbc_testing.all_column_types.
     /// Both Thrift and SEA are tested for parity.
     /// </summary>
-    public class SeaMetadataE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IAsyncLifetime
+    public class SeaMetadataE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         private const string TestCatalog = "main";
         private const string TestSchema = "adbc_testing";
         private const string TestTable = "all_column_types";
-        private const string RefTable = "fk_test_ref_table";
 
         public SeaMetadataE2ETests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
@@ -47,54 +45,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         private void SkipIfNotConfigured()
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
-        }
-
-        // Idempotently create the fixture tables this class depends on. The
-        // shared main.adbc_testing workspace can drift (tables dropped by TTL
-        // or unrelated workloads), so we self-bootstrap with CREATE IF NOT
-        // EXISTS. No DROP — other test classes may depend on the same table
-        // and assembly-level parallelism is disabled so within-run races are
-        // not a concern.
-        //
-        // Best-effort: if bootstrap fails (missing schema, permissions, etc.)
-        // we log and continue so tests still fail with their own assertions
-        // rather than masking the real problem behind a setup error.
-        public async Task InitializeAsync()
-        {
-            if (!Utils.CanExecuteTestConfig(TestConfigVariable))
-            {
-                return;
-            }
-
-            var refFullName = $"`{TestCatalog}`.`{TestSchema}`.`{RefTable}`";
-            var tableFullName = $"`{TestCatalog}`.`{TestSchema}`.`{TestTable}`";
-
-            try
-            {
-                await ExecuteSqlFromResourceAsync("Resources/create_reference_table.sql", refFullName);
-                await ExecuteSqlFromResourceAsync("Resources/create_table_all_types.sql", tableFullName, RefTable);
-            }
-            catch (Exception ex)
-            {
-                OutputHelper?.WriteLine($"SeaMetadataE2ETests fixture bootstrap failed (continuing): {ex.Message}");
-            }
-        }
-
-        public Task DisposeAsync() => Task.CompletedTask;
-
-        private async Task ExecuteSqlFromResourceAsync(string resourcePath, string fullTableName, string? refTableName = null)
-        {
-            var sql = File.ReadAllText(resourcePath).Replace("{TABLE_NAME}", fullTableName);
-            if (refTableName != null)
-            {
-                sql = sql.Replace("{CATALOG_NAME}", TestCatalog)
-                         .Replace("{SCHEMA_NAME}", TestSchema)
-                         .Replace("{REF_TABLE_NAME}", refTableName);
-            }
-
-            using var stmt = Connection.CreateStatement();
-            stmt.SqlQuery = sql;
-            await stmt.ExecuteUpdateAsync();
         }
 
         private AdbcConnection CreateThriftConnection()
