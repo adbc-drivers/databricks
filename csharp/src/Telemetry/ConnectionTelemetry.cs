@@ -324,19 +324,13 @@ namespace AdbcDrivers.Databricks.Telemetry
             bool isOAuth = SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue)
                 && authTypeValue == SparkAuthType.OAuth;
 
-            if (!string.IsNullOrEmpty(grantType) &&
-                grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
+            if (isOAuth)
             {
                 authMech = Proto.DriverAuthMech.Types.Type.Oauth;
-                authFlow = Proto.DriverAuthFlow.Types.Type.ClientCredentials;
-            }
-            else if (isOAuth)
-            {
-                // OAuth U2M access-token passthrough (e.g., browser flow, GitHub OIDC federation).
-                // authType=oauth with no grant_type (or grant_type=access_token) means the caller
-                // supplied a pre-acquired access token via SparkParameters.AccessToken.
-                authMech = Proto.DriverAuthMech.Types.Type.Oauth;
-                authFlow = Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
+                authFlow = !string.IsNullOrEmpty(grantType) &&
+                           grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials
+                    ? Proto.DriverAuthFlow.Types.Type.ClientCredentials
+                    : Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
             }
             else
             {
