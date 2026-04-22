@@ -135,40 +135,32 @@ namespace AdbcDrivers.Databricks.Tests.Auth
 
             var httpClient = new HttpClient(handler);
 
-            // First request - should trigger background token refresh but use original token
+            // First request - should trigger token refresh synchronously before sending
             var firstRequest = new HttpRequestMessage(HttpMethod.Get, $"https://{host}/api/2.0/sql/config/warehouses");
-            var startTime = DateTime.UtcNow;
             var firstResponse = await httpClient.SendAsync(firstRequest, CancellationToken.None);
-            var firstRequestDuration = DateTime.UtcNow - startTime;
 
-            // The first request should succeed quickly (not waiting for token refresh)
+            // The first request should succeed with the refreshed token
             firstResponse.EnsureSuccessStatusCode();
             string firstContent = await firstResponse.Content.ReadAsStringAsync();
             Assert.Contains("sql_configuration_parameters", firstContent);
 
-            // Verify the request completed quickly (token refresh happens in background)
-            Assert.True(firstRequestDuration < TimeSpan.FromSeconds(5),
-                $"First request took {firstRequestDuration.TotalMilliseconds}ms, which may indicate it waited for token refresh");
-
-            // Verify the first request used the original token
+            // Verify the first request used the refreshed token (not the original)
             Assert.Single(tokenCapturingHandler.CapturedTokens);
+            Assert.NotEqual(TestConfiguration.AccessToken, tokenCapturingHandler.CapturedTokens[0]);
 
-            // Wait for background token refresh to complete
-            await Task.Delay(TimeSpan.FromSeconds(10));
-
-            // Second request - should use the refreshed token
+            // Second request - should also use the refreshed token (cached, no need to refresh again)
             var secondRequest = new HttpRequestMessage(HttpMethod.Get, $"https://{host}/api/2.0/sql/config/warehouses");
             var secondResponse = await httpClient.SendAsync(secondRequest, CancellationToken.None);
 
-            // The second request should also succeed (now with refreshed token)
+            // The second request should also succeed (with same refreshed token)
             secondResponse.EnsureSuccessStatusCode();
             string secondContent = await secondResponse.Content.ReadAsStringAsync();
             Assert.Contains("sql_configuration_parameters", secondContent);
 
-            // Verify we now have two different tokens
+            // Verify both requests used the same refreshed token (different from original)
             Assert.Equal(2, tokenCapturingHandler.CapturedTokens.Count);
-            Assert.Equal(TestConfiguration.AccessToken, tokenCapturingHandler.CapturedTokens[0]);
-            Assert.NotEqual(TestConfiguration.AccessToken, tokenCapturingHandler.CapturedTokens[1]);
+            Assert.Equal(tokenCapturingHandler.CapturedTokens[0], tokenCapturingHandler.CapturedTokens[1]);
+            Assert.NotEqual(TestConfiguration.AccessToken, tokenCapturingHandler.CapturedTokens[0]);
         }
 
         [SkippableFact]
