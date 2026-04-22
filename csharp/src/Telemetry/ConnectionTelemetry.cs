@@ -305,7 +305,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             };
         }
 
-        private static Proto.DriverConnectionParameters BuildDriverConnectionParams(
+        internal static Proto.DriverConnectionParameters BuildDriverConnectionParams(
             IReadOnlyDictionary<string, string> properties,
             string host,
             bool enableDirectResults,
@@ -321,11 +321,22 @@ namespace AdbcDrivers.Databricks.Telemetry
             properties.TryGetValue(SparkParameters.AuthType, out string? authType);
             properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
 
+            bool isOAuth = SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue)
+                && authTypeValue == SparkAuthType.OAuth;
+
             if (!string.IsNullOrEmpty(grantType) &&
                 grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
             {
                 authMech = Proto.DriverAuthMech.Types.Type.Oauth;
                 authFlow = Proto.DriverAuthFlow.Types.Type.ClientCredentials;
+            }
+            else if (isOAuth)
+            {
+                // OAuth U2M access-token passthrough (e.g., browser flow, GitHub OIDC federation).
+                // authType=oauth with no grant_type (or grant_type=access_token) means the caller
+                // supplied a pre-acquired access token via SparkParameters.AccessToken.
+                authMech = Proto.DriverAuthMech.Types.Type.Oauth;
+                authFlow = Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
             }
             else
             {
