@@ -305,7 +305,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             };
         }
 
-        private static Proto.DriverConnectionParameters BuildDriverConnectionParams(
+        internal static Proto.DriverConnectionParameters BuildDriverConnectionParams(
             IReadOnlyDictionary<string, string> properties,
             string host,
             bool enableDirectResults,
@@ -321,11 +321,16 @@ namespace AdbcDrivers.Databricks.Telemetry
             properties.TryGetValue(SparkParameters.AuthType, out string? authType);
             properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
 
-            if (!string.IsNullOrEmpty(grantType) &&
-                grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials)
+            bool isOAuth = SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue)
+                && authTypeValue == SparkAuthType.OAuth;
+
+            if (isOAuth)
             {
                 authMech = Proto.DriverAuthMech.Types.Type.Oauth;
-                authFlow = Proto.DriverAuthFlow.Types.Type.ClientCredentials;
+                authFlow = !string.IsNullOrEmpty(grantType) &&
+                           grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials
+                    ? Proto.DriverAuthFlow.Types.Type.ClientCredentials
+                    : Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
             }
             else
             {
