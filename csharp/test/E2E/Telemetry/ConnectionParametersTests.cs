@@ -155,6 +155,72 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
+        /// Regression test for PECO-2987: driver_connection_params.host_info.host_url was
+        /// emitted as <c>"https://&lt;host&gt;:443"</c>, differing from JDBC which emits a bare
+        /// hostname. Analysts joining on host across drivers had to normalize. host_url must
+        /// now match JDBC: bare hostname, no scheme, no port suffix. Port is reported
+        /// separately in host_info.port.
+        /// </summary>
+        [SkippableFact]
+        public async Task ConnectionParams_HostInfoHostUrl_IsBareHostname()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+                // Resolve the expected host using the same precedence as DatabricksConnection.GetHost().
+                string? expectedHost = null;
+                if (properties.TryGetValue(SparkParameters.HostName, out string? hostName)
+                    && !string.IsNullOrEmpty(hostName))
+                {
+                    expectedHost = hostName;
+                }
+                else if (properties.TryGetValue(AdbcOptions.Uri, out string? uri)
+                    && !string.IsNullOrEmpty(uri)
+                    && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+                {
+                    expectedHost = parsedUri.Host;
+                }
+
+                Assert.False(string.IsNullOrEmpty(expectedHost),
+                    $"Test configuration must set {SparkParameters.HostName} or {AdbcOptions.Uri}");
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.DriverConnectionParams);
+                Assert.NotNull(protoLog.DriverConnectionParams.HostInfo);
+                string actualHostUrl = protoLog.DriverConnectionParams.HostInfo.HostUrl;
+
+                Assert.False(string.IsNullOrEmpty(actualHostUrl), "host_url should be populated");
+                Assert.Equal(expectedHost, actualHostUrl);
+                Assert.DoesNotContain("://", actualHostUrl);
+                Assert.DoesNotContain(":", actualHostUrl);
+
+                OutputHelper?.WriteLine($"✓ host_info.host_url: {actualHostUrl}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
         /// Tests that enable_arrow is set to true for ADBC driver.
         /// </summary>
         [SkippableFact]
