@@ -822,4 +822,222 @@ Estimated net addition: ~700 LOC. Estimated net deletion: ~0 LOC.
 
 ---
 
+## 18. Auth + TLS integration addendum
+
+Added after initial design circulated. A deep audit of how the Node driver's auth/transport layer interacts with the proposed kernel async surface surfaced five concrete gaps that the original §7 (Authentication) understated. This addendum documents them and proposes additive kernel changes beyond the core async exposure.
+
+### 18.1 Responsibility split — Node resolves, Rust consumes
+
+The Node binding will use the kernel **exclusively in access-token (PAT) mode**. All OAuth flows, federation, external-token callbacks, custom `IAuthentication` subclasses, and token caching stay in TypeScript — where they already exist in the Thrift driver and do not need reimplementing.
+
+```mermaid
+sequenceDiagram
+    participant TS as lib/sea/SeaBackend (TS)
+    participant Auth as IAuthentication chain (TS)<br/>Federation → Cached → External / OAuth / PAT
+    participant NAPI as napi-rs binding
+    participant Rust as Rust kernel<br/>(PersonalAccessToken mode only)
+    participant DBX as Databricks SEA
+
+    Note over TS,Auth: Token resolution, refresh, federation, caching — all TS-side
+    TS->>Auth: authenticate()
+    Auth-->>TS: Bearer token (JWT)
+    TS->>NAPI: stmt.updateAccessToken(token)
+    TS->>NAPI: stmt.execute_async(sql)
+    NAPI->>Rust: Statement.execute_async
+    Rust->>DBX: POST /api/2.0/sql/statements<br/>Authorization: Bearer ...
+    DBX-->>Rust: ExecuteResult
+    Rust-->>NAPI: AsyncResultReader
+    NAPI-->>TS: Promise<Buffer>
+```
+
+**Invariant:** the kernel's OAuth providers (`ClientCredentialsProvider`, `AuthorizationCodeProvider`) are never constructed by the Node binding. Only `PersonalAccessToken` is used. This avoids:
+
+- Duplicate OAuth flows in Rust and TS.
+- Port collision between the two U2M callback servers (both bind localhost port 8030 by default).
+- Duplicate token caches on disk with divergent content.
+
+### 18.2 Kernel gap — `PersonalAccessToken` needs interior mutability
+
+`src/client/http.rs:272-280` uses `OnceLock::set()` for auth-provider installation — second call returns `Err` and today's code panics. Combined with `PersonalAccessToken::token: String` being immutable, this means the Node binding **cannot rotate the bearer token after construction**. Every OAuth token expiry would require tearing down the kernel `Connection` — unusable for long-lived sessions.
+
+**Proposed kernel change:**
+
+```rust
+// src/auth/pat.rs (new)
+pub struct PersonalAccessToken {
+    token: Arc<RwLock<String>>,
+}
+
+impl PersonalAccessToken {
+    pub fn new(token: impl Into<String>) -> Self {
+        Self { token: Arc::new(RwLock::new(token.into())) }
+    }
+
+    /// Atomically replace the held token. Safe to call from any thread
+    /// concurrently with `get_auth_header` calls.
+    pub fn update_token(&self, new_token: impl Into<String>) {
+        *self.token.write().unwrap() = new_token.into();
+    }
+}
+
+impl AuthProvider for PersonalAccessToken {
+    fn get_auth_header(&self) -> Result<String> {
+        Ok(format!("Bearer {}", self.token.read().unwrap()))
+    }
+}
+```
+
+Same addition on `AsyncAuthProvider` impl. Zero change to the trait signatures.
+
+**Estimated cost:** ~20 LOC.
+
+### 18.3 Token-refresh strategy across the FFI
+
+With §18.2 in place, the Node binding drives token freshness with two mechanisms:
+
+1. **Pre-emptive push (primary).** After resolving a token via `IAuthentication`, TS parses the JWT `exp` claim and starts a timer for `exp − 30s`. On fire: re-authenticate, call `nativeConnection.updateAccessToken(fresh)`. Same cadence used by the Thrift driver's `CachedTokenProvider`.
+2. **401 retry (safety net).** If the kernel returns a status-401 error (observable via `napi::Error` mapping), the TS wrapper re-authenticates and retries the operation once. Safe for idempotent metadata ops (`list_catalogs`, etc.); **not** invoked for `execute_statement` — a re-executed query could double-apply side effects.
+
+**CloudFetch chunk downloads use presigned URLs** and require no `Authorization` header, so mid-stream expiry of the Databricks-issued bearer token does not break in-flight downloads. Only the statement-polling loop inside Rust is affected, and that loop picks up the fresh token on its next HTTP request because `get_auth_header()` reads from the `RwLock` on every call.
+
+### 18.4 TLS trust store — the biggest behavioral divergence
+
+The Node driver and the Rust kernel load trust anchors from **different sources**:
+
+| Aspect | Node driver today | Rust kernel |
+|---|---|---|
+| TLS backend | Node's built-in OpenSSL | `reqwest` + `native-tls` (`Cargo.toml:42`) |
+| Default trust anchors | Node's bundled Mozilla CA list | OS system store (macOS Keychain / Linux `/etc/ssl/certs` / Windows SChannel) |
+| `NODE_EXTRA_CA_CERTS` env var | Automatically appended | **Ignored** |
+| `ca` ConnectionOption | `Buffer \| string` — used as full replacement | **Not supported** (kernel accepts file path only) |
+| Config field | `ca` (in-memory) | `TlsConfig.trusted_certificate_path` (file path) |
+| `rejectUnauthorized` default | **`false`** (permissive, see §18.4.1) | `true` (strict) |
+
+**Failure scenarios that break users migrating Thrift → SEA:**
+
+1. Corporate MITM proxy with `NODE_EXTRA_CA_CERTS=/etc/corp-ca.pem` — Thrift works, SEA fails with cert verification error.
+2. User passes `ca: fs.readFileSync('cert.pem')` as Buffer — Thrift works, SEA fails because kernel expects a file path.
+3. CA trusted in Keychain (macOS enterprise auto-installed) but not in Node's bundle — Thrift fails, SEA works (opposite divergence).
+
+**Required changes:**
+
+1. **Node binding (TS side):**
+   - New `ConnectionOptions.caPath: string` — forwarded to Rust's `trusted_certificate_path`.
+   - When user supplies in-memory `ca: Buffer | string`, serialize to a securely-created temp file (`0o600`, auto-cleanup on process exit) and pass the path through.
+   - When `NODE_EXTRA_CA_CERTS` is set and `useSEA: true`, emit a warning: *"SEA backend uses a separate TLS trust store; NODE_EXTRA_CA_CERTS is not applied. Use `caPath` option instead."*
+   - Forward `rejectUnauthorized: false` through to Rust's `allow_self_signed=true` + `allow_hostname_mismatch=true` (both already in `TlsConfig`).
+
+2. **Kernel change (separate PR, outside this design):**
+   - Add `reqwest::Certificate::from_pem(bytes: &[u8])` support so `TlsConfig` can accept in-memory CA bytes, not just file paths. Removes the temp-file dance on the TS side.
+
+#### 18.4.1 `rejectUnauthorized: false` as the Thrift default
+
+`lib/connection/connections/HttpConnection.ts` sets `rejectUnauthorized: false` unconditionally today. That means **the Thrift driver disables server cert verification by default**. Surprising but documented behavior.
+
+To preserve parity, the SEA path must match this default. Flag for discussion with reviewers: do we take this opportunity to introduce a `strictTls: boolean` option (default `false` for parity, move to `true` in a later major) so users who've been unknowingly running without verification can opt into strict mode?
+
+### 18.5 mTLS — a hard gap
+
+| | Node driver today | Rust kernel |
+|---|---|---|
+| Client certificate | Supported (`cert`/`key`/`pfx`/`passphrase`) | **Not supported** |
+| TLS backend hook | `tls.createSecureContext` | `reqwest::Identity` — not currently wired in |
+
+Any user relying on mTLS under Thrift cannot migrate to SEA until the kernel adds client-cert support. **Proposed as a known limitation for the initial SEA GA**, tracked as a separate kernel issue:
+
+> Add `TlsConfig.client_identity_pem_path: Option<String>` (and the corresponding in-memory variant) routed into `reqwest::Identity::from_pem` and `ClientBuilder::identity(identity)`.
+
+Estimated kernel cost: ~30 LOC. Not included in this design's scope.
+
+### 18.6 Proxy divergence
+
+| Aspect | Node | Rust |
+|---|---|---|
+| HTTP proxy | ✓ (via `proxy-agent`) | ✓ |
+| HTTPS proxy | ✓ | ✓ |
+| SOCKS4 / SOCKS5 | ✓ | **✗** |
+| `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` env | ✓ | ✓ |
+| Basic-auth credentials | ✓ | ✓ |
+| ConnectionOption config | `proxy: { protocol, host, port, auth }` | `ProxyConfig { url, username, password, bypass_hosts }` |
+
+**Required:** the SeaBackend must marshal the Node `proxy` ConnectionOption into the kernel's `ProxyConfig`. For `protocol: 'socks4' | 'socks5'`, fail fast with a clear error message at `DBSQLClient.connect()` — do not silently fall back to direct connection.
+
+### 18.7 User-Agent passthrough
+
+Current kernel default at `HttpClientConfig::user_agent`:
+
+```
+Databricks JDBC Driver/14.8.1 JDK/11.0.16 ADBC/1.2.0
+```
+
+A comment in `src/client/http.rs` explains this masquerade triggers Databricks server-side INLINE_OR_EXTERNAL_LINKS disposition. But it misrepresents the client — customer analytics dashboards would categorize every SEA-path query from Node as JDBC-from-JVM, breaking attribution.
+
+**Required:**
+
+1. `HttpClientConfig::user_agent` must be a public settable field.
+2. The Node binding passes `NodejsDatabricksSqlConnector/{version} napi ({nodeVersion}, {os})` derived from the existing `lib/utils/buildUserAgentString.ts` helper.
+
+Flag for reviewers: should the kernel default remain the JDBC masquerade, or move to `DatabricksADBC/{version}` once the server-side disposition-triggering logic no longer depends on UA sniffing?
+
+### 18.8 Read timeout default
+
+`HttpClientConfig::read_timeout` defaults to **60 seconds**. This aborts any SEA statement polling loop where the query runs longer than a minute — i.e., the exact workloads SEA exists to serve (large warehouse queries that run tens of seconds to minutes).
+
+**Required:** the Node binding must override this to a value driven by `ConnectionOptions.socketTimeout` (or a new `requestTimeout`) with a floor of 15 minutes. Document the setting prominently.
+
+### 18.9 Updated open questions
+
+In addition to §15's six questions, add:
+
+7. **Mutable `PersonalAccessToken` on the main design PR or a separate kernel PR?**
+   - Recommendation: separate kernel PR (small, focused, orthogonal). This design PR references it as a prerequisite.
+
+8. **`strictTls` default — match Thrift's permissive default, or make SEA strict from day one?**
+   - Recommendation: match for v1. Introduce strict-by-default in a later major.
+
+9. **User-Agent kernel default — keep the JDBC masquerade, or switch to ADBC branding?**
+   - Needs confirmation from server-side team about whether UA sniffing is still load-bearing for disposition.
+
+10. **mTLS gap — known-limitation for SEA v1, or block GA?**
+    - Recommendation: known-limitation. File a kernel issue and communicate clearly.
+
+11. **Migration warning for `NODE_EXTRA_CA_CERTS` users — runtime log, or fail-fast with documentation link?**
+    - Recommendation: warn-and-proceed at connect time; add to migration docs.
+
+### 18.10 Updated file-by-file change map
+
+Additions to §17:
+
+| File | Change |
+|---|---|
+| `src/auth/pat.rs` | `PersonalAccessToken` gains `Arc<RwLock<String>>` token + `update_token(&self, String)` setter |
+| `src/client/http.rs` | `user_agent` made public-settable on `HttpClientConfig` (no default change for this PR) |
+| `src/client/http.rs` | **(separate PR)** `TlsConfig` gains in-memory CA bytes support via `Certificate::from_pem(&[u8])` |
+| `src/client/http.rs` | **(separate PR)** `TlsConfig` gains `client_identity_pem_path` for mTLS |
+
+Updated LOC estimate for this design: still ~700 LOC net additive. Separate kernel PRs for in-memory CA + mTLS add another ~60 LOC combined.
+
+### 18.11 Updated phased plan
+
+Insert between §10 Phase 2 (Async auth providers) and Phase 3 (Async constructors):
+
+**Phase 2b — Mutable PersonalAccessToken + `update_token` setter.**
+
+- Change `PersonalAccessToken::token` to `Arc<RwLock<String>>`.
+- Add `update_token` method.
+- Verify `get_auth_header` / `get_auth_header_async` read from the lock on every call (not cached).
+- Unit test: concurrent `update_token` + `get_auth_header_async` calls produce a consistent view (never a half-updated token).
+
+**Exit:** a stress test firing `update_token` at 100 Hz while 10 concurrent tasks call `get_auth_header_async` observes no torn reads and no performance cliff.
+
+### 18.12 Updated review focus areas
+
+Added to §16:
+
+7. **Mutable PAT approach (§18.2).** Is `Arc<RwLock<String>>` the right primitive, or would a simpler `ArcSwap<String>` (lock-free) be preferable given the read-heavy access pattern?
+8. **TLS temp-file bridge (§18.4).** Should we accept the temp-file hack for in-memory CA certs in v1 and fix properly in a follow-up, or gate SEA behind the kernel supporting in-memory bytes from day one?
+9. **`rejectUnauthorized: false` parity (§18.4.1).** Ship permissive-by-default (mirroring Thrift), or take the migration as an opportunity to flip to strict?
+
+---
+
 **End of design.**
