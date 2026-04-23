@@ -123,7 +123,7 @@ flowchart TD
 |---|---|---|
 | `http_path` | Populated | |
 | `mode` | Populated | Hardcoded to THRIFT |
-| `host_info` | Populated | |
+| `host_info` | Populated | `host_url` is bare hostname (matches JDBC, PECO-2987); `port` reported separately |
 | `auth_mech` | Populated | PAT or OAUTH |
 | `auth_flow` | Populated | TOKEN_PASSTHROUGH or CLIENT_CREDENTIALS |
 | `use_proxy` | **NOT SET** | |

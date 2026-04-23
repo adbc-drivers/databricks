@@ -346,7 +346,10 @@ namespace AdbcDrivers.Databricks.Telemetry
                 Mode = Proto.DriverMode.Types.Type.Thrift,
                 HostInfo = new Proto.HostDetails
                 {
-                    HostUrl = $"https://{host}:{port}",
+                    // Bare hostname, matching JDBC. Scheme is implicit (always https) and
+                    // port is reported in the sibling Port field, so including them here
+                    // was redundant and forced analysts to normalize across drivers.
+                    HostUrl = host,
                     Port = port
                 },
                 AuthMech = authMech,

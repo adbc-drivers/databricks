@@ -1114,7 +1114,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type.Unspecified, connParams.Mode);
                 Assert.NotNull(connParams.HostInfo);
                 Assert.False(string.IsNullOrEmpty(connParams.HostInfo.HostUrl), "HostUrl should be populated");
-                Assert.Contains("https://", connParams.HostInfo.HostUrl);
+                // host_url is a bare hostname (matches JDBC). Scheme/port must not be embedded
+                // (PECO-2987). Port is reported separately in host_info.port.
+                Assert.DoesNotContain("://", connParams.HostInfo.HostUrl);
                 Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthMech.Types.Type.Unspecified, connParams.AuthMech);
                 Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthFlow.Types.Type.Unspecified, connParams.AuthFlow);
 
