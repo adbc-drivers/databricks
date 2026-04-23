@@ -1040,4 +1040,265 @@ Added to §16:
 
 ---
 
+## 19. Validation pass — Apache ADBC Node driver manager (`@apache-arrow/adbc-driver-manager`)
+
+Added after the initial two sections circulated. PR review feedback pointed at the existing Apache Arrow Node binding as a potential alternative to building our own. While we are not adopting the Apache package for v1 (see §19.7), reading its implementation reveals several concrete patterns that either **validate** our design or **should be adopted**, plus a few places where we **deliberately diverge**.
+
+Source: `apache/arrow-adbc/javascript/` on main as of April 2026. Package `@apache-arrow/adbc-driver-manager@0.24.0`.
+
+### 19.1 Architectural summary of the Apache binding
+
+- **napi-rs 3.0** with `napi = "3.0.0"` and `napi-derive = "3.0.0"`.
+- **No tokio dependency.** Uses napi-rs's `AsyncTask` trait (older libuv-worker-pool model) instead of `#[napi] async fn` with a tokio runtime.
+- **Synchronous Rust layer.** Every method's `compute()` runs on a libuv worker, calls blocking ADBC C API via `adbc_driver_manager`, returns a value; `resolve()` / `reject()` run on the JS thread.
+- **Arrow IPC bytes** as the wire format between Rust and JS — same choice we made in §5.4/§18. Confirmed correct.
+- **`Option<Arc<T>>` / `Option<Arc<Mutex<T>>>`** for stateful fields with explicit `close()` = `take()`.
+- **Structured `AdbcError`** JS class with `code` / `vendorCode` / `sqlState` propagation across the thread boundary.
+- **Node 22+ required**, 5-platform matrix (no musl-linux).
+
+### 19.2 Patterns to adopt verbatim
+
+#### 19.2.1 Structured error class with preserved SQLSTATE
+
+Apache defines a JS `AdbcError extends Error` with fields `code`, `vendorCode`, `sqlState`. Our design's §6 mentioned `SeaError extends HiveDriverError` — we should carry the same fields.
+
+**More importantly**, their Rust side solves a footgun that we would otherwise hit. Per `src/lib.rs:45-50`:
+
+> *Using `env.throw()` in `reject()` creates a pending V8 exception that escapes as an uncaughtException instead of rejecting the Promise.*
+
+Their fix: capture the raw ADBC error during `compute()` into a field on the Task struct, then reconstruct a structured JS Error object during `reject()` using `env.create_error` + `set_named_property`. Never touches `env.throw`.
+
+Pattern to adopt:
+
+```rust
+pub struct ExecuteTask {
+    statement: Arc<Mutex<Statement>>,
+    captured_err: Option<KernelError>,   // ← captured during compute
+}
+
+impl Task for ExecuteTask {
+    fn compute(&mut self) -> Result<Self::Output> {
+        match real_work() {
+            Err(e) => {
+                self.captured_err = Some(e.clone());   // stash for reject
+                Err(to_basic_napi_err(e))
+            }
+            Ok(v) => Ok(v),
+        }
+    }
+
+    fn reject(&mut self, env: Env, err: Error) -> Result<Self::JsValue> {
+        if let Some(kernel_err) = self.captured_err.take() {
+            Err(build_structured_js_error(env, kernel_err))  // structured JS Error
+        } else {
+            Err(err)
+        }
+    }
+}
+```
+
+Our design doc §5 must reference this pattern in every `AsyncTask` we define. Otherwise we ship reject logic that produces uncaughtExceptions instead of Promise rejections — a classic napi-rs production bug.
+
+#### 19.2.2 `Option<Arc<T>>` state with `close() = take()`
+
+Apache's state model is uniform:
+
+```rust
+#[napi]
+pub struct _NativeAdbcDatabase {
+    inner: Option<Arc<CoreDatabase>>,
+}
+
+#[napi]
+impl _NativeAdbcDatabase {
+    #[napi]
+    pub fn close(&mut self) -> Result<()> {
+        self.inner.take();
+        Ok(())
+    }
+}
+```
+
+Every method starts with `let db = self.inner.as_ref().ok_or_else(closed_err)?;` — returns "Object is closed" on post-close usage. AsyncTasks clone the `Arc` into their own state, so a dropped JS wrapper doesn't kill an in-flight task.
+
+**Adopt verbatim.** Replace our design's Drop-spawn-cleanup pattern (§6.4) with this `Option<Arc<...>>` convention where it makes sense (most of our types). Keep spawn-cleanup only for Statement's `close_statement` where the kernel RPC genuinely needs to be issued.
+
+#### 19.2.3 Raw native classes prefixed with underscore; TS wrapper mandatory
+
+Apache exports `_NativeAdbcDatabase`, `_NativeAdbcConnection`, `_NativeAdbcStatement`, `_NativeAdbcResultIterator` — all `_`-prefixed. The user-facing classes are hand-written TS (`lib/index.ts`) that wrap each raw class, promote errors, add convenience methods, and expose a clean API.
+
+Our §17 change map already has `lib/sea/SeaBackend.ts` and friends. What we should explicitly adopt:
+
+- Raw napi classes named `SeaNativeDatabase`, `SeaNativeConnection`, etc. — never exported from `@databricks/sql` directly.
+- `SeaBackend` (TS) wraps them, error-promotes, provides the `IBackend` surface that `DBSQLClient` already consumes.
+- Users of `@databricks/sql` never see a napi class or a napi method. The DBSQLClient facade stays identical.
+
+This is the translation-layer pattern we already discussed — Apache validates it by ending up with the same structure.
+
+#### 19.2.4 `Symbol.asyncDispose` support
+
+Apache's TS classes implement `[Symbol.asyncDispose]` that calls `close()`. Enables `using` / `await using` syntax:
+
+```ts
+{
+    await using session = await client.openSession();
+    // ... use session ...
+}   // close() called automatically
+```
+
+Adopt for our `DBSQLClient`, `DBSQLSession`, `DBSQLOperation`. Low cost (one method per class), high ergonomic value, and matches TC39 explicit resource management. Falls back gracefully on pre-Node-21 runtimes via a `Symbol.asyncDispose ?? Symbol('Symbol.asyncDispose')` guard that Apache also uses.
+
+#### 19.2.5 String-keyed option maps
+
+Apache: `HashMap<String, String>` for database, connection, statement options. ADBC-spec-aligned.
+
+Our SEA path has similar needs (connection params, statement hints). Adopt `HashMap<String, String>` on the Rust side for config options. Map to `Record<string, string>` in TS.
+
+### 19.3 Patterns to deliberately diverge from
+
+#### 19.3.1 Streaming granularity — batch-at-a-time, not drain-into-one-buffer
+
+Apache's `AdbcResultIteratorCore::next()` drains the entire Arrow `RecordBatchReader` on the first call, serializes to one Arrow IPC stream buffer, returns it. `exhausted` flag prevents subsequent calls from returning anything.
+
+```rust
+// Apache's approach (paraphrased from client.rs:421):
+pub fn next(&mut self) -> Result<Option<Vec<u8>>> {
+    if self.exhausted { return Ok(None); }
+    self.exhausted = true;
+
+    let mut output = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut output, &schema)?;
+    for batch in self.reader.by_ref() {
+        writer.write(&batch?)?;
+    }
+    writer.finish()?;
+    Ok(Some(output))
+}
+```
+
+**This is fundamentally incompatible with our workload.** Databricks EXTERNAL_LINKS queries return GBs across hundreds of chunks. Draining all batches into one Buffer would OOM V8 at ~500 MB.
+
+**Our divergence:** `AsyncResultReader::next_batch()` returns **one batch per call**. Our §5.4 already specifies this — validated by the Apache pattern being *wrong* for our scale.
+
+Trade-off we accept: more FFI roundtrips (one per batch). Amortized over the network fetch time per batch (10s–100s of ms), the napi overhead (microseconds) is negligible.
+
+#### 19.3.2 `AsyncTask` + libuv worker pool vs `#[napi] async fn` + tokio
+
+Apache uses `AsyncTask`. Our design proposes `#[napi] async fn`. Both are valid napi-rs patterns — they differ in where the work actually runs:
+
+| | Apache: `AsyncTask` | Us: `#[napi] async fn` |
+|---|---|---|
+| Run location | libuv worker thread pool | napi-rs's shared tokio runtime |
+| Concurrency limit | `UV_THREADPOOL_SIZE` (default 4) | tokio workers (default `num_cpus`) |
+| Kernel's async ops | N/A — kernel is sync | `.await` directly |
+| Best for | Sync Rust work | Async Rust work |
+
+Apache's kernel is sync (the ADBC C API is sync). Our kernel will be async (per this entire design doc). Using `AsyncTask` + `block_on` would:
+
+- Block a libuv worker for the duration of each query.
+- Still require a tokio runtime inside the kernel anyway (for HTTP).
+- Re-introduce the nested-runtime risk we designed §4.3 to avoid.
+
+**We stay with `#[napi] async fn` + napi-rs's tokio integration.** Apache's choice is correct for their context; ours is correct for ours. This is not a contradiction — they're different constraints.
+
+However, there's a real open question: **is our proposed Borrowed-mode runtime (§4.3) the right way to share tokio between napi-rs and the kernel?** Apache sidesteps the question by not having tokio at all. We can't.
+
+Open Question #12 (new): should the kernel in Borrowed mode use napi-rs's shared runtime (via `Handle::current()` inside a napi-rs async context), or a dedicated secondary tokio runtime inside the binding?
+
+#### 19.3.3 Unbounded `std::sync::mpsc` for ingestion streaming
+
+Apache's `push_batch` from JS sends into an unbounded `std::sync::mpsc::Sender<Vec<u8>>`. Comment explicitly notes: *"Unbounded channel: a bounded channel would block the JS main thread."*
+
+Our use case is the reverse direction — kernel produces batches, JS consumes. Backpressure should be applied inside the kernel (already done via `chunks_in_memory: AtomicUsize` in `StreamingCloudFetchProvider` — §6.2). JS consumer pacing naturally back-pressures via `await next_batch()`.
+
+We do NOT need an mpsc channel in the napi-rs binding for result streaming. For parameter bind-stream (the reverse direction), we might adopt Apache's unbounded-mpsc pattern — open for design in a future phase, not included in v1.
+
+#### 19.3.4 Node 22+ requirement
+
+Apache: `"engines": { "node": ">=22.0.0" }`. Justified by `Symbol.asyncDispose` stabilization and napi-rs 3.0 API.
+
+**We cannot take this.** `@databricks/sql` today supports Node 14+. Forcing Node 22+ would break most enterprise users on LTS release trains. We'll target Node 16+ for the SEA path (still a bump, but survivable); async-dispose gets a conditional polyfill as Apache does.
+
+#### 19.3.5 Platform matrix excludes musl
+
+Apache: `darwin-arm64`, `darwin-x64`, `linux-arm64-gnu`, `linux-x64-gnu`, `win32-x64-msvc` — no musl.
+
+**We include `linux-x64-musl`.** Alpine is a common deployment target in Kubernetes; our Thrift driver "just works" on Alpine (pure JS). Excluding musl in the SEA path would be a behavioral regression.
+
+#### 19.3.6 No `cancel()` method
+
+Apache exposes no cancel. ADBC's C API has limited cancellation semantics; they don't work around it.
+
+Our design explicitly defines `cancel_async` (§5.3, §6.3). This is mandatory for SEA — long-running queries on shared warehouses MUST be cancellable to avoid quota impact.
+
+### 19.4 Validation of existing design decisions
+
+Reading the Apache binding confirmed several choices in our design are correct:
+
+| Our design says | Apache does | Conclusion |
+|---|---|---|
+| Arrow IPC bytes as FFI wire format (§3.3) | Same | ✓ Validated |
+| `Box<dyn AsyncResultReader + Send>` returned from execute (§5.3) | `_NativeAdbcResultIterator` wrapping `Arc<Mutex<...>>` | ✓ Same shape |
+| Structured JS error with `sqlState` (§18.8) | `AdbcError` class with `sqlState` | ✓ Validated |
+| TS wrapper over raw napi classes (§4.4, §17) | `lib/index.ts` wraps `_Native*` classes | ✓ Validated |
+| `IBackend` / `SeaBackend` two-layer split | Same two-layer split | ✓ Validated |
+| Arrow schema exposure via serialized Arrow IPC | Same approach | ✓ Validated |
+
+### 19.5 New findings that sharpen our plan
+
+- **napi-rs 3.0.x**, not 2.x, is the target version. Many newer patterns (better `Buffer` ownership, improved `Task` trait) depend on 3.0. Pin `napi = "3.0"` and `napi-derive = "3.0"` in our binding's `Cargo.toml`.
+- **`arrow-ipc` crate (not `arrow`)** for the stream-writer pattern. Confirms our §3.1 analysis that we want fine-grained Arrow deps, not the full `arrow` feature flag.
+- **`napi-build = "2"`** in build-dependencies. Required for the napi-rs 3.x codegen setup.
+
+### 19.6 Capture-then-reject error pattern — explicit addition to §5
+
+Update §5.5 (`AsyncAuthProvider`) and all AsyncTask-backed methods in §5.2–§5.4 to require the capture-then-reject pattern described in §19.2.1. Every async method's Task impl must have a `captured_err` field and a `reject` impl that builds the structured JS error. This is non-negotiable; getting it wrong produces uncaughtExceptions in production instead of Promise rejections.
+
+### 19.7 Why we still don't adopt the Apache package
+
+Even after this analysis validates most of our design, three reasons block adopting Apache's npm directly:
+
+1. **ADBC-compliance coupling.** The Apache driver manager can only load drivers via the ADBC C ABI. If the Databricks kernel ever diverges from ADBC (an active internal discussion — see §18 and the PR conversation thread), the driver manager path breaks. Our custom binding is immune (§19.3).
+
+2. **Alpha status.** `"APIs may change without notice"` is documented in their README. Acceptable for a reference implementation, not for production Databricks driver.
+
+3. **Node 22+ requirement.** Breaks our existing user base on Node 14+/16+/18+/20+. Non-negotiable for v1.
+
+4. **Auth feature gap.** ADBC's options-based auth model covers ~30% of our auth surface (§18.2); the rest (federation, external callbacks, custom `IAuthentication`) requires custom TS-side resolution and kernel-side token mutability — neither exposed via the driver manager's generic API.
+
+We remain **aligned with Apache's design choices** at the binding layer (error shape, state model, TS wrapper pattern, Arrow IPC format, Symbol.asyncDispose) while building our own napi-rs crate that fits our constraints.
+
+### 19.8 Updated open questions
+
+Added to §15:
+
+12. **Runtime model for Borrowed mode (§19.3.2).** Should the Borrowed `Handle` be napi-rs's shared tokio runtime (simpler, but couples lifecycle), or a secondary tokio runtime owned by our napi-rs crate (more isolated, but doubles runtime count)?
+13. **Capture-then-reject error pattern** (§19.2.1, §19.6). Codify as mandatory in the binding style guide, or let each AsyncTask author decide?
+
+### 19.9 Updated file-by-file change map
+
+Additions to §17 (the Node binding repo, `databricks-sql-nodejs`, not the kernel):
+
+| File | Change |
+|---|---|
+| `native/Cargo.toml` | `napi = "3.0"`, `napi-derive = "3.0"`, `napi-build = "2"`; `arrow-ipc`, `arrow-array`, `arrow-schema` >=53.1.0; no `tokio` direct dep (rely on napi-rs's); `adbc-databricks` kernel as path/git dep with async features |
+| `native/src/lib.rs` | Raw napi classes `_NativeSeaDatabase`, `_NativeSeaConnection`, `_NativeSeaStatement`, `_NativeSeaResultIterator` — all with `Option<Arc<...>>` state and `close() = take()` |
+| `native/src/error.rs` | `build_sea_err(env, kernel_err) -> napi::Error` using `create_error` + `set_named_property` pattern; companion `capture_sea_err` / `reject_sea` helpers per §19.2.1 |
+| `lib/sea/SeaError.ts` | `SeaError extends HiveDriverError` with `code`, `vendorCode`, `sqlState`; `fromError()` static to promote raw napi errors |
+| `lib/sea/SeaBackend.ts` | Wraps `_Native*` classes; never exports them |
+| All exported classes | Implement `[Symbol.asyncDispose]` with graceful fallback for pre-Node-21 |
+
+### 19.10 Summary
+
+Apache's implementation is the single best reference we have for napi-rs bindings over ADBC-shaped APIs. Reading it:
+
+- **Validated** our Arrow-IPC-bytes choice, our two-layer TS wrapper, our structured-error shape, our state-model direction.
+- **Exposed a footgun** (using `env.throw` in reject) with a clean fix to adopt.
+- **Highlighted real divergences** (streaming granularity, async vs sync Rust layer, Node version floor, musl support, cancel semantics) — each with a clear reason for our path.
+- **Strengthened** the case for building our own napi-rs binding rather than adopting theirs, on four independent grounds (§19.7).
+
+Net effect on this design: refinement, not redirection. Two new open questions, an additional style-guide requirement (capture-then-reject), and concrete pins for versions and patterns. No phase in §10 needs to shift.
+
+---
+
 **End of design.**
