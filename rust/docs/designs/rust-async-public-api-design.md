@@ -1301,4 +1301,71 @@ Net effect on this design: refinement, not redirection. Two new open questions, 
 
 ---
 
+## 20. Upstream convergence with `apache/arrow-adbc#3714`
+
+Added after review of the active upstream PR that adds async traits to `adbc_core`.
+
+### 20.1 Context
+
+`apache/arrow-adbc#3714` proposes `AsyncDriver` / `AsyncDatabase` / `AsyncConnection` / `AsyncStatement` trait mirrors on the shared ADBC Rust framework. Our kernel already depends on `adbc_core`, so when this PR merges our driver simply adds `impl AsyncStatement for Statement` etc. alongside our existing sync impls.
+
+**Status at the time of this design:** active review, months from merge (waiting on `arrow-rs#7228` for async `RecordBatchStream`, plus the PR needs to be split per reviewer feedback). We ship our interim design now; convergence is a follow-up.
+
+### 20.2 One concrete style adoption — RPITIT
+
+Upstream uses Return-Position Impl Trait In Traits (stable since Rust 1.75), not `#[async_trait]`:
+
+```rust
+// Upstream style (and our style from now on)
+pub trait AsyncResultReader: Send {
+    fn schema(&self) -> impl core::future::Future<Output = Result<SchemaRef>> + Send;
+    fn next_batch(&mut self) -> impl core::future::Future<Output = Result<Option<RecordBatch>>> + Send;
+    fn cancel(&self);
+}
+
+// NOT this:
+#[async_trait]
+pub trait AsyncResultReader: Send {
+    async fn schema(&self) -> Result<SchemaRef>;
+    ...
+}
+```
+
+Benefits: no `async-trait` dependency, no per-call heap allocation for the boxed future, zero-cost convergence when we later swap `AsyncResultReader` for `Pin<Box<dyn RecordBatchStream + Send>>`.
+
+**Supersedes earlier §5.4/§5.5 references to `#[async_trait]`.** Every async trait defined in our kernel (`AsyncResultReader`, `AsyncAuthProvider`, any internals) uses the RPITIT style.
+
+### 20.3 Convergence plan when #3714 merges
+
+Zero behavioral change. Mechanical refactor, estimated ~200 LOC:
+
+| Our design today | After upstream merges |
+|---|---|
+| `impl Statement { pub async fn execute_async(&mut self) -> ... }` (inherent) | `impl adbc_core::non_blocking::AsyncStatement for Statement { fn execute(&mut self) -> impl Future<...> + Send }` (trait) |
+| `pub trait AsyncResultReader` (local) | Drop; use `Pin<Box<dyn RecordBatchStream + Send>>` from upstream |
+| `pub async fn list_catalogs_async`, etc. | Drop; use upstream `AsyncConnection::get_objects` with `depth=Catalogs` |
+| Our `AsyncAuthProvider` trait | Stays — ADBC has no auth trait, this remains Databricks-specific |
+| Inherent async methods | Become trait impl methods with identical bodies |
+| `RuntimeMode::Borrowed(Handle)` | Unchanged — runtime ownership is not prescribed by upstream |
+
+Our napi-rs binding code needs **no changes** during convergence. It calls `stmt.execute().await` either way — inherent method today, trait impl method after.
+
+### 20.4 Reference material
+
+Deep-dive analysis of both the Apache Node driver manager (`@apache-arrow/adbc-driver-manager`) and the upstream async-traits PR lives outside this design doc to keep the design itself focused on architecture rather than investigation. See the companion reference doc at:
+
+> `adbc-upstream-references.md`
+
+It covers the driver manager's napi-rs implementation in depth, the upstream trait shapes and review debates, and a what-to-do-when-#3714-merges runbook. Refer to it when: building the napi-rs binding, reviewing PR #398 feedback, doing the convergence refactor.
+
+### 20.5 Commitment
+
+By using RPITIT from day one and keeping `adbc_core` as a direct dependency, the cost of converging on upstream traits when they land is trivial. This design is an interim implementation that:
+
+- Ships before upstream (by months).
+- Keeps the kernel code organization pre-aligned so the later refactor is mechanical.
+- Does not fork ADBC semantics — we implement the sync `adbc_core` traits today; we'll add the async ones when they exist.
+
+---
+
 **End of design.**
