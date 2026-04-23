@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -302,7 +303,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         private static Proto.DriverSystemConfiguration CreateSystemConfiguration(string assemblyVersion)
         {
             var osVersion = System.Environment.OSVersion;
-            var processName = Process.GetCurrentProcess().ProcessName;
+            // Prefer the entry assembly name so process_name reflects the actual application
+            // (e.g. "MyApp") rather than the .NET host executable name ("dotnet"). Fall back
+            // to the OS process name when there is no entry assembly (e.g. unmanaged hosts).
+            var processName = Assembly.GetEntryAssembly()?.GetName().Name
+                ?? Process.GetCurrentProcess().ProcessName;
             return new Proto.DriverSystemConfiguration
             {
                 DriverVersion = assemblyVersion,
