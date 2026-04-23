@@ -14,7 +14,9 @@
 name: Trigger Integration Tests
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
+  pull_request_target:
+    types: [labeled]
   merge_group:  # Trigger when added to merge queue
 jobs:
   # =============================================================================
@@ -22,6 +24,7 @@ jobs:
   # =============================================================================
   remove-label-on-new-commit:
     if: github.event_name == 'pull_request' && github.event.action == 'synchronize'
+    # Note: runs on pull_request (not pull_request_target) — no secrets needed here
     runs-on: [self-hosted, Linux, X64, peco-driver]
     permissions:
       pull-requests: write
@@ -98,7 +101,7 @@ jobs:
   # (they run as a required gate in the merge queue)
   # =============================================================================
   skip-integration-tests-pr:
-    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Generate GitHub App Token
@@ -153,7 +156,7 @@ jobs:
   # =============================================================================
   trigger-tests-pr:
     if: |
-      github.event_name == 'pull_request' &&
+      github.event_name == 'pull_request_target' &&
       github.event.action == 'labeled' &&
       contains(github.event.pull_request.labels.*.name, 'integration-test')
     runs-on: [self-hosted, Linux, X64, peco-driver]
