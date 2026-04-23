@@ -869,7 +869,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     TotalChunksIterated = _totalChunksIterated,
                     InitialChunkLatencyMs = _initialChunkLatencyMs,
                     SlowestChunkLatencyMs = _slowestChunkLatencyMs,
-                    SumChunksDownloadTimeMs = _sumChunksDownloadTimeMs
+                    SumChunksDownloadTimeMs = _sumChunksDownloadTimeMs,
+                    IsLz4Compressed = _isLz4Compressed
                 };
             }
         }

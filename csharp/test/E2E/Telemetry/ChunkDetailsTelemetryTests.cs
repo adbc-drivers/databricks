@@ -592,5 +592,178 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 TelemetryTestHelpers.ClearExporterOverride();
             }
         }
+
+        /// <summary>
+        /// PECO-2988: is_compressed must reflect the actual per-result compression state,
+        /// not the connection-level LZ4 capability flag.
+        ///
+        /// When CloudFetch is disabled, results stream inline over Thrift and are never
+        /// LZ4-compressed, even if the connection advertises LZ4 capability.
+        /// Prior to the fix, is_compressed echoed the capability flag and reported true here.
+        /// </summary>
+        [SkippableFact]
+        public async Task InlineResults_IsCompressed_IsFalse_EvenWhenLz4CapabilityEnabled()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                // Force the inline Arrow path while advertising LZ4 capability on the connection.
+                // This is the exact scenario that produced is_compressed=true bug reports.
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS value";
+
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                while (await reader.ReadNextRecordBatchAsync() is { } batch)
+                {
+                    batch.Dispose();
+                }
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
+
+                Assert.NotEmpty(logs);
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+                Assert.NotNull(protoLog.SqlOperation);
+
+                Assert.False(protoLog.SqlOperation.IsCompressed,
+                    "is_compressed must be false for inline results regardless of the connection-level LZ4 capability flag (PECO-2988)");
+
+                OutputHelper?.WriteLine($"Inline result: is_compressed={protoLog.SqlOperation.IsCompressed}, execution_result={protoLog.SqlOperation.ExecutionResult}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// PECO-2988: For CloudFetch results, is_compressed should reflect the actual LZ4
+        /// compression state of the downloaded chunks (from <c>metadataResp.Lz4Compressed</c>),
+        /// which maps to the LZ4 capability flag on the connection. When LZ4 is enabled and the
+        /// server returns compressed chunks, is_compressed should be true.
+        /// </summary>
+        [SkippableFact]
+        public async Task CloudFetch_IsCompressed_IsTrueWhenLz4Enabled()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
+
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                while (await reader.ReadNextRecordBatchAsync() is { } batch)
+                {
+                    batch.Dispose();
+                }
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
+
+                Assert.NotEmpty(logs);
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+                Assert.NotNull(protoLog.SqlOperation);
+
+                // Only assert the IsCompressed mapping when the server actually returned CloudFetch chunks.
+                if (protoLog.SqlOperation.ExecutionResult != ExecutionResult.Types.Format.ExternalLinks)
+                {
+                    Skip.If(true, $"Test skipped: server returned {protoLog.SqlOperation.ExecutionResult}, not CloudFetch");
+                }
+
+                Assert.True(protoLog.SqlOperation.IsCompressed,
+                    "is_compressed must be true for CloudFetch results when LZ4 is enabled and chunks were compressed by the server (PECO-2988)");
+
+                OutputHelper?.WriteLine($"CloudFetch result: is_compressed={protoLog.SqlOperation.IsCompressed}, execution_result={protoLog.SqlOperation.ExecutionResult}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// PECO-2988: For CloudFetch results with LZ4 disabled at the connection, chunks are
+        /// not LZ4-compressed and is_compressed must be false.
+        /// </summary>
+        [SkippableFact]
+        public async Task CloudFetch_IsCompressed_IsFalseWhenLz4Disabled()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.EnableDirectResults] = "false",
+                    [DatabricksParameters.CanDecompressLz4] = "false",
+                    [DatabricksParameters.MaxBytesPerFile] = "10485760",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
+
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                while (await reader.ReadNextRecordBatchAsync() is { } batch)
+                {
+                    batch.Dispose();
+                }
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
+
+                Assert.NotEmpty(logs);
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+                Assert.NotNull(protoLog.SqlOperation);
+
+                if (protoLog.SqlOperation.ExecutionResult != ExecutionResult.Types.Format.ExternalLinks)
+                {
+                    Skip.If(true, $"Test skipped: server returned {protoLog.SqlOperation.ExecutionResult}, not CloudFetch");
+                }
+
+                Assert.False(protoLog.SqlOperation.IsCompressed,
+                    "is_compressed must be false for CloudFetch results when LZ4 is disabled on the connection (PECO-2988)");
+
+                OutputHelper?.WriteLine($"CloudFetch (LZ4 disabled) result: is_compressed={protoLog.SqlOperation.IsCompressed}, execution_result={protoLog.SqlOperation.ExecutionResult}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
     }
 }

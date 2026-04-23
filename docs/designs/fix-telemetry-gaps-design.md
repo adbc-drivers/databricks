@@ -142,7 +142,7 @@ flowchart TD
 | Proto Field | Status | Notes |
 |---|---|---|
 | `statement_type` | Populated | QUERY or UPDATE |
-| `is_compressed` | Populated | From LZ4 flag |
+| `is_compressed` | Populated | From the actual per-result compression state (PECO-2988). Sourced from `ChunkMetrics.IsLz4Compressed` for CloudFetch results (which mirrors the server's `metadataResp.Lz4Compressed`); `false` for inline results regardless of the connection-level LZ4 capability flag. |
 | `execution_result` | Populated | INLINE_ARROW or EXTERNAL_LINKS |
 | `chunk_id` | Not applicable | For individual chunk failure events |
 | `retry_count` | **NOT SET** | Should track retries |

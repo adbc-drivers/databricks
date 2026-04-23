@@ -113,7 +113,10 @@ namespace AdbcDrivers.Databricks
             var ctx = new StatementTelemetryContext(session);
             ctx.OperationType = OperationType.ExecuteStatement;
             ctx.StatementType = statementType;
-            ctx.IsCompressed = canDecompressLz4;
+            // IsCompressed is populated from the actual result stream in EmitTelemetry, not the
+            // connection-level capability flag. Default to false; overridden for CloudFetch results
+            // whose chunks were LZ4-compressed per server metadataResp.Lz4Compressed.
+            ctx.IsCompressed = false;
             ctx.IsInternalCall = IsInternalCall;
             return ctx;
         }
@@ -283,8 +286,8 @@ namespace AdbcDrivers.Databricks
             {
                 ctx.RecordResultsConsumed();
 
-                // Extract chunk metrics if this was a CloudFetch query
-                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped)
+                // Extract chunk metrics if this was a CloudFetch query.
+                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped).
                 ChunkMetrics? metrics = null;
                 if (_lastQueryResult?.Stream is CloudFetchReader cfReader)
                 {
@@ -307,6 +310,14 @@ namespace AdbcDrivers.Databricks
                     {
                         // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
                     }
+                }
+
+                // Set IsCompressed from the actual result stream, not the connection-level LZ4
+                // capability flag. Inline results report false; CloudFetch results report the real
+                // chunk compression state from metrics.IsLz4Compressed (PECO-2988).
+                if (metrics != null && metrics.TotalChunksIterated > 0)
+                {
+                    ctx.IsCompressed = metrics.IsLz4Compressed;
                 }
 
                 // Set chunk details if we have metrics and at least one chunk was iterated

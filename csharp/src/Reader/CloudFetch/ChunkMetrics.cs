@@ -51,5 +51,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// This is the total time spent downloading (excluding parallel overlap).
         /// </summary>
         public long SumChunksDownloadTimeMs { get; internal set; }
+
+        /// <summary>
+        /// Gets a value indicating whether the CloudFetch chunks were LZ4-compressed.
+        /// Reflects the actual server-reported compression state of the downloaded chunks
+        /// (from <c>metadataResp.Lz4Compressed</c>), not the connection-level capability flag.
+        /// </summary>
+        public bool IsLz4Compressed { get; internal set; }
     }
 }
