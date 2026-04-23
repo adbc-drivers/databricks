@@ -92,7 +92,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 }
 
                 HttpClient telemetryHttpClient = HttpClientFactory.CreateTelemetryHttpClient(
-                    properties, host, assemblyVersion, oauthTokenProvider);
+                    properties, host, oauthTokenProvider);
 
                 ITelemetryClient telemetryClient = TelemetryClientManager.GetInstance().GetOrCreateClient(
                     host,

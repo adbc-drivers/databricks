@@ -30,6 +30,8 @@ namespace AdbcDrivers.Databricks.Http
     /// </summary>
     internal static class HttpClientFactory
     {
+        private static readonly string s_assemblyVersion = typeof(HttpClientFactory).Assembly.GetName().Version.ToString(3);
+
         /// <summary>
         /// Creates an HttpClientHandler with TLS and proxy settings from connection properties.
         /// This is the base handler used by all HttpClient instances.
@@ -86,12 +88,10 @@ namespace AdbcDrivers.Databricks.Http
         /// </summary>
         /// <param name="properties">Connection properties.</param>
         /// <param name="host">The Databricks host (without protocol).</param>
-        /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
         /// <returns>Configured HttpClient for feature flags.</returns>
         public static HttpClient CreateFeatureFlagHttpClient(
             IReadOnlyDictionary<string, string> properties,
-            string host,
-            string assemblyVersion)
+            string host)
         {
             const int DefaultFeatureFlagTimeoutSeconds = 10;
 
@@ -110,7 +110,7 @@ namespace AdbcDrivers.Databricks.Http
             };
 
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
-                UserAgentHelper.GetUserAgent(assemblyVersion, properties));
+                UserAgentHelper.GetUserAgent(s_assemblyVersion, properties));
 
             string? orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
             if (!string.IsNullOrEmpty(orgId))
@@ -126,13 +126,11 @@ namespace AdbcDrivers.Databricks.Http
         /// </summary>
         /// <param name="properties">Connection properties.</param>
         /// <param name="host">The Databricks host (without protocol).</param>
-        /// <param name="assemblyVersion">The driver version for the User-Agent.</param>
         /// <param name="existingTokenProvider">Optional existing OAuthClientCredentialsProvider to reuse for token caching.</param>
         /// <returns>Configured HttpClient for telemetry.</returns>
         public static HttpClient CreateTelemetryHttpClient(
             IReadOnlyDictionary<string, string> properties,
             string host,
-            string assemblyVersion,
             Auth.OAuthClientCredentialsProvider? existingTokenProvider = null)
         {
             const int DefaultTelemetryTimeoutSeconds = 10;
@@ -148,7 +146,7 @@ namespace AdbcDrivers.Databricks.Http
             };
 
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
-                UserAgentHelper.GetUserAgent(assemblyVersion, properties));
+                UserAgentHelper.GetUserAgent(s_assemblyVersion, properties));
 
             string? orgId = PropertyHelper.ParseOrgIdFromProperties(properties);
             if (!string.IsNullOrEmpty(orgId))

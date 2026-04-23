@@ -51,9 +51,9 @@ namespace AdbcDrivers.Databricks
     internal class DatabricksConnection : SparkHttpConnection
     {
         internal const string DatabricksDriverName = "ADBC Databricks Driver";
-        internal const string DriverVersion = "1.1.0";
         internal static new readonly string s_assemblyName = ApacheUtility.GetAssemblyName(typeof(DatabricksConnection));
         internal static new readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(DatabricksConnection));
+        private readonly Lazy<string> _assemblyVersion;
 
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
@@ -140,6 +140,9 @@ namespace AdbcDrivers.Databricks
             System.Buffers.ArrayPool<byte>? lz4BufferPool)
             : base(properties)
         {
+            // This handles if class is inherited and ensures assembly version is always from the actual runtime type
+            _assemblyVersion = new(() => GetType().Assembly.GetName().Version.ToString(3));
+
             // Use provided manager (from Database) or create new instance (for direct construction)
             RecyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             // Use provided pool (from Database) or create new instance (for direct construction)
@@ -442,7 +445,7 @@ namespace AdbcDrivers.Databricks
         protected override bool GetObjectsPatternsRequireLowerCase => true;
 
         protected override string DriverName => DatabricksDriverName;
-        protected override string ProductVersionDefault => DriverVersion;
+        protected override string ProductVersionDefault => _assemblyVersion.Value;
 
         /// <summary>
         /// Overrides GetObjects to emit telemetry with appropriate operation type based on depth.

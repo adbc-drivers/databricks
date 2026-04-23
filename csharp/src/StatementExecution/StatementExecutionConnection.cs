@@ -49,6 +49,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly HttpClient _cloudFetchHttpClient; // Separate HttpClient without auth headers for CloudFetch downloads
         private readonly IReadOnlyDictionary<string, string> _properties;
         private readonly bool _ownsHttpClient;
+        private readonly Lazy<string> _assemblyVersion;
 
         // Session management
         private string? _sessionId;
@@ -117,6 +118,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             bool ownsHttpClient)
             : base(properties) // Initialize TracingConnection base class
         {
+            _assemblyVersion = new Lazy<string>(() => GetType().Assembly.GetName().Version.ToString(3));
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
             _ownsHttpClient = ownsHttpClient;
 
@@ -352,7 +354,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             // Use DatabricksJDBCDriverOSS prefix for server-side feature compatibility
             // (e.g., INLINE_OR_EXTERNAL_LINKS disposition support)
-            string baseUserAgent = $"DatabricksJDBCDriverOSS/{DatabricksConnection.DriverVersion} (ADBC)";
+            string baseUserAgent = $"DatabricksJDBCDriverOSS/{AssemblyVersion} (ADBC)";
 
             // Check if a client has provided a user-agent entry
             string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
@@ -908,7 +910,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // TracingConnection provides IActivityTracer implementation
         internal bool EnableComplexDatatypeSupport => _enableComplexDatatypeSupport;
 
-        public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
+        public override string AssemblyVersion => _assemblyVersion.Value;
+
         public override string AssemblyName => "AdbcDrivers.Databricks";
     }
 }

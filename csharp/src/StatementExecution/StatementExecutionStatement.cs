@@ -42,6 +42,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// </summary>
     internal class StatementExecutionStatement : TracingStatement
     {
+        private readonly Lazy<string> _assemblyVersion;
         private readonly IStatementExecutionClient _client;
         private readonly string? _sessionId;
         private readonly string _warehouseId;
@@ -106,6 +107,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             StatementExecutionConnection connection)
             : base(connection)
         {
+            _assemblyVersion = new Lazy<string>(() => GetType().Assembly.GetName().Version.ToString(3));
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _sessionId = sessionId;
@@ -1399,7 +1401,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         // TracingStatement implementation
-        public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
+        public override string AssemblyVersion => _assemblyVersion.Value;
         public override string AssemblyName => "AdbcDrivers.Databricks";
 
         // ─── Helpers for GetColumnsExtended fallback (mirrors HiveServer2Statement) ──
