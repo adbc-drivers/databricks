@@ -111,6 +111,9 @@ namespace AdbcDrivers.Databricks
         // Shared OAuth token provider for connection-wide token caching
         private OAuthClientCredentialsProvider? _oauthTokenProvider;
 
+        // Shared HttpClient for CloudFetch downloads (created once, reused across queries)
+        private HttpClient? _cloudFetchHttpClient;
+
         // Telemetry
         private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
         internal TelemetrySessionContext? TelemetrySession => _telemetry.Session;
@@ -505,8 +508,9 @@ namespace AdbcDrivers.Databricks
                 databricksStatement.StatementId = new Guid(response.OperationHandle.OperationId.Guid).ToString();
             }
 
-            HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
-            return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
+            // Reuse the shared CloudFetch HttpClient (created once per connection, disposed with connection)
+            _cloudFetchHttpClient ??= HttpClientFactory.CreateCloudFetchHttpClient(Properties);
+            return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, _cloudFetchHttpClient);
         }
 
         internal override SchemaParser SchemaParser => new DatabricksSchemaParser();
@@ -1002,6 +1006,10 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
+                // Dispose the shared CloudFetch HttpClient
+                _cloudFetchHttpClient?.Dispose();
+                _cloudFetchHttpClient = null;
+
                 // Clean up telemetry client
                 // This is synchronous because Dispose() cannot be async
                 // We use GetAwaiter().GetResult() to block, which is acceptable in Dispose
