@@ -89,9 +89,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             // Process the initial external links (chunk 0)
             ProcessExternalLinks(_initialExternalLinks, cancellationToken);
-            _currentChunkIndex = 1; // Start fetching from chunk 1
 
-            // Check if there are more chunks to fetch
+            // Use next_chunk_index from the last link to determine continuation
+            var lastInitialLink = _initialExternalLinks[_initialExternalLinks.Count - 1];
+            _currentChunkIndex = (int)(lastInitialLink.NextChunkIndex ?? _manifest.TotalChunkCount);
             _hasMoreResults = _currentChunkIndex < _manifest.TotalChunkCount;
         }
 
@@ -131,9 +132,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 if (resultData.ExternalLinks != null && resultData.ExternalLinks.Count > 0)
                 {
                     ProcessExternalLinks(resultData.ExternalLinks, cancellationToken);
+                    // Use next_chunk_index from the last link to determine the next fetch
+                    var lastLink = resultData.ExternalLinks[resultData.ExternalLinks.Count - 1];
+                    _currentChunkIndex = (int)(lastLink.NextChunkIndex ?? _manifest.TotalChunkCount);
+                }
+                else
+                {
+                    _currentChunkIndex = (int)_manifest.TotalChunkCount;
                 }
 
-                _currentChunkIndex++;
                 _hasMoreResults = _currentChunkIndex < _manifest.TotalChunkCount;
             }
             catch (Exception ex)
