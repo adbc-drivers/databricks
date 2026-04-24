@@ -132,15 +132,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 if (resultData.ExternalLinks != null && resultData.ExternalLinks.Count > 0)
                 {
                     ProcessExternalLinks(resultData.ExternalLinks, cancellationToken);
-                    // Use next_chunk_index from the last link to determine the next fetch
-                    var lastLink = resultData.ExternalLinks[resultData.ExternalLinks.Count - 1];
-                    _currentChunkIndex = (int)(lastLink.NextChunkIndex ?? _manifest.TotalChunkCount);
-                }
-                else
-                {
-                    _currentChunkIndex = (int)_manifest.TotalChunkCount;
                 }
 
+                // Use next_chunk_index from the last link to determine the next fetch;
+                // null (or no links) means no more chunks
+                var lastLink = resultData.ExternalLinks != null && resultData.ExternalLinks.Count > 0
+                    ? resultData.ExternalLinks[resultData.ExternalLinks.Count - 1]
+                    : null;
+                _currentChunkIndex = (int)(lastLink?.NextChunkIndex ?? _manifest.TotalChunkCount);
                 _hasMoreResults = _currentChunkIndex < _manifest.TotalChunkCount;
             }
             catch (Exception ex)
