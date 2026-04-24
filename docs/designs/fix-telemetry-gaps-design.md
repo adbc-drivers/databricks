@@ -109,7 +109,7 @@ flowchart TD
 | `runtime_version` | Populated | Environment.Version |
 | `runtime_vendor` | **NOT SET** | Should be "Microsoft" for .NET |
 | `os_name` | Populated | OSVersion.Platform |
-| `os_version` | Populated | OSVersion.Version |
+| `os_version` | Populated | `/etc/os-release` PRETTY_NAME on Linux, else `RuntimeInformation.OSDescription` (see PECO-2986) |
 | `os_arch` | Populated | RuntimeInformation.OSArchitecture |
 | `driver_name` | Populated | "Databricks ADBC Driver" |
 | `client_app_name` | **NOT SET** | Should come from connection property or user-agent |
@@ -123,7 +123,7 @@ flowchart TD
 |---|---|---|
 | `http_path` | Populated | |
 | `mode` | Populated | Hardcoded to THRIFT |
-| `host_info` | Populated | |
+| `host_info` | Populated | `host_url` is bare hostname (matches JDBC, PECO-2987); `port` reported separately |
 | `auth_mech` | Populated | PAT or OAUTH |
 | `auth_flow` | Populated | TOKEN_PASSTHROUGH or CLIENT_CREDENTIALS |
 | `use_proxy` | **NOT SET** | |
@@ -669,22 +669,23 @@ Fix all gaps in the existing Thrift telemetry pipeline first, since the infrastr
 13. Track `retry_count` on SqlExecutionEvent
 14. Mark internal calls with `is_internal_call = true`
 15. Add metadata operation telemetry (GetObjects, GetTableTypes)
-16. Verify all Phase 1 E2E tests pass
+16. Fix `os_version` to report the Linux distro PRETTY_NAME instead of the bare kernel version (PECO-2986)
+17. Verify all Phase 1 E2E tests pass
 
 ### Phase 2: SEA Telemetry (Wire Telemetry into StatementExecutionConnection)
 
 Once Thrift telemetry is complete, extend coverage to the SEA protocol using the shared `TelemetryHelper`.
 
 **E2E Tests (test-first):**
-17. Write failing E2E tests for SEA telemetry (expect telemetry events from SEA connections)
+18. Write failing E2E tests for SEA telemetry (expect telemetry events from SEA connections)
 
 **Implementation:**
-18. Extract `TelemetryHelper` from `DatabricksConnection` for shared use (already done - verify coverage)
-19. Wire `InitializeTelemetry()` into `StatementExecutionConnection` with `mode=SEA`
-20. Add `EmitTelemetry()` to `StatementExecutionStatement`
-21. Wire telemetry dispose/flush into `StatementExecutionConnection.Dispose()`
-22. Wire `SetChunkDetails()` in `StatementExecutionStatement.EmitTelemetry()` for SEA CloudFetch
-23. Verify all Phase 2 SEA E2E tests pass
+19. Extract `TelemetryHelper` from `DatabricksConnection` for shared use (already done - verify coverage)
+20. Wire `InitializeTelemetry()` into `StatementExecutionConnection` with `mode=SEA`
+21. Add `EmitTelemetry()` to `StatementExecutionStatement`
+22. Wire telemetry dispose/flush into `StatementExecutionConnection.Dispose()`
+23. Wire `SetChunkDetails()` in `StatementExecutionStatement.EmitTelemetry()` for SEA CloudFetch
+24. Verify all Phase 2 SEA E2E tests pass
 
 ---
 

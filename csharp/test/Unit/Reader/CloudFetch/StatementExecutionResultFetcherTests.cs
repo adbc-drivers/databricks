@@ -310,7 +310,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
                             RowOffset = 0,
                             RowCount = 100,
                             ByteCount = 1024,
-                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O")
+                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O"),
+                            NextChunkIndex = 1
                         }
                     }
                 });
@@ -331,7 +332,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
                             RowOffset = 100,
                             RowCount = 100,
                             ByteCount = 1024,
-                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O")
+                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O"),
+                            NextChunkIndex = null
                         }
                     }
                 });
@@ -361,6 +363,104 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
 
             // 2 download results + end guard
             Assert.Equal(3, results.Count);
+        }
+
+        [Fact]
+        public async Task StartAsync_WithBatchReturningMultipleLinks_UsesNextChunkIndexNotSequentialCounter()
+        {
+            // Server returns links for chunks 0 and 1 in a single /chunks/0 response.
+            // The driver must use next_chunk_index from the last link (= 2) for the next call,
+            // and must NOT redundantly call /chunks/1.
+            var manifest = new ResultManifest
+            {
+                TotalChunkCount = 3,
+                TotalRowCount = 300,
+                Chunks = new List<ResultChunk>
+                {
+                    new ResultChunk { ChunkIndex = 0, RowOffset = 0, RowCount = 100, ByteCount = 1024 },
+                    new ResultChunk { ChunkIndex = 1, RowOffset = 100, RowCount = 100, ByteCount = 1024 },
+                    new ResultChunk { ChunkIndex = 2, RowOffset = 200, RowCount = 100, ByteCount = 1024 }
+                }
+            };
+
+            _mockClient.Setup(c => c.GetResultChunkAsync(_testStatementId, 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResultData
+                {
+                    ExternalLinks = new List<ExternalLink>
+                    {
+                        new ExternalLink { ChunkIndex = 0, ExternalLinkUrl = "https://s3/chunk0.arrow", RowOffset = 0, RowCount = 100, ByteCount = 1024, Expiration = DateTime.UtcNow.AddHours(1).ToString("O") },
+                        new ExternalLink { ChunkIndex = 1, ExternalLinkUrl = "https://s3/chunk1.arrow", RowOffset = 100, RowCount = 100, ByteCount = 1024, Expiration = DateTime.UtcNow.AddHours(1).ToString("O"), NextChunkIndex = 2 }
+                    }
+                });
+
+            _mockClient.Setup(c => c.GetResultChunkAsync(_testStatementId, 2, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResultData
+                {
+                    ExternalLinks = new List<ExternalLink>
+                    {
+                        new ExternalLink { ChunkIndex = 2, ExternalLinkUrl = "https://s3/chunk2.arrow", RowOffset = 200, RowCount = 100, ByteCount = 1024, Expiration = DateTime.UtcNow.AddHours(1).ToString("O"), NextChunkIndex = null }
+                    }
+                });
+
+            var fetcher = new StatementExecutionResultFetcher(
+                _mockClient.Object, _testStatementId, manifest, initialExternalLinks: null,
+                _mockMemoryManager.Object, _downloadQueue);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await fetcher.StartAsync(cts.Token);
+            await WaitForFetcherCompletionAsync(fetcher, cts.Token);
+
+            // Must call chunk 0 and chunk 2, but NOT chunk 1 (already returned in chunk 0 batch)
+            _mockClient.Verify(c => c.GetResultChunkAsync(_testStatementId, 0, It.IsAny<CancellationToken>()), Times.Once);
+            _mockClient.Verify(c => c.GetResultChunkAsync(_testStatementId, 1, It.IsAny<CancellationToken>()), Times.Never);
+            _mockClient.Verify(c => c.GetResultChunkAsync(_testStatementId, 2, It.IsAny<CancellationToken>()), Times.Once);
+
+            var results = DrainQueue();
+            // 3 links (chunks 0, 1, 2) + end guard
+            Assert.Equal(4, results.Count);
+            Assert.IsType<EndOfResultsGuard>(results.Last());
+        }
+
+        [Fact]
+        public async Task StartAsync_WithNullNextChunkIndex_StopsEarlyRegardlessOfTotalChunkCount()
+        {
+            // TotalChunkCount says 3 chunks exist, but server signals end via next_chunk_index = null
+            var manifest = new ResultManifest
+            {
+                TotalChunkCount = 3,
+                TotalRowCount = 300,
+                Chunks = new List<ResultChunk>
+                {
+                    new ResultChunk { ChunkIndex = 0, RowOffset = 0, RowCount = 100, ByteCount = 1024 }
+                }
+            };
+
+            _mockClient.Setup(c => c.GetResultChunkAsync(_testStatementId, 0, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResultData
+                {
+                    ExternalLinks = new List<ExternalLink>
+                    {
+                        new ExternalLink { ChunkIndex = 0, ExternalLinkUrl = "https://s3/chunk0.arrow", RowOffset = 0, RowCount = 100, ByteCount = 1024, Expiration = DateTime.UtcNow.AddHours(1).ToString("O"), NextChunkIndex = null }
+                    }
+                });
+
+            var fetcher = new StatementExecutionResultFetcher(
+                _mockClient.Object, _testStatementId, manifest, initialExternalLinks: null,
+                _mockMemoryManager.Object, _downloadQueue);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await fetcher.StartAsync(cts.Token);
+            await WaitForFetcherCompletionAsync(fetcher, cts.Token);
+
+            // Only chunk 0 fetched; chunks 1 and 2 never called
+            _mockClient.Verify(c => c.GetResultChunkAsync(_testStatementId, 0, It.IsAny<CancellationToken>()), Times.Once);
+            _mockClient.Verify(c => c.GetResultChunkAsync(_testStatementId, 1, It.IsAny<CancellationToken>()), Times.Never);
+            _mockClient.Verify(c => c.GetResultChunkAsync(_testStatementId, 2, It.IsAny<CancellationToken>()), Times.Never);
+
+            var results = DrainQueue();
+            // 1 link + end guard
+            Assert.Equal(2, results.Count);
+            Assert.IsType<EndOfResultsGuard>(results.Last());
         }
 
         #endregion
@@ -600,6 +700,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
             };
 
             // Initial external links for chunk 0 (from result.external_links)
+            // Set NextChunkIndex so the fetcher knows to continue to chunk 1 (if there are more chunks)
             var initialExternalLinks = new List<ExternalLink>
             {
                 new ExternalLink
@@ -609,11 +710,22 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
                     RowOffset = 0,
                     RowCount = 100,
                     ByteCount = 1024,
-                    Expiration = DateTime.UtcNow.AddHours(1).ToString("O")
+                    Expiration = DateTime.UtcNow.AddHours(1).ToString("O"),
+                    NextChunkIndex = chunkCount > 1 ? (long?)1 : null
                 }
             };
 
             return (manifest, initialExternalLinks);
+        }
+
+        private List<IDownloadResult> DrainQueue()
+        {
+            var results = new List<IDownloadResult>();
+            while (_downloadQueue.TryTake(out var result, TimeSpan.FromMilliseconds(100)))
+            {
+                results.Add(result);
+            }
+            return results;
         }
 
         private async Task WaitForFetcherCompletionAsync(StatementExecutionResultFetcher fetcher, CancellationToken cancellationToken)

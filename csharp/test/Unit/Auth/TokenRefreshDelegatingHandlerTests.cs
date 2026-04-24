@@ -114,22 +114,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
             Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
             Assert.Equal(_initialToken, capturedRequest.Headers.Authorization?.Parameter);
 
-            // Wait for background task to complete
-            await Task.Delay(1000);
-
             _mockTokenExchangeClient.Verify(
                 x => x.RefreshTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
                 Times.Never);
         }
 
         [Fact]
-        public async Task SendAsync_WithTokenNearExpiry_StartsTokenRenewalInBackground()
+        public async Task SendAsync_WithTokenNearExpiry_BlocksAndUsesNewToken()
         {
-            // Arrange
             var nearExpiryTime = DateTime.UtcNow.AddMinutes(5); // Within renewal limit
             var newToken = "new-renewed-token";
             var newExpiry = DateTime.UtcNow.AddHours(1);
-            var tokenExchangeDelay = TimeSpan.FromMilliseconds(500);
 
             var handler = new TokenRefreshDelegatingHandler(
                 _mockInnerHandler.Object,
@@ -137,9 +132,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
                 _initialToken,
                 nearExpiryTime,
                 _tokenRenewLimitMinutes);
-
-            var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
-            var expectedResponse = new HttpResponseMessage(HttpStatusCode.OK);
 
             var tokenExchangeResponse = new TokenExchangeResponse
             {
@@ -151,11 +143,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
 
             _mockTokenExchangeClient
                 .Setup(x => x.RefreshTokenAsync(_initialToken, It.IsAny<CancellationToken>()))
-                .Returns(async (string token, CancellationToken ct) =>
-                {
-                    await Task.Delay(tokenExchangeDelay, ct);
-                    return tokenExchangeResponse;
-                });
+                .ReturnsAsync(tokenExchangeResponse);
 
             HttpRequestMessage? capturedRequest = null;
 
@@ -165,43 +153,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
                     ItExpr.IsAny<HttpRequestMessage>(),
                     ItExpr.IsAny<CancellationToken>())
                 .Callback<HttpRequestMessage, CancellationToken>((req, ct) => capturedRequest = req)
-                .ReturnsAsync(expectedResponse);
-
-            var httpClient = new HttpClient(handler);
-
-            // Make the first request - this should use the original token and start background refresh
-            var startTime = DateTime.UtcNow;
-            var response = await httpClient.SendAsync(request);
-            var requestDuration = DateTime.UtcNow - startTime;
-
-            Assert.Equal(expectedResponse, response);
-            Assert.True(requestDuration < tokenExchangeDelay,
-                $"Request took {requestDuration.TotalMilliseconds}ms, which is longer than the token refresh delay of {tokenExchangeDelay.TotalMilliseconds}ms");
-
-            Assert.NotNull(capturedRequest);
-            Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
-            Assert.Equal(_initialToken, capturedRequest.Headers.Authorization?.Parameter); // First request uses original token
-
-            // Wait a bit for the background task to complete
-            await Task.Delay(tokenExchangeDelay + TimeSpan.FromMilliseconds(1000));
-
-            // Make a second request - this should use the new token
-            var request2 = new HttpRequestMessage(HttpMethod.Get, "https://example.com/2");
-            HttpRequestMessage? capturedRequest2 = null;
-
-            _mockInnerHandler.Protected()
-                .Setup<Task<HttpResponseMessage>>(
-                    "SendAsync",
-                    ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.PathAndQuery == "/2"),
-                    ItExpr.IsAny<CancellationToken>())
-                .Callback<HttpRequestMessage, CancellationToken>((req, ct) => capturedRequest2 = req)
                 .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
 
-            await httpClient.SendAsync(request2);
+            var httpClient = new HttpClient(handler);
+            await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Get, "https://example.com"));
 
-            Assert.NotNull(capturedRequest2);
-            Assert.Equal("Bearer", capturedRequest2.Headers.Authorization?.Scheme);
-            Assert.Equal(newToken, capturedRequest2.Headers.Authorization?.Parameter); // Second request uses new token
+            // Request blocks until refresh completes — first request already uses the new token
+            Assert.NotNull(capturedRequest);
+            Assert.Equal(newToken, capturedRequest.Headers.Authorization?.Parameter);
 
             _mockTokenExchangeClient.Verify(
                 x => x.RefreshTokenAsync(_initialToken, It.IsAny<CancellationToken>()),
@@ -209,7 +168,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
         }
 
         [Fact]
-        public async Task SendAsync_WithTokenExchangeFailure_ContinuesWithOriginalToken()
+        public async Task SendAsync_WithTokenRefreshFailure_ContinuesWithOriginalToken()
         {
             var nearExpiryTime = DateTime.UtcNow.AddMinutes(5); // Within renewal limit
 
@@ -220,13 +179,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
                 nearExpiryTime,
                 _tokenRenewLimitMinutes);
 
-            var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
-            var expectedResponse = new HttpResponseMessage(HttpStatusCode.OK);
-
-            // Setup token exchange to fail
             _mockTokenExchangeClient
                 .Setup(x => x.RefreshTokenAsync(_initialToken, It.IsAny<CancellationToken>()))
-                .ThrowsAsync(new Exception("Token exchange failed"));
+                .ThrowsAsync(new Exception("Token refresh failed"));
 
             HttpRequestMessage? capturedRequest = null;
 
@@ -236,35 +191,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
                     ItExpr.IsAny<HttpRequestMessage>(),
                     ItExpr.IsAny<CancellationToken>())
                 .Callback<HttpRequestMessage, CancellationToken>((req, ct) => capturedRequest = req)
-                .ReturnsAsync(expectedResponse);
-
-            var httpClient = new HttpClient(handler);
-            var response = await httpClient.SendAsync(request);
-
-            Assert.Equal(expectedResponse, response);
-            Assert.NotNull(capturedRequest);
-            Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
-            Assert.Equal(_initialToken, capturedRequest.Headers.Authorization?.Parameter); // Should still use original token
-
-            // Wait for background task to complete
-            await Task.Delay(1000);
-
-            var request2 = new HttpRequestMessage(HttpMethod.Get, "https://example.com/2");
-            HttpRequestMessage? capturedRequest2 = null;
-
-            _mockInnerHandler.Protected()
-                .Setup<Task<HttpResponseMessage>>(
-                    "SendAsync",
-                    ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.PathAndQuery == "/2"),
-                    ItExpr.IsAny<CancellationToken>())
-                .Callback<HttpRequestMessage, CancellationToken>((req, ct) => capturedRequest2 = req)
                 .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
 
-            await httpClient.SendAsync(request2);
+            var httpClient = new HttpClient(handler);
+            await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Get, "https://example.com"));
 
-            Assert.NotNull(capturedRequest2);
-            Assert.Equal("Bearer", capturedRequest2.Headers.Authorization?.Scheme);
-            Assert.Equal(_initialToken, capturedRequest2.Headers.Authorization?.Parameter);
+            // Refresh failed — falls back to original token on the same (blocking) request
+            Assert.NotNull(capturedRequest);
+            Assert.Equal(_initialToken, capturedRequest.Headers.Authorization?.Parameter);
 
             _mockTokenExchangeClient.Verify(
                 x => x.RefreshTokenAsync(_initialToken, It.IsAny<CancellationToken>()),
@@ -276,7 +210,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
         {
             var nearExpiryTime = DateTime.UtcNow.AddMinutes(5); // Within renewal limit
             var newToken = "new-renewed-token";
-            var newExpiry = DateTime.UtcNow.AddMinutes(3); // New token also near expiry
+            var newExpiry = DateTime.UtcNow.AddHours(1); // New token is fresh, well beyond renewal limit
 
             var handler = new TokenRefreshDelegatingHandler(
                 _mockInnerHandler.Object,
@@ -306,16 +240,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
 
             var httpClient = new HttpClient(handler);
 
-            // Make first request to trigger token renewal
+            // First request triggers blocking refresh
             await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Get, "https://example.com/1"));
-
-            // Wait for background renewal to complete
-            await Task.Delay(1000);
-
-            // Make second request
+            // Second request — refresh already done, should not trigger again
             await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Get, "https://example.com/2"));
 
-            // Token exchange should only be called once (renewed tokens cannot be renewed again)
             _mockTokenExchangeClient.Verify(
                 x => x.RefreshTokenAsync(_initialToken, It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -370,9 +299,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
             };
 
             await Task.WhenAll(tasks);
-
-            // Wait for any background token renewal to complete
-            await Task.Delay(1000);
 
             // Token exchange should only be called once despite concurrent requests
             _mockTokenExchangeClient.Verify(
@@ -504,9 +430,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
 
             var httpClient = new HttpClient(handler);
             await httpClient.SendAsync(request);
-
-            // Wait for background renewal to complete
-            await Task.Delay(1000);
 
             _mockTokenExchangeClient.Verify(
                 x => x.RefreshTokenAsync(_initialToken, It.IsAny<CancellationToken>()),

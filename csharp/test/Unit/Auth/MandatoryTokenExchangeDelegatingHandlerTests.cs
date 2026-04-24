@@ -85,7 +85,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
         {
             var handler = new MandatoryTokenExchangeDelegatingHandler(
                 _mockInnerHandler.Object,
-                _mockTokenExchangeClient.Object);
+                _mockTokenExchangeClient.Object,
+                null);
 
             Assert.NotNull(handler);
         }
@@ -120,9 +121,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
             Assert.NotNull(capturedRequest);
             Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
             Assert.Equal(_databricksToken, capturedRequest.Headers.Authorization?.Parameter);
-
-            // Wait for any background tasks
-            await Task.Delay(1000);
 
             // Verify no token exchange was attempted
             _mockTokenExchangeClient.Verify(
@@ -246,9 +244,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
             Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
             Assert.Equal(_externalToken, capturedRequest.Headers.Authorization?.Parameter); // Should still use original token
 
-            // Wait for background task to complete
-            await Task.Delay(1000);
-
             var request2 = new HttpRequestMessage(HttpMethod.Get, "https://example.com/2");
             request2.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _externalToken);
             HttpRequestMessage? capturedRequest2 = null;
@@ -267,7 +262,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
             Assert.Equal("Bearer", capturedRequest2.Headers.Authorization?.Scheme);
             Assert.Equal(_externalToken, capturedRequest2.Headers.Authorization?.Parameter); // Should still use original token
 
-            // Verify token exchange was attempted
+            // Exchange attempted once; on failure _currentToken is set to the original token,
+            // so subsequent requests return it directly without retrying.
             _mockTokenExchangeClient.Verify(
                 x => x.ExchangeTokenAsync(_externalToken, _identityFederationClientId, It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -310,9 +306,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
                 await httpClient.SendAsync(request);
             }
 
-            // Wait for background exchange to complete
-            await Task.Delay(1000);
-
             // Token exchange should only be called once
             _mockTokenExchangeClient.Verify(
                 x => x.ExchangeTokenAsync(_externalToken, _identityFederationClientId, It.IsAny<CancellationToken>()),
@@ -322,6 +315,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
         [Fact]
         public async Task SendAsync_WithDifferentExternalTokens_ExchangesEachTokenOnce()
         {
+            // When the upstream token rotates (e.g. OAuthDelegatingHandler refreshes M2M token),
+            // each distinct external token should be exchanged independently.
             var handler = new MandatoryTokenExchangeDelegatingHandler(
                 _mockInnerHandler.Object,
                 _mockTokenExchangeClient.Object,
@@ -334,50 +329,26 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
 
             _mockTokenExchangeClient
                 .Setup(x => x.ExchangeTokenAsync(externalToken1, _identityFederationClientId, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new TokenExchangeResponse
-                {
-                    AccessToken = exchangedToken1,
-                    TokenType = "Bearer",
-                    ExpiresIn = 3600,
-                    ExpiryTime = DateTime.UtcNow.AddHours(1)
-                });
+                .ReturnsAsync(new TokenExchangeResponse { AccessToken = exchangedToken1, TokenType = "Bearer", ExpiresIn = 3600, ExpiryTime = DateTime.UtcNow.AddHours(1) });
 
             _mockTokenExchangeClient
                 .Setup(x => x.ExchangeTokenAsync(externalToken2, _identityFederationClientId, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new TokenExchangeResponse
-                {
-                    AccessToken = exchangedToken2,
-                    TokenType = "Bearer",
-                    ExpiresIn = 3600,
-                    ExpiryTime = DateTime.UtcNow.AddHours(1)
-                });
+                .ReturnsAsync(new TokenExchangeResponse { AccessToken = exchangedToken2, TokenType = "Bearer", ExpiresIn = 3600, ExpiryTime = DateTime.UtcNow.AddHours(1) });
 
             _mockInnerHandler.Protected()
-                .Setup<Task<HttpResponseMessage>>(
-                    "SendAsync",
-                    ItExpr.IsAny<HttpRequestMessage>(),
-                    ItExpr.IsAny<CancellationToken>())
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
                 .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
 
             var httpClient = new HttpClient(handler);
 
-            // Make request with first token
             var request1 = new HttpRequestMessage(HttpMethod.Get, "https://example.com/1");
             request1.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", externalToken1);
             await httpClient.SendAsync(request1);
 
-            // Wait for first exchange to complete
-            await Task.Delay(1000);
-
-            // Make request with second token
             var request2 = new HttpRequestMessage(HttpMethod.Get, "https://example.com/2");
             request2.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", externalToken2);
             await httpClient.SendAsync(request2);
 
-            // Wait for second exchange to complete
-            await Task.Delay(1000);
-
-            // Verify both tokens were exchanged
             _mockTokenExchangeClient.Verify(
                 x => x.ExchangeTokenAsync(externalToken1, _identityFederationClientId, It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -484,9 +455,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
             Assert.Equal("Bearer", capturedRequest.Headers.Authorization?.Scheme);
             Assert.Equal(invalidToken, capturedRequest.Headers.Authorization?.Parameter);
 
-            // Wait for any background tasks
-            await Task.Delay(1000);
-
             // Verify no token exchange was attempted
             _mockTokenExchangeClient.Verify(
                 x => x.ExchangeTokenAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
@@ -579,6 +547,68 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Auth
                 .Replace('+', '-')
                 .Replace('/', '_')
                 .TrimEnd('=');
+        }
+
+        [Fact]
+        public async Task SendAsync_WhenUpstreamProvidesFreshDatabricksToken_UsesFreshToken()
+        {
+            // After TokenRefreshDelegatingHandler refreshes, it passes a fresh Databricks token
+            // upstream. MandatoryTokenExchange must use it directly, not override with stale _currentToken.
+            var freshDatabricksToken = CreateJwtToken(
+                "https://databricks-workspace.cloud.databricks.com",
+                DateTime.UtcNow.AddHours(1));
+
+            var handler = new MandatoryTokenExchangeDelegatingHandler(
+                _mockInnerHandler.Object,
+                _mockTokenExchangeClient.Object,
+                _identityFederationClientId);
+
+            _mockTokenExchangeClient
+                .Setup(x => x.ExchangeTokenAsync(_externalToken, _identityFederationClientId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TokenExchangeResponse
+                {
+                    AccessToken = _exchangedToken,
+                    TokenType = "Bearer",
+                    ExpiresIn = 3600,
+                    ExpiryTime = DateTime.UtcNow.AddHours(1)
+                });
+
+            string? firstUsedToken = null;
+            string? secondUsedToken = null;
+            int callCount = 0;
+
+            _mockInnerHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .Callback<HttpRequestMessage, CancellationToken>((req, ct) =>
+                {
+                    callCount++;
+                    if (callCount == 1) firstUsedToken = req.Headers.Authorization?.Parameter;
+                    else secondUsedToken = req.Headers.Authorization?.Parameter;
+                })
+                .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
+
+            var httpClient = new HttpClient(handler);
+
+            // First request: external token → exchange → DB_token_1
+            var request1 = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+            request1.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _externalToken);
+            await httpClient.SendAsync(request1);
+            Assert.Equal(_exchangedToken, firstUsedToken);
+
+            // Second request: upstream provides fresh Databricks token directly (e.g. from TokenRefreshDelegatingHandler)
+            // Must use it directly, not the stale _exchangedToken from the initial exchange
+            var request2 = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+            request2.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", freshDatabricksToken);
+            await httpClient.SendAsync(request2);
+            Assert.Equal(freshDatabricksToken, secondUsedToken);
+
+            // Exchange should only have fired once (for the initial external token)
+            _mockTokenExchangeClient.Verify(
+                x => x.ExchangeTokenAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+                Times.Once);
         }
 
         protected virtual void Dispose(bool disposing)
