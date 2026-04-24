@@ -115,7 +115,7 @@ flowchart TD
 | `client_app_name` | **NOT SET** | Should come from connection property or user-agent |
 | `locale_name` | Populated | CultureInfo.CurrentCulture |
 | `char_set_encoding` | Populated | Encoding.Default.WebName |
-| `process_name` | Populated | Process name |
+| `process_name` | Populated | Entry assembly name (fallback: OS process name) — PECO-2989 |
 
 #### DriverConnectionParameters (47 fields)
 
