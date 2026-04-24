@@ -321,5 +321,13 @@ namespace AdbcDrivers.Databricks.Reader
             // Not using CloudFetch or reader not initialized yet
             return null;
         }
+
+        /// <summary>
+        /// Gets the server-reported LZ4 compression state for this result set
+        /// (from <c>TGetResultSetMetadataResp.Lz4Compressed</c>). Drives the LZ4 decompression
+        /// branch in both the inline <see cref="DatabricksReader"/> and the CloudFetch pipeline,
+        /// so it is the single source of truth for telemetry's <c>is_compressed</c> field.
+        /// </summary>
+        public bool IsLz4Compressed => _isLz4Compressed;
     }
 }

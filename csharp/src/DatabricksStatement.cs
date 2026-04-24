@@ -312,10 +312,18 @@ namespace AdbcDrivers.Databricks
                     }
                 }
 
-                // Set IsCompressed from the actual result stream, not the connection-level LZ4
-                // capability flag. Inline results report false; CloudFetch results report the real
-                // chunk compression state from metrics.IsLz4Compressed (PECO-2988).
-                if (metrics != null && metrics.TotalChunksIterated > 0)
+                // Set IsCompressed from the server's actual compression flag for this result set
+                // (TGetResultSetMetadataResp.Lz4Compressed), not the connection-level LZ4 capability
+                // (PECO-2988). The composite reader is the source of truth: the same flag drives
+                // both the inline DatabricksReader and the CloudFetch pipeline, so this is correct
+                // whether the active stream ended up inline or CloudFetch. For the direct
+                // CloudFetchReader case (no composite wrapper, e.g., future SEA telemetry), fall
+                // back to the per-chunk LZ4 flag carried in ChunkMetrics.
+                if (_lastQueryResult?.Stream is DatabricksCompositeReader compositeReaderForCompression)
+                {
+                    ctx.IsCompressed = compositeReaderForCompression.IsLz4Compressed;
+                }
+                else if (metrics != null && metrics.TotalChunksIterated > 0)
                 {
                     ctx.IsCompressed = metrics.IsLz4Compressed;
                 }
