@@ -17,7 +17,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Auth;
@@ -284,7 +286,20 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
         }
 
-        private static Proto.DriverSystemConfiguration BuildSystemConfiguration(string assemblyVersion)
+        // DriverSystemConfiguration is effectively process-wide constant: OS, runtime, driver
+        // version, process name, locale and encoding do not change during process lifetime.
+        // Cache the first-computed value to avoid repeated /etc/os-release reads and reflection
+        // lookups on every new connection.
+        private static Proto.DriverSystemConfiguration? s_systemConfiguration;
+
+        internal static Proto.DriverSystemConfiguration BuildSystemConfiguration(string assemblyVersion)
+        {
+            return LazyInitializer.EnsureInitialized(
+                ref s_systemConfiguration,
+                () => CreateSystemConfiguration(assemblyVersion))!;
+        }
+
+        private static Proto.DriverSystemConfiguration CreateSystemConfiguration(string assemblyVersion)
         {
             var osVersion = System.Environment.OSVersion;
             var processName = Process.GetCurrentProcess().ProcessName;
@@ -293,9 +308,9 @@ namespace AdbcDrivers.Databricks.Telemetry
                 DriverVersion = assemblyVersion,
                 DriverName = "Databricks ADBC Driver",
                 OsName = osVersion.Platform.ToString(),
-                OsVersion = osVersion.Version.ToString(),
-                OsArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
-                RuntimeName = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+                OsVersion = GetOsVersion(),
+                OsArch = RuntimeInformation.OSArchitecture.ToString(),
+                RuntimeName = RuntimeInformation.FrameworkDescription,
                 RuntimeVersion = System.Environment.Version.ToString(),
                 RuntimeVendor = "Microsoft",
                 LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
@@ -303,6 +318,75 @@ namespace AdbcDrivers.Databricks.Telemetry
                 ProcessName = processName,
                 ClientAppName = processName
             };
+        }
+
+        // Returns a human-readable OS version string, preferring the distro "PRETTY_NAME"
+        // from /etc/os-release on Linux (e.g. "Ubuntu 22.04.3 LTS") over the kernel release
+        // (e.g. "5.4.0.1156") that Environment.OSVersion.Version reports there.
+        internal static string GetOsVersion()
+        {
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
+                    string? prettyName = TryReadLinuxPrettyName();
+                    if (!string.IsNullOrEmpty(prettyName))
+                    {
+                        return prettyName!;
+                    }
+                }
+
+                string description = RuntimeInformation.OSDescription;
+                if (!string.IsNullOrEmpty(description))
+                {
+                    return description;
+                }
+            }
+            catch
+            {
+                // Telemetry must never impact driver operations; fall through to the kernel version.
+            }
+
+            return System.Environment.OSVersion.Version.ToString();
+        }
+
+        private static string? TryReadLinuxPrettyName()
+        {
+            try
+            {
+                const string osReleasePath = "/etc/os-release";
+                if (!File.Exists(osReleasePath))
+                {
+                    return null;
+                }
+
+                foreach (string line in File.ReadAllLines(osReleasePath))
+                {
+                    const string key = "PRETTY_NAME=";
+                    if (line.StartsWith(key, StringComparison.Ordinal))
+                    {
+                        return UnquoteOsReleaseValue(line.Substring(key.Length));
+                    }
+                }
+            }
+            catch
+            {
+                // Intentionally swallowed - telemetry must not fail.
+            }
+
+            return null;
+        }
+
+        // os-release(5) allows values to be wrapped in double or single quotes.
+        internal static string UnquoteOsReleaseValue(string raw)
+        {
+            if (raw.Length >= 2
+                && ((raw[0] == '"' && raw[raw.Length - 1] == '"')
+                    || (raw[0] == '\'' && raw[raw.Length - 1] == '\'')))
+            {
+                return raw.Substring(1, raw.Length - 2);
+            }
+            return raw;
         }
 
         internal static Proto.DriverConnectionParameters BuildDriverConnectionParams(
