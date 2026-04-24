@@ -69,7 +69,8 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                             RowOffset = 100,
                             RowCount = 100,
                             ByteCount = 1024,
-                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O")
+                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O"),
+                            NextChunkIndex = 2
                         }
                     }
                 });
@@ -247,7 +248,8 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                             RowOffset = 0,
                             RowCount = 100,
                             ByteCount = 1024,
-                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O")
+                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O"),
+                            NextChunkIndex = 1
                         }
                     }
                 });
@@ -268,7 +270,8 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                             RowOffset = 100,
                             RowCount = 100,
                             ByteCount = 1024,
-                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O")
+                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O"),
+                            NextChunkIndex = null
                         }
                     }
                 });
@@ -594,7 +597,8 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
                     RowOffset = 0,
                     RowCount = 100,
                     ByteCount = 1024,
-                    Expiration = DateTime.UtcNow.AddHours(1).ToString("O")
+                    Expiration = DateTime.UtcNow.AddHours(1).ToString("O"),
+                    NextChunkIndex = chunkCount > 1 ? (long?)1 : null
                 }
             };
 
