@@ -87,7 +87,7 @@ When ready to release a new major or minor version:
 
 ### Post-Cutoff (Maintenance)
 
-For the **current** release branch (newest minor version):
+For the **current** release branch (newest version):
 
 1. Open a PR on `main` with the fix and a `VersionPrefix` bump (e.g. `1.1.0` → `1.1.1`) and update `csharp/CHANGELOG.md`.
 2. Merge the PR. CI automatically:
