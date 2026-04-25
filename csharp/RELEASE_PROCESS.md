@@ -79,29 +79,30 @@ flowchart LR
 
 When ready to release a new minor version:
 
-1. Create the release branch from the desired commit on `main`:
-   ```bash
-   git checkout main && git pull origin main
-   git checkout -b release/csharp/v1.1.latest
-   git push origin release/csharp/v1.1.latest
-   ```
-2. Tag the cutoff commit:
-   ```bash
-   git tag csharp/v1.1.0
-   git push origin csharp/v1.1.0
-   ```
-3. `release/csharp/latest` is updated automatically by CI (see [CI/CD](#cicd)).
+1. Open a PR on `main` that bumps `VersionPrefix` in `csharp/Directory.Build.props` to the new version (e.g. `1.2.0`) and updates `csharp/CHANGELOG.md`.
+2. Merge the PR. CI automatically:
+   - Creates `release/csharp/v1.2.latest` from `main` (new branch)
+   - Tags the tip as `csharp/v1.2.0`
+   - Updates `release/csharp/latest`
 
 ### Post-Cutoff (Maintenance)
 
-1. Fix goes to `main` first, then synced or cherry-picked to the target release branch (see [Versioning Rules](#versioning-rules)).
-2. After the fix lands on the release branch, tag the new patch:
+For the **current** release branch (newest minor version):
+
+1. Open a PR on `main` with the fix and a `VersionPrefix` bump (e.g. `1.1.0` → `1.1.1`) and update `csharp/CHANGELOG.md`.
+2. Merge the PR. CI automatically:
+   - Fast-forwards `release/csharp/v1.1.latest` to the new `main` tip
+   - Tags the tip as `csharp/v1.1.1`
+   - Updates `release/csharp/latest`
+
+For **older** release branches (e.g. `v1.0.latest` when `v1.1.latest` exists), automation does not apply — cherry-pick the fix directly onto the older branch and tag manually:
    ```bash
-   git fetch origin
-   git tag csharp/v1.1.1 origin/release/csharp/v1.1.latest
-   git push origin csharp/v1.1.1
+   git checkout release/csharp/v1.0.latest
+   git cherry-pick <fix-commit>
+   git push origin release/csharp/v1.0.latest
+   git tag csharp/v1.0.2
+   git push origin csharp/v1.0.2
    ```
-3. `release/csharp/latest` is updated automatically by CI (see [CI/CD](#cicd)).
 
 ## Branch Protection
 
@@ -130,7 +131,7 @@ The release branch contains the full monorepo (Git doesn't support partial branc
 ## CI/CD
 
 - `csharp.yml` — runs build and tests on PRs targeting and pushes to `release/csharp/*` branches
-- `csharp-sync-latest.yml` — automatically syncs `release/csharp/latest` to the tip of the newest minor version branch on every push
+- `csharp-sync-latest.yml` — triggers on every push to `main` that changes `csharp/Directory.Build.props`; reads `VersionPrefix`, pushes `main` to the matching `release/csharp/vX.Y.latest` (creating it if new), tags the tip as `csharp/vX.Y.Z`, and force-updates `release/csharp/latest`
 
 ## Consumer Mapping (e.g., PowerBI)
 
