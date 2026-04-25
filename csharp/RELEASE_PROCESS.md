@@ -75,24 +75,21 @@ flowchart LR
     R3 -.->|update| LATEST[release/csharp/latest]
 ```
 
-### Cutoff
+### Releasing a new version
 
-When ready to release a new major or minor version:
+For any version bump (patch, minor, or major) on the **current** release line:
 
-1. Open a PR on `main` that bumps `VersionPrefix` in `csharp/Directory.Build.props` to the new version (e.g. `1.2.0` or `2.0.0`) and updates `csharp/CHANGELOG.md`.
+1. Open a PR on `main` that bumps `VersionPrefix` in `csharp/Directory.Build.props` and updates `csharp/CHANGELOG.md`.
+
+   | Bump type | Example | Branch result |
+   |-----------|---------|---------------|
+   | Patch | `1.1.0` → `1.1.1` | Updates existing `release/csharp/v1.1.latest` |
+   | Minor | `1.1.x` → `1.2.0` | Creates new `release/csharp/v1.2.latest` |
+   | Major | `1.x` → `2.0.0` | Creates new `release/csharp/v2.0.latest` |
+
 2. Merge the PR. CI automatically:
-   - Creates `release/csharp/v1.2.latest` (or `v2.0.latest`) from `main` (new branch)
-   - Tags the tip as `csharp/v1.2.0` (or `csharp/v2.0.0`)
-   - Updates `release/csharp/latest`
-
-### Post-Cutoff (Maintenance)
-
-For the **current** release branch (newest version):
-
-1. Open a PR on `main` with the fix and a `VersionPrefix` bump (e.g. `1.1.0` → `1.1.1`) and update `csharp/CHANGELOG.md`.
-2. Merge the PR. CI automatically:
-   - Fast-forwards `release/csharp/v1.1.latest` to the new `main` tip
-   - Tags the tip as `csharp/v1.1.1`
+   - Pushes `main` to the matching `release/csharp/vX.Y.latest` (creating it if new)
+   - Tags the tip as `csharp/vX.Y.Z`
    - Updates `release/csharp/latest`
 
 For **older** release branches (e.g. `v1.0.latest` when `v1.1.latest` exists), automation does not apply — cherry-pick the fix directly onto the older branch and tag manually:
