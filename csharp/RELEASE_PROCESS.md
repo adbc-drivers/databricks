@@ -77,12 +77,12 @@ flowchart LR
 
 ### Cutoff
 
-When ready to release a new minor version:
+When ready to release a new major or minor version:
 
-1. Open a PR on `main` that bumps `VersionPrefix` in `csharp/Directory.Build.props` to the new version (e.g. `1.2.0`) and updates `csharp/CHANGELOG.md`.
+1. Open a PR on `main` that bumps `VersionPrefix` in `csharp/Directory.Build.props` to the new version (e.g. `1.2.0` or `2.0.0`) and updates `csharp/CHANGELOG.md`.
 2. Merge the PR. CI automatically:
-   - Creates `release/csharp/v1.2.latest` from `main` (new branch)
-   - Tags the tip as `csharp/v1.2.0`
+   - Creates `release/csharp/v1.2.latest` (or `v2.0.latest`) from `main` (new branch)
+   - Tags the tip as `csharp/v1.2.0` (or `csharp/v2.0.0`)
    - Updates `release/csharp/latest`
 
 ### Post-Cutoff (Maintenance)
