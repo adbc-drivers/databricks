@@ -12,33 +12,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Sync release/csharp/latest
+name: Sync C# release branches
 
+# Runs whenever a commit lands on main that bumps the C# version.
+# Keeps the release branch, version tag, and release/csharp/latest all in sync.
 on:
   push:
     branches:
-      - 'release/csharp/v*.latest'
+      - main
+    paths:
+      - 'csharp/Directory.Build.props'
 
 jobs:
-  sync-latest:
+  sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Sync release/csharp/latest if this is the newest minor version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse version and derive names
+        id: ver
         run: |
-          CURRENT="${{ github.ref_name }}"
-          CURRENT_VER=$(echo "$CURRENT" | grep -oP 'v\d+\.\d+')
-
-          NEWEST=$(gh api repos/${{ github.repository }}/branches --paginate \
-            --jq '.[].name' \
-            | grep '^release/csharp/v[0-9]' \
-            | grep -oP 'v\d+\.\d+' \
-            | sort -V | tail -1)
-
-          if [ "$CURRENT_VER" = "$NEWEST" ]; then
-            echo "Syncing release/csharp/latest → $CURRENT"
-            git push origin "$CURRENT:refs/heads/release/csharp/latest" --force
-          else
-            echo "$CURRENT ($CURRENT_VER) is not the newest ($NEWEST), skipping"
+          VERSION=$(grep -oP '(?<=<VersionPrefix>)[^<]+' csharp/Directory.Build.props)
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: could not parse VersionPrefix from csharp/Directory.Build.props"
+            exit 1
           fi
+          MAJOR_MINOR=$(echo "$VERSION" | grep -oP '^\d+\.\d+')
+          echo "version=$VERSION"                                        >> "$GITHUB_OUTPUT"
+          echo "branch=release/csharp/v${MAJOR_MINOR}.latest"           >> "$GITHUB_OUTPUT"
+          echo "tag=csharp/v${VERSION}"                                  >> "$GITHUB_OUTPUT"
+
+      - name: Push main to release branch (create if new)
+        run: |
+          TARGET="${{ steps.ver.outputs.branch }}"
+          if git ls-remote --exit-code origin "refs/heads/$TARGET" > /dev/null 2>&1; then
+            echo "Updating existing branch: $TARGET"
+          else
+            echo "Creating new release branch: $TARGET"
+          fi
+          git push origin "HEAD:refs/heads/$TARGET"
+
+      - name: Tag the release
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          if git ls-remote --exit-code origin "refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "Created tag: $TAG"
+          fi
+
+      - name: Update release/csharp/latest
+        run: |
+          echo "Syncing release/csharp/latest → ${{ steps.ver.outputs.branch }}"
+          git push origin "HEAD:refs/heads/release/csharp/latest" --force
