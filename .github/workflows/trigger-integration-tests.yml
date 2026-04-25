@@ -94,14 +94,11 @@ jobs:
             });
 
   # =============================================================================
-  # For non-fork PRs: skip integration tests on non-label events
-  # (fork PRs are handled by skip-checks-reporter.yml via workflow_run once on main)
+  # For PRs: Always skip integration tests on non-label events
+  # (they run as a required gate in the merge queue)
   # =============================================================================
   skip-integration-tests-pr:
-    if: |
-      github.event_name == 'pull_request' &&
-      github.event.action != 'labeled' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - name: Generate GitHub App Token
