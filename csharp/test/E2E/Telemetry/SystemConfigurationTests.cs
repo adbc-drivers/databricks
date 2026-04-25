@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry;
 using Apache.Arrow.Adbc;
@@ -80,10 +81,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
-        /// Tests that client_app_name is always set to the process name.
+        /// Tests that process_name and client_app_name default to the entry assembly name
+        /// (the actual application) instead of the .NET host executable ("dotnet").
         /// </summary>
         [SkippableFact]
-        public async Task SystemConfig_ClientAppName_IsProcessName()
+        public async Task SystemConfig_ProcessName_IsEntryAssemblyName()
         {
             CapturingTelemetryExporter exporter = null!;
             AdbcConnection? connection = null;
@@ -108,16 +110,25 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 
                 var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
 
-                // Assert client_app_name is set to the current process name
                 Assert.NotNull(protoLog.SystemConfiguration);
+                Assert.False(string.IsNullOrEmpty(protoLog.SystemConfiguration.ProcessName),
+                    "process_name should be populated");
                 Assert.False(string.IsNullOrEmpty(protoLog.SystemConfiguration.ClientAppName),
-                    "client_app_name should be populated with process name when property not set");
+                    "client_app_name should be populated");
 
-                // Verify it matches the actual process name
-                string expectedProcessName = Process.GetCurrentProcess().ProcessName;
-                Assert.Equal(expectedProcessName, protoLog.SystemConfiguration.ClientAppName);
+                // On .NET Core / .NET 5+ hosts, the OS process name is "dotnet"; that is the
+                // bug this field is meant to avoid (PECO-2989). Regardless of runtime, the
+                // reported value should reflect the actual application, not the .NET host.
+                Assert.NotEqual("dotnet", protoLog.SystemConfiguration.ProcessName);
+                Assert.NotEqual("dotnet", protoLog.SystemConfiguration.ClientAppName);
 
-                OutputHelper?.WriteLine($"✓ client_app_name defaulted to process name: {protoLog.SystemConfiguration.ClientAppName}");
+                string expected = Assembly.GetEntryAssembly()?.GetName().Name
+                    ?? Process.GetCurrentProcess().ProcessName;
+                Assert.Equal(expected, protoLog.SystemConfiguration.ProcessName);
+                Assert.Equal(expected, protoLog.SystemConfiguration.ClientAppName);
+
+                OutputHelper?.WriteLine($"✓ process_name: {protoLog.SystemConfiguration.ProcessName}");
+                OutputHelper?.WriteLine($"✓ client_app_name: {protoLog.SystemConfiguration.ClientAppName}");
             }
             finally
             {
