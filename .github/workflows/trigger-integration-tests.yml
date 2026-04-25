@@ -94,64 +94,6 @@ jobs:
             });
 
   # =============================================================================
-  # For PRs: Always skip integration tests on non-label events
-  # (they run as a required gate in the merge queue)
-  # =============================================================================
-  skip-integration-tests-pr:
-    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Generate GitHub App Token
-        id: adbc-token
-        if: ${{ secrets.INTEGRATION_TEST_APP_ID != '' }}
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
-        with:
-          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
-          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
-          owner: adbc-drivers
-          repositories: databricks
-
-      - name: Skip C# Integration Tests
-        if: steps.adbc-token.conclusion == 'success'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
-        with:
-          github-token: ${{ steps.adbc-token.outputs.token }}
-          script: |
-            await github.rest.checks.create({
-              owner: 'adbc-drivers',
-              repo: 'databricks',
-              name: 'C# Integration Tests',
-              head_sha: context.payload.pull_request.head.sha,
-              status: 'completed',
-              conclusion: 'success',
-              completed_at: new Date().toISOString(),
-              output: {
-                title: 'Skipped on PR - runs in merge queue',
-                summary: '✅ Integration tests are skipped on PRs and run as a required gate in the merge queue.'
-              }
-            });
-
-      - name: Skip Rust Integration Tests
-        if: steps.adbc-token.conclusion == 'success'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
-        with:
-          github-token: ${{ steps.adbc-token.outputs.token }}
-          script: |
-            await github.rest.checks.create({
-              owner: 'adbc-drivers',
-              repo: 'databricks',
-              name: 'Rust Integration Tests',
-              head_sha: context.payload.pull_request.head.sha,
-              status: 'completed',
-              conclusion: 'success',
-              completed_at: new Date().toISOString(),
-              output: {
-                title: 'Skipped on PR - runs in merge queue',
-                summary: '✅ Integration tests are skipped on PRs and run as a required gate in the merge queue.'
-              }
-            });
-
-  # =============================================================================
   # For PRs: Dispatch real tests when integration-test label is added
   # =============================================================================
   trigger-tests-pr:
