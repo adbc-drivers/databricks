@@ -39,12 +39,12 @@ jobs:
             echo "ERROR: could not parse VersionPrefix from csharp/Directory.Build.props"
             exit 1
           fi
-          MINOR=$(echo "$VERSION" | grep -oP '^\d+\.\d+')
-          echo "version=$VERSION"                                  >> "$GITHUB_OUTPUT"
-          echo "branch=release/csharp/v${MINOR}.latest"           >> "$GITHUB_OUTPUT"
-          echo "tag=csharp/v${VERSION}"                           >> "$GITHUB_OUTPUT"
+          MAJOR_MINOR=$(echo "$VERSION" | grep -oP '^\d+\.\d+')
+          echo "version=$VERSION"                                        >> "$GITHUB_OUTPUT"
+          echo "branch=release/csharp/v${MAJOR_MINOR}.latest"           >> "$GITHUB_OUTPUT"
+          echo "tag=csharp/v${VERSION}"                                  >> "$GITHUB_OUTPUT"
 
-      - name: Push main to release branch (create if new minor version)
+      - name: Push main to release branch (create if new)
         run: |
           TARGET="${{ steps.ver.outputs.branch }}"
           if git ls-remote --exit-code origin "refs/heads/$TARGET" > /dev/null 2>&1; then
