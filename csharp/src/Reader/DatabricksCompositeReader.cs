@@ -329,5 +329,14 @@ namespace AdbcDrivers.Databricks.Reader
         /// so it is the single source of truth for telemetry's <c>is_compressed</c> field.
         /// </summary>
         public bool IsLz4Compressed => _isLz4Compressed;
+
+        /// <summary>
+        /// Gets a value indicating whether the active reader is a <see cref="CloudFetchReader"/>.
+        /// Reflects the server's actual choice for this result set (presence of result links in the
+        /// fetch response, see <see cref="ShouldUseCloudFetch"/>), not the connection-level
+        /// <c>useCloudFetch</c> capability flag. Returns <c>false</c> before the first read, when the
+        /// active reader has not been initialized yet.
+        /// </summary>
+        public bool IsCloudFetchActive => _activeReader is CloudFetchReader;
     }
 }

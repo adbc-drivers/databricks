@@ -113,10 +113,11 @@ namespace AdbcDrivers.Databricks
             var ctx = new StatementTelemetryContext(session);
             ctx.OperationType = OperationType.ExecuteStatement;
             ctx.StatementType = statementType;
-            // IsCompressed is populated from the actual result stream in EmitTelemetry, not the
-            // connection-level capability flag. Default to false; overridden for CloudFetch results
-            // whose chunks were LZ4-compressed per server metadataResp.Lz4Compressed.
+            // IsCompressed and ResultFormat are populated from the actual result stream in
+            // EmitTelemetry, not the connection-level capability flags. Defaults here cover error
+            // and unconsumed paths (PECO-2988, PECO-2978).
             ctx.IsCompressed = false;
+            ctx.ResultFormat = ExecutionResultFormat.InlineArrow;
             ctx.IsInternalCall = IsInternalCall;
             return ctx;
         }
@@ -159,9 +160,9 @@ namespace AdbcDrivers.Databricks
         private void RecordSuccess(StatementTelemetryContext ctx)
         {
             ctx.RecordFirstBatchReady();
-            ctx.ResultFormat = useCloudFetch
-                ? ExecutionResultFormat.ExternalLinks
-                : ExecutionResultFormat.InlineArrow;
+            // ResultFormat is populated from the actual active reader in EmitTelemetry (PECO-2978);
+            // setting it here from the connection-level useCloudFetch flag mislabels inline results
+            // as EXTERNAL_LINKS whenever CloudFetch is enabled on the connection.
             ctx.StatementId = StatementId;
             CaptureRetryCount(ctx);
         }
@@ -312,20 +313,17 @@ namespace AdbcDrivers.Databricks
                     }
                 }
 
-                // Set IsCompressed from the server's actual compression flag for this result set
-                // (TGetResultSetMetadataResp.Lz4Compressed), not the connection-level LZ4 capability
-                // (PECO-2988). The composite reader is the source of truth: the same flag drives
-                // both the inline DatabricksReader and the CloudFetch pipeline, so this is correct
-                // whether the active stream ended up inline or CloudFetch. For the direct
-                // CloudFetchReader case (no composite wrapper, e.g., future SEA telemetry), fall
-                // back to the per-chunk LZ4 flag carried in ChunkMetrics.
-                if (_lastQueryResult?.Stream is DatabricksCompositeReader compositeReaderForCompression)
+                // Source IsCompressed and ResultFormat from the active reader, not connection-level
+                // capability flags. The composite reader holds the server-reported truth for both:
+                // IsLz4Compressed mirrors TGetResultSetMetadataResp.Lz4Compressed (drives both inline
+                // and CloudFetch decompression), and IsCloudFetchActive reflects whether the server
+                // returned result links for this statement (PECO-2988, PECO-2978).
+                if (_lastQueryResult?.Stream is DatabricksCompositeReader composite)
                 {
-                    ctx.IsCompressed = compositeReaderForCompression.IsLz4Compressed;
-                }
-                else if (metrics != null && metrics.TotalChunksIterated > 0)
-                {
-                    ctx.IsCompressed = metrics.IsLz4Compressed;
+                    ctx.IsCompressed = composite.IsLz4Compressed;
+                    ctx.ResultFormat = composite.IsCloudFetchActive
+                        ? ExecutionResultFormat.ExternalLinks
+                        : ExecutionResultFormat.InlineArrow;
                 }
 
                 // Set chunk details if we have metrics and at least one chunk was iterated

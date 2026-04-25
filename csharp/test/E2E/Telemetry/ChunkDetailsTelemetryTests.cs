@@ -765,5 +765,63 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 TelemetryTestHelpers.ClearExporterOverride();
             }
         }
+
+        /// <summary>
+        /// PECO-2978: execution_result must reflect the actual reader chosen for this result set,
+        /// not the connection-level <c>useCloudFetch</c> capability flag.
+        ///
+        /// When the server returns inline Arrow (e.g., a small SELECT over Thrift), execution_result
+        /// must be INLINE_ARROW even when CloudFetch is enabled on the connection. Prior to the fix,
+        /// it was hard-coded to EXTERNAL_LINKS whenever <c>useCloudFetch=true</c>, mislabeling ~90%
+        /// of inline events.
+        /// </summary>
+        [SkippableFact]
+        public async Task SmallQuery_ExecutionResult_IsInlineArrow_EvenWhenCloudFetchEnabled()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                // CloudFetch enabled on the connection, but the server should return inline Arrow
+                // for a trivial SELECT — the bug under PECO-2978 was that this still got tagged
+                // EXTERNAL_LINKS based on the connection capability.
+                var connectionOptions = new Dictionary<string, string>
+                {
+                    [DatabricksParameters.UseCloudFetch] = "true",
+                    [DatabricksParameters.CanDecompressLz4] = "true",
+                };
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(
+                    TestEnvironment.GetDriverParameters(TestConfiguration), connectionOptions);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS value";
+
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+                while (await reader.ReadNextRecordBatchAsync() is { } batch)
+                {
+                    batch.Dispose();
+                }
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, 1, timeoutMs: 10000);
+
+                Assert.NotEmpty(logs);
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+                Assert.NotNull(protoLog.SqlOperation);
+
+                Assert.Equal(ExecutionResult.Types.Format.InlineArrow, protoLog.SqlOperation.ExecutionResult);
+                Assert.Null(protoLog.SqlOperation.ChunkDetails);
+
+                OutputHelper?.WriteLine($"Small query (CloudFetch enabled): execution_result={protoLog.SqlOperation.ExecutionResult}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
     }
 }
