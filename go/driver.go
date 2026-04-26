@@ -70,6 +70,41 @@ const (
 	// Arrow serialization options
 	OptionArrowNativeGeospatial = "databricks.arrow.native_geospatial"
 
+	// Bulk ingest options.  When OptionBulkVolumePath is set, executeIngest
+	// streams Arrow batches as Parquet files to a Databricks Volume and
+	// applies COPY INTO (one COPY per Arrow batch) instead of issuing a
+	// per-row INSERT.  The path must be a writable Volume directory the
+	// connection's principal has access to, e.g.
+	//   /Volumes/<catalog>/<schema>/<volume>/<subdir>
+	OptionBulkVolumePath = "databricks.bulk.volume_path"
+
+	// OptionBulkGeometryColumns is a comma-separated list of
+	// `column:srid` pairs that tells the bulk-ingest path which Arrow
+	// BINARY columns are WKB-encoded geometries and which SRID to apply.
+	// The destination columns will be created as GEOMETRY(srid) and the
+	// COPY INTO transform projects each through ST_GEOMFROMWKB so the
+	// staged BINARY rebuilds as a typed geometry on insert.
+	//
+	// Example: "geom:4326" or "boundary:3857,centroid:4326".
+	//
+	// Required only when the source emits geometry as plain BINARY with
+	// no geoarrow.wkb extension metadata.  When the source already
+	// annotates the column (e.g., DuckDB's adbc_scanner emits PROJJSON
+	// CRS), the driver auto-detects and the hint is unnecessary.
+	OptionBulkGeometryColumns = "databricks.bulk.geometry_columns"
+
+	// OptionBulkBatchRows is the target number of rows to accumulate per
+	// staged Parquet file before issuing COPY INTO.  The bulk path holds
+	// a single Parquet writer open across multiple Arrow record batches
+	// so per-batch fixed cost (HTTP upload + COPY INTO planning) is
+	// amortized over many rows.  Default: 20000.  Tuning above ~50000
+	// rarely helps further; tuning below ~5000 sacrifices throughput
+	// without saving meaningful memory.
+	OptionBulkBatchRows = "databricks.bulk.batch_rows"
+
+	// DefaultBulkBatchRows is used when OptionBulkBatchRows is unset.
+	DefaultBulkBatchRows = 20000
+
 	// Default values
 	DefaultPort    = 443
 	DefaultSSLMode = "require"
