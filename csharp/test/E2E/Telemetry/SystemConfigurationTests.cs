@@ -138,6 +138,49 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
+        /// Tests that char_set_encoding is emitted in upper-case (e.g. "UTF-8")
+        /// to match the OSS JDBC and DatabricksJDBC drivers. .NET Core / Linux
+        /// returns Encoding.Default.WebName as lower-case "utf-8" by default,
+        /// which breaks exact-string matches across drivers (PECO-2990).
+        /// </summary>
+        [SkippableFact]
+        public async Task SystemConfig_CharSetEncoding_IsUppercase()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.SystemConfiguration);
+                string charSet = protoLog.SystemConfiguration.CharSetEncoding;
+                Assert.False(string.IsNullOrEmpty(charSet), "char_set_encoding should be populated");
+                Assert.Equal(charSet.ToUpperInvariant(), charSet);
+
+                OutputHelper?.WriteLine($"✓ char_set_encoding: {charSet}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
         /// Tests that all 12 DriverSystemConfiguration fields are populated (comprehensive check).
         /// This ensures runtime_vendor and client_app_name are included alongside existing fields.
         /// </summary>

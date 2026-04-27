@@ -319,7 +319,9 @@ namespace AdbcDrivers.Databricks.Telemetry
                 RuntimeVersion = System.Environment.Version.ToString(),
                 RuntimeVendor = "Microsoft",
                 LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
-                CharSetEncoding = System.Text.Encoding.Default.WebName,
+                // Normalize to upper-case (e.g. "UTF-8") to match the casing emitted by the
+                // OSS JDBC and DatabricksJDBC drivers; .NET Core / Linux returns "utf-8".
+                CharSetEncoding = System.Text.Encoding.Default.WebName.ToUpperInvariant(),
                 ProcessName = processName,
                 ClientAppName = processName
             };
