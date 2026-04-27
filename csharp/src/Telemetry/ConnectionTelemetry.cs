@@ -428,6 +428,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
 
             int batchSize = GetBatchSize(properties);
+            int asyncPollIntervalMillis = GetAsyncPollIntervalMillis(properties);
 
             return new Proto.DriverConnectionParameters
             {
@@ -449,7 +450,22 @@ namespace AdbcDrivers.Databricks.Telemetry
                 EnableDirectResults = enableDirectResults,
                 EnableComplexDatatypeSupport = useDescTableExtended,
                 AutoCommit = true,
+                AsyncPollIntervalMillis = asyncPollIntervalMillis,
             };
+        }
+
+        // PECO-2997: report the async-execution poll interval (in milliseconds) used by
+        // DatabricksStatement when polling for query completion. The driver overrides
+        // the Apache base default (500ms) with DefaultAsyncExecPollIntervalMs (100ms);
+        // callers can override via ApacheParameters.PollTimeMilliseconds.
+        private static int GetAsyncPollIntervalMillis(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(ApacheParameters.PollTimeMilliseconds, out string? pollTimeStr) &&
+                int.TryParse(pollTimeStr, out int pollTime) && pollTime > 0)
+            {
+                return pollTime;
+            }
+            return DatabricksConstants.DefaultAsyncExecPollIntervalMs;
         }
 
         private static string DetermineAuthType(IReadOnlyDictionary<string, string> properties)

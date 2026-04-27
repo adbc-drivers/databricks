@@ -495,6 +495,102 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
+        /// Regression test for PECO-2997 (TELEM-15): driver_connection_params.async_poll_interval_millis
+        /// was 0 for 100% of ADBC rows because <c>BuildDriverConnectionParams</c> never set the field,
+        /// even though DatabricksStatement overrides the Apache base default with 100ms via
+        /// <see cref="DatabricksConstants.DefaultAsyncExecPollIntervalMs"/>. With no override the
+        /// captured telemetry must report the 100ms canonical default.
+        /// </summary>
+        [SkippableFact]
+        public async Task ConnectionParams_AsyncPollIntervalMillis_DefaultsTo100Ms()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+                // Ensure no override is present so we exercise the default path.
+                properties.Remove(ApacheParameters.PollTimeMilliseconds);
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.DriverConnectionParams);
+                Assert.Equal(
+                    DatabricksConstants.DefaultAsyncExecPollIntervalMs,
+                    protoLog.DriverConnectionParams.AsyncPollIntervalMillis);
+
+                OutputHelper?.WriteLine(
+                    $"✓ async_poll_interval_millis (default): {protoLog.DriverConnectionParams.AsyncPollIntervalMillis}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// PECO-2997 (TELEM-15): when the caller overrides
+        /// <see cref="ApacheParameters.PollTimeMilliseconds"/>, the captured telemetry must reflect
+        /// the override so analysts can correlate polling behavior with query latency.
+        /// </summary>
+        [SkippableFact]
+        public async Task ConnectionParams_AsyncPollIntervalMillis_ReflectsOverride()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+                const int customPollIntervalMs = 250;
+                properties[ApacheParameters.PollTimeMilliseconds] = customPollIntervalMs.ToString();
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.DriverConnectionParams);
+                Assert.Equal(
+                    customPollIntervalMs,
+                    protoLog.DriverConnectionParams.AsyncPollIntervalMillis);
+
+                OutputHelper?.WriteLine(
+                    $"✓ async_poll_interval_millis (override): {protoLog.DriverConnectionParams.AsyncPollIntervalMillis}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
         /// Tests that all extended connection parameter fields are non-default (comprehensive check).
         /// This ensures enable_arrow, rows_fetched_per_block, socket_timeout,
         /// enable_direct_results, enable_complex_datatype_support, and auto_commit are all populated.
