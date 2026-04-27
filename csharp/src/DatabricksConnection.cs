@@ -506,7 +506,15 @@ namespace AdbcDrivers.Databricks
             }
 
             HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
-            return new DatabricksCompositeReader(databricksStatement, schema, response, isLz4Compressed, httpClient);
+            // Forward the in-flight per-statement telemetry context so the operation status poller
+            // can populate n_operation_status_calls and operation_status_latency_millis (PECO-2992).
+            return new DatabricksCompositeReader(
+                databricksStatement,
+                schema,
+                response,
+                isLz4Compressed,
+                httpClient,
+                telemetryContext: databricksStatement.CurrentTelemetryContext);
         }
 
         internal override SchemaParser SchemaParser => new DatabricksSchemaParser();
