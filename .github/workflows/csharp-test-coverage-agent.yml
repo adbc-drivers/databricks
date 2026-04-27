@@ -16,7 +16,15 @@ name: C# Test Coverage Agent
 
 # Analyzes a driver PR, checks existing test coverage in databricks-driver-test,
 # and files a Copilot-assigned issue to add missing tests if needed.
+# Triggers automatically when a PR touching csharp/src/ is merged to main,
+# or manually via workflow_dispatch for any PR number.
 on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+    paths:
+      - 'csharp/src/**'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -30,6 +38,7 @@ on:
 
 jobs:
   create-test-issue:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,12 +48,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Resolve PR number
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pr_number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "pr_number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Gather PR context
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER="${{ inputs.pr_number }}"
+          PR_NUMBER="${{ steps.resolve.outputs.pr_number }}"
 
           gh pr view "$PR_NUMBER" --json title,body,url,headRefName > pr_meta.json
 
@@ -68,7 +86,7 @@ jobs:
           PR_URL="${{ steps.pr.outputs.url }}"
           PR_TITLE="${{ steps.pr.outputs.title }}"
           PR_BRANCH="${{ steps.pr.outputs.branch }}"
-          PR_NUMBER="${{ inputs.pr_number }}"
+          PR_NUMBER="${{ steps.resolve.outputs.pr_number }}"
           CUSTOM="${{ inputs.custom_instructions }}"
 
           {
@@ -178,6 +196,6 @@ jobs:
         run: |
           gh issue create \
             --repo databricks/databricks-driver-test \
-            --title "test(csharp): coverage for driver PR #${{ inputs.pr_number }} — ${{ steps.pr.outputs.title }}" \
+            --title "test(csharp): coverage for driver PR #${{ steps.resolve.outputs.pr_number }} — ${{ steps.pr.outputs.title }}" \
             --body-file issue_body.md \
             --assignee copilot
