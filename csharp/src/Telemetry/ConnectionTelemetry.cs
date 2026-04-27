@@ -27,6 +27,7 @@ using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -429,6 +430,13 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             int batchSize = GetBatchSize(properties);
 
+            // PECO-2994: populate proxy-related flags so enterprise observability dashboards
+            // can attribute latency / TLS-break incidents to proxy configurations.
+            // Match JDBC's behavior: missing or unparseable values default to false.
+            bool useProxy = ParseBoolPropertyOrDefault(properties, HttpProxyOptions.UseProxy, false);
+            bool useSystemProxy = ParseBoolPropertyOrDefault(properties, DatabricksParameters.UseSystemProxy, false);
+            bool useCfProxy = ParseBoolPropertyOrDefault(properties, DatabricksParameters.UseCfProxy, false);
+
             return new Proto.DriverConnectionParameters
             {
                 HttpPath = httpPath ?? "",
@@ -441,6 +449,9 @@ namespace AdbcDrivers.Databricks.Telemetry
                     HostUrl = host,
                     Port = port
                 },
+                UseProxy = useProxy,
+                UseSystemProxy = useSystemProxy,
+                UseCfProxy = useCfProxy,
                 AuthMech = authMech,
                 AuthFlow = authFlow,
                 EnableArrow = true,
@@ -450,6 +461,19 @@ namespace AdbcDrivers.Databricks.Telemetry
                 EnableComplexDatatypeSupport = useDescTableExtended,
                 AutoCommit = true,
             };
+        }
+
+        private static bool ParseBoolPropertyOrDefault(
+            IReadOnlyDictionary<string, string> properties,
+            string key,
+            bool defaultValue)
+        {
+            if (properties.TryGetValue(key, out string? raw)
+                && bool.TryParse(raw, out bool parsed))
+            {
+                return parsed;
+            }
+            return defaultValue;
         }
 
         private static string DetermineAuthType(IReadOnlyDictionary<string, string> properties)

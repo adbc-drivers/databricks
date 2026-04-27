@@ -408,6 +408,23 @@ namespace AdbcDrivers.Databricks
         /// Default value is false if not specified.
         /// </summary>
         public const string EnableComplexDatatypeSupport = "adbc.databricks.enable_complex_datatype_support";
+
+        /// <summary>
+        /// Whether to use the system-configured proxy (e.g., from environment variables or
+        /// platform proxy settings) for HTTP connections. Mirrors the JDBC <c>useSystemProxy</c>
+        /// option. Default value is false if not specified.
+        /// Reported in driver telemetry as <c>driver_connection_params.use_system_proxy</c> for
+        /// enterprise proxy observability (PECO-2994).
+        /// </summary>
+        public const string UseSystemProxy = "adbc.proxy_options.use_system_proxy";
+
+        /// <summary>
+        /// Whether to apply proxy settings to CloudFetch downloads. Mirrors the JDBC
+        /// <c>useCfProxy</c> option. Default value is false if not specified.
+        /// Reported in driver telemetry as <c>driver_connection_params.use_cf_proxy</c> for
+        /// enterprise proxy observability (PECO-2994).
+        /// </summary>
+        public const string UseCfProxy = "adbc.proxy_options.use_cf_proxy";
     }
 
     /// <summary>
