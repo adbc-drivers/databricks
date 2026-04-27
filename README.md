@@ -55,4 +55,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
-# Test scenario 1
