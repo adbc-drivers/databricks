@@ -14,8 +14,8 @@
 
 name: C# Test Coverage Agent
 
-# Analyzes a driver PR, checks existing test coverage in databricks-driver-test,
-# and files a Copilot-assigned issue to add missing tests if needed.
+# Notifies databricks-driver-test when a C# source PR merges, so the test
+# coverage agent there can decide whether new tests are needed.
 # Triggers automatically when a PR touching csharp/src/ is merged to main,
 # or manually via workflow_dispatch for any PR number.
 on:
@@ -31,23 +31,15 @@ on:
         description: 'Driver PR number to analyze for test coverage'
         required: true
         type: string
-      custom_instructions:
-        description: 'Additional instructions for the agent (e.g. focus areas, scenarios to prioritize)'
-        required: false
-        type: string
 
 jobs:
-  create-test-issue:
+  notify:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-        with:
-          fetch-depth: 0
-
       - name: Resolve PR number
         id: resolve
         run: |
@@ -56,79 +48,6 @@ jobs:
           else
             echo "pr_number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Gather PR context
-        id: pr
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_NUMBER="${{ steps.resolve.outputs.pr_number }}"
-
-          gh pr view "$PR_NUMBER" --json title,body,url,headRefName > pr_meta.json
-
-          echo "title=$(jq -r '.title'       pr_meta.json)" >> "$GITHUB_OUTPUT"
-          echo "url=$(jq -r '.url'           pr_meta.json)" >> "$GITHUB_OUTPUT"
-          echo "branch=$(jq -r '.headRefName' pr_meta.json)" >> "$GITHUB_OUTPUT"
-
-          # PR description — cap at 2 KB
-          jq -r '.body // ""' pr_meta.json | head -c 2048 > pr_body.txt
-
-          # Changed C# source files only
-          gh pr view "$PR_NUMBER" --json files \
-            --jq '[.files[].path | select(startswith("csharp/src/"))] | join("\n")' \
-            > changed_files.txt
-
-          # Diff of csharp/src/ — cap at 25 KB to stay within GitHub issue limit
-          gh pr diff "$PR_NUMBER" -- 'csharp/src/**' | head -c 25600 > pr_diff.txt
-
-      - name: Build issue body
-        run: |
-          PR_URL="${{ steps.pr.outputs.url }}"
-          PR_TITLE="${{ steps.pr.outputs.title }}"
-          PR_BRANCH="${{ steps.pr.outputs.branch }}"
-          PR_NUMBER="${{ steps.resolve.outputs.pr_number }}"
-          CUSTOM="${{ inputs.custom_instructions }}"
-
-          {
-            echo "## Driver PR"
-            echo ""
-            echo "**PR:** $PR_URL"
-            echo "**Branch:** \`$PR_BRANCH\`"
-            echo "**Title:** $PR_TITLE"
-            echo ""
-            echo "<details>"
-            echo "<summary>PR description</summary>"
-            echo ""
-            cat pr_body.txt
-            echo ""
-            echo "</details>"
-            echo ""
-            echo "## Changed source files (csharp/src/ only)"
-            echo ""
-            echo '```'
-            cat changed_files.txt
-            echo '```'
-            echo ""
-            echo "<details>"
-            echo "<summary>Diff</summary>"
-            echo ""
-            echo '```diff'
-            cat pr_diff.txt
-            echo '```'
-            echo ""
-            echo "</details>"
-            echo ""
-            echo "## Task"
-            echo ""
-            echo "Follow the instructions in this repository (.github/copilot-instructions.md) to classify this change, determine whether test coverage needs to be added or updated, and open a PR if needed."
-
-            if [ -n "$CUSTOM" ]; then
-              echo ""
-              echo "## Additional context"
-              echo ""
-              echo "$CUSTOM"
-            fi
-          } > issue_body.md
 
       - name: Generate GitHub App token for databricks-driver-test
         id: app-token
@@ -139,12 +58,11 @@ jobs:
           owner: databricks
           repositories: databricks-driver-test
 
-      - name: Create issue on databricks-driver-test and assign Copilot
+      - name: Dispatch to databricks-driver-test
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh issue create \
-            --repo databricks/databricks-driver-test \
-            --title "test(csharp): coverage for driver PR #${{ steps.resolve.outputs.pr_number }} — ${{ steps.pr.outputs.title }}" \
-            --body-file issue_body.md \
-            --assignee copilot
+          gh api repos/databricks/databricks-driver-test/dispatches \
+            --method POST \
+            --field event_type=csharp-coverage \
+            --field client_payload='{"pr_number":"${{ steps.resolve.outputs.pr_number }}"}'
