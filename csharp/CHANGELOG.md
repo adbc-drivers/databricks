@@ -6,6 +6,7 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ### Fixed
 
+- Set telemetry `is_compressed` and `execution_result` from actual result, not connection capability (#402)
 - Populate `process_name` telemetry with entry assembly name (#403)
 - Use `next_chunk_index` from last ExternalLink for SEA CloudFetch navigation (#404)
 - Report distro `PRETTY_NAME` instead of kernel version in `os_version` telemetry (#399)
