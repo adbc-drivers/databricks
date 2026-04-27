@@ -1220,10 +1220,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
                     }
                     finally
                     {
-                        if (offset > 0)
-                        {
-                            concurrentDownloads.TryRemove(offset, out _);
-                        }
+                        concurrentDownloads.TryRemove(offset, out _);
                     }
 
                     return new HttpResponseMessage(HttpStatusCode.OK)
@@ -1292,10 +1289,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
                     }
                     finally
                     {
-                        if (offset > 0)
-                        {
-                            concurrentDownloads.TryRemove(offset, out _);
-                        }
+                        concurrentDownloads.TryRemove(offset, out _);
                     }
 
                     return new HttpResponseMessage(HttpStatusCode.OK)

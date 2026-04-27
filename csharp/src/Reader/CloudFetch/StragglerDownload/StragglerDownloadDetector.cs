@@ -112,7 +112,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
         /// due to exceeding the maximum straggler threshold.
         /// </summary>
         public bool ShouldFallbackToSequentialDownloads =>
-            _totalStragglersDetectedInQuery >= (_config.SynchronousFallbackEnabled ? _config.MaxStragglersBeforeFallback : long.MaxValue);
+            Interlocked.Read(ref _totalStragglersDetectedInQuery) >= (_config.SynchronousFallbackEnabled ? _config.MaxStragglersBeforeFallback : long.MaxValue);
 
         /// <summary>
         /// Starts the straggler monitoring background task.
@@ -433,7 +433,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
                                 activity.AddEvent("cloudfetch.straggler_identified", [
                                     new("offset", download.FileOffset),
                                     new("elapsed_seconds", elapsedSeconds),
-                                    new("file_size_mb", download.FileSizeBytes / (1024.0 / 1024.0))
+                                    new("file_size_mb", download.FileSizeBytes / (1024.0 * 1024.0))
                                 ]);
                             }
                         }

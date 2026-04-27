@@ -317,8 +317,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 try
                 {
-                    // Keep track of active download tasks
-                    var downloadTasks = new ConcurrentDictionary<Task, IDownloadResult>();
+                    // Keep track of active download tasks keyed by ChunkIndex
+                    var downloadTasks = new ConcurrentDictionary<long, Task>();
                     var downloadTaskCompletionSource = new TaskCompletionSource<bool>();
 
                     // Process items from the download queue until it's completed
@@ -351,7 +351,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             {
                                 try
                                 {
-                                    await Task.WhenAll(downloadTasks.Keys).ConfigureAwait(false);
+                                    await Task.WhenAll(downloadTasks.Values).ConfigureAwait(false);
                                 }
                                 catch (Exception ex)
                                 {
@@ -415,6 +415,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         ]);
 
                         Task downloadTask;
+                        long chunkIndex = downloadResult.ChunkIndex;
                         try
                         {
                             // Start the download task
@@ -426,7 +427,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     _downloadSemaphore.Release();
 
                                 // Remove the task from the dictionary
-                                downloadTasks.TryRemove(t, out _);
+                                downloadTasks.TryRemove(chunkIndex, out _);
 
                                 // Handle any exceptions
                                 if (t.IsFaulted)
@@ -457,7 +458,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             });
 
                             // Add the task to the dictionary
-                            downloadTasks[downloadTask] = downloadResult;
+                            downloadTasks[chunkIndex] = downloadTask;
                         }
                         catch (Exception ex)
                         {

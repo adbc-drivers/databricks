@@ -193,7 +193,7 @@ namespace AdbcDrivers.Databricks
         /// Straggler throughput multiplier for CloudFetch operations.
         /// A download is considered a straggler if it takes more than (multiplier × expected_time) to complete.
         /// Default value is 1.5 if not specified.
-        /// Must be greater than or equal to 1.0.
+        /// Must be greater than 1.0.
         /// </summary>
         public const string CloudFetchStragglerMultiplier = "adbc.databricks.cloudfetch.straggler_multiplier";
 
