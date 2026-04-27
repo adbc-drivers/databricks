@@ -82,6 +82,5 @@ jobs:
 
       - name: Update release/csharp/latest
         run: |
-          SOURCE="${{ steps.ver.outputs.branch }}"
-          echo "Syncing release/csharp/latest → $SOURCE"
-          git push origin "refs/heads/$SOURCE:refs/heads/release/csharp/latest" --force
+          echo "Syncing release/csharp/latest → main"
+          git push origin "HEAD:refs/heads/release/csharp/latest" --force
