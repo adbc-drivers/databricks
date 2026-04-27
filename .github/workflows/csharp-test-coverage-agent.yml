@@ -90,13 +90,11 @@ jobs:
           CUSTOM="${{ inputs.custom_instructions }}"
 
           {
-            echo "## Context"
+            echo "## Driver PR"
             echo ""
-            echo "This issue was created automatically to evaluate and add test coverage for a driver PR."
-            echo ""
-            echo "**Driver PR:** $PR_URL"
+            echo "**PR:** $PR_URL"
             echo "**Branch:** \`$PR_BRANCH\`"
-            echo "**PR title:** $PR_TITLE"
+            echo "**Title:** $PR_TITLE"
             echo ""
             echo "<details>"
             echo "<summary>PR description</summary>"
@@ -105,14 +103,14 @@ jobs:
             echo ""
             echo "</details>"
             echo ""
-            echo "## Changed driver source files"
+            echo "## Changed source files (csharp/src/ only)"
             echo ""
             echo '```'
             cat changed_files.txt
             echo '```'
             echo ""
             echo "<details>"
-            echo "<summary>Diff (csharp/src/ only)</summary>"
+            echo "<summary>Diff</summary>"
             echo ""
             echo '```diff'
             cat pr_diff.txt
@@ -120,62 +118,13 @@ jobs:
             echo ""
             echo "</details>"
             echo ""
-            echo "## Your task"
+            echo "## Task"
             echo ""
-            echo "1. **Read the existing tests** in \`tests/csharp/\` to understand what is already covered."
-            echo "2. **Read the relevant spec YAML files** in \`specs/\` that relate to the changed driver behaviour."
-            echo "3. **Decide**: do the driver changes introduce new observable behaviour that is not yet tested?"
-            echo "   - If everything is already covered, close this issue with a comment explaining why."
-            echo "   - If there are gaps, continue to step 4."
-            echo "4. **Write the missing tests** following the patterns below and open a PR against \`main\`."
-            echo ""
-            echo "## Test writing guidelines"
-            echo ""
-            echo "### File and class selection"
-            echo "- Add tests to the existing \`tests/csharp/<Domain>Tests.cs\` file whose domain matches the change."
-            echo "- Only create a new \`<Domain>Tests.cs\` if there is genuinely no matching file."
-            echo ""
-            echo "### Class and method structure"
-            echo '```csharp'
-            echo '[Collection("ProxyTests")]'
-            echo 'public class <Domain>Tests : ProxyTestBase'
-            echo '{'
-            echo '    /// <summary>'
-            echo '    /// <SPEC-ID>: <Title>'
-            echo '    /// <One-line description of what behaviour is verified.>'
-            echo '    /// </summary>'
-            echo '    [Fact]   // or [SkippableFact] for environment-specific tests'
-            echo '    public async Task <DescriptiveName>()'
-            echo '    {'
-            echo '        // Arrange'
-            echo '        // Act'
-            echo '        // Assert'
-            echo '    }'
-            echo '}'
-            echo '```'
-            echo ""
-            echo "### Spec IDs"
-            echo "- Each test must reference a spec ID from the relevant \`specs/*.yaml\` file (e.g. \`AUTH-013\`)."
-            echo "- If the behaviour is new and not yet in the spec, add a new entry to the YAML first, then reference it."
-            echo ""
-            echo "### Proxy usage"
-            echo "- Use \`CreateProxiedConnection()\` (or \`CreateProxiedConnectionWithParameters()\`) from \`ProxyTestBase\`."
-            echo "- Use \`ControlClient\` to inject failures, count Thrift calls, or verify OAuth token exchanges."
-            echo "- Use \`IsSeaMode\` to branch assertion logic when Thrift and SEA/REST protocols behave differently."
-            echo ""
-            echo "### Validation"
-            echo "- After writing, verify the tests build: \`dotnet build tests/csharp/ProxyTests.csproj -c Release\`"
-            echo "- Do not run the full integration suite (it requires a live Databricks workspace and proxy)."
-            echo ""
-            echo "### PR instructions"
-            echo "- Branch name: \`ai/test-coverage-pr-$PR_NUMBER\`"
-            echo "- PR title: \`test(csharp): add coverage for <short description> (driver PR #$PR_NUMBER)\`"
-            echo "- PR body: list each new test ID and one sentence explaining what it verifies."
-            echo "- Target branch: \`main\`"
+            echo "Follow the instructions in this repository (.github/copilot-instructions.md) to classify this change, determine whether test coverage needs to be added or updated, and open a PR if needed."
 
             if [ -n "$CUSTOM" ]; then
               echo ""
-              echo "## Additional instructions"
+              echo "## Additional context"
               echo ""
               echo "$CUSTOM"
             fi
