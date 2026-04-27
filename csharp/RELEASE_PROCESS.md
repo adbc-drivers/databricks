@@ -123,7 +123,7 @@ The release branch contains the full monorepo (Git doesn't support partial branc
 
 ## Latest Branch
 
-`release/csharp/latest` always points to the tip of the most recent release branch. It is updated automatically by the `csharp-sync-latest.yml` workflow whenever any `release/csharp/v*.latest` branch is pushed to — the workflow determines which branch is the newest by sorting all release branch version numbers and syncs `release/csharp/latest` accordingly.
+`release/csharp/latest` always points to the tip of the most recent release branch. It is updated automatically by the `csharp-sync-latest.yml` workflow on every push to `main` that bumps `csharp/Directory.Build.props`. The workflow reads `VersionPrefix`, pushes `main` to the matching `release/csharp/vX.Y.latest` branch, and force-pushes that branch to `release/csharp/latest`.
 
 ## CI/CD
 

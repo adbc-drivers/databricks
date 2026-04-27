@@ -23,23 +23,38 @@ on:
     paths:
       - 'csharp/Directory.Build.props'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Parse version and derive names
         id: ver
         run: |
-          VERSION=$(grep -oP '(?<=<VersionPrefix>)[^<]+' csharp/Directory.Build.props)
+          VERSION=$(grep -oP '(?<=<VersionPrefix>)[^<]+' csharp/Directory.Build.props | head -n1)
+          VERSION=$(printf '%s' "$VERSION" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
           if [ -z "$VERSION" ]; then
             echo "ERROR: could not parse VersionPrefix from csharp/Directory.Build.props"
             exit 1
           fi
-          MAJOR_MINOR=$(echo "$VERSION" | grep -oP '^\d+\.\d+')
+          if ! printf '%s' "$VERSION" | grep -qP '^\d+\.\d+\.\d+$'; then
+            echo "ERROR: VersionPrefix must be in X.Y.Z format, got: '$VERSION'"
+            exit 1
+          fi
+          MAJOR_MINOR=$(printf '%s' "$VERSION" | grep -oP '^\d+\.\d+')
+          if [ -z "$MAJOR_MINOR" ]; then
+            echo "ERROR: failed to derive major.minor from VersionPrefix: '$VERSION'"
+            exit 1
+          fi
           echo "version=$VERSION"                                        >> "$GITHUB_OUTPUT"
           echo "branch=release/csharp/v${MAJOR_MINOR}.latest"           >> "$GITHUB_OUTPUT"
           echo "tag=csharp/v${VERSION}"                                  >> "$GITHUB_OUTPUT"
@@ -67,5 +82,6 @@ jobs:
 
       - name: Update release/csharp/latest
         run: |
-          echo "Syncing release/csharp/latest → ${{ steps.ver.outputs.branch }}"
-          git push origin "HEAD:refs/heads/release/csharp/latest" --force
+          SOURCE="${{ steps.ver.outputs.branch }}"
+          echo "Syncing release/csharp/latest → $SOURCE"
+          git push origin "refs/heads/$SOURCE:refs/heads/release/csharp/latest" --force
