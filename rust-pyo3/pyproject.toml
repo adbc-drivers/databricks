@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "databricks-adbc-pyo3"
+version = "0.1.0"
+description = "PyO3 Python bindings for the Databricks ADBC Rust kernel (POC)"
+requires-python = ">=3.9"
+dependencies = ["pyarrow>=14"]
+
+[tool.maturin]
+module-name = "databricks_adbc_pyo3"
+features = ["pyo3/extension-module"]
