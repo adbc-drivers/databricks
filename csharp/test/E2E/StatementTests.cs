@@ -1157,7 +1157,7 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(expectedNullable == field.IsNullable, $"Field {index} nullability mismatch");
         }
 
-        [Theory]
+        [SkippableTheory]
         [InlineData(false, "main", true)]
         [InlineData(true, "", true)]
         [InlineData(true, "SPARK", true)]
@@ -1165,6 +1165,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData(true, "main", false)]
         public void ShouldReturnEmptyPkFkResult_WorksAsExpected(bool enablePKFK, string? catalogName, bool expected)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "ShouldReturnEmptyPkFkResult is Thrift-only; SEA uses StatementExecutionStatement");
             // Arrange: create test configuration and connection
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             var connectionParams = new Dictionary<string, string>

@@ -412,6 +412,7 @@ namespace AdbcDrivers.Databricks.Tests
             // Skip if default catalog or schema is not configured
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Catalog), "Default catalog not configured");
             Skip.If(string.IsNullOrEmpty(TestConfiguration.DbSchema), "Default schema not configured");
+            Skip.If(TestConfiguration.Protocol == "rest", "DefaultNamespace is Thrift-only; SEA uses StatementExecutionConnection");
 
             // Act
             using var connection = NewConnection();
@@ -508,6 +509,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("False", "custom-header", "True")]
         public void TracePropagationConfigurationTest(string tracePropagationEnabled, string traceParentHeaderName, string traceStateEnabled)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "TracePropagation configuration is Thrift-only; SEA uses StatementExecutionConnection");
             // Arrange
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             testConfig.TracePropagationEnabled = tracePropagationEnabled;
