@@ -203,7 +203,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Connection feature flags — parse before catalog/schema loading that depends on them
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
-            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, false);
+            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
 
             // Session configuration
             // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.

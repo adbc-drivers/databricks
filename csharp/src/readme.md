@@ -131,7 +131,7 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 | `adbc.databricks.ssp_*` | Server-side properties prefix. Properties with this prefix will be passed to the server by executing "set key=value" queries | |
 | `adbc.databricks.enable_multiple_catalog_support` | Whether to use multiple catalogs | `true` |
 | `adbc.databricks.enable_pk_fk` | Whether to enable primary key foreign key metadata calls | `true` |
-| `adbc.databricks.use_desc_table_extended` | Whether to use DESC TABLE EXTENDED to get extended column metadata when supported by DBR | `true` |
+| `adbc.databricks.use_desc_table_extended` | Whether to use DESC TABLE EXTENDED to get extended column metadata when supported by DBR | `true` (SEA/REST), `false` (Thrift) |
 | `adbc.databricks.enable_run_async_thrift` | Whether to enable RunAsync flag in Thrift operations | `true` |
 | `adbc.databricks.driver_config_take_precedence` | Whether driver configuration overrides passed-in properties during configuration merging | `false` |
 | `adbc.apache.statement.batch_size` | Sets the maximum number of rows to retrieve in a single batch request | `2000000` |
