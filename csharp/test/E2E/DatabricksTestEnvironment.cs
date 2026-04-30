@@ -184,6 +184,10 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 parameters.Add(DatabricksParameters.MaxBytesPerFetchRequest, testConfiguration.MaxBytesPerFetchRequest!);
             }
+            if (!string.IsNullOrEmpty(testConfiguration.Protocol))
+            {
+                parameters.Add(DatabricksParameters.Protocol, testConfiguration.Protocol!);
+            }
             if (testConfiguration.HttpOptions != null)
             {
                 if (testConfiguration.HttpOptions.Tls != null)
