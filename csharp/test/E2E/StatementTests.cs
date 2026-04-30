@@ -37,6 +37,7 @@ using Xunit.Abstractions;
 
 namespace AdbcDrivers.Databricks.Tests
 {
+    // TODO: PECO-3011 - CanSetOptionBatchSize/PollTime/QueryTimeout inherited from base class not validated in SEA's StatementExecutionStatement
     public class StatementTests : StatementTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public StatementTests(ITestOutputHelper? outputHelper)
@@ -452,6 +453,7 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(TestConfiguration.Metadata.ExpectedColumnCount, actualBatchLength);
         }
 
+        // TODO: PECO-3008 - CanGetColumnsExtended fails for SEA; investigate catalog/schema metadata path in StatementExecutionConnection
         [SkippableTheory]
         [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true, new[] { "PK_IS_NULLABLE:NO" })]
         [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false, new[] { "PK_IS_NULLABLE:YES" })]
@@ -1158,6 +1160,7 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(expectedNullable == field.IsNullable, $"Field {index} nullability mismatch");
         }
 
+        // TODO: PECO-3009 - hard cast to DatabricksStatement fails for SEA's StatementExecutionStatement
         [Theory]
         [InlineData(false, "main", true)]
         [InlineData(true, "", true)]

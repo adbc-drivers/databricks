@@ -32,6 +32,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
     /// </summary>
     public class SystemConfigurationTests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
+        // TODO: PECO-3010 - telemetry not wired for SEA protocol; these tests fail for rest protocol
         public SystemConfigurationTests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {

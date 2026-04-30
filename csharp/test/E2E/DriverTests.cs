@@ -33,6 +33,7 @@ using Metadata = Apache.Arrow.Adbc.Tests.Metadata;
 
 namespace AdbcDrivers.Databricks.Tests
 {
+    // TODO: PECO-3006 - CanExecuteQuery/CanExecuteUpdate/CanExecuteQueryAsync return 0 rows for SEA; fix result consumption in StatementExecutionStatement
     public class DriverTests : DriverTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public DriverTests(ITestOutputHelper? outputHelper)
@@ -83,6 +84,7 @@ namespace AdbcDrivers.Databricks.Tests
             GetObjectsTablesTest(tableNamePattern: tableName, expectedTableName: tableName);
         }
 
+        // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
         public override void CanDetectInvalidServer()
         {
             AdbcDriver driver = NewDriver;
@@ -109,6 +111,7 @@ namespace AdbcDrivers.Databricks.Tests
             OutputHelper?.WriteLine(exception.Message);
         }
 
+        // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
         public override void CanDetectInvalidAuthentication()
         {
             AdbcDriver driver = NewDriver;

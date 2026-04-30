@@ -266,6 +266,7 @@ namespace AdbcDrivers.Databricks.Tests
         public override string GetInsertStatement(string tableName, string columnName, string? value) =>
             string.Format("INSERT INTO {0} ({1}) SELECT {2};", tableName, columnName, value ?? "NULL");
 
+        // TODO: PECO-3005 - base class hard-casts Connection to HiveServer2Connection; shadow here to return unconvertedValue for SEA
         public new string? GetValueForProtocolVersion(string? unconvertedValue, string? convertedValue) =>
             Connection is AdbcDrivers.Databricks.StatementExecution.StatementExecutionConnection
                 ? unconvertedValue

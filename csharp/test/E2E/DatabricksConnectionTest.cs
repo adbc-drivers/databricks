@@ -406,6 +406,7 @@ namespace AdbcDrivers.Databricks.Tests
         /// <summary>
         /// Tests that default namespace is correctly stored in the connection namespace.
         /// </summary>
+        // TODO: PECO-3009 - test hard-asserts DatabricksConnection type; fails for SEA's StatementExecutionConnection
         [SkippableFact]
         internal void DefaultNamespaceStoredInConnection()
         {
@@ -514,6 +515,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("false", "X-Trace-Id", "true")]
         [InlineData("TRUE", "X-Custom-Trace", "FALSE")]
         [InlineData("False", "custom-header", "True")]
+        // TODO: PECO-3009 - Assert.IsType<DatabricksConnection> fails for SEA's StatementExecutionConnection
         public void TracePropagationConfigurationTest(string tracePropagationEnabled, string traceParentHeaderName, string traceStateEnabled)
         {
             // Arrange
