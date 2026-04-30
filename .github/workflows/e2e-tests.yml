@@ -16,6 +16,13 @@ name: Tests Workflow
 
 on:
   workflow_dispatch:
+    inputs:
+      protocol:
+        description: 'Protocol to test (thrift, rest, or both)'
+        required: false
+        default: 'both'
+        type: choice
+        options: [both, thrift, rest]
   push:
     branches:
       - main
@@ -41,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        protocol: [thrift, rest]
+        protocol: ${{ inputs.protocol == 'thrift' && fromJson('["thrift"]') || inputs.protocol == 'rest' && fromJson('["rest"]') || fromJson('["thrift","rest"]') }}
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}

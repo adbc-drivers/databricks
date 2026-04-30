@@ -488,14 +488,22 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(expectedRuntimeCatalog, catalogFromRuntime);
             Assert.Equal(expectedRuntimeSchema, schemaFromRuntime);
 
-            // Assert statement object values
-            var dbStatement = (DatabricksStatement)statement;
-            Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
-            Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
+            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName
+            if (statement is DatabricksStatement dbStatement)
+            {
+                Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
+                Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
 
-            OutputHelper?.WriteLine(
-                $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
-                $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}, Statement catalog={dbStatement.CatalogName}");
+                OutputHelper?.WriteLine(
+                    $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
+                    $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}, Statement catalog={dbStatement.CatalogName}");
+            }
+            else
+            {
+                OutputHelper?.WriteLine(
+                    $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
+                    $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}");
+            }
         }
 
         /// <summary>
