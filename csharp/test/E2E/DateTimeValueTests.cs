@@ -102,6 +102,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("INTERVAL -106751991 DAYS 23 HOURS 59 MINUTES 59.999999 SECONDS", "-106751990 00:00:00.000001000")]
         public async Task TestIntervalData(string intervalClause, string value)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns native Arrow interval types, not String");
             string selectStatement = $"SELECT {intervalClause} AS INTERVAL_VALUE;";
             await SelectAndValidateValuesAsync(selectStatement, value, 1);
         }

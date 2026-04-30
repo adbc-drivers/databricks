@@ -102,6 +102,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData(LongRunningStatementTimeoutTestData.LongRunningQuery, "true", "false")]
         internal async Task DatabricksCanCancelStatementTest(string query, string enableRunAsyncInThriftOp, string enableDirectResults)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "EnableRunAsyncInThriftOp and EnableDirectResults are Thrift-only");
             string enableRunAsyncInThriftOpOrig = TestConfiguration.EnableRunAsyncInThriftOp;
             string enableDirectResultsOrig = TestConfiguration.EnableDirectResults;
             try

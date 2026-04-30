@@ -539,9 +539,10 @@ namespace AdbcDrivers.Databricks.Tests
         /// <summary>
         /// Tests that TrySetGetDirectResults uses DatabricksConnection's defaultGetDirectResults
         /// </summary>
-        [Fact]
+        [SkippableFact]
         public void TrySetGetDirectResults_UsesDatabricksDefaultGetDirectResults()
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "DirectResults is Thrift-only");
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             using var connection = NewConnection(testConfig);
             // Create a mock request object
