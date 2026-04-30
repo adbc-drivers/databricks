@@ -321,5 +321,22 @@ namespace AdbcDrivers.Databricks.Reader
             // Not using CloudFetch or reader not initialized yet
             return null;
         }
+
+        /// <summary>
+        /// Gets the server-reported LZ4 compression state for this result set
+        /// (from <c>TGetResultSetMetadataResp.Lz4Compressed</c>). Drives the LZ4 decompression
+        /// branch in both the inline <see cref="DatabricksReader"/> and the CloudFetch pipeline,
+        /// so it is the single source of truth for telemetry's <c>is_compressed</c> field.
+        /// </summary>
+        public bool IsLz4Compressed => _isLz4Compressed;
+
+        /// <summary>
+        /// Gets a value indicating whether the active reader is a <see cref="CloudFetchReader"/>.
+        /// Reflects the server's actual choice for this result set (presence of result links in the
+        /// fetch response, see <see cref="ShouldUseCloudFetch"/>), not the connection-level
+        /// <c>useCloudFetch</c> capability flag. Returns <c>false</c> before the first read, when the
+        /// active reader has not been initialized yet.
+        /// </summary>
+        public bool IsCloudFetchActive => _activeReader is CloudFetchReader;
     }
 }
