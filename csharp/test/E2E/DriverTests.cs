@@ -108,14 +108,6 @@ namespace AdbcDrivers.Databricks.Tests
             await base.CanExecuteQueryAsync();
         }
 
-        // TODO: PECO-3005 - CanGetObjectsAll hard-casts Connection to HiveServer2Connection via GetValueForProtocolVersion
-        [SkippableFact]
-        public override void CanGetObjectsAll()
-        {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
-            base.CanGetObjectsAll();
-        }
-
         // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
         public override void CanDetectInvalidServer()
         {

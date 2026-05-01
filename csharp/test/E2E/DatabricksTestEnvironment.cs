@@ -305,6 +305,7 @@ namespace AdbcDrivers.Databricks.Tests
                 new("date", typeof(DateTime), typeof(Date32Type), new DateTime(2023, 9, 8)),
                 new("timestamp", typeof(DateTimeOffset), typeof(TimestampType), new DateTimeOffset(new DateTime(2023, 9, 8, 12, 34, 56), TimeSpan.Zero)),
             };
+            // TODO: PECO-3014 - SEA returns INTERVAL in a different string format than Thrift
             if (!isSeaConnection)
                 standardExpectedValues.Add(new("interval", typeof(string), typeof(StringType), "178956969-11"));
             standardExpectedValues.AddRange(new[]
@@ -329,7 +330,7 @@ namespace AdbcDrivers.Databricks.Tests
                             "X'616263313233' as data, " +
                             "DATE '2023-09-08' as date, " +
                             "TIMESTAMP '2023-09-08 12:34:56+00:00' as timestamp, " +
-                            (isSeaConnection ? "" : "INTERVAL 178956969 YEAR 11 MONTH as interval, ") +
+                            (isSeaConnection ? "" : "INTERVAL 178956969 YEAR 11 MONTH as interval, ") + // TODO: PECO-3014 - SEA returns INTERVAL in a different string format than Thrift
                             "ARRAY(1, 2, 3) as numbers, " +
                             "STRUCT('John Doe' as name, 30 as age) as person," +
                             "MAP('name', CAST('Jane Doe' AS STRING), 'age', CAST(29 AS INT)) as map",
