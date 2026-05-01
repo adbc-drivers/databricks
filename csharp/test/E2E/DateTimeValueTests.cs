@@ -119,15 +119,6 @@ namespace AdbcDrivers.Databricks.Tests
             return base.TestTimestampData(value, columnType);
         }
 
-        [SkippableTheory]
-        [MemberData(nameof(TimestampBasicData), "DATE")]
-        public override async Task TestDateData(DateTimeOffset value, string columnType)
-        {
-            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
-            await base.TestDateData(value, columnType);
-        }
-
         protected override string GetFormattedTimestampValue(string value)
         {
             return "TO_TIMESTAMP(" + QuoteValue(value) + ")";
