@@ -22,6 +22,7 @@
 */
 
 using System.Collections.Generic;
+using Apache.Arrow.Adbc.Tests.Xunit;
 using AdbcDrivers.Tests.HiveServer2.Common;
 using Xunit;
 using Xunit.Abstractions;
@@ -42,6 +43,7 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         // TODO: PECO-3012 - SEA ExecuteUpdate returns 0 affected rows instead of -1
+        [SkippableFact, Order(1)]
         public override void CanClientExecuteUpdate()
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA CanClientExecuteUpdate returns 0 affected rows instead of -1 (PECO-3012)");
@@ -49,6 +51,7 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         // TODO: PECO-3006 - SEA CanClientExecuteQuery returns 0 rows
+        [SkippableFact, Order(3)]
         public override void CanClientExecuteQuery()
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA CanClientExecuteQuery returns 0 rows (PECO-3006)");

@@ -27,6 +27,7 @@ using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2.Spark;
 using AdbcDrivers.Tests.HiveServer2.Common;
+using Apache.Arrow.Adbc.Tests.Xunit;
 using Xunit;
 using Xunit.Abstractions;
 using Metadata = Apache.Arrow.Adbc.Tests.Metadata;
@@ -92,8 +93,16 @@ namespace AdbcDrivers.Databricks.Tests
             base.ValidateCanExecuteQuery(batchSizeFactor);
         }
 
+        // TODO: PECO-3005 - SEA CanGetObjectsAll returns different XdbcColumnSize metadata values
+        [SkippableFact, Order(6)]
+        public override void CanGetObjectsAll()
+        {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns different XdbcColumnSize metadata values (PECO-3005)");
+            base.CanGetObjectsAll();
+        }
+
         // TODO: PECO-3012 - SEA ExecuteUpdate returns 0 affected rows instead of -1
-        [SkippableFact]
+        [SkippableFact, Order(1)]
         public override void CanExecuteUpdate()
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA ExecuteUpdate returns 0 affected rows instead of -1 (PECO-3012)");
@@ -101,7 +110,7 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         // TODO: PECO-3006 - SEA CanExecuteQueryAsync returns 0 rows
-        [SkippableFact]
+        [SkippableFact, Order(11)]
         public override async System.Threading.Tasks.Task CanExecuteQueryAsync()
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA CanExecuteQueryAsync returns 0 rows (PECO-3006)");
@@ -109,6 +118,7 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
+        [SkippableFact, Order(14)]
         public override void CanDetectInvalidServer()
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA throws ArgumentException instead of AdbcException for invalid server (PECO-3007)");
@@ -137,6 +147,7 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
+        [SkippableFact, Order(13)]
         public override void CanDetectInvalidAuthentication()
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA returns UnknownError status instead of Unauthorized (PECO-3007)");

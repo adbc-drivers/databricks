@@ -123,7 +123,7 @@ jobs:
             "protocol": "${{ matrix.protocol }}",
             "catalog": "main",
             "db_schema": "adbc_testing",
-            "query": "SELECT * FROM main.adbc_testing.adbc_testing_table",
+            "query": "SELECT * FROM main.adbc_testing.adbc_testing_table_${{ matrix.protocol }}",
             "expectedResults": 12,
             "isCITesting": true,
             "tracePropagationEnabled": "true",
@@ -132,7 +132,7 @@ jobs:
             "metadata": {
               "catalog": "main",
               "schema": "adbc_testing",
-              "table": "adbc_testing_table",
+              "table": "adbc_testing_table_${{ matrix.protocol }}",
               "expectedColumnCount": 19
             }
           }
