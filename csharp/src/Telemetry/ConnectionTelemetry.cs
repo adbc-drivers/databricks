@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -302,7 +303,11 @@ namespace AdbcDrivers.Databricks.Telemetry
         private static Proto.DriverSystemConfiguration CreateSystemConfiguration(string assemblyVersion)
         {
             var osVersion = System.Environment.OSVersion;
-            var processName = Process.GetCurrentProcess().ProcessName;
+            // Prefer the entry assembly name so process_name reflects the actual application
+            // (e.g. "MyApp") rather than the .NET host executable name ("dotnet"). Fall back
+            // to the OS process name when there is no entry assembly (e.g. unmanaged hosts).
+            var processName = Assembly.GetEntryAssembly()?.GetName().Name
+                ?? Process.GetCurrentProcess().ProcessName;
             return new Proto.DriverSystemConfiguration
             {
                 DriverVersion = assemblyVersion,
@@ -314,7 +319,9 @@ namespace AdbcDrivers.Databricks.Telemetry
                 RuntimeVersion = System.Environment.Version.ToString(),
                 RuntimeVendor = "Microsoft",
                 LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
-                CharSetEncoding = System.Text.Encoding.Default.WebName,
+                // Normalize to upper-case (e.g. "UTF-8") to match the casing emitted by the
+                // OSS JDBC and DatabricksJDBC drivers; .NET Core / Linux returns "utf-8".
+                CharSetEncoding = System.Text.Encoding.Default.WebName.ToUpperInvariant(),
                 ProcessName = processName,
                 ClientAppName = processName
             };
@@ -423,6 +430,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
 
             int batchSize = GetBatchSize(properties);
+            int asyncPollIntervalMillis = GetAsyncPollIntervalMillis(properties);
 
             return new Proto.DriverConnectionParameters
             {
@@ -444,7 +452,22 @@ namespace AdbcDrivers.Databricks.Telemetry
                 EnableDirectResults = enableDirectResults,
                 EnableComplexDatatypeSupport = useDescTableExtended,
                 AutoCommit = true,
+                AsyncPollIntervalMillis = asyncPollIntervalMillis,
             };
+        }
+
+        // PECO-2997: report the async-execution poll interval (in milliseconds) used by
+        // DatabricksStatement when polling for query completion. The driver overrides
+        // the Apache base default (500ms) with DefaultAsyncExecPollIntervalMs (100ms);
+        // callers can override via ApacheParameters.PollTimeMilliseconds.
+        private static int GetAsyncPollIntervalMillis(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(ApacheParameters.PollTimeMilliseconds, out string? pollTimeStr) &&
+                int.TryParse(pollTimeStr, out int pollTime) && pollTime > 0)
+            {
+                return pollTime;
+            }
+            return DatabricksConstants.DefaultAsyncExecPollIntervalMs;
         }
 
         private static string DetermineAuthType(IReadOnlyDictionary<string, string> properties)
