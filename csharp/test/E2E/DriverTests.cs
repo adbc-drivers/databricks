@@ -85,6 +85,19 @@ namespace AdbcDrivers.Databricks.Tests
             GetObjectsTablesTest(tableNamePattern: tableName, expectedTableName: tableName);
         }
 
+        // TODO: PECO-3006 - SEA CanExecuteQuery returns 0 rows
+        [SkippableTheory]
+        [InlineData(0.1)]
+        [InlineData(0.25)]
+        [InlineData(1.0)]
+        [InlineData(2.0)]
+        [InlineData(null)]
+        public override void CanExecuteQuery(double? batchSizeFactor)
+        {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanExecuteQuery returns 0 rows (PECO-3006)");
+            base.CanExecuteQuery(batchSizeFactor);
+        }
+
         // TODO: PECO-3012 - SEA ExecuteUpdate returns 0 affected rows instead of -1
         [SkippableFact]
         public override void CanExecuteUpdate()
