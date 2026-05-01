@@ -102,6 +102,6 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         internal override string FormatTableName =>
-       $"{TestConfiguration.Metadata.Catalog}.{TestConfiguration.Metadata.Schema}.{TestConfiguration.Metadata.Table}";
+       $"{TestConfiguration.Metadata.Catalog}.{TestConfiguration.Metadata.Schema}.{TestConfiguration.Metadata.Table}_{TestConfiguration.Protocol}";
     }
 }
