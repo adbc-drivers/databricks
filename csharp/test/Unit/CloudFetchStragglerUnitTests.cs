@@ -74,16 +74,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public void FileDownloadMetrics_MarkCancelledAsStragler_SetsFlag()
+        public void FileDownloadMetrics_MarkCancelledAsStraggler_SetsFlag()
         {
             // Arrange
             var metrics = new FileDownloadMetrics(fileOffset: 0, fileSizeBytes: 1024);
 
             // Act
-            metrics.MarkCancelledAsStragler();
+            metrics.MarkCancelledAsStraggler();
 
             // Assert
-            Assert.True(metrics.WasCancelledAsStragler);
+            Assert.True(metrics.WasCancelledAsStraggler);
         }
 
         #endregion
@@ -321,7 +321,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             for (int i = 0; i < 5; i++)
             {
                 var m = new FileDownloadMetrics(i, 1024 * 1024);
-                m.MarkCancelledAsStragler();
+                m.MarkCancelledAsStraggler();
                 metrics.Add(m);
             }
 

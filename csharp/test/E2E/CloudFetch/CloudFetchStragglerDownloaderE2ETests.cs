@@ -1442,7 +1442,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
             Assert.Equal(12345, metrics.FileOffset);
             Assert.Equal(10 * 1024 * 1024, metrics.FileSizeBytes);
             Assert.False(metrics.IsDownloadCompleted);
-            Assert.False(metrics.WasCancelledAsStragler);
+            Assert.False(metrics.WasCancelledAsStraggler);
         }
 
         [Fact]

@@ -715,7 +715,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             new("max_retries", _maxRetries)
                         ]);
 
-                        _stragglerDetector?.MarkCancelledAsStragler(fileOffset, activity);
+                        _stragglerDetector?.MarkCancelledAsStraggler(fileOffset, activity);
                         effectiveToken = _stragglerDetector?.RegisterDownload(fileOffset, size, cancellationToken, activity)
                                        ?? cancellationToken;
 

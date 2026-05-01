@@ -216,7 +216,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
             // Preserve the cancelled flag for retries (used for tracing/debugging)
             if (wasPreviouslyCancelled)
             {
-                metrics.MarkCancelledAsStragler();
+                metrics.MarkCancelledAsStraggler();
             }
 
             _activeDownloadMetrics[fileOffset] = metrics;
@@ -263,7 +263,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
                     new("offset", fileOffset),
                     new("duration_ms", duration),
                     new("throughput_mbps", throughput.HasValue ? throughput.Value / (1024.0 * 1024.0) : 0),
-                    new("was_cancelled_as_straggler", metrics.WasCancelledAsStragler)
+                    new("was_cancelled_as_straggler", metrics.WasCancelledAsStraggler)
                 ]);
             }
 
@@ -276,11 +276,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
         /// </summary>
         /// <param name="fileOffset">File offset identifier.</param>
         /// <param name="activity">Optional activity for tracing.</param>
-        public void MarkCancelledAsStragler(long fileOffset, Activity? activity = null)
+        public void MarkCancelledAsStraggler(long fileOffset, Activity? activity = null)
         {
             if (_activeDownloadMetrics.TryGetValue(fileOffset, out var metrics))
             {
-                metrics.MarkCancelledAsStragler();
+                metrics.MarkCancelledAsStraggler();
 
                 var elapsed = (DateTime.UtcNow - metrics.DownloadStartTime).TotalMilliseconds;
 
@@ -332,9 +332,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
             // Determine which dictionary to use for tracking already-detected stragglers
             var countingDict = alreadyCounted ?? _alreadyCountedStragglers;
 
-            // Get completed downloads from both active metrics (just completed) and historical completed metrics
+            // Get completed downloads from both active metrics (just completed) and historical completed metrics.
+            // Dedup by FileOffset: a metric in transit from active→completed can momentarily appear in both
+            // _activeDownloadMetrics (snapshot) and _completedDownloadMetrics (live), so exclude history
+            // entries already represented in the active snapshot to keep the count consistent.
+            var allOffsetsInActive = new HashSet<long>(allDownloadMetrics.Select(m => m.FileOffset));
             var completedFromActive = allDownloadMetrics.Where(m => m.IsDownloadCompleted).ToList();
-            var completedFromHistory = _completedDownloadMetrics.Values.ToList();
+            var completedFromHistory = _completedDownloadMetrics
+                .Where(kv => !allOffsetsInActive.Contains(kv.Key))
+                .Select(kv => kv.Value)
+                .ToList();
             var completedDownloads = completedFromActive.Concat(completedFromHistory).ToList();
 
             // Filter out downloads that were already detected as stragglers (prevents re-detection on retry)
@@ -346,7 +353,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
             }
 
             // Check if we have enough completed downloads to calculate median
-            int totalDownloads = allDownloadMetrics.Count + _completedDownloadMetrics.Count;
+            int totalDownloads = allDownloadMetrics.Count + completedFromHistory.Count;
             int requiredCompletions = (int)Math.Ceiling(totalDownloads * _config.Quantile);
 
             if (completedDownloads.Count < requiredCompletions)
@@ -406,7 +413,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
             {
                 // Calculate metrics for tracing only when needed
                 var completedDownloads = allDownloadMetrics.Where(m => m.IsDownloadCompleted).ToList();
-                var activeDownloads = allDownloadMetrics.Where(m => !m.IsDownloadCompleted && !m.WasCancelledAsStragler).ToList();
+                var activeDownloads = allDownloadMetrics.Where(m => !m.IsDownloadCompleted && !m.WasCancelledAsStraggler).ToList();
                 int requiredCompletions = (int)Math.Ceiling(allDownloadMetrics.Count * _config.Quantile);
 
                 if (completedDownloads.Count >= requiredCompletions && activeDownloads.Count > 0)
@@ -596,14 +603,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
 
         public void Dispose()
         {
-            _monitoringCts?.Cancel();
-            _monitoringCts?.Dispose();
-
-            foreach (var cts in _perFileDownloadCancellationTokens.Values)
-            {
-                cts?.Dispose();
-            }
-            _perFileDownloadCancellationTokens.Clear();
+            // Ensure the monitoring loop is fully stopped before disposing resources it may touch.
+            // StopMonitoring is idempotent (early-returns when _monitoringTask is null), so calling
+            // it from both StopAsync and Dispose is safe.
+            StopMonitoring().GetAwaiter().GetResult();
 
             _sequentialSemaphore?.Dispose();
         }

@@ -26,7 +26,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
     {
         private readonly object _lock = new object();
         private DateTime? _downloadEndTime;
-        private bool _wasCancelledAsStragler;
+        private bool _wasCancelledAsStraggler;
 
         // Minimum elapsed time to avoid unrealistic throughput calculations
         private const double MinimumElapsedSecondsForThroughput = 0.001;
@@ -79,7 +79,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
         /// <summary>
         /// Gets a value indicating whether this download was cancelled as a straggler.
         /// </summary>
-        public bool WasCancelledAsStragler => _wasCancelledAsStragler;
+        public bool WasCancelledAsStraggler => _wasCancelledAsStraggler;
 
         /// <summary>
         /// Calculates the download throughput in bytes per second.
@@ -126,11 +126,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
         /// Marks this download as having been cancelled due to being identified as a straggler.
         /// Thread-safe - idempotent.
         /// </summary>
-        public void MarkCancelledAsStragler()
+        public void MarkCancelledAsStraggler()
         {
             lock (_lock)
             {
-                _wasCancelledAsStragler = true;
+                _wasCancelledAsStraggler = true;
             }
         }
     }
