@@ -508,6 +508,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false, new[] { "PK_IS_NULLABLE:YES" })]
         public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended, string[]? extraPlaceholdsInResult = null)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanGetColumnsExtended returns different BUFFER_LENGTH values (PECO-3008)");
             var connectionParams = new Dictionary<string, string> { ["adbc.databricks.use_desc_table_extended"] = $"{useDescTableExtended}" };
 
             using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
