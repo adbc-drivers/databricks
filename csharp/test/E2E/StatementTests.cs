@@ -45,51 +45,25 @@ namespace AdbcDrivers.Databricks.Tests
         {
         }
 
-        [SkippableTheory]
-        [InlineData("-1", true)]
-        [InlineData("zero", true)]
-        [InlineData("-2147483648", true)]
-        [InlineData("2147483648", true)]
-        [InlineData("0")]
-        [InlineData("1")]
-        [InlineData("2147483647")]
-        public override void CanSetOptionPollTime(string value, bool throws = false)
+        // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate poll time option
+        protected override void ValidateCanSetOptionPollTime(string value, bool throws = false)
         {
-            // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate poll time option
             Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce poll time validation");
-            base.CanSetOptionPollTime(value, throws);
+            base.ValidateCanSetOptionPollTime(value, throws);
         }
 
-        [SkippableTheory]
-        [InlineData("zero", true)]
-        [InlineData("-2147483648", true)]
-        [InlineData("2147483648", true)]
-        [InlineData("0", false)]
-        [InlineData("-1", true)]
-        [InlineData("1")]
-        [InlineData("2147483647")]
-        public override void CanSetOptionQueryTimeout(string value, bool throws = false)
+        // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate query timeout option
+        protected override void ValidateCanSetOptionQueryTimeout(string value, bool throws = false)
         {
-            // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate query timeout option
             Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce query timeout validation");
-            base.CanSetOptionQueryTimeout(value, throws);
+            base.ValidateCanSetOptionQueryTimeout(value, throws);
         }
 
-        [SkippableTheory]
-        [InlineData("-1", true)]
-        [InlineData("one", true)]
-        [InlineData("-2147483648", true)]
-        [InlineData("2147483648", false)]
-        [InlineData("9223372036854775807", false)]
-        [InlineData("9223372036854775808", true)]
-        [InlineData("0", true)]
-        [InlineData("1")]
-        [InlineData("2147483647")]
-        public override void CanSetOptionBatchSize(string value, bool throws = false)
+        // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate batch size option
+        protected override void ValidateCanSetOptionBatchSize(string value, bool throws = false)
         {
-            // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate batch size option
             Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce batch size validation");
-            base.CanSetOptionBatchSize(value, throws);
+            base.ValidateCanSetOptionBatchSize(value, throws);
         }
 
         [SkippableTheory]
