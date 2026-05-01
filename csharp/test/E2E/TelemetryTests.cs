@@ -22,6 +22,7 @@
 */
 
 using AdbcDrivers.Tests.HiveServer2.Common;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace AdbcDrivers.Databricks.Tests
