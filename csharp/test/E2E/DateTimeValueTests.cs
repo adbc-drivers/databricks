@@ -41,6 +41,8 @@ namespace AdbcDrivers.Databricks.Tests
         [MemberData(nameof(TimestampExtendedData), "TIMESTAMP_LTZ")]
         public async Task TestTimestampDataDatabricks(DateTimeOffset value, string columnType)
         {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
             await base.TestTimestampData(value, columnType);
         }
 
@@ -112,7 +114,18 @@ namespace AdbcDrivers.Databricks.Tests
         [MemberData(nameof(TimestampExtendedData), "TIMESTAMP")]
         public override Task TestTimestampData(DateTimeOffset value, string columnType)
         {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
             return base.TestTimestampData(value, columnType);
+        }
+
+        [SkippableTheory]
+        [MemberData(nameof(TimestampBasicData), "DATE")]
+        public override async Task TestDateData(DateTimeOffset value, string columnType)
+        {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
+            await base.TestDateData(value, columnType);
         }
 
         protected override string GetFormattedTimestampValue(string value)

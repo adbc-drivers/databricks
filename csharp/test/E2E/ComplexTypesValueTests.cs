@@ -94,6 +94,32 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(batch.Column(0).IsNull(0), "Expected null value");
         }
 
+        [SkippableTheory]
+        [InlineData("ARRAY(CAST(1 AS INT), 2, 3)", "[1,2,3]")]
+        [InlineData("ARRAY(CAST(1 AS LONG), 2, 3)", "[1,2,3]")]
+        [InlineData("ARRAY(CAST(1 AS DOUBLE), 2, 3)", "[1.0,2.0,3.0]")]
+        [InlineData("ARRAY(CAST(1 AS NUMERIC(38,0)), 2, 3)", "[1,2,3]")]
+        [InlineData("ARRAY(CAST('John Doe' AS STRING), 2, 3)", """["John Doe","2","3"]""")]
+        [InlineData("ARRAY(CAST('2024-01-01T00:00:00-07:00' AS TIMESTAMP), CAST('2024-02-02T02:02:02+01:30' AS TIMESTAMP), CAST('2024-03-03T03:03:03Z' AS TIMESTAMP))", """[2024-01-01 07:00:00,2024-02-02 00:32:02,2024-03-03 03:03:03]""")]
+        [InlineData("ARRAY(CAST('2024-01-01T00:00:00Z' AS DATE), CAST('2024-02-02T02:02:02Z' AS DATE), CAST('2024-03-03T03:03:03Z' AS DATE))", """[2024-01-01,2024-02-02,2024-03-03]""")]
+        [InlineData("ARRAY(INTERVAL 123 YEARS 11 MONTHS, INTERVAL 5 YEARS, INTERVAL 6 MONTHS)", """[123-11,5-0,0-6]""")]
+        public override async Task TestArrayData(string projection, string value)
+        {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
+            await base.TestArrayData(projection, value);
+        }
+
+        [SkippableTheory]
+        [InlineData("MAP(1, 'John Doe', 2, 'Jane Doe', 3, 'Jack Doe')", """{1:"John Doe",2:"Jane Doe",3:"Jack Doe"}""")]
+        [InlineData("MAP('John Doe', 1, 'Jane Doe', 2, 'Jack Doe', 3)", """{"Jack Doe":3,"Jane Doe":2,"John Doe":1}""")]
+        public override async Task TestMapData(string projection, string value)
+        {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
+            await base.TestMapData(projection, value);
+        }
+
         // COMPLEX-001: Simple ARRAY of integers
         [SkippableFact]
         public async Task COMPLEX001_QueryReturningArray()

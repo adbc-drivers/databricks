@@ -65,7 +65,57 @@ namespace AdbcDrivers.Databricks.Tests
         //[InlineData(float.MaxValue)]
         public override async Task TestFloatValuesInsertSelectDelete(float value)
         {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
             await base.TestFloatValuesInsertSelectDelete(value);
+        }
+
+        [SkippableTheory]
+        [InlineData("-1")]
+        [InlineData("0")]
+        [InlineData("1")]
+        [InlineData("99")]
+        [InlineData("-99")]
+        public override async Task TestSmallNumberRange(string value)
+        {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
+            await base.TestSmallNumberRange(value);
+        }
+
+        [SkippableTheory]
+        [InlineData("0.00")]
+        [InlineData("4.85")]
+        [InlineData("-999999999999999999999999999999999999.99")]
+        [InlineData("999999999999999999999999999999999999.99")]
+        public override async Task TestSmallScaleNumberRange(string value)
+        {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
+            await base.TestSmallScaleNumberRange(value);
+        }
+
+        [SkippableTheory]
+        [InlineData("0E-37")]
+        [InlineData("-2.0030000000000000000000000000000000000")]
+        [InlineData("4.8500000000000000000000000000000000000")]
+        [InlineData("1E-37")]
+        [InlineData("9.5545204502636499875576383003668916798")]
+        public override async Task TestLargeScaleNumberRange(string value)
+        {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
+            await base.TestLargeScaleNumberRange(value);
+        }
+
+        [SkippableTheory]
+        [InlineData(2.467, 2.47)]
+        [InlineData(-672.613, -672.61)]
+        public override async Task TestRoundingNumbers(decimal input, decimal output)
+        {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
+            await base.TestRoundingNumbers(input, output);
         }
     }
 }

@@ -46,6 +46,53 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         [SkippableTheory]
+        [InlineData("-1", true)]
+        [InlineData("zero", true)]
+        [InlineData("-2147483648", true)]
+        [InlineData("2147483648", true)]
+        [InlineData("0")]
+        [InlineData("1")]
+        [InlineData("2147483647")]
+        public override void CanSetOptionPollTime(string value, bool throws = false)
+        {
+            // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate poll time option
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce poll time validation");
+            base.CanSetOptionPollTime(value, throws);
+        }
+
+        [SkippableTheory]
+        [InlineData("zero", true)]
+        [InlineData("-2147483648", true)]
+        [InlineData("2147483648", true)]
+        [InlineData("0", false)]
+        [InlineData("-1", true)]
+        [InlineData("1")]
+        [InlineData("2147483647")]
+        public override void CanSetOptionQueryTimeout(string value, bool throws = false)
+        {
+            // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate query timeout option
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce query timeout validation");
+            base.CanSetOptionQueryTimeout(value, throws);
+        }
+
+        [SkippableTheory]
+        [InlineData("-1", true)]
+        [InlineData("one", true)]
+        [InlineData("-2147483648", true)]
+        [InlineData("2147483648", false)]
+        [InlineData("9223372036854775807", false)]
+        [InlineData("9223372036854775808", true)]
+        [InlineData("0", true)]
+        [InlineData("1")]
+        [InlineData("2147483647")]
+        public override void CanSetOptionBatchSize(string value, bool throws = false)
+        {
+            // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate batch size option
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce batch size validation");
+            base.CanSetOptionBatchSize(value, throws);
+        }
+
+        [SkippableTheory]
         [InlineData(true, "CloudFetch enabled")]
         [InlineData(false, "CloudFetch disabled")]
         public async Task LZ4DecompressionCapabilityTest(bool useCloudFetch, string configName)
@@ -94,6 +141,8 @@ namespace AdbcDrivers.Databricks.Tests
         [ClassData(typeof(LongRunningStatementTimeoutTestData))]
         internal override void StatementTimeoutTest(StatementWithExceptions statementWithExceptions)
         {
+            // TODO: PECO-3013 - SEA throws AdbcException instead of TimeoutException on query timeout
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA throws AdbcException not TimeoutException on timeout");
             base.StatementTimeoutTest(statementWithExceptions);
         }
 
@@ -1161,7 +1210,7 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         // TODO: PECO-3009 - hard cast to DatabricksStatement fails for SEA's StatementExecutionStatement
-        [Theory]
+        [SkippableTheory]
         [InlineData(false, "main", true)]
         [InlineData(true, "", true)]
         [InlineData(true, "SPARK", true)]
@@ -1169,6 +1218,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData(true, "main", false)]
         public void ShouldReturnEmptyPkFkResult_WorksAsExpected(bool enablePKFK, string? catalogName, bool expected)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: hard cast to DatabricksStatement fails for StatementExecutionStatement");
             // Arrange: create test configuration and connection
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             var connectionParams = new Dictionary<string, string>

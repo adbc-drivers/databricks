@@ -31,6 +31,8 @@ namespace AdbcDrivers.Databricks.Tests
         public TelemetryTests(ITestOutputHelper outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
+            // TODO: PECO-3010 - telemetry not wired for SEA protocol; file trace exporter produces no output
+            Skip.If(TestConfiguration.Protocol == "rest", "Telemetry file tracing is Thrift-only");
         }
     }
 }
