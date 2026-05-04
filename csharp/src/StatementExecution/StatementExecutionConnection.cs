@@ -16,11 +16,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.HiveServer2.Spark;
@@ -53,6 +55,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Session management
         private string? _sessionId;
         private readonly SemaphoreSlim _sessionLock = new SemaphoreSlim(1, 1);
+
+        // Telemetry
+        private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
+        internal TelemetrySessionContext? TelemetrySession => _telemetry.Session;
 
         // Configuration for statement creation
         private readonly string _resultDisposition;
@@ -408,6 +414,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         {
                             _catalog = GetCurrentCatalog();
                         }
+
+                        // Initialize telemetry after successful session creation
+                        InitializeTelemetry();
                     }
                 }
                 finally
@@ -415,6 +424,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     _sessionLock.Release();
                 }
             }
+        }
+
+        /// <summary>
+        /// Initializes telemetry via the SeaConnectionTelemetry factory.
+        /// Returns NoOpConnectionTelemetry if telemetry is disabled or initialization fails.
+        /// </summary>
+        private void InitializeTelemetry()
+        {
+            _telemetry = SeaConnectionTelemetry.Create(
+                properties: _properties,
+                host: GetHost(_properties),
+                assemblyVersion: AssemblyVersion,
+                sessionId: _sessionId,
+                activity: Activity.Current);
         }
 
         /// <summary>
@@ -437,7 +460,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _recyclableMemoryStreamManager,
                 _lz4BufferPool,
                 _cloudFetchHttpClient,
-                this); // Pass connection as TracingConnection for tracing support
+                this, // Pass connection as TracingConnection for tracing support
+                _telemetry.Session); // Pass telemetry session context
         }
 
         public override void SetOption(string key, string? value)
@@ -899,6 +923,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _cloudFetchHttpClient.Dispose();
 
                 _sessionLock.Dispose();
+
+                // Dispose telemetry (flush + release client)
+                _telemetry.DisposeAsync().GetAwaiter().GetResult();
             });
         }
 

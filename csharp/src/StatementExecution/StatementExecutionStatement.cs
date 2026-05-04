@@ -25,6 +25,9 @@ using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.Databricks.Result;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
@@ -72,6 +75,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Connection reference for metadata queries
         private readonly StatementExecutionConnection _connection;
 
+        // Telemetry
+        private readonly TelemetrySessionContext? _telemetrySession;
+        private StatementTelemetryContext? _pendingTelemetryContext;
+        private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
@@ -103,7 +111,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Microsoft.IO.RecyclableMemoryStreamManager recyclableMemoryStreamManager,
             System.Buffers.ArrayPool<byte> lz4BufferPool,
             HttpClient httpClient,
-            StatementExecutionConnection connection)
+            StatementExecutionConnection connection,
+            TelemetrySessionContext? telemetrySession = null)
             : base(connection)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
@@ -124,6 +133,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+            _telemetrySession = telemetrySession;
 
             // Match Thrift: statement starts with connection's default catalog.
             // When enableMultipleCatalogSupport=true, this is the catalog from config (e.g. "main").
@@ -139,6 +149,111 @@ namespace AdbcDrivers.Databricks.StatementExecution
             get => _sqlQuery;
             set => _sqlQuery = value;
         }
+
+        // ── Telemetry helpers ────────────────────────────────────────────────────────
+
+        private StatementTelemetryContext? CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type statementType)
+        {
+            if (_telemetrySession?.TelemetryClient == null) return null;
+            var ctx = new StatementTelemetryContext(_telemetrySession);
+            ctx.OperationType = Telemetry.Proto.Operation.Types.Type.ExecuteStatement;
+            ctx.StatementType = statementType;
+            ctx.IsCompressed = _resultCompression != null;
+            return ctx;
+        }
+
+        private StatementTelemetryContext? CreateMetadataTelemetryContext()
+        {
+            if (_telemetrySession?.TelemetryClient == null) return null;
+            var operationType = DatabricksStatement.GetMetadataOperationType(_sqlQuery)
+                ?? Telemetry.Proto.Operation.Types.Type.Unspecified;
+            var ctx = new StatementTelemetryContext(_telemetrySession);
+            ctx.OperationType = operationType;
+            ctx.StatementType = Telemetry.Proto.Statement.Types.Type.Metadata;
+            ctx.ResultFormat = Telemetry.Proto.ExecutionResult.Types.Format.InlineArrow;
+            ctx.IsCompressed = false;
+            return ctx;
+        }
+
+        private static void RecordError(StatementTelemetryContext ctx, Exception ex)
+        {
+            ctx.HasError = true;
+            ctx.ErrorName = ex.GetType().Name;
+            ctx.ErrorMessage = ex.Message;
+            CaptureRetryCount(ctx);
+        }
+
+        private static void CaptureRetryCount(StatementTelemetryContext ctx)
+        {
+            if (Activity.Current != null)
+            {
+                var retryCountTag = Activity.Current.GetTagItem("http.retry.total_attempts");
+                if (retryCountTag is int retryCount)
+                {
+                    ctx.RetryCount = retryCount;
+                }
+            }
+        }
+
+        private void RecordQuerySuccess(StatementTelemetryContext ctx, bool hasExternalLinks)
+        {
+            ctx.RecordFirstBatchReady();
+            ctx.ResultFormat = hasExternalLinks
+                ? Telemetry.Proto.ExecutionResult.Types.Format.ExternalLinks
+                : Telemetry.Proto.ExecutionResult.Types.Format.InlineArrow;
+            ctx.StatementId = _currentStatementId;
+            CaptureRetryCount(ctx);
+        }
+
+        private void EmitTelemetry(StatementTelemetryContext ctx)
+        {
+            try
+            {
+                ctx.RecordResultsConsumed();
+
+                // Extract chunk metrics if this was a CloudFetch query
+                ChunkMetrics? metrics = null;
+                if (_lastQueryResult?.Stream is Reader.CloudFetch.CloudFetchReader cfReader)
+                {
+                    try { metrics = cfReader.GetChunkMetrics(); }
+                    catch { /* Ignore errors retrieving chunk metrics */ }
+                }
+
+                if (metrics != null && metrics.TotalChunksIterated > 0)
+                {
+                    ctx.SetChunkDetails(
+                        metrics.TotalChunksPresent,
+                        metrics.TotalChunksIterated,
+                        metrics.InitialChunkLatencyMs,
+                        metrics.SlowestChunkLatencyMs,
+                        metrics.SumChunksDownloadTimeMs);
+                }
+
+                OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
+
+                var frontendLog = new TelemetryFrontendLog
+                {
+                    WorkspaceId = ctx.WorkspaceId,
+                    FrontendLogEventId = Guid.NewGuid().ToString(),
+                    Context = new FrontendLogContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    },
+                    Entry = new FrontendLogEntry
+                    {
+                        SqlDriverLog = telemetryLog
+                    }
+                };
+
+                _telemetrySession?.TelemetryClient?.Enqueue(frontendLog);
+            }
+            catch
+            {
+                // Telemetry must never impact driver operations
+            }
+        }
+
+        // ── End telemetry helpers ────────────────────────────────────────────────────
 
         public override void SetOption(string key, string value)
         {
@@ -239,84 +354,110 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new InvalidOperationException("SQL query is required");
             }
 
-            // Build the execute statement request
-            // Note: warehouse_id is always required by the Databricks Statement Execution API
-            // Note: catalog/schema cannot be set when session_id is provided (session has context)
-            var request = new ExecuteStatementRequest
-            {
-                Statement = _sqlQuery,
-                WarehouseId = _warehouseId,
-                SessionId = _sessionId,
-                Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
-                Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
-                Disposition = _resultDisposition,
-                Format = _resultFormat,
-                ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
-                OnWaitTimeout = "CONTINUE",
-                IsMetadata = isMetadataExecution
-            };
+            var ctx = isMetadataExecution
+                ? CreateMetadataTelemetryContext()
+                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
 
-            // Execute the statement
-            var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
-            _currentStatementId = response.StatementId;
-
-            // Handle query status according to Databricks API documentation:
-            // PENDING: waiting for warehouse - continue polling
-            // RUNNING: running - continue polling
-            // SUCCEEDED: execution was successful, result data available for fetch
-            // FAILED: execution failed; reason for failure described in accompanying error message
-            // CANCELED: user canceled; can come from explicit cancel call, or timeout with on_wait_timeout=CANCEL
-            // CLOSED: execution successful, and statement closed; result no longer available for fetch
-            var state = response.Status?.State;
-            if (state == "PENDING" || state == "RUNNING")
+            try
             {
-                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
-                state = response.Status?.State;
+                // Build the execute statement request
+                // Note: warehouse_id is always required by the Databricks Statement Execution API
+                // Note: catalog/schema cannot be set when session_id is provided (session has context)
+                var request = new ExecuteStatementRequest
+                {
+                    Statement = _sqlQuery,
+                    WarehouseId = _warehouseId,
+                    SessionId = _sessionId,
+                    Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
+                    Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
+                    Disposition = _resultDisposition,
+                    Format = _resultFormat,
+                    ResultCompression = _resultCompression,
+                    WaitTimeout = $"{_waitTimeoutSeconds}s",
+                    OnWaitTimeout = "CONTINUE",
+                    IsMetadata = isMetadataExecution
+                };
+
+                // Execute the statement
+                var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
+                _currentStatementId = response.StatementId;
+
+                // Handle query status according to Databricks API documentation:
+                // PENDING: waiting for warehouse - continue polling
+                // RUNNING: running - continue polling
+                // SUCCEEDED: execution was successful, result data available for fetch
+                // FAILED: execution failed; reason for failure described in accompanying error message
+                // CANCELED: user canceled; can come from explicit cancel call, or timeout with on_wait_timeout=CANCEL
+                // CLOSED: execution successful, and statement closed; result no longer available for fetch
+                var state = response.Status?.State;
+                if (state == "PENDING" || state == "RUNNING")
+                {
+                    response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                    state = response.Status?.State;
+                }
+
+                // Check for terminal error states
+                if (state == "FAILED")
+                {
+                    var error = response.Status?.Error;
+                    throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                }
+                if (state == "CANCELED")
+                {
+                    throw new AdbcException("Statement execution was canceled");
+                }
+                if (state == "CLOSED")
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
+
+                // Check for truncated results warning
+                if (response.Manifest?.Truncated == true)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("statement.results_truncated",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "total_row_count", response.Manifest.TotalRowCount },
+                            { "total_byte_count", response.Manifest.TotalByteCount }
+                        }));
+                }
+
+                // Create appropriate reader based on result disposition
+                IArrowArrayStream reader = CreateReader(response, cancellationToken);
+
+                // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
+                // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
+                if (!_enableComplexDatatypeSupport)
+                {
+                    reader = new ComplexTypeSerializingStream(reader);
+                }
+
+                // Return query result - use 0 if row count is not available
+                long rowCount = response.Manifest?.TotalRowCount ?? 0;
+                var result = new QueryResult(rowCount, reader);
+
+                if (ctx != null)
+                {
+                    bool hasExternalLinks = response.Manifest?.Chunks != null &&
+                        response.Manifest.Chunks.Count > 0 &&
+                        response.Manifest.Chunks[0].ExternalLinks != null &&
+                        response.Manifest.Chunks[0].ExternalLinks.Count > 0;
+                    hasExternalLinks = hasExternalLinks ||
+                        (response.Result?.ExternalLinks != null && response.Result.ExternalLinks.Count > 0);
+                    RecordQuerySuccess(ctx, hasExternalLinks);
+                    _lastQueryResult = result;
+                    _pendingTelemetryContext = ctx; // Emit on Dispose when reader is consumed
+                }
+
+                return result;
             }
-
-            // Check for terminal error states
-            if (state == "FAILED")
+            catch (Exception ex) when (ctx != null)
             {
-                var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                RecordError(ctx, ex);
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null;
+                throw;
             }
-            if (state == "CANCELED")
-            {
-                throw new AdbcException("Statement execution was canceled");
-            }
-            if (state == "CLOSED")
-            {
-                throw new AdbcException("Statement was closed before results could be retrieved");
-            }
-
-            // Check for truncated results warning
-            if (response.Manifest?.Truncated == true)
-            {
-                Activity.Current?.AddEvent(new ActivityEvent("statement.results_truncated",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "total_row_count", response.Manifest.TotalRowCount },
-                        { "total_byte_count", response.Manifest.TotalByteCount }
-                    }));
-            }
-
-            // Create appropriate reader based on result disposition
-            IArrowArrayStream reader = CreateReader(response, cancellationToken);
-
-            // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
-            // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
-            if (!_enableComplexDatatypeSupport)
-            {
-                reader = new ComplexTypeSerializingStream(reader);
-            }
-
-            // Get schema from reader
-            var schema = reader.Schema;
-
-            // Return query result - use 0 if row count is not available
-            long rowCount = response.Manifest?.TotalRowCount ?? 0;
-            return new QueryResult(rowCount, reader);
         }
 
         /// <summary>
@@ -591,60 +732,94 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new InvalidOperationException("SQL query is required");
             }
 
-            // Build the execute statement request
-            // Note: catalog/schema cannot be set when session_id is provided (session has context)
-            var request = new ExecuteStatementRequest
-            {
-                Statement = _sqlQuery,
-                WarehouseId = _warehouseId,
-                SessionId = _sessionId,
-                Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
-                Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
-                Disposition = _resultDisposition,
-                Format = _resultFormat,
-                ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
-                OnWaitTimeout = "CONTINUE",
-                IsMetadata = false
-            };
+            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
 
-            // Execute the statement
-            var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
-            _currentStatementId = response.StatementId;
+            try
+            {
+                // Build the execute statement request
+                // Note: catalog/schema cannot be set when session_id is provided (session has context)
+                var request = new ExecuteStatementRequest
+                {
+                    Statement = _sqlQuery,
+                    WarehouseId = _warehouseId,
+                    SessionId = _sessionId,
+                    Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
+                    Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
+                    Disposition = _resultDisposition,
+                    Format = _resultFormat,
+                    ResultCompression = _resultCompression,
+                    WaitTimeout = $"{_waitTimeoutSeconds}s",
+                    OnWaitTimeout = "CONTINUE",
+                    IsMetadata = false
+                };
 
-            // Handle query status - poll until complete
-            var state = response.Status?.State;
-            if (state == "PENDING" || state == "RUNNING")
-            {
-                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
-                state = response.Status?.State;
-            }
+                // Execute the statement
+                var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
+                _currentStatementId = response.StatementId;
 
-            // Check for terminal error states
-            if (state == "FAILED")
-            {
-                var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
-            }
-            if (state == "CANCELED")
-            {
-                throw new AdbcException("Statement execution was canceled");
-            }
-            if (state == "CLOSED")
-            {
-                throw new AdbcException("Statement was closed before results could be retrieved");
-            }
+                // Handle query status - poll until complete
+                var state = response.Status?.State;
+                if (state == "PENDING" || state == "RUNNING")
+                {
+                    response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                    state = response.Status?.State;
+                }
 
-            // For updates, we don't need to read the results - just return the row count.
-            long rowCount = response.Manifest?.TotalRowCount ?? 0;
-            return new UpdateResult(rowCount);
+                // Check for terminal error states
+                if (state == "FAILED")
+                {
+                    var error = response.Status?.Error;
+                    throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                }
+                if (state == "CANCELED")
+                {
+                    throw new AdbcException("Statement execution was canceled");
+                }
+                if (state == "CLOSED")
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
+
+                // For updates, return the affected row count from the manifest.
+                // When the SEA API does not return a row count (e.g. for DDL like CREATE TABLE),
+                // TotalRowCount is null and we return -1, which is the ADBC convention for
+                // "unknown or not applicable" -- matching what the Thrift path does.
+                long rowCount = response.Manifest?.TotalRowCount ?? -1;
+                var result = new UpdateResult(rowCount);
+
+                if (ctx != null)
+                {
+                    ctx.StatementId = _currentStatementId;
+                    ctx.ResultFormat = Telemetry.Proto.ExecutionResult.Types.Format.InlineArrow;
+                    ctx.RecordFirstBatchReady();
+                    CaptureRetryCount(ctx);
+                    _pendingTelemetryContext = ctx; // Emit on Dispose
+                }
+
+                return result;
+            }
+            catch (Exception ex) when (ctx != null)
+            {
+                RecordError(ctx, ex);
+                EmitTelemetry(ctx);
+                _pendingTelemetryContext = null;
+                throw;
+            }
         }
 
         /// <summary>
         /// Disposes the statement and cancels/closes any active statement.
+        /// Emits any pending telemetry before closing.
         /// </summary>
         public override void Dispose()
         {
+            // Emit pending telemetry (success path — results have been consumed by caller)
+            if (_pendingTelemetryContext != null)
+            {
+                EmitTelemetry(_pendingTelemetryContext);
+                _pendingTelemetryContext = null;
+            }
+
             if (_currentStatementId != null)
             {
                 try
