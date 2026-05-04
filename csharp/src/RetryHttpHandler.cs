@@ -350,15 +350,24 @@ namespace AdbcDrivers.Databricks
             // SocketException/WebException: low-level network errors (wrapped or standalone)
             if (ex is SocketException sockEx)
             {
-                return sockEx.SocketErrorCode != SocketError.HostNotFound
-                    && sockEx.SocketErrorCode != SocketError.ConnectionRefused
+                if (sockEx.SocketErrorCode == SocketError.HostNotFound
+                    || sockEx.SocketErrorCode == SocketError.ConnectionRefused)
+                {
+                    return false;
+                }
+
+                return sockEx.InnerException == null
                     || IsTransientTransportException(sockEx.InnerException, cancellationToken);
             }
             if (ex is WebException webEx)
             {
-                return webEx.Status != WebExceptionStatus.NameResolutionFailure
-                    && webEx.Status != WebExceptionStatus.ConnectFailure
-                    && webEx.InnerException == null
+                if (webEx.Status == WebExceptionStatus.NameResolutionFailure
+                    || webEx.Status == WebExceptionStatus.ConnectFailure)
+                {
+                    return false;
+                }
+
+                return webEx.InnerException == null
                     || IsTransientTransportException(webEx.InnerException, cancellationToken);
             }
 
