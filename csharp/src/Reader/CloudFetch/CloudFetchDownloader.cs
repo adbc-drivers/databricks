@@ -286,8 +286,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 try
                 {
-                    // Keep track of active download tasks
-                    var downloadTasks = new ConcurrentDictionary<Task, IDownloadResult>();
+                    // Keep track of active download tasks keyed by ChunkIndex.
+                    // Keying by Task itself is unsafe here: the value stored is the continuation
+                    // task, but the continuation's lambda parameter `t` is the antecedent, so
+                    // TryRemove(t, ...) never matches and entries accumulate until method exit.
+                    var downloadTasks = new ConcurrentDictionary<long, Task>();
                     var downloadTaskCompletionSource = new TaskCompletionSource<bool>();
 
                     // Process items from the download queue until it's completed
@@ -320,7 +323,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             {
                                 try
                                 {
-                                    await Task.WhenAll(downloadTasks.Keys).ConfigureAwait(false);
+                                    await Task.WhenAll(downloadTasks.Values).ConfigureAwait(false);
                                 }
                                 catch (Exception ex)
                                 {
@@ -375,6 +378,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         ]);
 
                         // Start the download task
+                        long chunkIndex = downloadResult.ChunkIndex;
                         Task downloadTask = DownloadFileAsync(downloadResult, cancellationToken)
                             .ContinueWith(t =>
                             {
@@ -382,7 +386,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 _downloadSemaphore.Release();
 
                                 // Remove the task from the dictionary
-                                downloadTasks.TryRemove(t, out _);
+                                downloadTasks.TryRemove(chunkIndex, out _);
 
                                 // Handle any exceptions
                                 if (t.IsFaulted)
@@ -413,7 +417,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             }, cancellationToken);
 
                         // Add the task to the dictionary
-                        downloadTasks[downloadTask] = downloadResult;
+                        downloadTasks[chunkIndex] = downloadTask;
 
                         // Add the result to the result queue add the result here to assure the download sequence.
                         _resultQueue.Add(downloadResult, cancellationToken);
