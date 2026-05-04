@@ -411,10 +411,18 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload
             // Add tracing only if activity is provided
             if (activity != null)
             {
-                // Calculate metrics for tracing only when needed
-                var completedDownloads = allDownloadMetrics.Where(m => m.IsDownloadCompleted).ToList();
+                // Calculate metrics for tracing only when needed.
+                // Mirror the deduplication logic from the internal detection path so the trace
+                // gate uses the same totals/threshold as actual detection.
+                var allOffsetsInActive = new HashSet<long>(allDownloadMetrics.Select(m => m.FileOffset));
+                var completedFromHistory = _completedDownloadMetrics
+                    .Where(kv => !allOffsetsInActive.Contains(kv.Key))
+                    .Select(kv => kv.Value)
+                    .ToList();
+                var completedDownloads = allDownloadMetrics.Where(m => m.IsDownloadCompleted).Concat(completedFromHistory).ToList();
                 var activeDownloads = allDownloadMetrics.Where(m => !m.IsDownloadCompleted && !m.WasCancelledAsStraggler).ToList();
-                int requiredCompletions = (int)Math.Ceiling(allDownloadMetrics.Count * _config.Quantile);
+                int totalDownloads = allDownloadMetrics.Count + completedFromHistory.Count;
+                int requiredCompletions = (int)Math.Ceiling(totalDownloads * _config.Quantile);
 
                 if (completedDownloads.Count >= requiredCompletions && activeDownloads.Count > 0)
                 {
