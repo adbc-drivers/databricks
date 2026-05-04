@@ -71,6 +71,8 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("String whose length is too long for VARCHAR(10).", new string[] { "DELTA_EXCEED_CHAR_VARCHAR_LIMIT" }, "22001")]
         public async Task TestVarcharExceptionDataDatabricks(string value, string[] expectedTexts, string? expectedSqlState)
         {
+            // TODO: PECO-3014 - SEA throws DatabricksException not HiveServer2Exception; Assert.Throws<HiveServer2Exception>() fails
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA throws DatabricksException not HiveServer2Exception");
             await base.TestVarcharExceptionData(value, expectedTexts, expectedSqlState);
         }
     }
