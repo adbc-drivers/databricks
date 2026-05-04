@@ -455,20 +455,18 @@ namespace AdbcDrivers.Databricks.Telemetry
                 AsyncPollIntervalMillis = asyncPollIntervalMillis,
             };
 
-            // PECO-2995 (TELEM-16): emit discovery_mode_enabled and enable_token_cache so
-            // analysts can distinguish ADBC C# rows (where these features are NOT supported)
-            // from JDBC rows (where they're configurable). The C# driver hardcodes the OIDC
-            // token endpoint to https://{host}/oidc/v1/token (see OAuthClientCredentialsProvider
-            // and TokenExchangeClient) and does not perform .well-known discovery; therefore
-            // discovery_mode_enabled is always false and discovery_url is intentionally left
-            // unset (no value to report). Likewise the driver has no opt-in persistent token
-            // cache (the in-memory dedup dictionaries in TokenRefreshDelegatingHandler /
-            // MandatoryTokenExchangeDelegatingHandler are NOT what JDBC's enableTokenCache
-            // refers to), so enable_token_cache is always false. Each setter is wrapped in
-            // its own try/catch so a future per-field source change cannot kill the whole
-            // telemetry payload.
+            // PECO-2995 (TELEM-16): emit discovery_mode_enabled and enable_token_cache.
+            // The C# driver hardcodes the OIDC token endpoint to https://{host}/oidc/v1/token
+            // (see OAuthClientCredentialsProvider and TokenExchangeClient) and never performs
+            // .well-known discovery, so discovery_mode_enabled is always false and
+            // discovery_url is intentionally left unset (no value to report).
+            // OAuth providers DO cache tokens in memory (see OAuthClientCredentialsProvider's
+            // _cachedToken / GetValidCachedToken), so enable_token_cache is reported as true
+            // whenever any caching is happening — independent of whether JDBC's persistent
+            // disk-cache feature exists in this driver. Each setter is wrapped in its own
+            // try/catch so a future per-field source change cannot kill the whole payload.
             TrySetField(connectionParams, p => p.DiscoveryModeEnabled = false);
-            TrySetField(connectionParams, p => p.EnableTokenCache = false);
+            TrySetField(connectionParams, p => p.EnableTokenCache = true);
 
             return connectionParams;
         }

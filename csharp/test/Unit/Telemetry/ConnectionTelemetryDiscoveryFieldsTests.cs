@@ -97,7 +97,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void EnableTokenCache_AlwaysFalse_PatAuth()
+        public void EnableTokenCache_AlwaysTrue_PatAuth()
         {
             var properties = BaseProperties();
             properties[SparkParameters.AuthType] = SparkAuthTypeConstants.Token;
@@ -107,11 +107,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasEnableTokenCache);
-            Assert.False(connParams.EnableTokenCache);
+            Assert.True(connParams.EnableTokenCache);
         }
 
         [Fact]
-        public void EnableTokenCache_AlwaysFalse_OAuthClientCredentials()
+        public void EnableTokenCache_AlwaysTrue_OAuthClientCredentials()
         {
             var properties = BaseProperties();
             properties[SparkParameters.AuthType] = SparkAuthTypeConstants.OAuth;
@@ -124,7 +124,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasEnableTokenCache);
-            Assert.False(connParams.EnableTokenCache);
+            Assert.True(connParams.EnableTokenCache);
         }
     }
 }
