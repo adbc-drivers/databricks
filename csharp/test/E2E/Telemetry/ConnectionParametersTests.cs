@@ -38,6 +38,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
+            Skip.If(TestConfiguration.Protocol == "rest", "Connection parameters telemetry tests are Thrift-only");
         }
 
         /// <summary>
@@ -146,6 +147,72 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 Assert.Equal(expectedPort, protoLog.DriverConnectionParams.HostInfo.Port);
 
                 OutputHelper?.WriteLine($"✓ host_info.port: {protoLog.DriverConnectionParams.HostInfo.Port}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Regression test for PECO-2987: driver_connection_params.host_info.host_url was
+        /// emitted as <c>"https://&lt;host&gt;:443"</c>, differing from JDBC which emits a bare
+        /// hostname. Analysts joining on host across drivers had to normalize. host_url must
+        /// now match JDBC: bare hostname, no scheme, no port suffix. Port is reported
+        /// separately in host_info.port.
+        /// </summary>
+        [SkippableFact]
+        public async Task ConnectionParams_HostInfoHostUrl_IsBareHostname()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+                // Resolve the expected host using the same precedence as DatabricksConnection.GetHost().
+                string? expectedHost = null;
+                if (properties.TryGetValue(SparkParameters.HostName, out string? hostName)
+                    && !string.IsNullOrEmpty(hostName))
+                {
+                    expectedHost = hostName;
+                }
+                else if (properties.TryGetValue(AdbcOptions.Uri, out string? uri)
+                    && !string.IsNullOrEmpty(uri)
+                    && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+                {
+                    expectedHost = parsedUri.Host;
+                }
+
+                Assert.False(string.IsNullOrEmpty(expectedHost),
+                    $"Test configuration must set {SparkParameters.HostName} or {AdbcOptions.Uri}");
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.DriverConnectionParams);
+                Assert.NotNull(protoLog.DriverConnectionParams.HostInfo);
+                string actualHostUrl = protoLog.DriverConnectionParams.HostInfo.HostUrl;
+
+                Assert.False(string.IsNullOrEmpty(actualHostUrl), "host_url should be populated");
+                Assert.Equal(expectedHost, actualHostUrl);
+                Assert.DoesNotContain("://", actualHostUrl);
+                Assert.DoesNotContain(":", actualHostUrl);
+
+                OutputHelper?.WriteLine($"✓ host_info.host_url: {actualHostUrl}");
             }
             finally
             {
@@ -420,6 +487,102 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                     "auto_commit should be true for ADBC driver");
 
                 OutputHelper?.WriteLine($"✓ auto_commit: {protoLog.DriverConnectionParams.AutoCommit}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// Regression test for PECO-2997 (TELEM-15): driver_connection_params.async_poll_interval_millis
+        /// was 0 for 100% of ADBC rows because <c>BuildDriverConnectionParams</c> never set the field,
+        /// even though DatabricksStatement overrides the Apache base default with 100ms via
+        /// <see cref="DatabricksConstants.DefaultAsyncExecPollIntervalMs"/>. With no override the
+        /// captured telemetry must report the 100ms canonical default.
+        /// </summary>
+        [SkippableFact]
+        public async Task ConnectionParams_AsyncPollIntervalMillis_DefaultsTo100Ms()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+                // Ensure no override is present so we exercise the default path.
+                properties.Remove(ApacheParameters.PollTimeMilliseconds);
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.DriverConnectionParams);
+                Assert.Equal(
+                    DatabricksConstants.DefaultAsyncExecPollIntervalMs,
+                    protoLog.DriverConnectionParams.AsyncPollIntervalMillis);
+
+                OutputHelper?.WriteLine(
+                    $"✓ async_poll_interval_millis (default): {protoLog.DriverConnectionParams.AsyncPollIntervalMillis}");
+            }
+            finally
+            {
+                connection?.Dispose();
+                TelemetryTestHelpers.ClearExporterOverride();
+            }
+        }
+
+        /// <summary>
+        /// PECO-2997 (TELEM-15): when the caller overrides
+        /// <see cref="ApacheParameters.PollTimeMilliseconds"/>, the captured telemetry must reflect
+        /// the override so analysts can correlate polling behavior with query latency.
+        /// </summary>
+        [SkippableFact]
+        public async Task ConnectionParams_AsyncPollIntervalMillis_ReflectsOverride()
+        {
+            CapturingTelemetryExporter exporter = null!;
+            AdbcConnection? connection = null;
+
+            try
+            {
+                var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+
+                const int customPollIntervalMs = 250;
+                properties[ApacheParameters.PollTimeMilliseconds] = customPollIntervalMs.ToString();
+
+                (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1 AS test_value";
+                var result = statement.ExecuteQuery();
+                using var reader = result.Stream;
+
+                statement.Dispose();
+
+                var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+                TelemetryTestHelpers.AssertLogCount(logs, 1);
+
+                var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+                Assert.NotNull(protoLog.DriverConnectionParams);
+                Assert.Equal(
+                    customPollIntervalMs,
+                    protoLog.DriverConnectionParams.AsyncPollIntervalMillis);
+
+                OutputHelper?.WriteLine(
+                    $"✓ async_poll_interval_millis (override): {protoLog.DriverConnectionParams.AsyncPollIntervalMillis}");
             }
             finally
             {

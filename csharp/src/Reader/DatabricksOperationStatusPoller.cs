@@ -88,31 +88,50 @@ namespace AdbcDrivers.Databricks.Reader
             var linkedToken = CancellationTokenSource.CreateLinkedTokenSource(_internalCts.Token, externalToken).Token;
             _operationStatusPollingTask = Task.Run(async () =>
             {
+                await PollOperationStatus(linkedToken).ConfigureAwait(false);
+            });
+        }
+
+        private async Task PollOperationStatus(CancellationToken cancellationToken)
+        {
+            int consecutiveFailures = 0;
+            bool shouldStop = false;
+
+            while (!cancellationToken.IsCancellationRequested && !shouldStop)
+            {
                 if (_activityTracer != null)
                 {
                     await _activityTracer.Trace.TraceActivityAsync(
-                        activity => PollOperationStatus(linkedToken, activity),
+                        activity => PollOnceAsync(cancellationToken, activity),
                         activityName: "PollOperationStatus").ConfigureAwait(false);
                 }
                 else
                 {
-                    await PollOperationStatus(linkedToken, null).ConfigureAwait(false);
+                    await PollOnceAsync(cancellationToken, null).ConfigureAwait(false);
                 }
-            });
-        }
 
-        private async Task PollOperationStatus(CancellationToken cancellationToken, Activity? activity)
-        {
-            int consecutiveFailures = 0;
+                if (shouldStop) break;
 
-            while (!cancellationToken.IsCancellationRequested)
+                // Wait before next poll.
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Normal shutdown — don't let this propagate as an error through TraceActivityAsync
+                    break;
+                }
+            }
+
+            async Task PollOnceAsync(CancellationToken ct, Activity? activity)
             {
                 try
                 {
                     TOperationHandle? operationHandle = _response.OperationHandle;
-                    if (operationHandle == null) break;
+                    if (operationHandle == null) return;
 
-                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
 
                     TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
@@ -124,6 +143,7 @@ namespace AdbcDrivers.Databricks.Reader
                     // Track poll count for telemetry
                     _pollCount++;
 
+                    activity?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
                     activity?.AddEvent(new ActivityEvent("operation_status_poller.poll_success",
                         tags: new ActivityTagsCollection
                         {
@@ -138,13 +158,14 @@ namespace AdbcDrivers.Databricks.Reader
                         response.OperationState == TOperationState.TIMEDOUT_STATE ||
                         response.OperationState == TOperationState.UKNOWN_STATE)
                     {
-                        break;
+                        shouldStop = true;
+                        return;
                     }
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     // Cancellation was requested - exit the polling loop gracefully
-                    break;
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -170,24 +191,11 @@ namespace AdbcDrivers.Databricks.Reader
                                 { "consecutive_failures", consecutiveFailures },
                                 { "poll_count", _pollCount }
                             }));
-                        break;
+                        shouldStop = true;
+                        return;
                     }
                 }
-
-                // Wait before next poll.
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds), cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    // Normal shutdown — don't let this propagate as an error through TraceActivityAsync
-                    break;
-                }
             }
-
-            // Add telemetry tags to current activity when polling completes
-            activity?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
         }
 
         public void Stop()

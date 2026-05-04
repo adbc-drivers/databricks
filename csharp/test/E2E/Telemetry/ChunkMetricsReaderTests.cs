@@ -38,6 +38,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
+            Skip.If(TestConfiguration.Protocol == "rest", "CloudFetch metrics reader tests are Thrift-only");
         }
 
         /// <summary>

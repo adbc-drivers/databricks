@@ -1,0 +1,76 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: Report Integration Test Skip
+
+# Runs in the base repo context (has secrets) even for fork PRs.
+# Creates the required "C# Integration Tests" and "Rust Integration Tests"
+# check runs via the Driver Integration Test GitHub App whenever a PR
+# triggers the "Trigger Integration Tests" workflow.
+on:
+  workflow_run:
+    workflows: ["Trigger Integration Tests"]
+    types: [requested]
+
+jobs:
+  report-skip:
+    # Only for pull_request events; merge_group runs the real tests
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: adbc-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
+          private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
+          owner: adbc-drivers
+          repositories: databricks
+
+      - name: Skip C# Integration Tests
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers',
+              repo: 'databricks',
+              name: 'C# Integration Tests',
+              head_sha: context.payload.workflow_run.head_sha,
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Skipped on PR - runs in merge queue',
+                summary: '✅ Integration tests are skipped on PRs and run as a required gate in the merge queue.'
+              }
+            });
+
+      - name: Skip Rust Integration Tests
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ steps.adbc-token.outputs.token }}
+          script: |
+            await github.rest.checks.create({
+              owner: 'adbc-drivers',
+              repo: 'databricks',
+              name: 'Rust Integration Tests',
+              head_sha: context.payload.workflow_run.head_sha,
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: 'Skipped on PR - runs in merge queue',
+                summary: '✅ Integration tests are skipped on PRs and run as a required gate in the merge queue.'
+              }
+            });

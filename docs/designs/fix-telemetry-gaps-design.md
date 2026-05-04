@@ -109,13 +109,13 @@ flowchart TD
 | `runtime_version` | Populated | Environment.Version |
 | `runtime_vendor` | **NOT SET** | Should be "Microsoft" for .NET |
 | `os_name` | Populated | OSVersion.Platform |
-| `os_version` | Populated | OSVersion.Version |
+| `os_version` | Populated | `/etc/os-release` PRETTY_NAME on Linux, else `RuntimeInformation.OSDescription` (see PECO-2986) |
 | `os_arch` | Populated | RuntimeInformation.OSArchitecture |
 | `driver_name` | Populated | "Databricks ADBC Driver" |
 | `client_app_name` | **NOT SET** | Should come from connection property or user-agent |
 | `locale_name` | Populated | CultureInfo.CurrentCulture |
 | `char_set_encoding` | Populated | Encoding.Default.WebName |
-| `process_name` | Populated | Process name |
+| `process_name` | Populated | Entry assembly name (fallback: OS process name) — PECO-2989 |
 
 #### DriverConnectionParameters (47 fields)
 
@@ -123,7 +123,7 @@ flowchart TD
 |---|---|---|
 | `http_path` | Populated | |
 | `mode` | Populated | Hardcoded to THRIFT |
-| `host_info` | Populated | |
+| `host_info` | Populated | `host_url` is bare hostname (matches JDBC, PECO-2987); `port` reported separately |
 | `auth_mech` | Populated | PAT or OAUTH |
 | `auth_flow` | Populated | TOKEN_PASSTHROUGH or CLIENT_CREDENTIALS |
 | `use_proxy` | **NOT SET** | |
@@ -142,8 +142,8 @@ flowchart TD
 | Proto Field | Status | Notes |
 |---|---|---|
 | `statement_type` | Populated | QUERY or UPDATE |
-| `is_compressed` | Populated | From LZ4 flag |
-| `execution_result` | Populated | INLINE_ARROW or EXTERNAL_LINKS |
+| `is_compressed` | Populated | From the server's actual per-result compression flag (`TGetResultSetMetadataResp.Lz4Compressed`), exposed via `DatabricksCompositeReader.IsLz4Compressed` (PECO-2988). Same flag drives both the inline `DatabricksReader` and the CloudFetch decompression paths, so the value is correct for whichever path the result took. Not derived from the connection-level LZ4 capability flag. |
+| `execution_result` | Populated | From the active reader on `DatabricksCompositeReader.IsCloudFetchActive` (PECO-2978): `EXTERNAL_LINKS` when the server returned result links and the CloudFetch reader was selected, else `INLINE_ARROW`. Not derived from the connection-level `useCloudFetch` capability flag. |
 | `chunk_id` | Not applicable | For individual chunk failure events |
 | `retry_count` | **NOT SET** | Should track retries |
 | `chunk_details` | **NOT WIRED** | `SetChunkDetails()` exists but is never called (see below) |
@@ -669,22 +669,23 @@ Fix all gaps in the existing Thrift telemetry pipeline first, since the infrastr
 13. Track `retry_count` on SqlExecutionEvent
 14. Mark internal calls with `is_internal_call = true`
 15. Add metadata operation telemetry (GetObjects, GetTableTypes)
-16. Verify all Phase 1 E2E tests pass
+16. Fix `os_version` to report the Linux distro PRETTY_NAME instead of the bare kernel version (PECO-2986)
+17. Verify all Phase 1 E2E tests pass
 
 ### Phase 2: SEA Telemetry (Wire Telemetry into StatementExecutionConnection)
 
 Once Thrift telemetry is complete, extend coverage to the SEA protocol using the shared `TelemetryHelper`.
 
 **E2E Tests (test-first):**
-17. Write failing E2E tests for SEA telemetry (expect telemetry events from SEA connections)
+18. Write failing E2E tests for SEA telemetry (expect telemetry events from SEA connections)
 
 **Implementation:**
-18. Extract `TelemetryHelper` from `DatabricksConnection` for shared use (already done - verify coverage)
-19. Wire `InitializeTelemetry()` into `StatementExecutionConnection` with `mode=SEA`
-20. Add `EmitTelemetry()` to `StatementExecutionStatement`
-21. Wire telemetry dispose/flush into `StatementExecutionConnection.Dispose()`
-22. Wire `SetChunkDetails()` in `StatementExecutionStatement.EmitTelemetry()` for SEA CloudFetch
-23. Verify all Phase 2 SEA E2E tests pass
+19. Extract `TelemetryHelper` from `DatabricksConnection` for shared use (already done - verify coverage)
+20. Wire `InitializeTelemetry()` into `StatementExecutionConnection` with `mode=SEA`
+21. Add `EmitTelemetry()` to `StatementExecutionStatement`
+22. Wire telemetry dispose/flush into `StatementExecutionConnection.Dispose()`
+23. Wire `SetChunkDetails()` in `StatementExecutionStatement.EmitTelemetry()` for SEA CloudFetch
+24. Verify all Phase 2 SEA E2E tests pass
 
 ---
 

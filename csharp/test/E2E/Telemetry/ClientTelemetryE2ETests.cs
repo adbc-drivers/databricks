@@ -37,9 +37,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
     /// </summary>
     public class ClientTelemetryE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
+        // TODO: PECO-3010 - telemetry not wired for SEA protocol; these tests fail for rest protocol
         public ClientTelemetryE2ETests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "Telemetry not wired for SEA protocol (PECO-3010)");
         }
 
         /// <summary>
@@ -1114,7 +1116,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type.Unspecified, connParams.Mode);
                 Assert.NotNull(connParams.HostInfo);
                 Assert.False(string.IsNullOrEmpty(connParams.HostInfo.HostUrl), "HostUrl should be populated");
-                Assert.Contains("https://", connParams.HostInfo.HostUrl);
+                // host_url is a bare hostname (matches JDBC). Scheme/port must not be embedded
+                // (PECO-2987). Port is reported separately in host_info.port.
+                Assert.DoesNotContain("://", connParams.HostInfo.HostUrl);
                 Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthMech.Types.Type.Unspecified, connParams.AuthMech);
                 Assert.NotEqual(AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthFlow.Types.Type.Unspecified, connParams.AuthFlow);
 

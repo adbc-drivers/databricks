@@ -1793,7 +1793,7 @@ The JDBC driver uses Jackson with explicit `@JsonProperty("session_id")` annotat
   "session_id": "abc123",
   "sql_statement_id": "def456",
   "system_configuration": { "driver_version": "1.0.0", "runtime_name": ".NET 8.0" },
-  "driver_connection_params": { "http_path": "/sql/1.0/warehouses/xyz", "host_info": { "host_url": "https://..." } },
+  "driver_connection_params": { "http_path": "/sql/1.0/warehouses/xyz", "host_info": { "host_url": "host.cloud.databricks.com", "port": 443 } },
   "auth_type": "pat",
   "sql_operation": { "statement_type": "STATEMENT_QUERY", "execution_result": "EXECUTION_RESULT_EXTERNAL_LINKS" },
   "operation_latency_ms": 254
@@ -2373,8 +2373,8 @@ Every field in the `OssSqlDriverTelemetryLog` proto must be populated and verifi
 |-------------|---------------|------------|
 | `http_path` | e.g. `"/sql/1.0/warehouses/abc123"` | Non-empty, starts with `/` |
 | `mode` | `DRIVER_MODE_THRIFT` or `DRIVER_MODE_SEA` | Not `UNSPECIFIED` |
-| `host_info.host_url` | e.g. `"https://host.cloud.databricks.com:443"` | Non-empty, starts with `https://` |
-| `host_info.port` | Port number (may be 0 if embedded in URL) | — |
+| `host_info.host_url` | e.g. `"host.cloud.databricks.com"` (bare hostname, matches JDBC) | Non-empty, no scheme, no port suffix |
+| `host_info.port` | Port number, e.g. `443` | > 0 |
 | `auth_mech` | e.g. `DRIVER_AUTH_MECH_PAT` | Not `UNSPECIFIED` |
 | `auth_flow` | e.g. `DRIVER_AUTH_FLOW_TOKEN_PASSTHROUGH` | Not `UNSPECIFIED` |
 | `enable_arrow` | `true` | Boolean |

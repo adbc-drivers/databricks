@@ -51,9 +51,9 @@ namespace AdbcDrivers.Databricks
     internal class DatabricksConnection : SparkHttpConnection
     {
         internal const string DatabricksDriverName = "ADBC Databricks Driver";
-        internal const string DriverVersion = "1.1.0";
         internal static new readonly string s_assemblyName = ApacheUtility.GetAssemblyName(typeof(DatabricksConnection));
         internal static new readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(DatabricksConnection));
+        internal static readonly string DriverVersion = s_assemblyVersion;
 
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
@@ -738,6 +738,7 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("connection.server_side_properties.count", serverSideProperties.Count);
 
                 using var statement = new DatabricksStatement(this);
+                statement.IsInternalCall = true; // Mark driver-initiated SET statements as internal
 
                 foreach (var property in serverSideProperties)
                 {

@@ -113,7 +113,11 @@ namespace AdbcDrivers.Databricks
             var ctx = new StatementTelemetryContext(session);
             ctx.OperationType = OperationType.ExecuteStatement;
             ctx.StatementType = statementType;
-            ctx.IsCompressed = canDecompressLz4;
+            // IsCompressed and ResultFormat are populated from the actual result stream in
+            // EmitTelemetry, not the connection-level capability flags. Defaults here cover error
+            // and unconsumed paths (PECO-2988, PECO-2978).
+            ctx.IsCompressed = false;
+            ctx.ResultFormat = ExecutionResultFormat.InlineArrow;
             ctx.IsInternalCall = IsInternalCall;
             return ctx;
         }
@@ -156,9 +160,9 @@ namespace AdbcDrivers.Databricks
         private void RecordSuccess(StatementTelemetryContext ctx)
         {
             ctx.RecordFirstBatchReady();
-            ctx.ResultFormat = useCloudFetch
-                ? ExecutionResultFormat.ExternalLinks
-                : ExecutionResultFormat.InlineArrow;
+            // ResultFormat is populated from the actual active reader in EmitTelemetry (PECO-2978);
+            // setting it here from the connection-level useCloudFetch flag mislabels inline results
+            // as EXTERNAL_LINKS whenever CloudFetch is enabled on the connection.
             ctx.StatementId = StatementId;
             CaptureRetryCount(ctx);
         }
@@ -283,8 +287,8 @@ namespace AdbcDrivers.Databricks
             {
                 ctx.RecordResultsConsumed();
 
-                // Extract chunk metrics if this was a CloudFetch query
-                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped)
+                // Extract chunk metrics if this was a CloudFetch query.
+                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped).
                 ChunkMetrics? metrics = null;
                 if (_lastQueryResult?.Stream is CloudFetchReader cfReader)
                 {
@@ -307,6 +311,19 @@ namespace AdbcDrivers.Databricks
                     {
                         // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
                     }
+                }
+
+                // Source IsCompressed and ResultFormat from the active reader, not connection-level
+                // capability flags. The composite reader holds the server-reported truth for both:
+                // IsLz4Compressed mirrors TGetResultSetMetadataResp.Lz4Compressed (drives both inline
+                // and CloudFetch decompression), and IsCloudFetchActive reflects whether the server
+                // returned result links for this statement (PECO-2988, PECO-2978).
+                if (_lastQueryResult?.Stream is DatabricksCompositeReader composite)
+                {
+                    ctx.IsCompressed = composite.IsLz4Compressed;
+                    ctx.ResultFormat = composite.IsCloudFetchActive
+                        ? ExecutionResultFormat.ExternalLinks
+                        : ExecutionResultFormat.InlineArrow;
                 }
 
                 // Set chunk details if we have metrics and at least one chunk was iterated
