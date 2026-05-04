@@ -1272,13 +1272,90 @@ namespace AdbcDrivers.Databricks
         /// <param name="disposing">True if disposing managed resources.</param>
         protected override void Dispose(bool disposing)
         {
-            if (disposing && _pendingTelemetryContext != null)
+            if (disposing)
             {
-                // Emit telemetry now that results have been consumed
-                EmitTelemetry(_pendingTelemetryContext);
-                _pendingTelemetryContext = null;
+                if (_pendingTelemetryContext != null)
+                {
+                    // Emit telemetry now that results have been consumed
+                    EmitTelemetry(_pendingTelemetryContext);
+                    _pendingTelemetryContext = null;
+                }
+
+                // Emit a CLOSE_STATEMENT telemetry event for every statement disposal,
+                // independently of any EXECUTE_STATEMENT/metadata event already emitted.
+                // The driver doesn't issue a separate server-side close RPC here (the
+                // base AdbcStatement Dispose just releases local resources), but JDBC
+                // emits CLOSE_STATEMENT for the same lifecycle hook so analysts can
+                // count statement-close events; we match that behaviour (PECO-2991).
+                try
+                {
+                    var session = ((DatabricksConnection)Connection).TelemetrySession;
+                    if (session?.TelemetryClient != null)
+                    {
+                        long elapsedMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
+                        ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                            OperationType.CloseStatement,
+                            Telemetry.Proto.Statement.Types.Type.Unspecified,
+                            StatementId,
+                            elapsedMs,
+                            error: null);
+                    }
+                }
+                catch
+                {
+                    // Telemetry must never impact driver operations.
+                }
             }
             base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Stopwatch covering the lifetime of this statement, started at construction.
+        /// Used to populate operation_latency_ms for CANCEL_STATEMENT and CLOSE_STATEMENT
+        /// telemetry events that don't have their own timing instrumentation.
+        /// </summary>
+        private readonly Stopwatch _statementLifetimeStopwatch = Stopwatch.StartNew();
+
+        /// <inheritdoc/>
+        public override void Cancel()
+        {
+            // Emit CANCEL_STATEMENT telemetry around the base cancel call so we capture
+            // user-initiated cancels even when the cancellation token has already
+            // disposed the execute path's pending telemetry context. The base class
+            // never throws here (it just signals the token source) but we still
+            // protect callers with a try/finally for resilience (PECO-2991).
+            Exception? error = null;
+            long startMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
+            try
+            {
+                base.Cancel();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                throw;
+            }
+            finally
+            {
+                try
+                {
+                    var session = ((DatabricksConnection)Connection).TelemetrySession;
+                    if (session?.TelemetryClient != null)
+                    {
+                        long elapsedMs = _statementLifetimeStopwatch.ElapsedMilliseconds - startMs;
+                        ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                            OperationType.CancelStatement,
+                            Telemetry.Proto.Statement.Types.Type.Unspecified,
+                            StatementId,
+                            elapsedMs,
+                            error);
+                    }
+                }
+                catch
+                {
+                    // Telemetry must never impact driver operations.
+                }
+            }
         }
     }
 }

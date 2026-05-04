@@ -113,6 +113,12 @@ namespace AdbcDrivers.Databricks
 
         // Telemetry
         private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
+        // Stopwatch covering the connection lifetime; started at construction and used to
+        // measure session-open latency for the CREATE_SESSION telemetry event. The wall-clock
+        // time between construction and HandleOpenSessionResponse encompasses transport setup
+        // and the OpenSession RPC, which is what we want to report.
+        private readonly Stopwatch _connectionLifetimeStopwatch = Stopwatch.StartNew();
+        private bool _sessionOpenTelemetryEmitted;
         internal TelemetrySessionContext? TelemetrySession => _telemetry.Session;
 
         /// <summary>
@@ -655,6 +661,25 @@ namespace AdbcDrivers.Databricks
 
             // Initialize telemetry after successful session creation
             InitializeTelemetry(activity);
+
+            // Emit CREATE_SESSION telemetry now that the session and telemetry client
+            // are wired up. Wrapped in try/catch defensively; telemetry must never fail
+            // the connection open path (PECO-2991).
+            try
+            {
+                long elapsedMs = _connectionLifetimeStopwatch.ElapsedMilliseconds;
+                _telemetry.EmitOperationTelemetry(
+                    Telemetry.Proto.Operation.Types.Type.CreateSession,
+                    Telemetry.Proto.Statement.Types.Type.Unspecified,
+                    statementId: null,
+                    elapsedMs: elapsedMs,
+                    error: null);
+                _sessionOpenTelemetryEmitted = true;
+            }
+            catch
+            {
+                // Telemetry must never impact driver operations.
+            }
         }
 
         /// <summary>
@@ -1002,6 +1027,27 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
+                // Emit DELETE_SESSION telemetry before tearing down the telemetry client
+                // so it gets flushed alongside any pending events. Mirrors the
+                // CREATE_SESSION emission in HandleOpenSessionResponse (PECO-2991).
+                try
+                {
+                    if (_sessionOpenTelemetryEmitted)
+                    {
+                        long elapsedMs = _connectionLifetimeStopwatch.ElapsedMilliseconds;
+                        _telemetry.EmitOperationTelemetry(
+                            Telemetry.Proto.Operation.Types.Type.DeleteSession,
+                            Telemetry.Proto.Statement.Types.Type.Unspecified,
+                            statementId: null,
+                            elapsedMs: elapsedMs,
+                            error: null);
+                    }
+                }
+                catch
+                {
+                    // Telemetry must never impact driver operations.
+                }
+
                 // Clean up telemetry client
                 // This is synchronous because Dispose() cannot be async
                 // We use GetAwaiter().GetResult() to block, which is acceptable in Dispose
@@ -1015,6 +1061,26 @@ namespace AdbcDrivers.Databricks
         /// Disposes telemetry client asynchronously.
         /// </summary>
         private Task DisposeTelemetryAsync() => _telemetry.DisposeAsync();
+
+        /// <summary>
+        /// Statement-facing entry point for emitting telemetry for discrete statement
+        /// operations (CANCEL_STATEMENT, CLOSE_STATEMENT) that don't have their own
+        /// execute path. Delegates to the connection's telemetry implementation.
+        /// </summary>
+        internal void EmitStatementOperationTelemetry(
+            Telemetry.Proto.Operation.Types.Type operationType,
+            Telemetry.Proto.Statement.Types.Type statementType,
+            string? statementId,
+            long elapsedMs,
+            Exception? error)
+        {
+            _telemetry.EmitOperationTelemetry(
+                operationType,
+                statementType,
+                statementId,
+                elapsedMs,
+                error);
+        }
 
         /// <summary>
         /// Gets operating system information.

@@ -41,6 +41,25 @@ namespace AdbcDrivers.Databricks.Telemetry
             Activity? activity);
 
         /// <summary>
+        /// Emits a single telemetry log for a discrete operation that has no separate
+        /// execution body to wrap (e.g. CREATE_SESSION, DELETE_SESSION, CANCEL_STATEMENT,
+        /// CLOSE_STATEMENT). Used when the work is already done and we just need to
+        /// record that it happened.
+        /// </summary>
+        /// <param name="operationType">The operation type to record.</param>
+        /// <param name="statementType">The statement type. Use TYPE_UNSPECIFIED for
+        /// session lifecycle events that aren't tied to a specific statement.</param>
+        /// <param name="statementId">Optional server-assigned statement id, when applicable.</param>
+        /// <param name="elapsedMs">Elapsed wall-clock time of the operation in milliseconds.</param>
+        /// <param name="error">Exception thrown by the operation, or null on success.</param>
+        void EmitOperationTelemetry(
+            Proto.Operation.Types.Type operationType,
+            Proto.Statement.Types.Type statementType,
+            string? statementId,
+            long elapsedMs,
+            Exception? error);
+
+        /// <summary>
         /// Flushes pending events and releases the telemetry client.
         /// Safe to call multiple times.
         /// </summary>
