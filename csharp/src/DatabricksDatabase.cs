@@ -137,6 +137,10 @@ namespace AdbcDrivers.Databricks
 
                 throw;
             }
+            catch (ArgumentException ae)
+            {
+                throw new AdbcException(ae.Message, AdbcStatusCode.InvalidState, ae);
+            }
         }
 
         /// <summary>
