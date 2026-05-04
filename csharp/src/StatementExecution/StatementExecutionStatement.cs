@@ -635,9 +635,49 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new AdbcException("Statement was closed before results could be retrieved");
             }
 
-            // For updates, we don't need to read the results - just return the row count.
-            long rowCount = response.Manifest?.TotalRowCount ?? 0;
-            return new UpdateResult(rowCount);
+            // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
+            // column is num_affected_rows. DDL (CREATE TABLE, DROP TABLE, CTAS, etc.)
+            // returns no result data. Return -1 for DDL per the ADBC convention for
+            // "unknown or not applicable", matching what the Thrift path does.
+            return new UpdateResult(ReadNumAffectedRows(response.Manifest, response.Result));
+        }
+
+        private static long ReadNumAffectedRows(ResultManifest? manifest, ResultData? result)
+        {
+            // DML statements (INSERT/UPDATE/DELETE) return a 1-row ARROW_STREAM result whose
+            // single column is num_affected_rows. DDL (CREATE TABLE, DROP, CTAS) has no result
+            // data. Return -1 for DDL per the ADBC convention for "unknown/not applicable".
+            var attachment = result?.Attachment;
+            if (attachment != null && attachment.Length > 0)
+            {
+                try
+                {
+                    using var ms = new System.IO.MemoryStream(attachment);
+                    using var reader = new ArrowStreamReader(ms);
+                    var batch = reader.ReadNextRecordBatch();
+                    if (batch != null)
+                    {
+                        var fields = batch.Schema.FieldsList;
+                        int colIdx = -1;
+                        for (int i = 0; i < fields.Count; i++)
+                        {
+                            if (string.Equals(fields[i].Name, "num_affected_rows", StringComparison.OrdinalIgnoreCase))
+                            {
+                                colIdx = i;
+                                break;
+                            }
+                        }
+                        if (colIdx >= 0 && batch.Length > 0 && batch.Column(colIdx) is Int64Array arr)
+                            return arr.GetValue(0) ?? -1;
+                    }
+                }
+                catch
+                {
+                    // Fall through to -1
+                }
+            }
+
+            return -1;
         }
 
         /// <summary>
