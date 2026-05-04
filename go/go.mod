@@ -14,7 +14,7 @@
 
 module github.com/adbc-drivers/databricks/go
 
-go 1.25.5
+go 1.26.0
 
 require (
 	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20251215145213-df04bfe8de4f
