@@ -332,8 +332,7 @@ namespace AdbcDrivers.Databricks
             if (ex is HttpRequestException httpEx)
             {
 #if NET8_0_OR_GREATER
-                if (httpEx.HttpRequestError == HttpRequestError.NameResolutionError
-                    || httpEx.HttpRequestError == HttpRequestError.ConnectionError)
+                if (httpEx.HttpRequestError == HttpRequestError.NameResolutionError)
                 {
                     return false;
                 }
@@ -350,8 +349,7 @@ namespace AdbcDrivers.Databricks
             // SocketException/WebException: low-level network errors (wrapped or standalone)
             if (ex is SocketException sockEx)
             {
-                if (sockEx.SocketErrorCode == SocketError.HostNotFound
-                    || sockEx.SocketErrorCode == SocketError.ConnectionRefused)
+                if (sockEx.SocketErrorCode == SocketError.HostNotFound)
                 {
                     return false;
                 }
@@ -361,8 +359,7 @@ namespace AdbcDrivers.Databricks
             }
             if (ex is WebException webEx)
             {
-                if (webEx.Status == WebExceptionStatus.NameResolutionFailure
-                    || webEx.Status == WebExceptionStatus.ConnectFailure)
+                if (webEx.Status == WebExceptionStatus.NameResolutionFailure)
                 {
                     return false;
                 }
