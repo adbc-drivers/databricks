@@ -22,14 +22,12 @@
 */
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
-using AdbcDrivers.HiveServer2;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 
