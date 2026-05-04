@@ -339,7 +339,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 return new Proto.DriverSystemConfiguration
                 {
                     DriverVersion = assemblyVersion ?? string.Empty,
-                    DriverName = "Databricks ADBC Driver",
+                    DriverName = DatabricksConnection.DatabricksDriverName,
                     RuntimeVendor = "Microsoft"
                 };
             }
@@ -420,7 +420,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             var config = new Proto.DriverSystemConfiguration
             {
                 DriverVersion = assemblyVersion ?? string.Empty,
-                DriverName = "Databricks ADBC Driver",
+                DriverName = DatabricksConnection.DatabricksDriverName,
                 // runtime_vendor is a process-wide constant for .NET — always emit it so the
                 // 110-row gap reported in PECO-2996 closes regardless of which other lookup
                 // throws.
