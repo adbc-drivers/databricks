@@ -91,30 +91,28 @@ namespace AdbcDrivers.Databricks.Tests
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
             Stopwatch stopwatch = new();
 
-            foreach (var host in new[] { "unknownhost.azure.com" })
+            var host = "unknownhost.azure.com";
+            bool hasUri = parameters.TryGetValue(AdbcOptions.Uri, out var uri) && !string.IsNullOrEmpty(uri);
+            bool hasHostName = parameters.TryGetValue(SparkParameters.HostName, out var hostName) && !string.IsNullOrEmpty(hostName);
+            if (hasUri)
             {
-                bool hasUri = parameters.TryGetValue(AdbcOptions.Uri, out var uri) && !string.IsNullOrEmpty(uri);
-                bool hasHostName = parameters.TryGetValue(SparkParameters.HostName, out var hostName) && !string.IsNullOrEmpty(hostName);
-                if (hasUri)
-                {
-                    parameters[AdbcOptions.Uri] = $"http://{host}/cliservice";
-                }
-                else if (hasHostName)
-                {
-                    parameters[SparkParameters.HostName] = host;
-                }
-                else
-                {
-                    Assert.Fail($"Unexpected configuration. Must provide '{AdbcOptions.Uri}' or '{SparkParameters.HostName}'.");
-                }
-
-                stopwatch.Restart();
-                AdbcDatabase database = driver.Open(parameters);
-                AdbcException exception = Assert.ThrowsAny<AdbcException>(() => database.Connect(parameters));
-                stopwatch.Stop();
-                OutputHelper?.WriteLine($"host: '{host}' - elapsed time: {stopwatch.Elapsed} - \n{exception.Message}");
-                Assert.InRange(stopwatch.Elapsed, TimeSpan.FromSeconds(0), TimeSpan.FromMinutes(3));
+                parameters[AdbcOptions.Uri] = $"http://{host}/cliservice";
             }
+            else if (hasHostName)
+            {
+                parameters[SparkParameters.HostName] = host;
+            }
+            else
+            {
+                Assert.Fail($"Unexpected configuration. Must provide '{AdbcOptions.Uri}' or '{SparkParameters.HostName}'.");
+            }
+
+            stopwatch.Restart();
+            AdbcDatabase database = driver.Open(parameters);
+            AdbcException exception = Assert.ThrowsAny<AdbcException>(() => database.Connect(parameters));
+            stopwatch.Stop();
+            OutputHelper?.WriteLine($"host: '{host}' - elapsed time: {stopwatch.Elapsed} - \n{exception.Message}");
+            Assert.InRange(stopwatch.Elapsed, TimeSpan.FromSeconds(0), TimeSpan.FromMinutes(3));
         }
 
         public override void CanDetectInvalidAuthentication()
