@@ -27,6 +27,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using AdbcDrivers.HiveServer2.Hive2;
@@ -65,13 +66,18 @@ namespace AdbcDrivers.Databricks.Reader
         /// <param name="schema">The Arrow schema.</param>
         /// <param name="isLz4Compressed">Whether the results are LZ4 compressed.</param>
         /// <param name="httpClient">The HTTP client for CloudFetch operations.</param>
+        /// <param name="operationPoller">Optional injected poller (for testing). If null, a default one is created.</param>
+        /// <param name="telemetryContext">Optional per-statement telemetry context. The default poller forwards
+        /// poll-count and per-poll latency into this context so <c>n_operation_status_calls</c> and
+        /// <c>operation_status_latency_millis</c> are populated in the emitted telemetry log (PECO-2992).</param>
         internal DatabricksCompositeReader(
             IHiveServer2Statement statement,
             Schema schema,
             IResponse response,
             bool isLz4Compressed,
             HttpClient httpClient,
-            IOperationStatusPoller? operationPoller = null)
+            IOperationStatusPoller? operationPoller = null,
+            StatementTelemetryContext? telemetryContext = null)
             : base(statement)
         {
             _statement = statement ?? throw new ArgumentNullException(nameof(statement));
@@ -89,7 +95,13 @@ namespace AdbcDrivers.Databricks.Reader
             }
             if (_response.DirectResults?.ResultSet?.HasMoreRows ?? true)
             {
-                operationStatusPoller = operationPoller ?? new DatabricksOperationStatusPoller(_statement, response, GetHeartbeatIntervalFromConnection(), GetRequestTimeoutFromConnection(), activityTracer: this);
+                operationStatusPoller = operationPoller ?? new DatabricksOperationStatusPoller(
+                    _statement,
+                    response,
+                    GetHeartbeatIntervalFromConnection(),
+                    GetRequestTimeoutFromConnection(),
+                    activityTracer: this,
+                    telemetryContext: telemetryContext);
                 operationStatusPoller.Start();
             }
         }
