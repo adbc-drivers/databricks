@@ -45,6 +45,9 @@ type connectionImpl struct {
 
 	// Database connection
 	conn *sql.Conn
+
+	// Arrow serialization options
+	useArrowNativeGeospatial bool
 }
 
 func (c *connectionImpl) Close() error {
