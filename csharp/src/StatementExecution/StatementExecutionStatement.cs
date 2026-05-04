@@ -432,7 +432,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Inline results - may be split across multiple chunks
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
-                    isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken);
+                    isLz4Compressed, totalChunks, _lz4BufferPool);
             }
             else
             {
@@ -700,14 +700,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Reader for inline results in Arrow IPC stream format.
-        /// Handles both single-chunk and multi-chunk inline results by fetching
-        /// all chunks and concatenating them into a single Arrow stream.
+        /// Fetches chunks lazily one at a time as the consumer reads, keeping memory
+        /// usage bounded to a single chunk regardless of total result size.
         /// Supports LZ4_FRAME compressed data.
         /// </summary>
         private class InlineArrowStreamReader : IArrowArrayStream
         {
-            private readonly ArrowStreamReader _streamReader;
-            private readonly System.IO.MemoryStream _memoryStream;
+            private readonly IStatementExecutionClient _client;
+            private readonly string _statementId;
+            private readonly bool _isLz4Compressed;
+            private readonly int _totalChunks;
+            private readonly System.Buffers.ArrayPool<byte> _bufferPool;
+
+            private int _nextChunkIndex;
+            private System.IO.MemoryStream? _currentStream;
+            private ArrowStreamReader? _currentReader;
+            private Schema? _schema;
             private bool _disposed;
 
             public InlineArrowStreamReader(
@@ -716,22 +724,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 byte[] firstChunkData,
                 bool isLz4Compressed,
                 int totalChunks,
-                System.Buffers.ArrayPool<byte> bufferPool,
-                CancellationToken cancellationToken)
+                System.Buffers.ArrayPool<byte> bufferPool)
             {
                 if (firstChunkData == null || firstChunkData.Length == 0)
                 {
                     throw new ArgumentException("First chunk data cannot be null or empty", nameof(firstChunkData));
                 }
 
-                // Fetch and concatenate all chunks
-                var allData = FetchAllChunksAsync(client, statementId, firstChunkData, isLz4Compressed, totalChunks, bufferPool, cancellationToken).GetAwaiter().GetResult();
+                _client = client;
+                _statementId = statementId;
+                _isLz4Compressed = isLz4Compressed;
+                _totalChunks = totalChunks;
+                _bufferPool = bufferPool;
 
-                _memoryStream = new System.IO.MemoryStream(allData);
-                _streamReader = new ArrowStreamReader(_memoryStream);
+                // Initialize reader from the first chunk (already available inline)
+                LoadChunk(firstChunkData);
+                _nextChunkIndex = 1;
             }
 
-            public Schema Schema => _streamReader.Schema;
+            public Schema Schema => _schema ??= _currentReader!.Schema;
 
             public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
             {
@@ -740,72 +751,47 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     throw new ObjectDisposedException(nameof(InlineArrowStreamReader));
                 }
 
-                return await _streamReader.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                while (true)
+                {
+                    var batch = await _currentReader!.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                    if (batch != null)
+                        return batch;
+
+                    // Current chunk exhausted — fetch next if available
+                    if (_nextChunkIndex >= _totalChunks)
+                        return null;
+
+                    var chunkResult = await _client.GetResultChunkAsync(_statementId, _nextChunkIndex, cancellationToken).ConfigureAwait(false);
+                    _nextChunkIndex++;
+
+                    if (chunkResult.Attachment == null || chunkResult.Attachment.Length == 0)
+                        continue;
+
+                    LoadChunk(chunkResult.Attachment);
+                }
+            }
+
+            private void LoadChunk(byte[] chunkData)
+            {
+                _currentReader?.Dispose();
+                _currentStream?.Dispose();
+
+                byte[] data = _isLz4Compressed
+                    ? Lz4Utilities.DecompressLz4(chunkData, _bufferPool).ToArray()
+                    : chunkData;
+
+                _currentStream = new System.IO.MemoryStream(data);
+                _currentReader = new ArrowStreamReader(_currentStream);
             }
 
             public void Dispose()
             {
                 if (!_disposed)
                 {
-                    _streamReader?.Dispose();
-                    _memoryStream?.Dispose();
+                    _currentReader?.Dispose();
+                    _currentStream?.Dispose();
                     _disposed = true;
                 }
-            }
-
-            private static async Task<byte[]> FetchAllChunksAsync(
-                IStatementExecutionClient client,
-                string statementId,
-                byte[] firstChunkData,
-                bool isLz4Compressed,
-                int totalChunks,
-                System.Buffers.ArrayPool<byte> bufferPool,
-                CancellationToken cancellationToken)
-            {
-                // Start with the first chunk (already have it inline)
-                var chunks = new List<byte[]>();
-
-                // Decompress first chunk if needed
-                if (isLz4Compressed)
-                {
-                    var decompressed = Lz4Utilities.DecompressLz4(firstChunkData, bufferPool);
-                    chunks.Add(decompressed.ToArray());
-                }
-                else
-                {
-                    chunks.Add(firstChunkData);
-                }
-
-                // Fetch remaining chunks (chunks are 0-indexed, chunk 0 is already inline)
-                for (int i = 1; i < totalChunks; i++)
-                {
-                    var chunkResult = await client.GetResultChunkAsync(statementId, i, cancellationToken).ConfigureAwait(false);
-
-                    if (chunkResult.Attachment != null && chunkResult.Attachment.Length > 0)
-                    {
-                        if (isLz4Compressed)
-                        {
-                            var decompressed = Lz4Utilities.DecompressLz4(chunkResult.Attachment, bufferPool);
-                            chunks.Add(decompressed.ToArray());
-                        }
-                        else
-                        {
-                            chunks.Add(chunkResult.Attachment);
-                        }
-                    }
-                }
-
-                // Concatenate all chunks
-                int totalLength = chunks.Sum(c => c.Length);
-                byte[] result = new byte[totalLength];
-                int offset = 0;
-                foreach (var chunk in chunks)
-                {
-                    Buffer.BlockCopy(chunk, 0, result, offset, chunk.Length);
-                    offset += chunk.Length;
-                }
-
-                return result;
             }
         }
 
