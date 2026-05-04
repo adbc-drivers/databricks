@@ -514,7 +514,7 @@ namespace AdbcDrivers.Databricks
                 response,
                 isLz4Compressed,
                 httpClient,
-                telemetryContext: databricksStatement.CurrentTelemetryContext);
+                telemetryContext: databricksStatement.PendingTelemetryContext);
         }
 
         internal override SchemaParser SchemaParser => new DatabricksSchemaParser();
