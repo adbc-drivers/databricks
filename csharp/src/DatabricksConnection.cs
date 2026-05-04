@@ -738,6 +738,7 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("connection.server_side_properties.count", serverSideProperties.Count);
 
                 using var statement = new DatabricksStatement(this);
+                statement.IsInternalCall = true; // Mark driver-initiated SET statements as internal
 
                 foreach (var property in serverSideProperties)
                 {
