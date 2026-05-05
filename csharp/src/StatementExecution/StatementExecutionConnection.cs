@@ -18,6 +18,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
@@ -589,44 +591,198 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         async Task<IReadOnlyList<(string catalog, string schema)>> IGetObjectsDataProvider.GetSchemasAsync(string? catalogPattern, string? schemaPattern, CancellationToken cancellationToken)
         {
-            // Note: catalogPattern comes from GetObjectsResultBuilder which resolves individual
-            // catalog names before calling this method. Despite the "pattern" name (from the
-            // IGetObjectsDataProvider interface), the value passed to ShowSchemasCommand is used
-            // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
-            string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            // When catalogPattern is null, use SHOW SCHEMAS IN ALL CATALOGS.
+            // When catalogPattern contains unescaped wildcards (% or _), fetch all schemas and
+            // filter by catalog pattern client-side to avoid invalid SQL like SHOW SCHEMAS IN `%`.
+            // When catalogPattern is an empty string or a literal that doesn't exist on the server,
+            // return an empty rowset rather than propagating the server error.
 
-            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
-            // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
-            bool showSchemasInAllCatalogs = catalogPattern == null;
+            if (catalogPattern == null)
+            {
+                // SHOW SCHEMAS IN ALL CATALOGS — existing behavior, returns (databaseName, catalog).
+                string sql = new ShowSchemasCommand(null, schemaPattern).Build();
+                var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                return ExtractSchemasFromAllCatalogs(batches, catalogFilter: null);
+            }
 
+            if (catalogPattern.Length == 0)
+            {
+                // Empty string cannot match any real catalog name.
+                return System.Array.Empty<(string, string)>();
+            }
+
+            if (ContainsUnescapedWildcard(catalogPattern))
+            {
+                // Wildcard catalog pattern: fetch all schemas, then filter by catalog regex.
+                string sql = new ShowSchemasCommand(null, schemaPattern).Build();
+                var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                Regex catalogRegex = CatalogPatternToRegex(catalogPattern);
+                return ExtractSchemasFromAllCatalogs(batches, catalogRegex);
+            }
+
+            // Literal catalog name (possibly with \_ or \% escapes decoded): try the direct query.
+            // Decode ADBC escape sequences: \_ → _, \% → %
+            string literalCatalog = DecodeLiteralPattern(catalogPattern);
+            try
+            {
+                string sql = new ShowSchemasCommand(literalCatalog, schemaPattern).Build();
+                var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
+                var result = new List<(string, string)>();
+                foreach (var batch in batches)
+                {
+                    var schemaArray = batch.Column(0) as StringArray;
+                    if (schemaArray == null) continue;
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (!schemaArray.IsNull(i))
+                            result.Add((literalCatalog, schemaArray.GetString(i)));
+                    }
+                }
+                return result;
+            }
+            catch (Exception ex) when (IsNotFoundOrInvalidIdentifierException(ex))
+            {
+                // The catalog doesn't exist or the name is invalid — return empty rowset per spec.
+                return System.Array.Empty<(string, string)>();
+            }
+        }
+
+        /// <summary>
+        /// Extracts (catalog, schema) pairs from SHOW SCHEMAS IN ALL CATALOGS result batches.
+        /// If <paramref name="catalogFilter"/> is non-null, only rows whose catalog matches are included.
+        /// </summary>
+        private static List<(string, string)> ExtractSchemasFromAllCatalogs(
+            IEnumerable<RecordBatch> batches,
+            Regex? catalogFilter)
+        {
             var result = new List<(string, string)>();
             foreach (var batch in batches)
             {
-                StringArray? catalogArray = null;
-                StringArray? schemaArray = null;
-
-                if (showSchemasInAllCatalogs)
-                {
-                    schemaArray = batch.Column(0) as StringArray;
-                    catalogArray = batch.Column(1) as StringArray;
-                }
-                else
-                {
-                    schemaArray = batch.Column(0) as StringArray;
-                }
-
+                // SHOW SCHEMAS IN ALL CATALOGS: column 0 = databaseName, column 1 = catalog
+                var schemaArray = batch.Column(0) as StringArray;
+                var catalogArray = batch.Column(1) as StringArray;
                 if (schemaArray == null) continue;
                 for (int i = 0; i < batch.Length; i++)
                 {
                     if (schemaArray.IsNull(i)) continue;
                     string catalog = catalogArray != null && !catalogArray.IsNull(i)
                         ? catalogArray.GetString(i)
-                        : catalogPattern ?? "";
+                        : "";
+                    if (catalogFilter != null && !catalogFilter.IsMatch(catalog))
+                        continue;
                     result.Add((catalog, schemaArray.GetString(i)));
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// Returns true if the ADBC SQL pattern contains an unescaped <c>%</c> or <c>_</c>
+        /// wildcard character. A <c>\</c> followed by <c>%</c> or <c>_</c> is an escaped literal.
+        /// </summary>
+        internal static bool ContainsUnescapedWildcard(string pattern)
+        {
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+                if (c == '\\')
+                {
+                    i++; // skip next char (it is escaped)
+                    continue;
+                }
+                if (c == '%' || c == '_')
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Converts an ADBC/SQL wildcard pattern to a case-insensitive <see cref="Regex"/>.
+        /// <list type="bullet">
+        ///   <item><c>%</c>  → <c>.*</c> (any sequence of characters)</item>
+        ///   <item><c>_</c>  → <c>.</c>  (any single character)</item>
+        ///   <item><c>\_</c> → <c>_</c>  (literal underscore)</item>
+        ///   <item><c>\%</c> → <c>%</c>  (literal percent)</item>
+        ///   <item><c>\\</c> → <c>\\</c> (literal backslash)</item>
+        /// </list>
+        /// </summary>
+        internal static Regex CatalogPatternToRegex(string pattern)
+        {
+            var sb = new StringBuilder("^");
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+                if (c == '\\' && i + 1 < pattern.Length)
+                {
+                    char next = pattern[i + 1];
+                    if (next == '_' || next == '%' || next == '\\')
+                    {
+                        sb.Append(Regex.Escape(next.ToString()));
+                        i++;
+                        continue;
+                    }
+                    // Lone backslash — treat as literal.
+                    sb.Append(Regex.Escape("\\"));
+                }
+                else if (c == '%')
+                {
+                    sb.Append(".*");
+                }
+                else if (c == '_')
+                {
+                    sb.Append('.');
+                }
+                else
+                {
+                    sb.Append(Regex.Escape(c.ToString()));
+                }
+            }
+            sb.Append('$');
+            return new Regex(sb.ToString(), RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        }
+
+        /// <summary>
+        /// Decodes ADBC escape sequences in a pattern that contains no unescaped wildcards,
+        /// returning the literal string it represents.
+        /// <c>\_</c> → <c>_</c>, <c>\%</c> → <c>%</c>, <c>\\</c> → <c>\</c>.
+        /// </summary>
+        internal static string DecodeLiteralPattern(string pattern)
+        {
+            if (!pattern.Contains('\\'))
+                return pattern;
+
+            var sb = new StringBuilder(pattern.Length);
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+                if (c == '\\' && i + 1 < pattern.Length)
+                {
+                    char next = pattern[i + 1];
+                    if (next == '_' || next == '%' || next == '\\')
+                    {
+                        sb.Append(next);
+                        i++;
+                        continue;
+                    }
+                }
+                sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Returns true for exceptions that indicate the catalog name is not found or is syntactically
+        /// invalid as an identifier (e.g., empty string, nonexistent catalog).
+        /// </summary>
+        private static bool IsNotFoundOrInvalidIdentifierException(Exception ex)
+        {
+            // DatabricksException (which extends AdbcException) is the standard exception thrown
+            // by the SEA backend when a SQL statement fails (e.g. "SHOW SCHEMAS IN `nonexistent`").
+            // Catching it here allows us to return an empty rowset per spec rather than propagating
+            // the server error. Network errors and other unrelated failures are not AdbcExceptions
+            // and will still propagate normally.
+            return ex is AdbcException;
         }
 
         async Task<IReadOnlyList<(string catalog, string schema, string table, string tableType)>> IGetObjectsDataProvider.GetTablesAsync(
