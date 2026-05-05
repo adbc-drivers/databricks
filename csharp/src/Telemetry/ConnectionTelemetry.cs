@@ -460,13 +460,13 @@ namespace AdbcDrivers.Databricks.Telemetry
             // (see OAuthClientCredentialsProvider and TokenExchangeClient) and never performs
             // .well-known discovery, so discovery_mode_enabled is always false and
             // discovery_url is intentionally left unset (no value to report).
-            // OAuth providers DO cache tokens in memory (see OAuthClientCredentialsProvider's
-            // _cachedToken / GetValidCachedToken), so enable_token_cache is reported as true
-            // whenever any caching is happening — independent of whether JDBC's persistent
-            // disk-cache feature exists in this driver. Each setter is wrapped in its own
-            // try/catch so a future per-field source change cannot kill the whole payload.
+            // enable_token_cache is set to false: the in-memory dictionaries in
+            // TokenRefreshDelegatingHandler and MandatoryTokenExchangeDelegatingHandler are
+            // NOT what JDBC's enableTokenCache refers to (JDBC's feature is a U2M browser-flow
+            // on-disk cache, which this driver does not support). Each setter is wrapped in its
+            // own try/catch so a future per-field source change cannot kill the whole payload.
             TrySetField(connectionParams, p => p.DiscoveryModeEnabled = false);
-            TrySetField(connectionParams, p => p.EnableTokenCache = true);
+            TrySetField(connectionParams, p => p.EnableTokenCache = false);
 
             return connectionParams;
         }

@@ -31,9 +31,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
     /// This driver does not support OIDC discovery (the OAuth token endpoint is
     /// hardcoded to <c>https://{host}/oidc/v1/token</c> in
     /// <c>OAuthClientCredentialsProvider</c> and <c>TokenExchangeClient</c>) and
-    /// does not support a persistent on-disk token cache (the in-memory dedup
-    /// dictionaries in the delegating handlers are not what JDBC's
-    /// <c>enableTokenCache</c> refers to). We therefore explicitly emit
+    /// does not support a persistent on-disk token cache (JDBC's
+    /// <c>enableTokenCache</c> refers to a U2M browser-flow disk cache, which this
+    /// driver does not support; the in-memory dedup dictionaries in the delegating
+    /// handlers are a different mechanism). We therefore explicitly emit
     /// <c>discovery_mode_enabled=false</c> and <c>enable_token_cache=false</c>
     /// for every connection so analysts can distinguish C# rows from JDBC rows.
     /// <c>discovery_url</c> is intentionally left unset (no value to report).
@@ -97,7 +98,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void EnableTokenCache_AlwaysTrue_PatAuth()
+        public void EnableTokenCache_AlwaysFalse_PatAuth()
         {
             var properties = BaseProperties();
             properties[SparkParameters.AuthType] = SparkAuthTypeConstants.Token;
@@ -107,11 +108,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasEnableTokenCache);
-            Assert.True(connParams.EnableTokenCache);
+            Assert.False(connParams.EnableTokenCache);
         }
 
         [Fact]
-        public void EnableTokenCache_AlwaysTrue_OAuthClientCredentials()
+        public void EnableTokenCache_AlwaysFalse_OAuthClientCredentials()
         {
             var properties = BaseProperties();
             properties[SparkParameters.AuthType] = SparkAuthTypeConstants.OAuth;
@@ -124,7 +125,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasEnableTokenCache);
-            Assert.True(connParams.EnableTokenCache);
+            Assert.False(connParams.EnableTokenCache);
         }
     }
 }
