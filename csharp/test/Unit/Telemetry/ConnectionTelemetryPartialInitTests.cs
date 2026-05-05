@@ -158,7 +158,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         {
             var config = ConnectionTelemetry.BuildSystemConfiguration("1.2.3");
 
-            Assert.Equal("Databricks ADBC Driver", config.DriverName);
+            Assert.Equal(DatabricksConnection.DatabricksDriverName, config.DriverName);
         }
 
         [Fact]
@@ -202,7 +202,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var config = ConnectionTelemetry.SafeBuildSystemConfiguration(string.Empty, activity: null);
 
             Assert.NotNull(config);
-            Assert.Equal("Databricks ADBC Driver", config.DriverName);
+            Assert.Equal(DatabricksConnection.DatabricksDriverName, config.DriverName);
             Assert.Equal("Microsoft", config.RuntimeVendor);
         }
 
