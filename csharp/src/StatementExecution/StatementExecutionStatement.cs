@@ -175,12 +175,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     _escapePatternWildcards = bool.TryParse(value, out bool escape) && escape;
                     break;
 
-                // These options are readonly in SEA (set at connection level).
-                // Accept but ignore them to avoid NotImplemented exceptions for compatibility.
+                // Validate these options to match Thrift path behavior (throw ArgumentOutOfRangeException
+                // for invalid values), even though they are read-only in SEA (set at connection level).
                 case ApacheParameters.PollTimeMilliseconds:
+                    if (string.IsNullOrEmpty(value) || !int.TryParse(value, out int pollTimeMs) || pollTimeMs < 0)
+                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than or equal to 0.");
+                    break;
                 case ApacheParameters.BatchSize:
+                    if (string.IsNullOrEmpty(value) || !long.TryParse(value, out long batchSize) || batchSize <= 0)
+                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than zero.");
+                    break;
                 case ApacheParameters.BatchSizeStopCondition:
+                    break;
                 case ApacheParameters.QueryTimeoutSeconds:
+                    if (string.IsNullOrEmpty(value) || !int.TryParse(value, out int queryTimeoutSecs) || queryTimeoutSecs < 0)
+                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value of 0 (infinite) or greater.");
                     break;
 
                 // DatabricksStatement-specific options: accept but ignore for now.
