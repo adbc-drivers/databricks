@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2.Spark;
@@ -35,7 +36,6 @@ using Metadata = Apache.Arrow.Adbc.Tests.Metadata;
 namespace AdbcDrivers.Databricks.Tests
 {
     // TODO: PECO-3006 - CanExecuteQuery/CanExecuteQueryAsync return 0 rows for SEA; fix result consumption in StatementExecutionStatement
-    // TODO: PECO-3012 - CanExecuteUpdate/CanClientExecuteUpdate return 0 affected rows instead of -1; map null affected-rows to -1 in StatementExecutionStatement.ExecuteUpdate
     public class DriverTests : DriverTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public DriverTests(ITestOutputHelper? outputHelper)
@@ -101,11 +101,9 @@ namespace AdbcDrivers.Databricks.Tests
             base.CanGetObjectsAll();
         }
 
-        // TODO: PECO-3012 - SEA ExecuteUpdate returns 0 affected rows instead of -1
         [SkippableFact, Order(1)]
         public override void CanExecuteUpdate()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA ExecuteUpdate returns 0 affected rows instead of -1 (PECO-3012)");
             base.CanExecuteUpdate();
         }
 
@@ -125,25 +123,30 @@ namespace AdbcDrivers.Databricks.Tests
             AdbcDriver driver = NewDriver;
             Assert.NotNull(driver);
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
+            Stopwatch stopwatch = new();
 
+            var host = "unknownhost.azure.com";
             bool hasUri = parameters.TryGetValue(AdbcOptions.Uri, out var uri) && !string.IsNullOrEmpty(uri);
             bool hasHostName = parameters.TryGetValue(SparkParameters.HostName, out var hostName) && !string.IsNullOrEmpty(hostName);
             if (hasUri)
             {
-                parameters[AdbcOptions.Uri] = "http://unknownhost.azure.com/cliservice";
+                parameters[AdbcOptions.Uri] = $"http://{host}/cliservice";
             }
             else if (hasHostName)
             {
-                parameters[SparkParameters.HostName] = "unknownhost.azure.com";
+                parameters[SparkParameters.HostName] = host;
             }
             else
             {
                 Assert.Fail($"Unexpected configuration. Must provide '{AdbcOptions.Uri}' or '{SparkParameters.HostName}'.");
             }
 
+            stopwatch.Restart();
             AdbcDatabase database = driver.Open(parameters);
             AdbcException exception = Assert.ThrowsAny<AdbcException>(() => database.Connect(parameters));
-            OutputHelper?.WriteLine(exception.Message);
+            stopwatch.Stop();
+            OutputHelper?.WriteLine($"host: '{host}' - elapsed time: {stopwatch.Elapsed} - \n{exception.Message}");
+            Assert.InRange(stopwatch.Elapsed, TimeSpan.FromSeconds(0), TimeSpan.FromMinutes(1));
         }
 
         // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient

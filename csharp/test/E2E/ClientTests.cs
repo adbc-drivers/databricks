@@ -42,11 +42,9 @@ namespace AdbcDrivers.Databricks.Tests
             return GetUpdateExpectedResults(affectedRows, true);
         }
 
-        // TODO: PECO-3012 - SEA ExecuteUpdate returns 0 affected rows instead of -1
         [SkippableFact, Order(1)]
         public override void CanClientExecuteUpdate()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanClientExecuteUpdate returns 0 affected rows instead of -1 (PECO-3012)");
             base.CanClientExecuteUpdate();
         }
 
