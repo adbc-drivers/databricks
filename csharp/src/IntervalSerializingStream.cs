@@ -56,13 +56,11 @@ namespace AdbcDrivers.Databricks
         private readonly Schema _schema;
         private readonly HashSet<int> _intervalColumnIndices;
 
-        // Arrow field metadata key set by the Databricks server and by TryGetSchemaFromManifest.
-        private const string SparkSqlNameKey = "Spark:DataType:SqlName";
-
-        public IntervalSerializingStream(IArrowArrayStream inner)
+        public IntervalSerializingStream(IArrowArrayStream inner, Schema schema, IReadOnlyCollection<int> intervalColumnIndices)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            (_schema, _intervalColumnIndices) = BuildStringSchema(inner.Schema);
+            _schema = schema ?? throw new ArgumentNullException(nameof(schema));
+            _intervalColumnIndices = new HashSet<int>(intervalColumnIndices);
         }
 
         public Schema Schema => _schema;
@@ -121,36 +119,6 @@ namespace AdbcDrivers.Databricks
                     builder.AppendNull();
             }
             return builder.Build();
-        }
-
-        private static (Schema schema, HashSet<int> intervalIndices) BuildStringSchema(Schema original)
-        {
-            List<Field> fields = new List<Field>(original.FieldsList.Count);
-            HashSet<int> indices = new HashSet<int>();
-
-            for (int i = 0; i < original.FieldsList.Count; i++)
-            {
-                Field field = original.FieldsList[i];
-                if (IsIntervalByMetadata(field))
-                {
-                    fields.Add(new Field(field.Name, StringType.Default, field.IsNullable, field.Metadata));
-                    indices.Add(i);
-                }
-                else
-                {
-                    fields.Add(field);
-                }
-            }
-
-            return (new Schema(fields, original.Metadata), indices);
-        }
-
-        private static bool IsIntervalByMetadata(Field field)
-        {
-            return field.Metadata != null &&
-                   field.Metadata.TryGetValue(SparkSqlNameKey, out string? sqlName) &&
-                   sqlName != null &&
-                   sqlName.StartsWith("INTERVAL", StringComparison.OrdinalIgnoreCase);
         }
 
         // --- Formatting helpers ---

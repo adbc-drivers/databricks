@@ -304,9 +304,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Create appropriate reader based on result disposition
             IArrowArrayStream reader = CreateReader(response, cancellationToken);
 
+            // Build the output schema and conversion indices from the manifest upfront.
+            // This avoids embedding detection metadata in Arrow fields — the manifest is the source of truth.
+            Schema manifestSchema = TryGetSchemaFromManifest(response.Manifest) ?? reader.Schema;
+            HashSet<int> intervalIndices = ComputeIntervalIndices(response.Manifest);
+
             // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
             // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
-            reader = new IntervalSerializingStream(reader);
+            reader = new IntervalSerializingStream(reader, manifestSchema, intervalIndices);
 
             // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
             // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
@@ -488,6 +493,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return TryGetSchemaFromManifest(manifest)
                 ?? throw new AdbcException("Result manifest does not contain schema information");
+        }
+
+        private static HashSet<int> ComputeIntervalIndices(ResultManifest? manifest)
+        {
+            var indices = new HashSet<int>();
+            var columns = manifest?.Schema?.Columns;
+            if (columns == null) return indices;
+            for (int i = 0; i < columns.Count; i++)
+            {
+                if (ColumnMetadataHelper.GetBaseTypeName(columns[i].TypeName ?? string.Empty)
+                    .StartsWith("INTERVAL", StringComparison.OrdinalIgnoreCase))
+                    indices.Add(i);
+            }
+            return indices;
         }
 
         /// <summary>
