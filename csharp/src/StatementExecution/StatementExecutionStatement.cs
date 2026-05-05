@@ -304,13 +304,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Create appropriate reader based on result disposition
             IArrowArrayStream reader = CreateReader(response, cancellationToken);
 
-            // ComplexTypeSerializingStream handles two concerns in a single pass:
-            //   1. When EnableComplexDatatypeSupport=false (default), it serializes complex Arrow types
-            //      (LIST, MAP, STRUCT) to JSON strings, matching legacy Thrift behavior.
-            //   2. Always: it converts native Arrow interval/duration types to canonical UTF-8 strings
-            //      so that SEA behavior matches Thrift, which emits interval values as strings.
-            //      SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
-            reader = new ComplexTypeSerializingStream(reader, serializeComplexTypes: !_enableComplexDatatypeSupport);
+            // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
+            // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
+            reader = new IntervalSerializingStream(reader);
+
+            // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
+            // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
+            if (!_enableComplexDatatypeSupport)
+            {
+                reader = new ComplexTypeSerializingStream(reader);
+            }
 
             // Get schema from reader
             var schema = reader.Schema;

@@ -14,7 +14,6 @@
 * limitations under the License.
 */
 
-using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,16 +26,16 @@ using Xunit;
 namespace AdbcDrivers.Databricks.Tests.Unit
 {
     /// <summary>
-    /// Unit tests for <see cref="ComplexTypeSerializingStream"/>.
+    /// Unit tests for <see cref="IntervalSerializingStream"/>.
     ///
     /// Covers:
-    ///   - Complex types (LIST, MAP, STRUCT) serialized to JSON strings when serializeComplexTypes=true.
-    ///   - Native Arrow interval/duration types always converted to canonical UTF-8 strings:
-    ///       YearMonth  → "Y-M"                        e.g. 30 months → "2-6"
-    ///       Duration   → "D HH:MM:SS.nnnnnnnnn"       e.g. 3 d + 12 h 30 m 15 s → "3 12:30:15.000000000"
-    ///   - serializeComplexTypes=false leaves complex columns untouched but still converts intervals.
+    ///   - YearMonthIntervalArray → "Y-M" string
+    ///   - DurationArray → "D HH:MM:SS.nnnnnnnnn" string
+    ///   - Null handling for both types
+    ///   - Schema rewriting (converted columns become StringType)
+    ///   - Non-interval columns pass through unchanged
     /// </summary>
-    public class ComplexTypeSerializingStreamTests
+    public class IntervalSerializingStreamTests
     {
         // -----------------------------------------------------------------------
         // FormatYearMonth static helper
@@ -51,7 +50,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [InlineData(-30, "-2--6")]      // negative (mirrors Java driver)
         public void FormatYearMonth_ReturnsExpectedString(int totalMonths, string expected)
         {
-            string actual = ComplexTypeSerializingStream.FormatYearMonth(totalMonths);
+            string actual = IntervalSerializingStream.FormatYearMonth(totalMonths);
             Assert.Equal(expected, actual);
         }
 
@@ -70,7 +69,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [InlineData(-304_215_000_000L, "-4 11:29:45.000000000")]                    // negative
         public void FormatDuration_Microseconds_ReturnsExpectedString(long rawUs, string expected)
         {
-            string actual = ComplexTypeSerializingStream.FormatDuration(rawUs, TimeUnit.Microsecond);
+            string actual = IntervalSerializingStream.FormatDuration(rawUs, TimeUnit.Microsecond);
             Assert.Equal(expected, actual);
         }
 
@@ -79,7 +78,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         {
             // 3 days 12 h 30 m 15 s in nanoseconds
             long rawNs = 304_215L * 1_000_000_000L;
-            string actual = ComplexTypeSerializingStream.FormatDuration(rawNs, TimeUnit.Nanosecond);
+            string actual = IntervalSerializingStream.FormatDuration(rawNs, TimeUnit.Nanosecond);
             Assert.Equal("3 12:30:15.000000000", actual);
         }
 
@@ -87,7 +86,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FormatDuration_Seconds_ReturnsExpectedString()
         {
             long rawS = 304_215L; // 3 days 12 h 30 m 15 s
-            string actual = ComplexTypeSerializingStream.FormatDuration(rawS, TimeUnit.Second);
+            string actual = IntervalSerializingStream.FormatDuration(rawS, TimeUnit.Second);
             Assert.Equal("3 12:30:15.000000000", actual);
         }
 
@@ -95,7 +94,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void FormatDuration_Milliseconds_ReturnsExpectedString()
         {
             long rawMs = 304_215_000L; // 3 days 12 h 30 m 15 s
-            string actual = ComplexTypeSerializingStream.FormatDuration(rawMs, TimeUnit.Millisecond);
+            string actual = IntervalSerializingStream.FormatDuration(rawMs, TimeUnit.Millisecond);
             Assert.Equal("3 12:30:15.000000000", actual);
         }
 
@@ -112,7 +111,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 .Build();
 
             using IArrowArrayStream inner = new StubArrowArrayStream(original, System.Array.Empty<RecordBatch>());
-            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             Schema rewritten = stream.Schema;
             Assert.Equal(2, rewritten.FieldsList.Count);
@@ -130,7 +129,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 .Build();
 
             using IArrowArrayStream inner = new StubArrowArrayStream(original, System.Array.Empty<RecordBatch>());
-            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             Schema rewritten = stream.Schema;
             Assert.Equal(2, rewritten.FieldsList.Count);
@@ -149,10 +148,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 .Build();
 
             using IArrowArrayStream inner = new StubArrowArrayStream(original, System.Array.Empty<RecordBatch>());
-            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             Schema rewritten = stream.Schema;
-            Assert.Equal(3, rewritten.FieldsList.Count);
             Assert.IsType<Int64Type>(rewritten.FieldsList[0].DataType);
             Assert.IsType<StringType>(rewritten.FieldsList[1].DataType);
             Assert.IsType<DoubleType>(rewritten.FieldsList[2].DataType);
@@ -165,11 +163,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public async Task ReadNextBatch_YearMonthColumn_ConvertsValues()
         {
-            // Build a batch with two rows: 30 months ("2-6") and null
             var ymBuilder = new YearMonthIntervalArray.Builder();
-            ymBuilder.Append(new YearMonthInterval(30)); // 2-6
+            ymBuilder.Append(new YearMonthInterval(30)); // "2-6"
             ymBuilder.AppendNull();
-            ymBuilder.Append(new YearMonthInterval(12)); // 1-0
+            ymBuilder.Append(new YearMonthInterval(12)); // "1-0"
             YearMonthIntervalArray ymArray = ymBuilder.Build();
 
             Schema schema = new Schema.Builder()
@@ -179,7 +176,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             RecordBatch batch = new RecordBatch(schema, new IArrowArray[] { ymArray }, ymArray.Length);
 
             using IArrowArrayStream inner = new StubArrowArrayStream(schema, new[] { batch });
-            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
             Assert.NotNull(result);
@@ -213,7 +210,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             RecordBatch batch = new RecordBatch(schema, new IArrowArray[] { dArray }, dArray.Length);
 
             using IArrowArrayStream inner = new StubArrowArrayStream(schema, new[] { batch });
-            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
             Assert.NotNull(result);
@@ -254,7 +251,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 new IArrowArray[] { idArray, ymArray, nameArray }, 1);
 
             using IArrowArrayStream inner = new StubArrowArrayStream(schema, new[] { batch });
-            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
             Assert.NotNull(result);
@@ -265,36 +262,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             Assert.Equal("2-6", ((StringArray)result.Column(1)).GetString(0));
             Assert.Equal("Alice", ((StringArray)result.Column(2)).GetString(0));
-        }
-
-        // -----------------------------------------------------------------------
-        // serializeComplexTypes=false: intervals still converted, complex untouched
-        // -----------------------------------------------------------------------
-
-        [Fact]
-        public async Task ReadNextBatch_SerializeComplexTypesFalse_IntervalStillConverted()
-        {
-            var ymBuilder = new YearMonthIntervalArray.Builder();
-            ymBuilder.Append(new YearMonthInterval(30)); // "2-6"
-            YearMonthIntervalArray ymArray = ymBuilder.Build();
-
-            Schema schema = new Schema.Builder()
-                .Field(f => f.Name("tenure").DataType(new IntervalType(IntervalUnit.YearMonth)).Nullable(true))
-                .Build();
-
-            RecordBatch batch = new RecordBatch(schema, new IArrowArray[] { ymArray }, ymArray.Length);
-
-            using IArrowArrayStream inner = new StubArrowArrayStream(schema, new[] { batch });
-            // serializeComplexTypes=false — complex types pass through, but intervals are still converted
-            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner, serializeComplexTypes: false);
-
-            // Schema: interval column must still be rewritten to StringType
-            Assert.IsType<StringType>(stream.Schema.FieldsList[0].DataType);
-
-            RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
-            Assert.NotNull(result);
-            StringArray strings = (StringArray)result!.Column(0);
-            Assert.Equal("2-6", strings.GetString(0));
         }
 
         // -----------------------------------------------------------------------
