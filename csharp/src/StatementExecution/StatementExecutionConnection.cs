@@ -594,7 +594,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // IGetObjectsDataProvider interface), the value passed to ShowSchemasCommand is used
             // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (AdbcException ex) when (IsNoCatalogException(ex))
+            {
+                // The SEA API treats the catalog name as a literal identifier; if the pattern
+                // does not match any real catalog the server returns NO_SUCH_CATALOG_EXCEPTION.
+                // Return an empty result set instead of propagating the error, which is the
+                // expected behaviour when a catalog pattern matches nothing (same as Thrift).
+                return System.Array.Empty<(string, string)>();
+            }
 
             // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
@@ -633,7 +645,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, CancellationToken cancellationToken)
         {
             string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (AdbcException ex) when (IsNoCatalogException(ex))
+            {
+                return System.Array.Empty<(string, string, string, string)>();
+            }
             var result = new List<(string, string, string, string)>();
             foreach (var batch in batches)
             {
@@ -671,7 +691,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            var batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+            }
+            catch (AdbcException ex) when (IsNoCatalogException(ex))
+            {
+                return;
+            }
 
             var tablePositions = new Dictionary<string, int>();
 
@@ -729,6 +757,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Returns true when the exception originates from a NO_SUCH_CATALOG_EXCEPTION error
+        /// returned by the SEA backend. The SEA API treats catalog names as literal identifiers
+        /// in SHOW SCHEMAS / SHOW TABLES / SHOW COLUMNS and raises this error when the catalog
+        /// does not exist, rather than returning an empty result set.
+        /// </summary>
+        private static bool IsNoCatalogException(AdbcException ex)
+        {
+            return ex.SqlState == "42704"
+                || ex.Message.Contains("NO_SUCH_CATALOG_EXCEPTION", StringComparison.OrdinalIgnoreCase);
         }
 
         internal async Task<List<RecordBatch>> ExecuteMetadataSqlAsync(string sql, CancellationToken cancellationToken = default)

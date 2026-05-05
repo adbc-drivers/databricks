@@ -279,7 +279,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (state == "FAILED")
             {
                 var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                var ex = new DatabricksException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                if (error?.SqlState != null) ex.SetSqlState(error.SqlState);
+                throw ex;
             }
             if (state == "CANCELED")
             {
@@ -624,7 +626,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (state == "FAILED")
             {
                 var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                var ex = new DatabricksException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                if (error?.SqlState != null) ex.SetSqlState(error.SqlState);
+                throw ex;
             }
             if (state == "CANCELED")
             {
