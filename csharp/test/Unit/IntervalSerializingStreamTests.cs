@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -37,6 +38,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
     /// </summary>
     public class IntervalSerializingStreamTests
     {
+        private static readonly Dictionary<string, string> IntervalMetadata =
+            new Dictionary<string, string> { ["Spark:DataType:SqlName"] = "INTERVAL" };
+
         // -----------------------------------------------------------------------
         // FormatYearMonth static helper
         // -----------------------------------------------------------------------
@@ -107,7 +111,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         {
             Schema original = new Schema.Builder()
                 .Field(f => f.Name("id").DataType(Int32Type.Default).Nullable(false))
-                .Field(f => f.Name("tenure").DataType(new IntervalType(IntervalUnit.YearMonth)).Nullable(true))
+                .Field(new Field("tenure", new IntervalType(IntervalUnit.YearMonth), nullable: true, IntervalMetadata))
                 .Build();
 
             using IArrowArrayStream inner = new StubArrowArrayStream(original, System.Array.Empty<RecordBatch>());
@@ -124,7 +128,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void Schema_DurationColumn_IsRewrittenToString()
         {
             Schema original = new Schema.Builder()
-                .Field(f => f.Name("elapsed").DataType(DurationType.Microsecond).Nullable(true))
+                .Field(new Field("elapsed", DurationType.Microsecond, nullable: true, IntervalMetadata))
                 .Field(f => f.Name("label").DataType(StringType.Default).Nullable(true))
                 .Build();
 
@@ -170,7 +174,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             YearMonthIntervalArray ymArray = ymBuilder.Build();
 
             Schema schema = new Schema.Builder()
-                .Field(f => f.Name("tenure").DataType(new IntervalType(IntervalUnit.YearMonth)).Nullable(true))
+                .Field(new Field("tenure", new IntervalType(IntervalUnit.YearMonth), nullable: true, IntervalMetadata))
                 .Build();
 
             RecordBatch batch = new RecordBatch(schema, new IArrowArray[] { ymArray }, ymArray.Length);
@@ -204,7 +208,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             DurationArray dArray = dBuilder.Build();
 
             Schema schema = new Schema.Builder()
-                .Field(f => f.Name("elapsed").DataType(DurationType.Microsecond).Nullable(true))
+                .Field(new Field("elapsed", DurationType.Microsecond, nullable: true, IntervalMetadata))
                 .Build();
 
             RecordBatch batch = new RecordBatch(schema, new IArrowArray[] { dArray }, dArray.Length);
@@ -239,7 +243,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             Schema schema = new Schema.Builder()
                 .Field(f => f.Name("id").DataType(Int32Type.Default).Nullable(false))
-                .Field(f => f.Name("tenure").DataType(new IntervalType(IntervalUnit.YearMonth)).Nullable(true))
+                .Field(new Field("tenure", new IntervalType(IntervalUnit.YearMonth), nullable: true, IntervalMetadata))
                 .Field(f => f.Name("name").DataType(StringType.Default).Nullable(true))
                 .Build();
 

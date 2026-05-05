@@ -54,13 +54,15 @@ namespace AdbcDrivers.Databricks
     {
         private readonly IArrowArrayStream _inner;
         private readonly Schema _schema;
-        // Maps column index → original interval/duration type, used to pick the right formatter
-        private readonly Dictionary<int, IArrowType> _intervalColumns;
+        private readonly HashSet<int> _intervalColumnIndices;
+
+        // Arrow field metadata key set by the Databricks server and by TryGetSchemaFromManifest.
+        private const string SparkSqlNameKey = "Spark:DataType:SqlName";
 
         public IntervalSerializingStream(IArrowArrayStream inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            (_schema, _intervalColumns) = BuildStringSchema(inner.Schema);
+            (_schema, _intervalColumnIndices) = BuildStringSchema(inner.Schema);
         }
 
         public Schema Schema => _schema;
@@ -71,7 +73,7 @@ namespace AdbcDrivers.Databricks
             if (batch == null)
                 return null;
 
-            if (_intervalColumns.Count == 0)
+            if (_intervalColumnIndices.Count == 0)
                 return batch;
 
             return ConvertColumns(batch);
@@ -84,59 +86,55 @@ namespace AdbcDrivers.Databricks
             IArrowArray[] arrays = new IArrowArray[batch.ColumnCount];
             for (int i = 0; i < batch.ColumnCount; i++)
             {
-                arrays[i] = _intervalColumns.TryGetValue(i, out IArrowType? originalType)
-                    ? SerializeIntervalToStringArray(batch.Column(i), originalType)
+                arrays[i] = _intervalColumnIndices.Contains(i)
+                    ? SerializeIntervalToStringArray(batch.Column(i))
                     : batch.Column(i);
             }
             return new RecordBatch(_schema, arrays, batch.Length);
         }
 
-        private static StringArray SerializeIntervalToStringArray(IArrowArray array, IArrowType originalType)
+        private static StringArray SerializeIntervalToStringArray(IArrowArray array)
         {
             StringArray.Builder builder = new StringArray.Builder();
-            for (int i = 0; i < array.Length; i++)
+            if (array is YearMonthIntervalArray ymArray)
             {
-                if (array.IsNull(i))
+                for (int i = 0; i < array.Length; i++)
                 {
-                    builder.AppendNull();
-                }
-                else if (originalType is IntervalType intervalType &&
-                         intervalType.Unit == IntervalUnit.YearMonth)
-                {
-                    YearMonthIntervalArray ymArray = (YearMonthIntervalArray)array;
+                    if (array.IsNull(i)) { builder.AppendNull(); continue; }
                     var value = ymArray.GetValue(i);
-                    builder.Append(value.HasValue
-                        ? FormatYearMonth(value.Value.Months)
-                        : null);
+                    builder.Append(value.HasValue ? FormatYearMonth(value.Value.Months) : null);
                 }
-                else if (originalType is DurationType durationType)
+            }
+            else if (array is DurationArray durationArray)
+            {
+                DurationType durationType = (DurationType)durationArray.Data.DataType;
+                for (int i = 0; i < array.Length; i++)
                 {
-                    DurationArray durationArray = (DurationArray)array;
+                    if (array.IsNull(i)) { builder.AppendNull(); continue; }
                     long? rawValue = durationArray.GetValue(i);
-                    builder.Append(rawValue.HasValue
-                        ? FormatDuration(rawValue.Value, durationType.Unit)
-                        : null);
+                    builder.Append(rawValue.HasValue ? FormatDuration(rawValue.Value, durationType.Unit) : null);
                 }
-                else
-                {
+            }
+            else
+            {
+                for (int i = 0; i < array.Length; i++)
                     builder.AppendNull();
-                }
             }
             return builder.Build();
         }
 
-        private static (Schema schema, Dictionary<int, IArrowType> intervalColumns) BuildStringSchema(Schema original)
+        private static (Schema schema, HashSet<int> intervalIndices) BuildStringSchema(Schema original)
         {
             List<Field> fields = new List<Field>(original.FieldsList.Count);
-            Dictionary<int, IArrowType> intervalColumns = new Dictionary<int, IArrowType>();
+            HashSet<int> indices = new HashSet<int>();
 
             for (int i = 0; i < original.FieldsList.Count; i++)
             {
                 Field field = original.FieldsList[i];
-                if (IsIntervalOrDurationType(field.DataType))
+                if (IsIntervalByMetadata(field))
                 {
                     fields.Add(new Field(field.Name, StringType.Default, field.IsNullable, field.Metadata));
-                    intervalColumns[i] = field.DataType;
+                    indices.Add(i);
                 }
                 else
                 {
@@ -144,12 +142,16 @@ namespace AdbcDrivers.Databricks
                 }
             }
 
-            return (new Schema(fields, original.Metadata), intervalColumns);
+            return (new Schema(fields, original.Metadata), indices);
         }
 
-        private static bool IsIntervalOrDurationType(IArrowType type) =>
-            (type is IntervalType intervalType && intervalType.Unit == IntervalUnit.YearMonth) ||
-            type is DurationType;
+        private static bool IsIntervalByMetadata(Field field)
+        {
+            return field.Metadata != null &&
+                   field.Metadata.TryGetValue(SparkSqlNameKey, out string? sqlName) &&
+                   sqlName != null &&
+                   sqlName.StartsWith("INTERVAL", StringComparison.OrdinalIgnoreCase);
+        }
 
         // --- Formatting helpers ---
 
