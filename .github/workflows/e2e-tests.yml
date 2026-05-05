@@ -48,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        protocol: ${{ inputs.protocol == 'thrift' && fromJson('["thrift"]') || inputs.protocol == 'rest' && fromJson('["rest"]') || fromJson('["thrift","rest"]') }}
+        protocol: ${{ fromJson(inputs.protocol == 'thrift' && '["thrift"]' || inputs.protocol == 'rest' && '["rest"]' || '["thrift","rest"]') }}
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ matrix.protocol == 'rest' && secrets.TEST_PECO_REYDEN_HTTP_PATH || secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
