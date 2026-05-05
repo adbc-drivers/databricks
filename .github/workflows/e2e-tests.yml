@@ -64,6 +64,7 @@ jobs:
       - name: Check if tests should run
         id: gate
         run: |
+          echo "🔍 inputs.protocol='${{ inputs.protocol }}' event='${{ github.event_name }}'"
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             if [[ "${{ github.event.action }}" == "labeled" ]] && [[ "${{ github.event.label.name }}" == "e2e-test" ]]; then
               echo "run=true" >> $GITHUB_OUTPUT && echo "✅ e2e-test label added — running E2E tests"
