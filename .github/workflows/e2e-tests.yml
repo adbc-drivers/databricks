@@ -48,10 +48,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        protocol: ${{ inputs.protocol == 'thrift' && fromJson('["thrift"]') || inputs.protocol == 'rest' && fromJson('["rest"]') || fromJson('["thrift","rest"]') }}
+        protocol: ${{ fromJson(inputs.protocol == 'thrift' && '["thrift"]' || inputs.protocol == 'rest' && '["rest"]' || '["thrift","rest"]') }}
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      DATABRICKS_HTTP_PATH: ${{ matrix.protocol == 'rest' && secrets.TEST_PECO_REYDEN_HTTP_PATH || secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
       DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
       DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
     steps:
@@ -64,6 +64,7 @@ jobs:
       - name: Check if tests should run
         id: gate
         run: |
+          echo "🔍 inputs.protocol='${{ inputs.protocol }}' event='${{ github.event_name }}'"
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             if [[ "${{ github.event.action }}" == "labeled" ]] && [[ "${{ github.event.label.name }}" == "e2e-test" ]]; then
               echo "run=true" >> $GITHUB_OUTPUT && echo "✅ e2e-test label added — running E2E tests"
