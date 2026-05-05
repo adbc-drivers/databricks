@@ -27,23 +27,60 @@ using Apache.Arrow.Types;
 namespace AdbcDrivers.Databricks
 {
     /// <summary>
-    /// Wraps an <see cref="IArrowArrayStream"/> and converts columns of complex Arrow types
-    /// (LIST, MAP represented as LIST of STRUCTs, STRUCT) into STRING columns containing
-    /// their JSON representation.
+    /// Wraps an <see cref="IArrowArrayStream"/> and converts columns that carry
+    /// native Arrow types that must be serialized to strings into STRING columns:
     ///
-    /// This is applied when EnableComplexDatatypeSupport=false (the default), so that SEA
-    /// results match the legacy Thrift behavior of returning JSON strings for complex types.
+    /// <list type="bullet">
+    ///   <item>
+    ///     <description>
+    ///       Complex types (LIST, MAP represented as LIST of STRUCTs, STRUCT) are
+    ///       converted into STRING columns containing their JSON representation.
+    ///       Applied when EnableComplexDatatypeSupport=false (the default) so that SEA
+    ///       results match the legacy Thrift behavior of returning JSON strings for complex types.
+    ///     </description>
+    ///   </item>
+    ///   <item>
+    ///     <description>
+    ///       <see cref="ArrowTypeId.Interval"/> with <see cref="IntervalUnit.YearMonth"/>
+    ///       (<c>YearMonthIntervalArray</c>) → "Y-M" string,
+    ///       e.g. 30 months → "2-6" (2 years, 6 months).
+    ///     </description>
+    ///   </item>
+    ///   <item>
+    ///     <description>
+    ///       <see cref="ArrowTypeId.Duration"/> (<c>DurationArray</c>) → "D HH:MM:SS.nnnnnnnnn"
+    ///       string, e.g. 3 days + 12 h + 30 min + 15 s → "3 12:30:15.000000000".
+    ///       The conversion respects the <see cref="DurationType.Unit"/> of the column.
+    ///     </description>
+    ///   </item>
+    /// </list>
+    ///
+    /// The schema reported to callers is rewritten so that converted columns have
+    /// <see cref="StringType"/> instead of the native type, exactly mirroring what
+    /// the Thrift protocol returns.
     /// </summary>
     internal sealed class ComplexTypeSerializingStream : IArrowArrayStream
     {
         private readonly IArrowArrayStream _inner;
         private readonly Schema _schema;
         private readonly HashSet<int> _complexColumnIndices;
+        // For interval/duration columns we need to know the original type to pick the right formatter
+        private readonly Dictionary<int, IArrowType> _intervalColumnOriginalTypes;
 
-        public ComplexTypeSerializingStream(IArrowArrayStream inner)
+        /// <summary>
+        /// Initializes a new instance of <see cref="ComplexTypeSerializingStream"/>.
+        /// </summary>
+        /// <param name="inner">The underlying Arrow stream to wrap.</param>
+        /// <param name="serializeComplexTypes">
+        /// When <c>true</c> (the default), LIST/MAP/STRUCT columns are serialized to JSON strings.
+        /// Set to <c>false</c> when EnableComplexDatatypeSupport=true so that complex columns are
+        /// passed through as native Arrow types. Interval/duration columns are always converted to
+        /// strings regardless of this flag.
+        /// </param>
+        public ComplexTypeSerializingStream(IArrowArrayStream inner, bool serializeComplexTypes = true)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            (_schema, _complexColumnIndices) = BuildStringSchema(inner.Schema);
+            (_schema, _complexColumnIndices, _intervalColumnOriginalTypes) = BuildStringSchema(inner.Schema, serializeComplexTypes);
         }
 
         public Schema Schema => _schema;
@@ -54,25 +91,30 @@ namespace AdbcDrivers.Databricks
             if (batch == null)
                 return null;
 
-            if (_complexColumnIndices.Count == 0)
+            if (_complexColumnIndices.Count == 0 && _intervalColumnOriginalTypes.Count == 0)
                 return batch;
 
-            return ConvertComplexColumns(batch);
+            return ConvertColumns(batch);
         }
 
         public void Dispose() => _inner.Dispose();
 
-        private RecordBatch ConvertComplexColumns(RecordBatch batch)
+        private RecordBatch ConvertColumns(RecordBatch batch)
         {
             IArrowArray[] arrays = new IArrowArray[batch.ColumnCount];
             for (int i = 0; i < batch.ColumnCount; i++)
             {
-                arrays[i] = _complexColumnIndices.Contains(i) ? SerializeToStringArray(batch.Column(i)) : batch.Column(i);
+                if (_complexColumnIndices.Contains(i))
+                    arrays[i] = SerializeComplexToStringArray(batch.Column(i));
+                else if (_intervalColumnOriginalTypes.TryGetValue(i, out IArrowType? originalType))
+                    arrays[i] = SerializeIntervalToStringArray(batch.Column(i), originalType);
+                else
+                    arrays[i] = batch.Column(i);
             }
             return new RecordBatch(_schema, arrays, batch.Length);
         }
 
-        private static StringArray SerializeToStringArray(IArrowArray array)
+        private static StringArray SerializeComplexToStringArray(IArrowArray array)
         {
             StringArray.Builder builder = new StringArray.Builder();
             for (int i = 0; i < array.Length; i++)
@@ -85,22 +127,62 @@ namespace AdbcDrivers.Databricks
             return builder.Build();
         }
 
+        private static StringArray SerializeIntervalToStringArray(IArrowArray array, IArrowType originalType)
+        {
+            StringArray.Builder builder = new StringArray.Builder();
+            for (int i = 0; i < array.Length; i++)
+            {
+                if (array.IsNull(i))
+                {
+                    builder.AppendNull();
+                }
+                else if (originalType is IntervalType intervalType &&
+                         intervalType.Unit == IntervalUnit.YearMonth)
+                {
+                    YearMonthIntervalArray ymArray = (YearMonthIntervalArray)array;
+                    var value = ymArray.GetValue(i);
+                    builder.Append(value.HasValue
+                        ? FormatYearMonth(value.Value.Months)
+                        : null);
+                }
+                else if (originalType is DurationType durationType)
+                {
+                    DurationArray durationArray = (DurationArray)array;
+                    long? rawValue = durationArray.GetValue(i);
+                    builder.Append(rawValue.HasValue
+                        ? FormatDuration(rawValue.Value, durationType.Unit)
+                        : null);
+                }
+                else
+                {
+                    builder.AppendNull();
+                }
+            }
+            return builder.Build();
+        }
+
         /// <summary>
-        /// Builds a new schema where all complex-type fields are replaced with StringType,
-        /// and returns the set of column indices that were converted.
+        /// Builds a new schema where all converted-type fields are replaced with StringType,
+        /// and returns the sets of column indices that were converted.
         /// </summary>
-        private static (Schema schema, HashSet<int> complexIndices) BuildStringSchema(Schema original)
+        private static (Schema schema, HashSet<int> complexIndices, Dictionary<int, IArrowType> intervalColumns) BuildStringSchema(Schema original, bool serializeComplexTypes)
         {
             List<Field> fields = new List<Field>(original.FieldsList.Count);
-            HashSet<int> indices = new HashSet<int>();
+            HashSet<int> complexIndices = new HashSet<int>();
+            Dictionary<int, IArrowType> intervalColumns = new Dictionary<int, IArrowType>();
 
             for (int i = 0; i < original.FieldsList.Count; i++)
             {
                 Field field = original.FieldsList[i];
-                if (IsComplexType(field.DataType))
+                if (serializeComplexTypes && IsComplexType(field.DataType))
                 {
                     fields.Add(new Field(field.Name, StringType.Default, field.IsNullable, field.Metadata));
-                    indices.Add(i);
+                    complexIndices.Add(i);
+                }
+                else if (IsIntervalOrDurationType(field.DataType))
+                {
+                    fields.Add(new Field(field.Name, StringType.Default, field.IsNullable, field.Metadata));
+                    intervalColumns[i] = field.DataType;
                 }
                 else
                 {
@@ -108,11 +190,73 @@ namespace AdbcDrivers.Databricks
                 }
             }
 
-            return (new Schema(fields, original.Metadata), indices);
+            return (new Schema(fields, original.Metadata), complexIndices, intervalColumns);
         }
 
         private static bool IsComplexType(IArrowType type) =>
             type is ListType || type is MapType || type is StructType;
+
+        private static bool IsIntervalOrDurationType(IArrowType type) =>
+            (type is IntervalType intervalType && intervalType.Unit == IntervalUnit.YearMonth) ||
+            type is DurationType;
+
+        // --- Interval/duration formatting helpers ---
+
+        /// <summary>
+        /// Formats a year-month interval (total months) as "Y-M", matching the Thrift output.
+        /// Example: 30 months → "2-6"
+        /// </summary>
+        internal static string FormatYearMonth(int totalMonths)
+        {
+            int years = totalMonths / 12;
+            int months = totalMonths % 12;
+            return $"{years}-{months}";
+        }
+
+        /// <summary>
+        /// Formats a duration value as "D HH:MM:SS.nnnnnnnnn", matching the Thrift output.
+        /// Example: 3 days + 12 h + 30 min + 15 s 500 ms → "3 12:30:15.500000000"
+        /// The <paramref name="unit"/> determines how to interpret <paramref name="rawValue"/>.
+        /// </summary>
+        internal static string FormatDuration(long rawValue, TimeUnit unit)
+        {
+            // Convert to nanoseconds first for uniform handling
+            long nanoseconds = unit switch
+            {
+                TimeUnit.Second => rawValue * 1_000_000_000L,
+                TimeUnit.Millisecond => rawValue * 1_000_000L,
+                TimeUnit.Microsecond => rawValue * 1_000L,
+                TimeUnit.Nanosecond => rawValue,
+                _ => rawValue * 1_000L // default to microseconds
+            };
+
+            // Separate the nanosecond sub-second part from whole seconds
+            long wholeSeconds = nanoseconds / 1_000_000_000L;
+            long subNanos = nanoseconds % 1_000_000_000L;
+
+            // Handle negative values: keep subNanos non-negative
+            if (subNanos < 0)
+            {
+                wholeSeconds -= 1;
+                subNanos += 1_000_000_000L;
+            }
+
+            long days = wholeSeconds / 86400L;
+            long remainderSeconds = wholeSeconds % 86400L;
+
+            // Handle negative days: ensure remainderSeconds is non-negative
+            if (remainderSeconds < 0)
+            {
+                days -= 1;
+                remainderSeconds += 86400L;
+            }
+
+            int hours = (int)(remainderSeconds / 3600L);
+            int minutes = (int)((remainderSeconds % 3600L) / 60L);
+            int seconds = (int)(remainderSeconds % 60L);
+
+            return $"{days} {hours:D2}:{minutes:D2}:{seconds:D2}.{subNanos:D9}";
+        }
 
         // --- JSON serialization helpers ---
 

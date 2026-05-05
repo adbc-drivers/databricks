@@ -304,12 +304,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Create appropriate reader based on result disposition
             IArrowArrayStream reader = CreateReader(response, cancellationToken);
 
-            // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
-            // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
-            if (!_enableComplexDatatypeSupport)
-            {
-                reader = new ComplexTypeSerializingStream(reader);
-            }
+            // ComplexTypeSerializingStream handles two concerns in a single pass:
+            //   1. When EnableComplexDatatypeSupport=false (default), it serializes complex Arrow types
+            //      (LIST, MAP, STRUCT) to JSON strings, matching legacy Thrift behavior.
+            //   2. Always: it converts native Arrow interval/duration types to canonical UTF-8 strings
+            //      so that SEA behavior matches Thrift, which emits interval values as strings.
+            //      SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
+            reader = new ComplexTypeSerializingStream(reader, serializeComplexTypes: !_enableComplexDatatypeSupport);
 
             // Get schema from reader
             var schema = reader.Schema;
@@ -524,6 +525,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Maps Databricks SQL type names to Arrow types.
+        /// Complex types (ARRAY, MAP, STRUCT) are mapped to placeholder Arrow complex types
+        /// so that <see cref="ComplexTypeSerializingStream"/> can detect and serialize them to
+        /// JSON strings when <see cref="_enableComplexDatatypeSupport"/> is false.
         /// </summary>
         private IArrowType MapDatabricksTypeToArrowType(string typeName)
         {
@@ -545,9 +549,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 "DATE" => Date32Type.Default,
                 "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
                 "INTERVAL" => StringType.Default, // Intervals as strings for now
-                "ARRAY" => StringType.Default, // Complex types as strings for now
-                "MAP" => StringType.Default,
-                "STRUCT" => StringType.Default,
+                // Complex types use placeholder Arrow types so ComplexTypeSerializingStream
+                // can detect them via IsComplexType() and serialize actual List/Map/Struct
+                // arrays from CloudFetch IPC data to JSON strings.  When
+                // EnableComplexDatatypeSupport=false (default) the wrapper replaces
+                // these fields with StringType in the schema exposed to callers.
+                "ARRAY" => new ListType(StringType.Default),
+                "MAP" => new MapType(StringType.Default, StringType.Default, keySorted: false),
+                "STRUCT" => new StructType(new List<Field> { new Field("__placeholder__", StringType.Default, nullable: true) }),
                 "NULL" or "VOID" => NullType.Default,
                 _ => StringType.Default // Default to string for unknown types
             };

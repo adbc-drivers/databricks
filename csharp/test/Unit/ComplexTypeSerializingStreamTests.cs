@@ -1,0 +1,325 @@
+/*
+* Copyright (c) 2025 ADBC Drivers Contributors
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*     http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/
+
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Apache.Arrow;
+using Apache.Arrow.Ipc;
+using Apache.Arrow.Scalars;
+using Apache.Arrow.Types;
+using Xunit;
+
+namespace AdbcDrivers.Databricks.Tests.Unit
+{
+    /// <summary>
+    /// Unit tests for <see cref="ComplexTypeSerializingStream"/>.
+    ///
+    /// Covers:
+    ///   - Complex types (LIST, MAP, STRUCT) serialized to JSON strings when serializeComplexTypes=true.
+    ///   - Native Arrow interval/duration types always converted to canonical UTF-8 strings:
+    ///       YearMonth  → "Y-M"                        e.g. 30 months → "2-6"
+    ///       Duration   → "D HH:MM:SS.nnnnnnnnn"       e.g. 3 d + 12 h 30 m 15 s → "3 12:30:15.000000000"
+    ///   - serializeComplexTypes=false leaves complex columns untouched but still converts intervals.
+    /// </summary>
+    public class ComplexTypeSerializingStreamTests
+    {
+        // -----------------------------------------------------------------------
+        // FormatYearMonth static helper
+        // -----------------------------------------------------------------------
+
+        [Theory]
+        [InlineData(0, "0-0")]          // zero
+        [InlineData(12, "1-0")]         // exactly 1 year
+        [InlineData(30, "2-6")]         // 2 years 6 months
+        [InlineData(1, "0-1")]          // 1 month only
+        [InlineData(25, "2-1")]         // 2 years 1 month
+        [InlineData(-30, "-2--6")]      // negative (mirrors Java driver)
+        public void FormatYearMonth_ReturnsExpectedString(int totalMonths, string expected)
+        {
+            string actual = ComplexTypeSerializingStream.FormatYearMonth(totalMonths);
+            Assert.Equal(expected, actual);
+        }
+
+        // -----------------------------------------------------------------------
+        // FormatDuration static helper — microsecond unit (Databricks default)
+        // -----------------------------------------------------------------------
+
+        [Theory]
+        [InlineData(0L, "0 00:00:00.000000000")]                                   // zero
+        [InlineData(1_000_000L, "0 00:00:01.000000000")]                            // 1 second
+        [InlineData(60_000_000L, "0 00:01:00.000000000")]                           // 1 minute
+        [InlineData(3_600_000_000L, "0 01:00:00.000000000")]                        // 1 hour
+        [InlineData(86_400_000_000L, "1 00:00:00.000000000")]                       // 1 day
+        [InlineData(304_215_000_000L, "3 12:30:15.000000000")]                      // 3 d 12 h 30 m 15 s
+        [InlineData(304_215_000_500L, "3 12:30:15.000500000")]                      // plus 500 us
+        [InlineData(-304_215_000_000L, "-4 11:29:45.000000000")]                    // negative
+        public void FormatDuration_Microseconds_ReturnsExpectedString(long rawUs, string expected)
+        {
+            string actual = ComplexTypeSerializingStream.FormatDuration(rawUs, TimeUnit.Microsecond);
+            Assert.Equal(expected, actual);
+        }
+
+        [Fact]
+        public void FormatDuration_Nanoseconds_ReturnsExpectedString()
+        {
+            // 3 days 12 h 30 m 15 s in nanoseconds
+            long rawNs = 304_215L * 1_000_000_000L;
+            string actual = ComplexTypeSerializingStream.FormatDuration(rawNs, TimeUnit.Nanosecond);
+            Assert.Equal("3 12:30:15.000000000", actual);
+        }
+
+        [Fact]
+        public void FormatDuration_Seconds_ReturnsExpectedString()
+        {
+            long rawS = 304_215L; // 3 days 12 h 30 m 15 s
+            string actual = ComplexTypeSerializingStream.FormatDuration(rawS, TimeUnit.Second);
+            Assert.Equal("3 12:30:15.000000000", actual);
+        }
+
+        [Fact]
+        public void FormatDuration_Milliseconds_ReturnsExpectedString()
+        {
+            long rawMs = 304_215_000L; // 3 days 12 h 30 m 15 s
+            string actual = ComplexTypeSerializingStream.FormatDuration(rawMs, TimeUnit.Millisecond);
+            Assert.Equal("3 12:30:15.000000000", actual);
+        }
+
+        // -----------------------------------------------------------------------
+        // Schema rewriting — interval/duration columns
+        // -----------------------------------------------------------------------
+
+        [Fact]
+        public void Schema_YearMonthColumn_IsRewrittenToString()
+        {
+            Schema original = new Schema.Builder()
+                .Field(f => f.Name("id").DataType(Int32Type.Default).Nullable(false))
+                .Field(f => f.Name("tenure").DataType(new IntervalType(IntervalUnit.YearMonth)).Nullable(true))
+                .Build();
+
+            using IArrowArrayStream inner = new StubArrowArrayStream(original, System.Array.Empty<RecordBatch>());
+            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+
+            Schema rewritten = stream.Schema;
+            Assert.Equal(2, rewritten.FieldsList.Count);
+            Assert.IsType<Int32Type>(rewritten.FieldsList[0].DataType);
+            Assert.IsType<StringType>(rewritten.FieldsList[1].DataType);
+            Assert.Equal("tenure", rewritten.FieldsList[1].Name);
+        }
+
+        [Fact]
+        public void Schema_DurationColumn_IsRewrittenToString()
+        {
+            Schema original = new Schema.Builder()
+                .Field(f => f.Name("elapsed").DataType(DurationType.Microsecond).Nullable(true))
+                .Field(f => f.Name("label").DataType(StringType.Default).Nullable(true))
+                .Build();
+
+            using IArrowArrayStream inner = new StubArrowArrayStream(original, System.Array.Empty<RecordBatch>());
+            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+
+            Schema rewritten = stream.Schema;
+            Assert.Equal(2, rewritten.FieldsList.Count);
+            Assert.IsType<StringType>(rewritten.FieldsList[0].DataType);
+            Assert.Equal("elapsed", rewritten.FieldsList[0].Name);
+            Assert.IsType<StringType>(rewritten.FieldsList[1].DataType);
+        }
+
+        [Fact]
+        public void Schema_NonIntervalColumns_AreUnchanged()
+        {
+            Schema original = new Schema.Builder()
+                .Field(f => f.Name("a").DataType(Int64Type.Default).Nullable(false))
+                .Field(f => f.Name("b").DataType(StringType.Default).Nullable(true))
+                .Field(f => f.Name("c").DataType(DoubleType.Default).Nullable(true))
+                .Build();
+
+            using IArrowArrayStream inner = new StubArrowArrayStream(original, System.Array.Empty<RecordBatch>());
+            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+
+            Schema rewritten = stream.Schema;
+            Assert.Equal(3, rewritten.FieldsList.Count);
+            Assert.IsType<Int64Type>(rewritten.FieldsList[0].DataType);
+            Assert.IsType<StringType>(rewritten.FieldsList[1].DataType);
+            Assert.IsType<DoubleType>(rewritten.FieldsList[2].DataType);
+        }
+
+        // -----------------------------------------------------------------------
+        // Data conversion — YearMonthIntervalArray → StringArray
+        // -----------------------------------------------------------------------
+
+        [Fact]
+        public async Task ReadNextBatch_YearMonthColumn_ConvertsValues()
+        {
+            // Build a batch with two rows: 30 months ("2-6") and null
+            var ymBuilder = new YearMonthIntervalArray.Builder();
+            ymBuilder.Append(new YearMonthInterval(30)); // 2-6
+            ymBuilder.AppendNull();
+            ymBuilder.Append(new YearMonthInterval(12)); // 1-0
+            YearMonthIntervalArray ymArray = ymBuilder.Build();
+
+            Schema schema = new Schema.Builder()
+                .Field(f => f.Name("tenure").DataType(new IntervalType(IntervalUnit.YearMonth)).Nullable(true))
+                .Build();
+
+            RecordBatch batch = new RecordBatch(schema, new IArrowArray[] { ymArray }, ymArray.Length);
+
+            using IArrowArrayStream inner = new StubArrowArrayStream(schema, new[] { batch });
+            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+
+            RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
+            Assert.NotNull(result);
+            Assert.Equal(3, result!.Length);
+
+            StringArray strings = (StringArray)result.Column(0);
+            Assert.Equal("2-6", strings.GetString(0));
+            Assert.True(strings.IsNull(1));
+            Assert.Equal("1-0", strings.GetString(2));
+        }
+
+        // -----------------------------------------------------------------------
+        // Data conversion — DurationArray → StringArray
+        // -----------------------------------------------------------------------
+
+        [Fact]
+        public async Task ReadNextBatch_DurationColumn_ConvertsValues()
+        {
+            // 3 d 12 h 30 m 15 s in microseconds = 304_215_000_000
+            long us = 304_215_000_000L;
+
+            var dBuilder = new DurationArray.Builder(DurationType.Microsecond);
+            dBuilder.Append(us);
+            dBuilder.AppendNull();
+            DurationArray dArray = dBuilder.Build();
+
+            Schema schema = new Schema.Builder()
+                .Field(f => f.Name("elapsed").DataType(DurationType.Microsecond).Nullable(true))
+                .Build();
+
+            RecordBatch batch = new RecordBatch(schema, new IArrowArray[] { dArray }, dArray.Length);
+
+            using IArrowArrayStream inner = new StubArrowArrayStream(schema, new[] { batch });
+            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+
+            RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
+            Assert.NotNull(result);
+            Assert.Equal(2, result!.Length);
+
+            StringArray strings = (StringArray)result.Column(0);
+            Assert.Equal("3 12:30:15.000000000", strings.GetString(0));
+            Assert.True(strings.IsNull(1));
+        }
+
+        // -----------------------------------------------------------------------
+        // Mixed schema: interval + non-interval columns
+        // -----------------------------------------------------------------------
+
+        [Fact]
+        public async Task ReadNextBatch_MixedColumns_OnlyIntervalColumnsConverted()
+        {
+            var idBuilder = new Int32Array.Builder();
+            idBuilder.Append(1);
+
+            var ymBuilder = new YearMonthIntervalArray.Builder();
+            ymBuilder.Append(new YearMonthInterval(30)); // "2-6"
+
+            var nameBuilder = new StringArray.Builder();
+            nameBuilder.Append("Alice");
+
+            Schema schema = new Schema.Builder()
+                .Field(f => f.Name("id").DataType(Int32Type.Default).Nullable(false))
+                .Field(f => f.Name("tenure").DataType(new IntervalType(IntervalUnit.YearMonth)).Nullable(true))
+                .Field(f => f.Name("name").DataType(StringType.Default).Nullable(true))
+                .Build();
+
+            Int32Array idArray = idBuilder.Build();
+            YearMonthIntervalArray ymArray = ymBuilder.Build();
+            StringArray nameArray = nameBuilder.Build();
+
+            RecordBatch batch = new RecordBatch(schema,
+                new IArrowArray[] { idArray, ymArray, nameArray }, 1);
+
+            using IArrowArrayStream inner = new StubArrowArrayStream(schema, new[] { batch });
+            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner);
+
+            RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
+            Assert.NotNull(result);
+
+            Assert.IsType<Int32Array>(result!.Column(0));
+            Assert.IsType<StringArray>(result.Column(1));
+            Assert.IsType<StringArray>(result.Column(2));
+
+            Assert.Equal("2-6", ((StringArray)result.Column(1)).GetString(0));
+            Assert.Equal("Alice", ((StringArray)result.Column(2)).GetString(0));
+        }
+
+        // -----------------------------------------------------------------------
+        // serializeComplexTypes=false: intervals still converted, complex untouched
+        // -----------------------------------------------------------------------
+
+        [Fact]
+        public async Task ReadNextBatch_SerializeComplexTypesFalse_IntervalStillConverted()
+        {
+            var ymBuilder = new YearMonthIntervalArray.Builder();
+            ymBuilder.Append(new YearMonthInterval(30)); // "2-6"
+            YearMonthIntervalArray ymArray = ymBuilder.Build();
+
+            Schema schema = new Schema.Builder()
+                .Field(f => f.Name("tenure").DataType(new IntervalType(IntervalUnit.YearMonth)).Nullable(true))
+                .Build();
+
+            RecordBatch batch = new RecordBatch(schema, new IArrowArray[] { ymArray }, ymArray.Length);
+
+            using IArrowArrayStream inner = new StubArrowArrayStream(schema, new[] { batch });
+            // serializeComplexTypes=false — complex types pass through, but intervals are still converted
+            using ComplexTypeSerializingStream stream = new ComplexTypeSerializingStream(inner, serializeComplexTypes: false);
+
+            // Schema: interval column must still be rewritten to StringType
+            Assert.IsType<StringType>(stream.Schema.FieldsList[0].DataType);
+
+            RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
+            Assert.NotNull(result);
+            StringArray strings = (StringArray)result!.Column(0);
+            Assert.Equal("2-6", strings.GetString(0));
+        }
+
+        // -----------------------------------------------------------------------
+        // Helper: trivial IArrowArrayStream backed by a fixed list of batches
+        // -----------------------------------------------------------------------
+
+        private sealed class StubArrowArrayStream : IArrowArrayStream
+        {
+            private readonly Queue<RecordBatch> _batches;
+
+            public StubArrowArrayStream(Schema schema, IEnumerable<RecordBatch> batches)
+            {
+                Schema = schema;
+                _batches = new Queue<RecordBatch>(batches);
+            }
+
+            public Schema Schema { get; }
+
+            public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+            {
+                RecordBatch? batch = _batches.Count > 0 ? _batches.Dequeue() : null;
+                return new ValueTask<RecordBatch?>(batch);
+            }
+
+            public void Dispose() { }
+        }
+    }
+}
