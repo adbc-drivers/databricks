@@ -528,9 +528,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Maps Databricks SQL type names to Arrow types.
-        /// Complex types (ARRAY, MAP, STRUCT) are mapped to placeholder Arrow complex types
-        /// so that <see cref="ComplexTypeSerializingStream"/> can detect and serialize them to
-        /// JSON strings when <see cref="_enableComplexDatatypeSupport"/> is false.
         /// </summary>
         private IArrowType MapDatabricksTypeToArrowType(string typeName)
         {
@@ -552,14 +549,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 "DATE" => Date32Type.Default,
                 "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
                 "INTERVAL" => StringType.Default, // Intervals as strings for now
-                // Complex types use placeholder Arrow types so ComplexTypeSerializingStream
-                // can detect them via IsComplexType() and serialize actual List/Map/Struct
-                // arrays from CloudFetch IPC data to JSON strings.  When
-                // EnableComplexDatatypeSupport=false (default) the wrapper replaces
-                // these fields with StringType in the schema exposed to callers.
-                "ARRAY" => new ListType(StringType.Default),
-                "MAP" => new MapType(StringType.Default, StringType.Default, keySorted: false),
-                "STRUCT" => new StructType(new List<Field> { new Field("__placeholder__", StringType.Default, nullable: true) }),
+                "ARRAY" => StringType.Default, // Complex types as strings for now
+                "MAP" => StringType.Default,
+                "STRUCT" => StringType.Default,
                 "NULL" or "VOID" => NullType.Default,
                 _ => StringType.Default // Default to string for unknown types
             };
