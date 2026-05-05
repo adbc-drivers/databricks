@@ -1,18 +1,11 @@
 /*
 * Copyright (c) 2025 ADBC Drivers Contributors
 *
-* This file has been modified from its original version, which is
-* under the Apache License:
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
 *
-* Licensed to the Apache Software Foundation (ASF) under one
-* or more contributor license agreements.  See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership.  The ASF licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
+*     http://www.apache.org/licenses/LICENSE-2.0
 *
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
@@ -38,7 +31,7 @@ namespace AdbcDrivers.Databricks.Tests
     /// Validates that INTERVAL types (YEAR TO MONTH and DAY TO SECOND) are returned as
     /// UTF-8 strings (StringType) for both Thrift and SEA (Statement Execution API) protocols.
     ///
-    /// For SEA, the fix in ComplexTypeSerializingStream converts YearMonthIntervalArray and
+    /// For SEA, the fix in IntervalSerializingStream converts YearMonthIntervalArray and
     /// DurationArray to StringArray before returning results to the caller.
     ///
     /// String formats:
