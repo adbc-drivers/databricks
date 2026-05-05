@@ -18,6 +18,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
@@ -571,7 +573,28 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         async Task<IReadOnlyList<string>> IGetObjectsDataProvider.GetCatalogsAsync(string? catalogPattern, CancellationToken cancellationToken)
         {
-            string sql = new ShowCatalogsCommand(catalogPattern).Build();
+            // Catalog-pattern handling (mirrors the Thrift path in HiveServer2Connection):
+            //
+            // SHOW CATALOGS LIKE '<pattern>' is not suitable for ADBC patterns because:
+            //   - "comparator\_tests" (ADBC escaped literal underscore) would emit
+            //     SHOW CATALOGS LIKE 'comparator_tests' where SQL _ is a wildcard → too broad.
+            //   - "%" would emit SHOW CATALOGS LIKE '*' which may not be valid SQL.
+            //
+            // Instead we always issue a bare SHOW CATALOGS (returns all catalogs) and then
+            // filter client-side using the standard ADBC/SQL pattern-to-regex conversion,
+            // exactly as the Thrift path does via PatternToRegEx().
+            //
+            // Special cases:
+            //   - null   → no filter, return all catalogs (JDBC spec: null means "any catalog").
+            //   - ""     → no catalog can have an empty name; return empty list immediately.
+
+            if (catalogPattern != null && catalogPattern.Length == 0)
+                return System.Array.Empty<string>();
+
+            // Build optional client-side filter.
+            Regex? catalogFilter = catalogPattern != null ? CatalogPatternToRegex(catalogPattern) : null;
+
+            string sql = new ShowCatalogsCommand().Build(); // SHOW CATALOGS (no LIKE)
             var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
             var result = new List<string>();
             foreach (var batch in batches)
@@ -580,8 +603,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (catalogArray == null) continue;
                 for (int i = 0; i < batch.Length; i++)
                 {
-                    if (!catalogArray.IsNull(i))
-                        result.Add(catalogArray.GetString(i));
+                    if (catalogArray.IsNull(i)) continue;
+                    string catalog = catalogArray.GetString(i);
+                    if (catalogFilter == null || catalogFilter.IsMatch(catalog))
+                        result.Add(catalog);
                 }
             }
             return result;
@@ -752,6 +777,70 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal List<RecordBatch> ExecuteMetadataSql(string sql, CancellationToken cancellationToken = default)
         {
             return ExecuteMetadataSqlAsync(sql, cancellationToken).GetAwaiter().GetResult();
+        }
+
+        // ----------------------------------------------------------------
+        // ADBC catalog-pattern helpers (used by GetCatalogsAsync)
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Returns <see langword="true"/> if the ADBC/SQL pattern contains an unescaped
+        /// <c>%</c> or <c>_</c> wildcard character.
+        /// A <c>\</c> immediately before <c>%</c>, <c>_</c>, or <c>\</c> is an escape sequence
+        /// and does not count as a wildcard.
+        /// </summary>
+        internal static bool ContainsUnescapedWildcard(string pattern)
+        {
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+                if (c == '\\')
+                {
+                    i++; // skip the escaped character
+                    continue;
+                }
+                if (c == '%' || c == '_')
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Converts an ADBC/SQL wildcard pattern to a case-insensitive <see cref="Regex"/>
+        /// anchored to the full string.
+        /// <list type="bullet">
+        ///   <item><c>%</c>  → <c>.*</c> (any sequence of characters)</item>
+        ///   <item><c>_</c>  → <c>.</c>  (any single character)</item>
+        ///   <item><c>\_</c> → <c>_</c>  (literal underscore)</item>
+        ///   <item><c>\%</c> → <c>%</c>  (literal percent)</item>
+        ///   <item><c>\\</c> → <c>\</c>  (literal backslash)</item>
+        /// </list>
+        /// </summary>
+        internal static Regex CatalogPatternToRegex(string pattern)
+        {
+            var sb = new StringBuilder("^");
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+                if (c == '\\' && i + 1 < pattern.Length)
+                {
+                    char next = pattern[i + 1];
+                    if (next == '_' || next == '%' || next == '\\')
+                    {
+                        sb.Append(Regex.Escape(next.ToString()));
+                        i++;
+                        continue;
+                    }
+                }
+                if (c == '%')
+                    sb.Append(".*");
+                else if (c == '_')
+                    sb.Append('.');
+                else
+                    sb.Append(Regex.Escape(c.ToString()));
+            }
+            sb.Append('$');
+            return new Regex(sb.ToString(), RegexOptions.IgnoreCase);
         }
 
         /// <summary>
