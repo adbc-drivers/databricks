@@ -419,7 +419,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Derive the output schema from the manifest once, for all paths.
             // JDBC uses the manifest schema exclusively for both inline and CloudFetch results;
             // the Arrow IPC bytes are only used for data extraction, not schema definition.
-            Schema manifestSchema = TryGetSchemaFromManifest(response.Manifest) ?? new Schema.Builder().Build();
+            Schema manifestSchema = GetSchemaFromManifest(response.Manifest);
 
             // Check for external links in manifest chunks or result
             bool hasExternalLinksInChunks = response.Manifest.Chunks != null &&
