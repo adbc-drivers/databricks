@@ -102,9 +102,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Arrow field metadata key used to carry the Spark SQL type name.
+        /// Arrow field metadata key that carries the Spark SQL type name for a column,
+        /// e.g. <c>"INTERVAL YEAR TO MONTH"</c>, <c>"ARRAY"</c>, <c>"TIMESTAMP"</c>.
+        ///
+        /// <para>
+        /// For Thrift results the Databricks server embeds this key directly inside the
+        /// Arrow IPC field metadata. For SEA (Statement Execution API) results the server
+        /// may or may not embed it in the IPC files; JDBC handles the missing-key case by
+        /// falling back to <c>ColumnInfo.typeText</c> from the manifest JSON
+        /// (<c>ArrowStreamResult.getObject</c>, JDBC source). In this driver we always
+        /// compute and embed the value ourselves in <see cref="TryGetSchemaFromManifest"/>
+        /// via <see cref="GetSparkSqlName"/>, so downstream stream wrappers
+        /// (<see cref="IntervalSerializingStream"/>, <see cref="ComplexTypeSerializingStream"/>)
+        /// can rely on it being present regardless of result path.
+        /// </para>
+        ///
+        /// <para>
         /// Mirrors <c>ARROW_METADATA_KEY</c> in the JDBC driver
         /// (<c>DatabricksJdbcConstants.java</c>).
+        /// </para>
         /// </summary>
         internal const string ArrowMetadataKey = "Spark:DataType:SqlName";
 

@@ -48,11 +48,27 @@ namespace AdbcDrivers.Databricks
     ///   </item>
     /// </list>
     ///
-    /// Column detection uses the <c>Spark:DataType:SqlName</c> field metadata set by
-    /// <c>TryGetSchemaFromManifest</c>, so the inner stream must already report the
-    /// manifest schema (which all three result paths — inline, CloudFetch, empty — do).
-    /// The schema exposed to callers is the inner stream's schema unchanged; it already
-    /// has <see cref="StringType"/> for interval columns.
+    /// <para><strong>Why both schema and data must be converted:</strong>
+    /// Unlike the JDBC driver, which returns <c>java.lang.Object</c> from <c>getObject()</c>
+    /// and can freely convert a native interval value to a string without touching the declared
+    /// type, <see cref="IArrowArrayStream"/> is a strongly-typed Arrow contract: the
+    /// <see cref="Schema"/> and the arrays inside each <see cref="RecordBatch"/> must agree on
+    /// the column type. This stream therefore changes both — the schema it exposes is already
+    /// <see cref="StringType"/> (coming from the manifest via
+    /// <c>TryGetSchemaFromManifest</c>), and the data arrays are converted to
+    /// <see cref="StringArray"/> at read time.
+    /// </para>
+    ///
+    /// <para><strong>Column detection:</strong>
+    /// Interval columns are identified by the <c>Spark:DataType:SqlName</c> field metadata
+    /// (<see cref="ColumnMetadataHelper.ArrowMetadataKey"/>) that
+    /// <c>TryGetSchemaFromManifest</c> embeds when building the manifest schema.
+    /// For SEA results the server may not include this key in the Arrow IPC field metadata
+    /// (unlike Thrift, where the server always embeds it); by computing it from the manifest
+    /// upfront we make detection consistent across all three result paths — inline, CloudFetch,
+    /// and empty. The actual Arrow subtype (year-month vs. day-time) is resolved at read time
+    /// by inspecting the incoming array type, not the metadata string.
+    /// </para>
     /// </summary>
     internal sealed class IntervalSerializingStream : IArrowArrayStream
     {
@@ -141,6 +157,10 @@ namespace AdbcDrivers.Databricks
             }
             else
             {
+                // The column was detected as INTERVAL via SqlName metadata but the
+                // underlying array is neither YearMonthIntervalArray nor DurationArray.
+                // This should not happen in practice — the SEA server always sends native
+                // interval types for INTERVAL columns — but null-fill defensively.
                 for (int i = 0; i < array.Length; i++)
                     builder.AppendNull();
             }

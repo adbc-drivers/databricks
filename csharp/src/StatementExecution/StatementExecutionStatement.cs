@@ -500,9 +500,34 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Tries to extract the Arrow schema from the result manifest.
-        /// Returns <c>null</c> when the manifest contains no column definitions,
-        /// allowing callers to decide on a fallback (e.g. empty schema for no-data results).
+        /// Builds an Arrow <see cref="Schema"/> from the SEA result manifest, or returns
+        /// <c>null</c> when the manifest contains no column definitions.
+        ///
+        /// <para>
+        /// This schema is used by all three result paths (inline, CloudFetch, empty) so
+        /// that every path exposes the same schema to callers — matching the JDBC driver,
+        /// which uses the manifest schema exclusively and treats Arrow IPC bytes as a data
+        /// source only.
+        /// </para>
+        ///
+        /// <para>
+        /// Each field carries <see cref="ColumnMetadataHelper.ArrowMetadataKey"/>
+        /// (<c>Spark:DataType:SqlName</c>) in its metadata. For Thrift results the server
+        /// embeds this key directly in the Arrow IPC field metadata; for SEA results it may
+        /// be absent from the IPC. By computing it here from the manifest type name and
+        /// embedding it on every field, we give <see cref="IntervalSerializingStream"/> and
+        /// <see cref="ComplexTypeSerializingStream"/> a reliable detection signal regardless
+        /// of result path. JDBC achieves the same effect by falling back to
+        /// <c>ColumnInfo.typeText</c> (the raw manifest type string) when the IPC metadata
+        /// key is absent.
+        /// </para>
+        ///
+        /// <para>
+        /// INTERVAL, ARRAY, MAP, and STRUCT columns are mapped to <see cref="StringType"/>
+        /// because the stream wrappers convert the native Arrow arrays to strings. The
+        /// declared Arrow type and the actual array type in each batch must always agree;
+        /// this is the output contract.
+        /// </para>
         /// </summary>
         private Schema? TryGetSchemaFromManifest(ResultManifest manifest)
         {
@@ -516,18 +541,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 var typeName = column.TypeName ?? string.Empty;
                 var arrowType = MapDatabricksTypeToArrowType(typeName);
-                // Embed the SQL type name as Arrow field metadata so that consumers
-                // (e.g. the PowerBI connector's AdjustNativeTypes) can read it via
-                // the "Spark:DataType:SqlName" key — the same metadata the Databricks
-                // server embeds in the Arrow IPC stream for non-empty results.
-                //
-                // Note: the Thrift server also sets "Spark:DataType:JsonType" (the JSON
-                // representation of the type, e.g. "{\"type\":\"integer\"}") alongside
-                // SqlName. That key is not read by any known consumer today, so we omit
-                // it here for now. Add it if a consumer requires it (PECO-2950).
+                // Embed Spark:DataType:SqlName so downstream stream wrappers and consumers
+                // (e.g. the PowerBI connector's AdjustNativeTypes) can read the SQL type name.
+                // Note: the Thrift server also sets "Spark:DataType:JsonType" alongside SqlName;
+                // that key is not read by any known consumer today, so we omit it here (PECO-2950).
                 var metadata = new Dictionary<string, string>
                 {
-                    ["Spark:DataType:SqlName"] = ColumnMetadataHelper.GetSparkSqlName(typeName)
+                    [ColumnMetadataHelper.ArrowMetadataKey] = ColumnMetadataHelper.GetSparkSqlName(typeName)
                 };
                 fields.Add(new Field(column.Name, arrowType, true, metadata));
             }
@@ -536,7 +556,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Maps Databricks SQL type names to Arrow types.
+        /// Maps a Databricks SQL type name from the manifest to its Arrow output type.
+        ///
+        /// <para>
+        /// INTERVAL, ARRAY, MAP, and STRUCT are mapped to <see cref="StringType"/> because
+        /// <see cref="IntervalSerializingStream"/> and <see cref="ComplexTypeSerializingStream"/>
+        /// convert the native Arrow arrays (e.g. <c>YearMonthIntervalArray</c>, <c>ListArray</c>)
+        /// to <see cref="StringArray"/> at read time. The manifest schema is the output contract
+        /// exposed to callers, so the declared type must match the converted data type.
+        /// </para>
         /// </summary>
         private IArrowType MapDatabricksTypeToArrowType(string typeName)
         {
@@ -557,12 +585,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 "BINARY" or "VARBINARY" => BinaryType.Default,
                 "DATE" => Date32Type.Default,
                 "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
-                "INTERVAL" => StringType.Default, // Intervals as strings for now
-                "ARRAY" => StringType.Default, // Complex types as strings for now
-                "MAP" => StringType.Default,
-                "STRUCT" => StringType.Default,
+                // Converted to string by IntervalSerializingStream; StringType is the output contract.
+                "INTERVAL" => StringType.Default,
+                // Converted to JSON string by ComplexTypeSerializingStream; StringType is the output contract.
+                "ARRAY" or "MAP" or "STRUCT" => StringType.Default,
                 "NULL" or "VOID" => NullType.Default,
-                _ => StringType.Default // Default to string for unknown types
+                _ => StringType.Default
             };
         }
 
@@ -784,8 +812,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 _memoryStream = new System.IO.MemoryStream(allData);
                 _streamReader = new ArrowStreamReader(_memoryStream);
-                // Report the manifest schema (not the IPC-embedded schema) so that all paths
-                // (inline, CloudFetch, empty) are consistent — matching JDBC behavior.
+                // Use the manifest schema as the reported schema rather than the IPC-embedded schema.
+                // Arrow IPC files are self-describing, but the IPC schema carries native types
+                // (YearMonthIntervalType, ListType, etc.) while callers expect the output contract
+                // declared by the manifest (StringType for interval and complex columns). Keeping
+                // inline consistent with CloudFetch — which already uses GetSchemaFromManifest —
+                // lets IntervalSerializingStream and ComplexTypeSerializingStream detect and convert
+                // columns uniformly via Spark:DataType:SqlName metadata on every path.
                 _schema = manifestSchema;
             }
 

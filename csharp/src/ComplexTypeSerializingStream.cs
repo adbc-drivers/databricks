@@ -31,14 +31,30 @@ namespace AdbcDrivers.Databricks
     /// Wraps an <see cref="IArrowArrayStream"/> and converts ARRAY, MAP, and STRUCT columns
     /// into STRING columns containing their JSON representation.
     ///
-    /// This is applied when EnableComplexDatatypeSupport=false (the default), so that SEA
+    /// <para>
+    /// Applied when <c>EnableComplexDatatypeSupport=false</c> (the default) so that SEA
     /// results match the legacy Thrift behavior of returning JSON strings for complex types.
+    /// </para>
     ///
-    /// Column detection uses the <c>Spark:DataType:SqlName</c> field metadata set by
-    /// <c>TryGetSchemaFromManifest</c>, so the inner stream must already report the
-    /// manifest schema (which all three result paths — inline, CloudFetch, empty — do).
-    /// The schema exposed to callers is the inner stream's schema unchanged; it already
-    /// has <see cref="StringType"/> for complex columns.
+    /// <para><strong>Why both schema and data must be converted:</strong>
+    /// Arrow streaming is strongly typed: the <see cref="Schema"/> and the arrays inside each
+    /// <see cref="RecordBatch"/> must agree on the column type. The manifest schema (built by
+    /// <c>TryGetSchemaFromManifest</c>) already declares complex columns as
+    /// <see cref="StringType"/>, so this stream only needs to convert the native Arrow arrays
+    /// (<c>ListArray</c>, <c>StructArray</c>, etc.) to <see cref="StringArray"/> at read time.
+    /// The schema it exposes to callers is the inner stream's schema unchanged.
+    /// </para>
+    ///
+    /// <para><strong>Column detection:</strong>
+    /// Complex columns are identified by the <c>Spark:DataType:SqlName</c> field metadata
+    /// (<see cref="ColumnMetadataHelper.ArrowMetadataKey"/>) that
+    /// <c>TryGetSchemaFromManifest</c> embeds when building the manifest schema. This is
+    /// the same key the Databricks server embeds in Arrow IPC field metadata for Thrift results
+    /// (and that the JDBC driver reads as <c>ARROW_METADATA_KEY</c>). Detecting via this
+    /// metadata — rather than by inspecting the Arrow field type — is necessary because the
+    /// manifest schema already uses <see cref="StringType"/> for complex columns, making
+    /// Arrow-type-based detection always return false.
+    /// </para>
     /// </summary>
     internal sealed class ComplexTypeSerializingStream : IArrowArrayStream
     {
