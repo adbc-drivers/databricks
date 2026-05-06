@@ -292,7 +292,7 @@ namespace AdbcDrivers.Databricks.Tests
                 Date32Array date32 => date32.GetDateTime(index)!.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 TimestampArray ts => ts.GetTimestamp(index)!.Value.ToString("O", CultureInfo.InvariantCulture),
                 Decimal128Array dec => dec.GetString(index),
-                BinaryArray bin => Convert.ToHexString(bin.GetBytes(index, out _).ToArray()),
+                BinaryArray bin => BitConverter.ToString(bin.GetBytes(index, out _).ToArray()).Replace("-", ""),
                 _ => throw new InvalidOperationException($"Unhandled Arrow array type: {array.GetType().Name}")
             };
         }

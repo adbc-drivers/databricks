@@ -434,7 +434,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (hasExternalLinks)
             {
                 // Use CloudFetch for external links
-                return CreateCloudFetchReader(response);
+                return CreateCloudFetchReader(response, manifestSchema);
             }
             else if (response.Result != null && response.Result.Attachment != null && response.Result.Attachment.Length > 0)
             {
@@ -462,12 +462,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// Creates a CloudFetch reader for external link results.
         /// </summary>
-        private IArrowArrayStream CreateCloudFetchReader(ExecuteStatementResponse response)
+        private IArrowArrayStream CreateCloudFetchReader(ExecuteStatementResponse response, Schema manifestSchema)
         {
             var manifest = response.Manifest!;
-
-            // Build schema from manifest
-            var schema = GetSchemaFromManifest(manifest);
+            var schema = manifestSchema;
 
             // The Statement Execution API response structure:
             // - manifest.chunks: Array of ChunkInfo with metadata for ALL chunks (row counts, offsets, etc.)
