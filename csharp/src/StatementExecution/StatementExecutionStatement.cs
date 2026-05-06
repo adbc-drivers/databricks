@@ -533,9 +533,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var typeName = column.TypeName ?? string.Empty;
                 var arrowType = MapDatabricksTypeToArrowType(typeName);
                 // Use TypeText (e.g. "INTERVAL YEAR TO MONTH", "ARRAY<INT>") for the SqlName
-                // metadata so it matches what the Thrift server embeds. Fall back to GetSparkSqlName
-                // on the bare TypeName when TypeText is absent.
-                var sqlName = column.TypeText ?? ColumnMetadataHelper.GetSparkSqlName(typeName);
+                // metadata so it matches what the Thrift server embeds. Fall back to GetBaseTypeName
+                // on the bare TypeName when TypeText is absent (handles BYTE→TINYINT etc.).
+                var sqlName = column.TypeText ?? ColumnMetadataHelper.GetBaseTypeName(typeName);
                 var metadata = new Dictionary<string, string>
                 {
                     [ColumnMetadataHelper.ArrowMetadataKey] = sqlName

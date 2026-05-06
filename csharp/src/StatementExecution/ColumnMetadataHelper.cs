@@ -103,16 +103,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Arrow field metadata key that carries the Spark SQL type name for a column,
-        /// e.g. <c>"INTERVAL YEAR TO MONTH"</c>, <c>"ARRAY"</c>, <c>"TIMESTAMP"</c>.
+        /// e.g. <c>"INTERVAL YEAR TO MONTH"</c>, <c>"ARRAY&lt;INT&gt;"</c>, <c>"TIMESTAMP_NTZ"</c>.
         ///
         /// <para>
         /// For Thrift results the Databricks server embeds this key directly inside the
-        /// Arrow IPC field metadata. For SEA (Statement Execution API) results the server
-        /// may or may not embed it in the IPC files; JDBC handles the missing-key case by
-        /// falling back to <c>ColumnInfo.typeText</c> from the manifest JSON
-        /// (<c>ArrowStreamResult.getObject</c>, JDBC source). In this driver we always
-        /// compute and embed the value ourselves in <see cref="TryGetSchemaFromManifest"/>
-        /// via <see cref="GetSparkSqlName"/>, so downstream stream wrappers
+        /// Arrow IPC field metadata. For SEA results we embed it ourselves using
+        /// <c>column.TypeText</c> from the manifest, which matches the Thrift server's
+        /// values exactly (verified on live warehouse). Downstream stream wrappers
         /// (<see cref="IntervalSerializingStream"/>, <see cref="ComplexTypeSerializingStream"/>)
         /// can rely on it being present regardless of result path.
         /// </para>
@@ -123,30 +120,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </para>
         /// </summary>
         internal const string ArrowMetadataKey = "Spark:DataType:SqlName";
-
-        // Corrections applied on top of GetBaseTypeName to produce the exact names
-        // the Thrift server embeds in Spark:DataType:SqlName Arrow metadata.
-        private static readonly Dictionary<string, string> s_sparkSqlNameOverrides = new(StringComparer.OrdinalIgnoreCase)
-        {
-            { "INTEGER", "INT" },
-            { "REAL", "FLOAT" },
-        };
-
-        /// <summary>
-        /// Returns the Spark:DataType:SqlName value for Arrow field metadata.
-        /// Uses the same SqlTypeNameParser as GetBaseTypeName, then applies overrides
-        /// for INTEGER→INT and REAL→FLOAT. TIMESTAMP_NTZ collapses to TIMESTAMP
-        /// (matching the Thrift server and Power BI connector expectations).
-        /// </summary>
-        internal static string GetSparkSqlName(string typeName)
-        {
-            string baseName = GetBaseTypeName(typeName);
-
-            if (s_sparkSqlNameOverrides.TryGetValue(baseName, out string? overridden))
-                return overridden;
-
-            return baseName;
-        }
 
         internal static int? GetColumnSizeDefault(string typeName)
         {
