@@ -15,6 +15,14 @@
 name: Tests Workflow
 
 on:
+  workflow_dispatch:
+    inputs:
+      protocol:
+        description: 'Protocol to test (thrift, rest, or both)'
+        required: false
+        default: 'both'
+        type: choice
+        options: [both, thrift, rest]
   push:
     branches:
       - main
@@ -35,7 +43,12 @@ concurrency:
 
 jobs:
   run-e2e-tests:
+    name: "E2E Tests (${{ matrix.protocol }})"
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        protocol: ${{ inputs.protocol == 'thrift' && fromJson('["thrift"]') || inputs.protocol == 'rest' && fromJson('["rest"]') || fromJson('["thrift","rest"]') }}
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
@@ -107,6 +120,7 @@ jobs:
             "scope": "sql",
             "access_token": "${{ steps.oauth.outputs.OAUTH_TOKEN }}",
             "type": "databricks",
+            "protocol": "${{ matrix.protocol }}",
             "catalog": "main",
             "db_schema": "adbc_testing",
             "query": "SELECT * FROM main.adbc_testing.adbc_testing_table",
