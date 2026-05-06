@@ -91,7 +91,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var columnInfos = new List<ColumnInfo>();
             foreach (var (name, typeName) in columns)
             {
-                columnInfos.Add(new ColumnInfo { Name = name, TypeName = typeName });
+                columnInfos.Add(new ColumnInfo { Name = name, TypeName = typeName, TypeText = typeName });
             }
 
             return new ResultManifest
@@ -219,10 +219,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public async Task ExecuteQuery_EmptyTable_SqlNameAliasesNormalized()
         {
-            // Arrange: SEA server returns Spark-internal aliases (LONG, BYTE, SHORT)
-            // rather than canonical SQL names. Verify they are normalized to the values
-            // PowerBI's DatabricksTypeMap expects (BIGINT, TINYINT, SMALLINT).
-            var manifest = BuildManifest(("a", "LONG"), ("b", "BYTE"), ("c", "SHORT"));
+            // Arrange: TypeText carries canonical names matching Thrift server output.
+            var manifest = BuildManifest(("a", "BIGINT"), ("b", "TINYINT"), ("c", "SMALLINT"));
 
             var mockClient = new Mock<IStatementExecutionClient>();
             mockClient
