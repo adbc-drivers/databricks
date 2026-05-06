@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-using System.Collections.Generic;
 using System.Text.Json;
 using AdbcDrivers.Databricks.StatementExecution;
 using Xunit;
@@ -184,6 +183,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Contains(@"""value"":""eng""", json);
             Assert.Contains(@"""key"":""env""", json);
             Assert.Contains(@"""value"":""prod""", json);
+        }
+
+        [Fact]
+        public void HandlesAutoQueryTagWithDoubleAtPrefix()
+        {
+            var tags = StatementExecutionStatement.ParseQueryTags(@"@@powerbi_activity_id:abc123,team:eng");
+            Assert.NotNull(tags);
+            Assert.Equal(2, tags.Count);
+            Assert.Equal("@@powerbi_activity_id", tags[0].Key);
+            Assert.Equal("abc123", tags[0].Value);
+            Assert.Equal("team", tags[1].Key);
+            Assert.Equal("eng", tags[1].Value);
+        }
+
+        [Fact]
+        public void HandlesMultipleAutoQueryTags()
+        {
+            var tags = StatementExecutionStatement.ParseQueryTags(@"@@powerbi_activity_id:abc123,@@powerbi_dataset_id:ds456,team:eng");
+            Assert.NotNull(tags);
+            Assert.Equal(3, tags.Count);
+            Assert.Equal("@@powerbi_activity_id", tags[0].Key);
+            Assert.Equal("abc123", tags[0].Value);
+            Assert.Equal("@@powerbi_dataset_id", tags[1].Key);
+            Assert.Equal("ds456", tags[1].Value);
+            Assert.Equal("team", tags[2].Key);
+            Assert.Equal("eng", tags[2].Value);
         }
 
         [Fact]
