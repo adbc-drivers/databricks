@@ -197,7 +197,9 @@ namespace AdbcDrivers.Databricks.Tests
                 "SELECT" +
                 "  INTERVAL '2-6' YEAR TO MONTH               AS c_ym," +
                 "  INTERVAL '0-1' YEAR TO MONTH               AS c_ym_zero_years," +
-                "  CAST(NULL AS INTERVAL YEAR TO MONTH)       AS c_ym_null");
+                "  CAST(NULL AS INTERVAL YEAR TO MONTH)       AS c_ym_null," +
+                "  INTERVAL '-2-6' YEAR TO MONTH              AS c_ym_neg," +
+                "  INTERVAL '-0-10' YEAR TO MONTH             AS c_ym_neg_zero_years");
         }
 
         // INTERVAL-010: Cross-protocol — Thrift and SEA return identical DAY TO SECOND strings.
@@ -210,7 +212,9 @@ namespace AdbcDrivers.Databricks.Tests
                 "  INTERVAL '3 12:30:15' DAY TO SECOND        AS c_ds," +
                 "  INTERVAL '0 00:00:00' DAY TO SECOND        AS c_ds_zero," +
                 "  INTERVAL '1 00:00:00.123456' DAY TO SECOND AS c_ds_subsecond," +
-                "  CAST(NULL AS INTERVAL DAY TO SECOND)       AS c_ds_null");
+                "  CAST(NULL AS INTERVAL DAY TO SECOND)       AS c_ds_null," +
+                "  INTERVAL '-3 12:30:15' DAY TO SECOND       AS c_ds_neg," +
+                "  INTERVAL '-0 00:00:00.000001' DAY TO SECOND AS c_ds_neg_subsecond");
         }
 
         // -----------------------------------------------------------------

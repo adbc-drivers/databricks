@@ -20,7 +20,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Ipc;
-using Apache.Arrow.Scalars;
 using Apache.Arrow.Types;
 using AdbcDrivers.Databricks.StatementExecution;
 
@@ -175,9 +174,11 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal static string FormatYearMonth(int totalMonths)
         {
-            int years = totalMonths / 12;
-            int months = totalMonths % 12;
-            return $"{years}-{months}";
+            bool neg = totalMonths < 0;
+            long abs = Math.Abs((long)totalMonths);  // (long) cast guards int.MinValue
+            long years = abs / 12;
+            long months = abs % 12;
+            return (neg ? "-" : "") + $"{years}-{months}";
         }
 
         /// <summary>
@@ -187,42 +188,33 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal static string FormatDuration(long rawValue, TimeUnit unit)
         {
-            // Convert to nanoseconds first for uniform handling
             long nanoseconds = unit switch
             {
                 TimeUnit.Second => rawValue * 1_000_000_000L,
                 TimeUnit.Millisecond => rawValue * 1_000_000L,
                 TimeUnit.Microsecond => rawValue * 1_000L,
                 TimeUnit.Nanosecond => rawValue,
-                _ => rawValue * 1_000L // default to microseconds
+                _ => rawValue * 1_000L
             };
 
-            // Separate the nanosecond sub-second part from whole seconds
+            // Mirror JDBC: negate upfront, format the absolute value, prepend sign.
+            // This matches the server output for negative intervals (e.g. -3 days 12:30:15
+            // → "-3 12:30:15.000000000", not the floor-carry form "-4 11:29:45.000000000").
+            if (nanoseconds == long.MinValue) nanoseconds += 1;  // guard negation overflow
+            bool neg = nanoseconds < 0;
+            if (neg) nanoseconds = -nanoseconds;
+
             long wholeSeconds = nanoseconds / 1_000_000_000L;
             long subNanos = nanoseconds % 1_000_000_000L;
 
-            // Handle negative values: keep subNanos non-negative
-            if (subNanos < 0)
-            {
-                wholeSeconds -= 1;
-                subNanos += 1_000_000_000L;
-            }
-
             long days = wholeSeconds / 86400L;
             long remainderSeconds = wholeSeconds % 86400L;
-
-            // Handle negative days: ensure remainderSeconds is non-negative
-            if (remainderSeconds < 0)
-            {
-                days -= 1;
-                remainderSeconds += 86400L;
-            }
 
             int hours = (int)(remainderSeconds / 3600L);
             int minutes = (int)((remainderSeconds % 3600L) / 60L);
             int seconds = (int)(remainderSeconds % 60L);
 
-            return $"{days} {hours:D2}:{minutes:D2}:{seconds:D2}.{subNanos:D9}";
+            return (neg ? "-" : "") + $"{days} {hours:D2}:{minutes:D2}:{seconds:D2}.{subNanos:D9}";
         }
     }
 }

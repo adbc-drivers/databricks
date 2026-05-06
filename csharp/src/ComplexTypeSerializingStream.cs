@@ -122,9 +122,9 @@ namespace AdbcDrivers.Databricks
                 if (field.Metadata != null &&
                     field.Metadata.TryGetValue(ColumnMetadataHelper.ArrowMetadataKey, out string? sqlName) &&
                     sqlName != null &&
-                    (sqlName.Equals("ARRAY", StringComparison.OrdinalIgnoreCase) ||
-                     sqlName.Equals("MAP", StringComparison.OrdinalIgnoreCase) ||
-                     sqlName.Equals("STRUCT", StringComparison.OrdinalIgnoreCase)))
+                    (sqlName.StartsWith("ARRAY", StringComparison.OrdinalIgnoreCase) ||
+                     sqlName.StartsWith("MAP", StringComparison.OrdinalIgnoreCase) ||
+                     sqlName.StartsWith("STRUCT", StringComparison.OrdinalIgnoreCase)))
                 {
                     indices.Add(i);
                 }

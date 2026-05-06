@@ -61,7 +61,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [InlineData(30, "2-6")]         // 2 years 6 months
         [InlineData(1, "0-1")]          // 1 month only
         [InlineData(25, "2-1")]         // 2 years 1 month
-        [InlineData(-30, "-2--6")]      // negative (mirrors Java driver)
+        [InlineData(-30, "-2-6")]       // negative: matches JDBC and server
+        [InlineData(-22, "-1-10")]      // negative: 1 year 10 months
+        [InlineData(-10, "-0-10")]      // negative: 0 years 10 months
+        [InlineData(-1, "-0-1")]        // negative: 1 month
         public void FormatYearMonth_ReturnsExpectedString(int totalMonths, string expected)
         {
             string actual = IntervalSerializingStream.FormatYearMonth(totalMonths);
@@ -80,7 +83,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [InlineData(86_400_000_000L, "1 00:00:00.000000000")]                       // 1 day
         [InlineData(304_215_000_000L, "3 12:30:15.000000000")]                      // 3 d 12 h 30 m 15 s
         [InlineData(304_215_000_500L, "3 12:30:15.000500000")]                      // plus 500 us
-        [InlineData(-304_215_000_000L, "-4 11:29:45.000000000")]                    // negative
+        [InlineData(-304_215_000_000L, "-3 12:30:15.000000000")]                    // negative: matches JDBC and server
         public void FormatDuration_Microseconds_ReturnsExpectedString(long rawUs, string expected)
         {
             string actual = IntervalSerializingStream.FormatDuration(rawUs, TimeUnit.Microsecond);
