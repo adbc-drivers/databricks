@@ -47,20 +47,25 @@ namespace AdbcDrivers.Databricks
     ///   </item>
     /// </list>
     ///
-    /// The schema reported to callers is rewritten so that converted columns have
-    /// <see cref="StringType"/> instead of the native type.
+    /// Column detection uses the <c>Spark:DataType:SqlName</c> field metadata set by
+    /// <c>TryGetSchemaFromManifest</c>, so the inner stream must already report the
+    /// manifest schema (which all three result paths — inline, CloudFetch, empty — do).
+    /// The schema exposed to callers is the inner stream's schema unchanged; it already
+    /// has <see cref="StringType"/> for interval columns.
     /// </summary>
     internal sealed class IntervalSerializingStream : IArrowArrayStream
     {
+        private const string SparkSqlNameKey = "Spark:DataType:SqlName";
+
         private readonly IArrowArrayStream _inner;
         private readonly Schema _schema;
         private readonly HashSet<int> _intervalColumnIndices;
 
-        public IntervalSerializingStream(IArrowArrayStream inner, Schema schema, IReadOnlyCollection<int> intervalColumnIndices)
+        public IntervalSerializingStream(IArrowArrayStream inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            _schema = schema ?? throw new ArgumentNullException(nameof(schema));
-            _intervalColumnIndices = new HashSet<int>(intervalColumnIndices);
+            _schema = inner.Schema;
+            _intervalColumnIndices = DetectIntervalColumns(_schema);
         }
 
         public Schema Schema => _schema;
@@ -78,6 +83,28 @@ namespace AdbcDrivers.Databricks
         }
 
         public void Dispose() => _inner.Dispose();
+
+        /// <summary>
+        /// Detects interval columns by inspecting the <c>Spark:DataType:SqlName</c> metadata
+        /// on each field. This works for all result paths because they all expose the manifest
+        /// schema, which carries that metadata.
+        /// </summary>
+        private static HashSet<int> DetectIntervalColumns(Schema schema)
+        {
+            var indices = new HashSet<int>();
+            for (int i = 0; i < schema.FieldsList.Count; i++)
+            {
+                Field field = schema.FieldsList[i];
+                if (field.Metadata != null &&
+                    field.Metadata.TryGetValue(SparkSqlNameKey, out string? sqlName) &&
+                    sqlName != null &&
+                    sqlName.StartsWith("INTERVAL", StringComparison.OrdinalIgnoreCase))
+                {
+                    indices.Add(i);
+                }
+            }
+            return indices;
+        }
 
         private RecordBatch ConvertColumns(RecordBatch batch)
         {

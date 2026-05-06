@@ -301,17 +301,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     }));
             }
 
-            // Create appropriate reader based on result disposition
+            // Create appropriate reader based on result disposition.
+            // All paths (inline, CloudFetch, empty) expose the manifest schema so that
+            // IntervalSerializingStream and ComplexTypeSerializingStream can detect columns
+            // uniformly via Spark:DataType:SqlName metadata rather than Arrow IPC types.
             IArrowArrayStream reader = CreateReader(response, cancellationToken);
-
-            // Build the output schema and conversion indices from the manifest upfront.
-            // This avoids embedding detection metadata in Arrow fields — the manifest is the source of truth.
-            Schema manifestSchema = TryGetSchemaFromManifest(response.Manifest) ?? reader.Schema;
-            HashSet<int> intervalIndices = ComputeIntervalIndices(response.Manifest);
 
             // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
             // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
-            reader = new IntervalSerializingStream(reader, manifestSchema, intervalIndices);
+            reader = new IntervalSerializingStream(reader);
 
             // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
             // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
@@ -418,6 +416,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return new EmptyArrowArrayStream();
             }
 
+            // Derive the output schema from the manifest once, for all paths.
+            // JDBC uses the manifest schema exclusively for both inline and CloudFetch results;
+            // the Arrow IPC bytes are only used for data extraction, not schema definition.
+            Schema manifestSchema = TryGetSchemaFromManifest(response.Manifest) ?? new Schema.Builder().Build();
+
             // Check for external links in manifest chunks or result
             bool hasExternalLinksInChunks = response.Manifest.Chunks != null &&
                                   response.Manifest.Chunks.Count > 0 &&
@@ -438,10 +441,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Check if data is LZ4 compressed
                 bool isLz4Compressed = response.Manifest?.ResultCompression?.ToUpperInvariant() == "LZ4_FRAME";
 
-                // Inline results - may be split across multiple chunks
+                // Inline results - may be split across multiple chunks.
+                // Pass the manifest schema so the reader reports it instead of the IPC-embedded schema,
+                // keeping inline consistent with CloudFetch (which also uses the manifest schema).
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
-                    isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken);
+                    isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken, manifestSchema);
             }
             else
             {
@@ -450,8 +455,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // when the queried table is empty — following the same pattern as
                 // the JDBC driver where ResultManifest schema is always extracted
                 // independently of data presence.
-                Schema schema = TryGetSchemaFromManifest(response.Manifest) ?? new Schema.Builder().Build();
-                return new EmptyArrowArrayStream(schema);
+                return new EmptyArrowArrayStream(manifestSchema);
             }
         }
 
@@ -493,20 +497,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return TryGetSchemaFromManifest(manifest)
                 ?? throw new AdbcException("Result manifest does not contain schema information");
-        }
-
-        private static HashSet<int> ComputeIntervalIndices(ResultManifest? manifest)
-        {
-            var indices = new HashSet<int>();
-            var columns = manifest?.Schema?.Columns;
-            if (columns == null) return indices;
-            for (int i = 0; i < columns.Count; i++)
-            {
-                if (ColumnMetadataHelper.GetBaseTypeName(columns[i].TypeName ?? string.Empty)
-                    .StartsWith("INTERVAL", StringComparison.OrdinalIgnoreCase))
-                    indices.Add(i);
-            }
-            return indices;
         }
 
         /// <summary>
@@ -771,6 +761,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             private readonly ArrowStreamReader _streamReader;
             private readonly System.IO.MemoryStream _memoryStream;
+            private readonly Schema _schema;
             private bool _disposed;
 
             public InlineArrowStreamReader(
@@ -780,7 +771,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 bool isLz4Compressed,
                 int totalChunks,
                 System.Buffers.ArrayPool<byte> bufferPool,
-                CancellationToken cancellationToken)
+                CancellationToken cancellationToken,
+                Schema manifestSchema)
             {
                 if (firstChunkData == null || firstChunkData.Length == 0)
                 {
@@ -792,9 +784,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 _memoryStream = new System.IO.MemoryStream(allData);
                 _streamReader = new ArrowStreamReader(_memoryStream);
+                // Report the manifest schema (not the IPC-embedded schema) so that all paths
+                // (inline, CloudFetch, empty) are consistent — matching JDBC behavior.
+                _schema = manifestSchema;
             }
 
-            public Schema Schema => _streamReader.Schema;
+            public Schema Schema => _schema;
 
             public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
             {

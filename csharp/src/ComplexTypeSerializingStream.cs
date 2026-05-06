@@ -27,15 +27,22 @@ using Apache.Arrow.Types;
 namespace AdbcDrivers.Databricks
 {
     /// <summary>
-    /// Wraps an <see cref="IArrowArrayStream"/> and converts columns of complex Arrow types
-    /// (LIST, MAP represented as LIST of STRUCTs, STRUCT) into STRING columns containing
-    /// their JSON representation.
+    /// Wraps an <see cref="IArrowArrayStream"/> and converts ARRAY, MAP, and STRUCT columns
+    /// into STRING columns containing their JSON representation.
     ///
     /// This is applied when EnableComplexDatatypeSupport=false (the default), so that SEA
     /// results match the legacy Thrift behavior of returning JSON strings for complex types.
+    ///
+    /// Column detection uses the <c>Spark:DataType:SqlName</c> field metadata set by
+    /// <c>TryGetSchemaFromManifest</c>, so the inner stream must already report the
+    /// manifest schema (which all three result paths — inline, CloudFetch, empty — do).
+    /// The schema exposed to callers is the inner stream's schema unchanged; it already
+    /// has <see cref="StringType"/> for complex columns.
     /// </summary>
     internal sealed class ComplexTypeSerializingStream : IArrowArrayStream
     {
+        private const string SparkSqlNameKey = "Spark:DataType:SqlName";
+
         private readonly IArrowArrayStream _inner;
         private readonly Schema _schema;
         private readonly HashSet<int> _complexColumnIndices;
@@ -43,7 +50,8 @@ namespace AdbcDrivers.Databricks
         public ComplexTypeSerializingStream(IArrowArrayStream inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            (_schema, _complexColumnIndices) = BuildStringSchema(inner.Schema);
+            _schema = inner.Schema;
+            _complexColumnIndices = DetectComplexColumns(_schema);
         }
 
         public Schema Schema => _schema;
@@ -86,33 +94,28 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Builds a new schema where all complex-type fields are replaced with StringType,
-        /// and returns the set of column indices that were converted.
+        /// Detects complex columns by inspecting the <c>Spark:DataType:SqlName</c> metadata
+        /// on each field. This works for all result paths because they all expose the manifest
+        /// schema, which carries that metadata and already types complex columns as StringType.
         /// </summary>
-        private static (Schema schema, HashSet<int> complexIndices) BuildStringSchema(Schema original)
+        private static HashSet<int> DetectComplexColumns(Schema schema)
         {
-            List<Field> fields = new List<Field>(original.FieldsList.Count);
             HashSet<int> indices = new HashSet<int>();
-
-            for (int i = 0; i < original.FieldsList.Count; i++)
+            for (int i = 0; i < schema.FieldsList.Count; i++)
             {
-                Field field = original.FieldsList[i];
-                if (IsComplexType(field.DataType))
+                Field field = schema.FieldsList[i];
+                if (field.Metadata != null &&
+                    field.Metadata.TryGetValue(SparkSqlNameKey, out string? sqlName) &&
+                    sqlName != null &&
+                    (sqlName.Equals("ARRAY", StringComparison.OrdinalIgnoreCase) ||
+                     sqlName.Equals("MAP", StringComparison.OrdinalIgnoreCase) ||
+                     sqlName.Equals("STRUCT", StringComparison.OrdinalIgnoreCase)))
                 {
-                    fields.Add(new Field(field.Name, StringType.Default, field.IsNullable, field.Metadata));
                     indices.Add(i);
                 }
-                else
-                {
-                    fields.Add(field);
-                }
             }
-
-            return (new Schema(fields, original.Metadata), indices);
+            return indices;
         }
-
-        private static bool IsComplexType(IArrowType type) =>
-            type is ListType || type is MapType || type is StructType;
 
         // --- JSON serialization helpers ---
 

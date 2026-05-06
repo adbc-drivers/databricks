@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,15 +29,27 @@ namespace AdbcDrivers.Databricks.Tests.Unit
     /// <summary>
     /// Unit tests for <see cref="IntervalSerializingStream"/>.
     ///
+    /// The stream is constructed with an inner reader that exposes the manifest schema
+    /// (StringType for interval columns, with Spark:DataType:SqlName metadata for detection).
+    /// The record batches contain native Arrow interval arrays (as the IPC bytes would).
+    ///
     /// Covers:
     ///   - YearMonthIntervalArray → "Y-M" string
     ///   - DurationArray → "D HH:MM:SS.nnnnnnnnn" string
     ///   - Null handling for both types
-    ///   - Schema rewriting (converted columns become StringType)
+    ///   - Schema pass-through (manifest schema is already StringType)
     ///   - Non-interval columns pass through unchanged
     /// </summary>
     public class IntervalSerializingStreamTests
     {
+        // Helper: build a single-field manifest schema with Spark:DataType:SqlName metadata
+        private static Schema ManifestSchema(string fieldName, string sqlName, IArrowType arrowType, bool nullable = true)
+        {
+            var metadata = new Dictionary<string, string> { ["Spark:DataType:SqlName"] = sqlName };
+            return new Schema.Builder()
+                .Field(new Field(fieldName, arrowType, nullable, metadata))
+                .Build();
+        }
 
         // -----------------------------------------------------------------------
         // FormatYearMonth static helper
@@ -100,23 +113,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         // -----------------------------------------------------------------------
-        // Schema — the wrapper reports the pre-built output schema as-is
+        // Schema — the wrapper passes the manifest schema through as-is
         // -----------------------------------------------------------------------
 
         [Fact]
-        public void Schema_YearMonthColumn_IsRewrittenToString()
+        public void Schema_YearMonthColumn_ReportsManifestStringType()
         {
-            Schema innerSchema = new Schema.Builder()
+            // Manifest schema: StringType for interval column (already correct output type)
+            Schema schema = new Schema.Builder()
                 .Field(f => f.Name("id").DataType(Int32Type.Default).Nullable(false))
-                .Field(new Field("tenure", new IntervalType(IntervalUnit.YearMonth), nullable: true))
-                .Build();
-            Schema outputSchema = new Schema.Builder()
-                .Field(f => f.Name("id").DataType(Int32Type.Default).Nullable(false))
-                .Field(f => f.Name("tenure").DataType(StringType.Default).Nullable(true))
+                .Field(new Field("tenure", StringType.Default, nullable: true,
+                    new Dictionary<string, string> { ["Spark:DataType:SqlName"] = "INTERVAL YEAR TO MONTH" }))
                 .Build();
 
-            using IArrowArrayStream inner = new StubArrowArrayStream(innerSchema, System.Array.Empty<RecordBatch>());
-            using IntervalSerializingStream stream = new IntervalSerializingStream(inner, outputSchema, new[] { 1 });
+            using IArrowArrayStream inner = new StubArrowArrayStream(schema, System.Array.Empty<RecordBatch>());
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             Schema reported = stream.Schema;
             Assert.Equal(2, reported.FieldsList.Count);
@@ -126,19 +137,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public void Schema_DurationColumn_IsRewrittenToString()
+        public void Schema_DurationColumn_ReportsManifestStringType()
         {
-            Schema innerSchema = new Schema.Builder()
-                .Field(new Field("elapsed", DurationType.Microsecond, nullable: true))
-                .Field(f => f.Name("label").DataType(StringType.Default).Nullable(true))
-                .Build();
-            Schema outputSchema = new Schema.Builder()
-                .Field(f => f.Name("elapsed").DataType(StringType.Default).Nullable(true))
+            Schema schema = new Schema.Builder()
+                .Field(new Field("elapsed", StringType.Default, nullable: true,
+                    new Dictionary<string, string> { ["Spark:DataType:SqlName"] = "INTERVAL DAY TO SECOND" }))
                 .Field(f => f.Name("label").DataType(StringType.Default).Nullable(true))
                 .Build();
 
-            using IArrowArrayStream inner = new StubArrowArrayStream(innerSchema, System.Array.Empty<RecordBatch>());
-            using IntervalSerializingStream stream = new IntervalSerializingStream(inner, outputSchema, new[] { 0 });
+            using IArrowArrayStream inner = new StubArrowArrayStream(schema, System.Array.Empty<RecordBatch>());
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             Schema reported = stream.Schema;
             Assert.Equal(2, reported.FieldsList.Count);
@@ -157,7 +165,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 .Build();
 
             using IArrowArrayStream inner = new StubArrowArrayStream(schema, System.Array.Empty<RecordBatch>());
-            using IntervalSerializingStream stream = new IntervalSerializingStream(inner, schema, System.Array.Empty<int>());
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             Schema reported = stream.Schema;
             Assert.IsType<Int64Type>(reported.FieldsList[0].DataType);
@@ -178,17 +186,20 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             ymBuilder.Append(new YearMonthInterval(12)); // "1-0"
             YearMonthIntervalArray ymArray = ymBuilder.Build();
 
-            Schema innerSchema = new Schema.Builder()
+            // Manifest schema: StringType + SqlName metadata (what all result paths expose)
+            Schema manifestSchema = new Schema.Builder()
+                .Field(new Field("tenure", StringType.Default, nullable: true,
+                    new Dictionary<string, string> { ["Spark:DataType:SqlName"] = "INTERVAL YEAR TO MONTH" }))
+                .Build();
+
+            // Batch carries native arrays (as the IPC bytes would produce)
+            Schema nativeSchema = new Schema.Builder()
                 .Field(new Field("tenure", new IntervalType(IntervalUnit.YearMonth), nullable: true))
                 .Build();
-            Schema outputSchema = new Schema.Builder()
-                .Field(f => f.Name("tenure").DataType(StringType.Default).Nullable(true))
-                .Build();
+            RecordBatch batch = new RecordBatch(nativeSchema, new IArrowArray[] { ymArray }, ymArray.Length);
 
-            RecordBatch batch = new RecordBatch(innerSchema, new IArrowArray[] { ymArray }, ymArray.Length);
-
-            using IArrowArrayStream inner = new StubArrowArrayStream(innerSchema, new[] { batch });
-            using IntervalSerializingStream stream = new IntervalSerializingStream(inner, outputSchema, new[] { 0 });
+            using IArrowArrayStream inner = new StubArrowArrayStream(manifestSchema, new[] { batch });
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
             Assert.NotNull(result);
@@ -215,17 +226,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             dBuilder.AppendNull();
             DurationArray dArray = dBuilder.Build();
 
-            Schema innerSchema = new Schema.Builder()
+            Schema manifestSchema = new Schema.Builder()
+                .Field(new Field("elapsed", StringType.Default, nullable: true,
+                    new Dictionary<string, string> { ["Spark:DataType:SqlName"] = "INTERVAL DAY TO SECOND" }))
+                .Build();
+
+            Schema nativeSchema = new Schema.Builder()
                 .Field(new Field("elapsed", DurationType.Microsecond, nullable: true))
                 .Build();
-            Schema outputSchema = new Schema.Builder()
-                .Field(f => f.Name("elapsed").DataType(StringType.Default).Nullable(true))
-                .Build();
+            RecordBatch batch = new RecordBatch(nativeSchema, new IArrowArray[] { dArray }, dArray.Length);
 
-            RecordBatch batch = new RecordBatch(innerSchema, new IArrowArray[] { dArray }, dArray.Length);
-
-            using IArrowArrayStream inner = new StubArrowArrayStream(innerSchema, new[] { batch });
-            using IntervalSerializingStream stream = new IntervalSerializingStream(inner, outputSchema, new[] { 0 });
+            using IArrowArrayStream inner = new StubArrowArrayStream(manifestSchema, new[] { batch });
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
             Assert.NotNull(result);
@@ -252,14 +264,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var nameBuilder = new StringArray.Builder();
             nameBuilder.Append("Alice");
 
-            Schema innerSchema = new Schema.Builder()
+            Schema manifestSchema = new Schema.Builder()
                 .Field(f => f.Name("id").DataType(Int32Type.Default).Nullable(false))
-                .Field(new Field("tenure", new IntervalType(IntervalUnit.YearMonth), nullable: true))
+                .Field(new Field("tenure", StringType.Default, nullable: true,
+                    new Dictionary<string, string> { ["Spark:DataType:SqlName"] = "INTERVAL YEAR TO MONTH" }))
                 .Field(f => f.Name("name").DataType(StringType.Default).Nullable(true))
                 .Build();
-            Schema outputSchema = new Schema.Builder()
+
+            Schema nativeSchema = new Schema.Builder()
                 .Field(f => f.Name("id").DataType(Int32Type.Default).Nullable(false))
-                .Field(f => f.Name("tenure").DataType(StringType.Default).Nullable(true))
+                .Field(new Field("tenure", new IntervalType(IntervalUnit.YearMonth), nullable: true))
                 .Field(f => f.Name("name").DataType(StringType.Default).Nullable(true))
                 .Build();
 
@@ -267,11 +281,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             YearMonthIntervalArray ymArray = ymBuilder.Build();
             StringArray nameArray = nameBuilder.Build();
 
-            RecordBatch batch = new RecordBatch(innerSchema,
+            RecordBatch batch = new RecordBatch(nativeSchema,
                 new IArrowArray[] { idArray, ymArray, nameArray }, 1);
 
-            using IArrowArrayStream inner = new StubArrowArrayStream(innerSchema, new[] { batch });
-            using IntervalSerializingStream stream = new IntervalSerializingStream(inner, outputSchema, new[] { 1 });
+            using IArrowArrayStream inner = new StubArrowArrayStream(manifestSchema, new[] { batch });
+            using IntervalSerializingStream stream = new IntervalSerializingStream(inner);
 
             RecordBatch? result = await stream.ReadNextRecordBatchAsync(CancellationToken.None);
             Assert.NotNull(result);
