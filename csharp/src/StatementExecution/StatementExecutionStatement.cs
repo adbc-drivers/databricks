@@ -87,6 +87,64 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _metadataForeignCatalogName;
         private string? _metadataForeignSchemaName;
         private string? _metadataForeignTableName;
+        private string? _queryTags;
+
+        /// <summary>
+        /// Parses "key1:val1,key2:val2" into a list of QueryTag objects.
+        /// Keys cannot contain : or , so first : is always the key-value separator.
+        /// Values may contain escaped commas (\,) which are preserved.
+        /// </summary>
+        internal static List<QueryTag>? ParseQueryTags(string? queryTags)
+        {
+            if (string.IsNullOrEmpty(queryTags))
+                return null;
+
+            var tags = new List<QueryTag>();
+
+            // Split on unescaped commas — values may contain \,
+            var current = new System.Text.StringBuilder();
+            var tokens = new List<string>();
+            for (int i = 0; i < queryTags.Length; i++)
+            {
+                if (queryTags[i] == '\\' && i + 1 < queryTags.Length)
+                {
+                    current.Append(queryTags[i]);
+                    current.Append(queryTags[++i]);
+                }
+                else if (queryTags[i] == ',')
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+                else
+                {
+                    current.Append(queryTags[i]);
+                }
+            }
+            tokens.Add(current.ToString());
+
+            foreach (var token in tokens)
+            {
+                var trimmed = token.Trim();
+                if (trimmed.Length == 0) continue;
+
+                // Keys can't contain ':', so first ':' is always the delimiter
+                var colonIndex = trimmed.IndexOf(':');
+                if (colonIndex >= 0)
+                {
+                    tags.Add(new QueryTag
+                    {
+                        Key = trimmed.Substring(0, colonIndex),
+                        Value = trimmed.Substring(colonIndex + 1)
+                    });
+                }
+                else
+                {
+                    tags.Add(new QueryTag { Key = trimmed, Value = null });
+                }
+            }
+            return tags.Count > 0 ? tags : null;
+        }
 
         public StatementExecutionStatement(
             IStatementExecutionClient client,
@@ -183,11 +241,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 case ApacheParameters.QueryTimeoutSeconds:
                     break;
 
-                // DatabricksStatement-specific options: accept but ignore for now.
-                // TODO(PECOBLR-2259): Implement query_tags support for SEA. The SEA API uses a
-                // JSON array of {key, value} objects in the executestatement request body,
-                // unlike Thrift which sends a string in confOverlay.
                 case DatabricksParameters.QueryTags:
+                    _queryTags = value;
+                    break;
+
+                // DatabricksStatement-specific options: accept but ignore for now.
                 case DatabricksParameters.UseCloudFetch:
                 case DatabricksParameters.CanDecompressLz4:
                 case DatabricksParameters.MaxBytesPerFile:
@@ -254,7 +312,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ResultCompression = _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
-                IsMetadata = isMetadataExecution
+                IsMetadata = isMetadataExecution,
+                QueryTags = ParseQueryTags(_queryTags)
             };
 
             // Execute the statement
@@ -636,7 +695,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ResultCompression = _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
-                IsMetadata = false
+                IsMetadata = false,
+                QueryTags = ParseQueryTags(_queryTags)
             };
 
             // Execute the statement

@@ -94,6 +94,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
     }
 
     /// <summary>
+    /// A query tag key-value pair sent in the SEA execute request body.
+    /// </summary>
+    public class QueryTag
+    {
+        [JsonPropertyName("key")]
+        public string Key { get; set; } = string.Empty;
+
+        [JsonPropertyName("value")]
+        public string? Value { get; set; }
+    }
+
+    /// <summary>
     /// Request to execute a SQL statement.
     /// </summary>
     public class ExecuteStatementRequest
@@ -184,6 +196,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("byte_limit")]
         public long? ByteLimit { get; set; }
+
+        /// <summary>
+        /// Query tags as an array of {key, value} objects.
+        /// </summary>
+        [JsonPropertyName("query_tags")]
+        public List<QueryTag>? QueryTags { get; set; }
     }
 
     /// <summary>
