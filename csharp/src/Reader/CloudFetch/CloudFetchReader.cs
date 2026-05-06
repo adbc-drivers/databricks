@@ -60,6 +60,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
         // Telemetry tracking
         private long _totalBytesDownloaded = 0;
+        private ChunkMetrics? _cachedChunkMetrics;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudFetchReader"/> class.
@@ -158,6 +159,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     new("total_expected_rows", _totalExpectedRows),
                                     new("current_chunk_rows_read", _currentChunkRowsRead)
                                 ]);
+                                // Snapshot metrics before disposing the download manager
+                                _cachedChunkMetrics = this.downloadManager.GetChunkMetrics();
                                 this.downloadManager.Dispose();
                                 this.downloadManager = null;
                                 // No more files
@@ -310,6 +313,22 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _currentChunkRowsRead += chunkTrimmedBatch.Length;
 
             return chunkTrimmedBatch;
+        }
+
+        /// <summary>
+        /// Gets the aggregated chunk metrics for this CloudFetch reader.
+        /// Returns metrics from the download manager, which tracks all chunk downloads.
+        /// </summary>
+        /// <returns>A ChunkMetrics object containing aggregated metrics.</returns>
+        public ChunkMetrics GetChunkMetrics()
+        {
+            if (downloadManager != null)
+            {
+                return downloadManager.GetChunkMetrics();
+            }
+
+            // Return cached metrics if download manager was already disposed after results were exhausted
+            return _cachedChunkMetrics ?? new ChunkMetrics();
         }
 
         protected override void Dispose(bool disposing)

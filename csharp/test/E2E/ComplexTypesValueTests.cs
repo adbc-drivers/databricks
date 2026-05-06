@@ -94,6 +94,20 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(batch.Column(0).IsNull(0), "Expected null value");
         }
 
+        // TODO: PECO-3014 - SEA returns NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL array elements in different format
+        protected override async System.Threading.Tasks.Task ValidateTestArrayData(string projection, string value)
+        {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns array elements in different format for NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL (PECO-3014)");
+            await base.ValidateTestArrayData(projection, value);
+        }
+
+        // TODO: PECO-3014 - SEA returns map values in different format
+        protected override async System.Threading.Tasks.Task ValidateTestMapData(string projection, string value)
+        {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns map values in different format (PECO-3014)");
+            await base.ValidateTestMapData(projection, value);
+        }
+
         // COMPLEX-001: Simple ARRAY of integers
         [SkippableFact]
         public async Task COMPLEX001_QueryReturningArray()

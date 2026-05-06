@@ -1793,7 +1793,7 @@ The JDBC driver uses Jackson with explicit `@JsonProperty("session_id")` annotat
   "session_id": "abc123",
   "sql_statement_id": "def456",
   "system_configuration": { "driver_version": "1.0.0", "runtime_name": ".NET 8.0" },
-  "driver_connection_params": { "http_path": "/sql/1.0/warehouses/xyz", "host_info": { "host_url": "https://..." } },
+  "driver_connection_params": { "http_path": "/sql/1.0/warehouses/xyz", "host_info": { "host_url": "host.cloud.databricks.com", "port": 443 } },
   "auth_type": "pat",
   "sql_operation": { "statement_type": "STATEMENT_QUERY", "execution_result": "EXECUTION_RESULT_EXTERNAL_LINKS" },
   "operation_latency_ms": 254
@@ -2373,8 +2373,8 @@ Every field in the `OssSqlDriverTelemetryLog` proto must be populated and verifi
 |-------------|---------------|------------|
 | `http_path` | e.g. `"/sql/1.0/warehouses/abc123"` | Non-empty, starts with `/` |
 | `mode` | `DRIVER_MODE_THRIFT` or `DRIVER_MODE_SEA` | Not `UNSPECIFIED` |
-| `host_info.host_url` | e.g. `"https://host.cloud.databricks.com:443"` | Non-empty, starts with `https://` |
-| `host_info.port` | Port number (may be 0 if embedded in URL) | — |
+| `host_info.host_url` | e.g. `"host.cloud.databricks.com"` (bare hostname, matches JDBC) | Non-empty, no scheme, no port suffix |
+| `host_info.port` | Port number, e.g. `443` | > 0 |
 | `auth_mech` | e.g. `DRIVER_AUTH_MECH_PAT` | Not `UNSPECIFIED` |
 | `auth_flow` | e.g. `DRIVER_AUTH_FLOW_TOKEN_PASSTHROUGH` | Not `UNSPECIFIED` |
 | `enable_arrow` | `true` | Boolean |
@@ -2846,3 +2846,83 @@ This **direct object telemetry design (V3)** provides a simple approach to colle
 4. **Deterministic emission**: Exactly one telemetry event per statement — on reader dispose (success) or catch block (error)
 5. **Flush-before-close**: Connection dispose blocks until all pending telemetry is sent to Databricks
 6. **JDBC-compatible**: snake_case JSON field names, same proto schema, same export endpoint
+
+---
+
+## Implementation Notes - E2E Test Infrastructure (2026-03-13)
+
+### Files Implemented
+
+1. **CapturingTelemetryExporter.cs** (`csharp/test/E2E/Telemetry/CapturingTelemetryExporter.cs`)
+   - Thread-safe telemetry event capture using `ConcurrentBag<TelemetryFrontendLog>`
+   - Export call counting for validation
+   - Reset capability for test cleanup
+
+2. **TelemetryTestHelpers.cs** (`csharp/test/E2E/Telemetry/TelemetryTestHelpers.cs`)
+   - `CreateConnectionWithCapturingTelemetry()` - Uses `TelemetryClientManager.ExporterOverride` to inject test exporter
+   - `WaitForTelemetryEvents()` - Waits for expected telemetry events with timeout
+   - Proto field assertion helpers for session, system config, connection params, SQL operations, and errors
+
+3. **TelemetryBaselineTests.cs** (`csharp/test/E2E/Telemetry/TelemetryBaselineTests.cs`)
+   - 10 baseline E2E tests validating all currently populated proto fields
+   - Tests against real Databricks workspace (no backend connectivity required)
+   - All tests passing ✅
+
+### Test Coverage
+
+Baseline tests validate:
+- ✅ session_id population
+- ✅ sql_statement_id population
+- ✅ operation_latency_ms > 0
+- ✅ system_configuration fields (driver_version, driver_name, os_name, runtime_name)
+- ✅ driver_connection_params.mode is set
+- ✅ sql_operation fields (statement_type, operation_type, result_latency)
+- ✅ Multiple statements share session_id but have unique statement_ids
+- ✅ Telemetry disabled when telemetry.enabled=false
+- ✅ error_info populated on SQL errors
+- ✅ UPDATE statement telemetry
+
+### Implementation Patterns Discovered
+
+1. **Exporter Override**: `TelemetryClientManager.ExporterOverride` provides global test exporter injection
+2. **Proto Enums**: Use nested structure `Statement.Types.Type.Query`, `Operation.Types.Type.ExecuteStatement`, etc.
+3. **Name Collision**: Proto `Statement` conflicts with `AdbcStatement` - resolved with type aliases:
+   ```csharp
+   using ProtoStatement = AdbcDrivers.Databricks.Telemetry.Proto.Statement;
+   using ProtoOperation = AdbcDrivers.Databricks.Telemetry.Proto.Operation;
+   using ProtoDriverMode = AdbcDrivers.Databricks.Telemetry.Proto.DriverMode;
+   ```
+4. **QueryResult**: `ExecuteQuery()` returns `QueryResult` with `Stream` property (IDisposable)
+
+### Test Pattern
+
+```csharp
+CapturingTelemetryExporter exporter = null!;
+AdbcConnection? connection = null;
+
+try
+{
+    var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
+    (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
+
+    // Execute operation
+    using var statement = connection.CreateStatement();
+    statement.SqlQuery = "SELECT 1";
+    var result = statement.ExecuteQuery();
+    using var reader = result.Stream;
+
+    statement.Dispose();
+
+    // Wait for and validate telemetry
+    var logs = await TelemetryTestHelpers.WaitForTelemetryEvents(exporter, expectedCount: 1);
+    var protoLog = TelemetryTestHelpers.GetProtoLog(logs[0]);
+
+    Assert.False(string.IsNullOrEmpty(protoLog.SessionId));
+    // ... more assertions
+}
+finally
+{
+    connection?.Dispose();
+    TelemetryTestHelpers.ClearExporterOverride();
+}
+```

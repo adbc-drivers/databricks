@@ -287,12 +287,18 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <summary>
         /// Sends the HTTP request to the telemetry endpoint.
         /// </summary>
+        /// <remarks>
+        /// Uses EnsureSuccessOrThrow (not EnsureSuccessStatusCode) so non-success responses raise
+        /// HttpExceptionWithStatusCode carrying the real status code. ExceptionClassifier only
+        /// inspects that typed exception, so without this the retry predicate can't distinguish
+        /// terminal 4xx from retryable 429/5xx.
+        /// </remarks>
         private async Task SendRequestAsync(string endpointUrl, string json, CancellationToken ct)
         {
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
             using var response = await _httpClient.PostAsync(endpointUrl, content, ct).ConfigureAwait(false);
 
-            response.EnsureSuccessStatusCode();
+            response.EnsureSuccessOrThrow();
         }
     }
 }

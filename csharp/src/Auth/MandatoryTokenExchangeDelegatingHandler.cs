@@ -22,6 +22,8 @@
 */
 
 using System;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -37,11 +39,14 @@ namespace AdbcDrivers.Databricks.Auth
     internal class MandatoryTokenExchangeDelegatingHandler : DelegatingHandler
     {
         private readonly string? _identityFederationClientId;
-        private readonly object _tokenLock = new object();
+        private readonly SemaphoreSlim _exchangeLock = new SemaphoreSlim(1, 1);
         private readonly ITokenExchangeClient _tokenExchangeClient;
-        private string? _currentToken;
-        private string? _lastSeenToken;
-        private Task? _pendingExchange = null;
+
+        // Maps each original (external) token to its exchanged Databricks token.
+        // On failure, the original token is mapped to itself to prevent repeated exchange attempts.
+        // Keyed by the original bearer token so that when the upstream token rotates
+        // (e.g. OAuthDelegatingHandler refreshes the M2M token), the new token is exchanged fresh.
+        private readonly ConcurrentDictionary<string, string> _tokenCache = new ConcurrentDictionary<string, string>();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MandatoryTokenExchangeDelegatingHandler"/> class.
@@ -80,64 +85,53 @@ namespace AdbcDrivers.Databricks.Auth
         }
 
         /// <summary>
-        /// Performs token exchange if needed.
+        /// Returns the token to use for the request, performing exchange if needed.
+        /// If the token is already Databricks-issued, returns it directly without exchange.
+        /// Results are cached per original token so that when the upstream token rotates,
+        /// the new token is exchanged fresh. On failure, the original token is cached to
+        /// prevent repeated exchange attempts for the same token.
         /// </summary>
-        /// <param name="bearerToken">The bearer token to potentially exchange.</param>
-        /// <param name="cancellationToken">A cancellation token.</param>
-        private async Task PerformTokenExchangeIfNeeded(string bearerToken, CancellationToken cancellationToken)
+        private async Task<string> GetTokenAsync(string bearerToken, CancellationToken cancellationToken)
         {
-            // Check if we need exchange (no lock needed for this check)
-            bool needsExchange = NeedsTokenExchange(bearerToken);
+            // Token is already Databricks-issued — pass it through directly.
+            // Do not fall back to cached token here: upstream may have provided a fresher
+            // Databricks token (e.g. after TokenRefreshDelegatingHandler refreshed).
+            if (!NeedsTokenExchange(bearerToken))
+                return bearerToken;
 
-            if (!needsExchange)
+            // Fast path: return cached token without acquiring the lock.
+            // ConcurrentDictionary reads are thread-safe.
+            if (_tokenCache.TryGetValue(bearerToken, out string? cached))
+                return cached;
+
+            await _exchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                lock (_tokenLock)
-                {
-                    _lastSeenToken = bearerToken;
-                }
-                return;
-            }
+                // Double-check after acquiring lock in case another thread exchanged while we waited.
+                if (!_tokenCache.TryGetValue(bearerToken, out cached))
+                    await DoExchangeAsync(bearerToken, cancellationToken).ConfigureAwait(false);
 
-            // Wait for any pending exchange to complete first (could be for a different token)
-            Task? exchangeToAwait = null;
-            lock (_tokenLock)
+                return _tokenCache[bearerToken];
+            }
+            finally
             {
-                if (_pendingExchange != null)
-                {
-                    exchangeToAwait = _pendingExchange;
-                }
+                _exchangeLock.Release();
             }
-
-            if (exchangeToAwait != null)
-            {
-                await exchangeToAwait;
-            }
-
-            // Now check if we need to exchange our token
-            lock (_tokenLock)
-            {
-                // If this token was already processed (by us or another concurrent request)
-                if (_lastSeenToken == bearerToken)
-                {
-                    return;
-                }
-
-                // Start new exchange for our token
-                _lastSeenToken = bearerToken;
-                _pendingExchange = DoExchangeAsync(bearerToken, cancellationToken);
-                exchangeToAwait = _pendingExchange;
-            }
-
-            await exchangeToAwait;
         }
 
         /// <summary>
         /// Performs the actual token exchange operation.
+        /// Caches the exchanged token on success, or the original bearer token on failure
+        /// to prevent repeated exchange attempts for the same token.
         /// </summary>
-        /// <param name="bearerToken">The bearer token to exchange.</param>
-        /// <param name="cancellationToken">A cancellation token.</param>
         private async Task DoExchangeAsync(string bearerToken, CancellationToken cancellationToken)
         {
+            Activity.Current?.AddEvent(new ActivityEvent("auth.token_exchange", tags: new ActivityTagsCollection
+            {
+                { "endpoint", _tokenExchangeClient.TokenExchangeEndpoint },
+                { "has_identity_federation", !string.IsNullOrEmpty(_identityFederationClientId) }
+            }));
+
             try
             {
                 TokenExchangeResponse response = await _tokenExchangeClient.ExchangeTokenAsync(
@@ -145,48 +139,43 @@ namespace AdbcDrivers.Databricks.Auth
                     _identityFederationClientId,
                     cancellationToken);
 
-                lock (_tokenLock)
+                _tokenCache[bearerToken] = response.AccessToken;
+
+                Activity.Current?.AddEvent(new ActivityEvent("auth.token_exchange.completed", tags: new ActivityTagsCollection
                 {
-                    _currentToken = response.AccessToken;
-                }
+                    { "expires_in", response.ExpiresIn }
+                }));
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Mandatory token exchange failed: {ex.Message}. Continuing with original token.");
-            }
-            finally
-            {
-                lock (_tokenLock)
-                {
-                    _pendingExchange = null;
-                }
+                // Cache the original token so subsequent requests with the same token don't retry the failed exchange.
+                _tokenCache[bearerToken] = bearerToken;
             }
         }
 
         /// <summary>
         /// Sends an HTTP request with the current token.
         /// </summary>
-        /// <param name="request">The HTTP request message to send.</param>
-        /// <param name="cancellationToken">A cancellation token.</param>
-        /// <returns>The HTTP response message.</returns>
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             string? bearerToken = request.Headers.Authorization?.Parameter;
             if (!string.IsNullOrEmpty(bearerToken))
             {
-                await PerformTokenExchangeIfNeeded(bearerToken!, cancellationToken);
-
-                string tokenToUse;
-                lock (_tokenLock)
-                {
-                    tokenToUse = _currentToken ?? bearerToken!;
-                }
-
+                string tokenToUse = await GetTokenAsync(bearerToken!, cancellationToken);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokenToUse);
             }
 
             return await base.SendAsync(request, cancellationToken);
         }
 
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _exchangeLock.Dispose();
+            }
+            base.Dispose(disposing);
+        }
     }
 }

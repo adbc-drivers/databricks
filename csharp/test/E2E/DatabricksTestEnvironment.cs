@@ -184,6 +184,10 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 parameters.Add(DatabricksParameters.MaxBytesPerFetchRequest, testConfiguration.MaxBytesPerFetchRequest!);
             }
+            if (!string.IsNullOrEmpty(testConfiguration.Protocol))
+            {
+                parameters.Add(DatabricksParameters.Protocol, testConfiguration.Protocol!);
+            }
             if (testConfiguration.HttpOptions != null)
             {
                 if (testConfiguration.HttpOptions.Tls != null)
@@ -262,6 +266,16 @@ namespace AdbcDrivers.Databricks.Tests
         public override string GetInsertStatement(string tableName, string columnName, string? value) =>
             string.Format("INSERT INTO {0} ({1}) SELECT {2};", tableName, columnName, value ?? "NULL");
 
+        public override string? GetValueForProtocolVersion(string? unconvertedValue, string? convertedValue) =>
+            Connection is AdbcDrivers.Databricks.StatementExecution.StatementExecutionConnection
+                ? unconvertedValue
+                : base.GetValueForProtocolVersion(unconvertedValue, convertedValue);
+
+        public override object? GetValueForProtocolVersion(object? unconvertedValue, object? convertedValue) =>
+            Connection is AdbcDrivers.Databricks.StatementExecution.StatementExecutionConnection
+                ? convertedValue
+                : base.GetValueForProtocolVersion(unconvertedValue, convertedValue);
+
         public override SampleDataBuilder GetSampleDataBuilder()
         {
             SampleDataBuilder sampleDataBuilder = new();
@@ -274,7 +288,33 @@ namespace AdbcDrivers.Databricks.Tests
             else
                 floatValue = 1d;
 
+            bool isSeaConnection = Connection is AdbcDrivers.Databricks.StatementExecution.StatementExecutionConnection;
+
             // standard values
+            var standardExpectedValues = new System.Collections.Generic.List<ColumnNetTypeArrowTypeValue>
+            {
+                new("id", typeof(long), typeof(Int64Type), 1L),
+                new("int", typeof(int), typeof(Int32Type), 2),
+                new("number_float", floatNetType, floatArrowType, floatValue),
+                new("number_double", typeof(double), typeof(DoubleType), 4.56d),
+                new("decimal", typeof(SqlDecimal), typeof(Decimal128Type), SqlDecimal.Parse("4.56")),
+                new("big_decimal", typeof(SqlDecimal), typeof(Decimal128Type), SqlDecimal.Parse("9.9999999999999999999999999999999999999")),
+                new("is_active", typeof(bool), typeof(BooleanType), true),
+                new("name", typeof(string), typeof(StringType), "John Doe"),
+                new("data", typeof(byte[]), typeof(BinaryType), UTF8Encoding.UTF8.GetBytes("abc123")),
+                new("date", typeof(DateTime), typeof(Date32Type), new DateTime(2023, 9, 8)),
+                new("timestamp", typeof(DateTimeOffset), typeof(TimestampType), new DateTimeOffset(new DateTime(2023, 9, 8, 12, 34, 56), TimeSpan.Zero)),
+            };
+            // TODO: PECO-3014 - SEA returns INTERVAL in a different string format than Thrift
+            if (!isSeaConnection)
+                standardExpectedValues.Add(new("interval", typeof(string), typeof(StringType), "178956969-11"));
+            standardExpectedValues.AddRange(new[]
+            {
+                new ColumnNetTypeArrowTypeValue("numbers", typeof(string), typeof(StringType), "[1,2,3]"),
+                new ColumnNetTypeArrowTypeValue("person", typeof(string), typeof(StringType), """{"name":"John Doe","age":30}"""),
+                new ColumnNetTypeArrowTypeValue("map", typeof(string), typeof(StringType), """{"age":"29","name":"Jane Doe"}"""), // This is unexpected JSON. Expecting 29 to be a numeric and not string.
+            });
+
             sampleDataBuilder.Samples.Add(
                 new SampleData()
                 {
@@ -290,28 +330,11 @@ namespace AdbcDrivers.Databricks.Tests
                             "X'616263313233' as data, " +
                             "DATE '2023-09-08' as date, " +
                             "TIMESTAMP '2023-09-08 12:34:56+00:00' as timestamp, " +
-                            "INTERVAL 178956969 YEAR 11 MONTH as interval, " +
+                            (isSeaConnection ? "" : "INTERVAL 178956969 YEAR 11 MONTH as interval, ") + // TODO: PECO-3014 - SEA returns INTERVAL in a different string format than Thrift
                             "ARRAY(1, 2, 3) as numbers, " +
                             "STRUCT('John Doe' as name, 30 as age) as person," +
                             "MAP('name', CAST('Jane Doe' AS STRING), 'age', CAST(29 AS INT)) as map",
-                    ExpectedValues =
-                    [
-                        new("id", typeof(long), typeof(Int64Type), 1L),
-                        new("int", typeof(int), typeof(Int32Type), 2),
-                        new("number_float", floatNetType, floatArrowType, floatValue),
-                        new("number_double", typeof(double), typeof(DoubleType), 4.56d),
-                        new("decimal", typeof(SqlDecimal), typeof(Decimal128Type), SqlDecimal.Parse("4.56")),
-                        new("big_decimal", typeof(SqlDecimal), typeof(Decimal128Type), SqlDecimal.Parse("9.9999999999999999999999999999999999999")),
-                        new("is_active", typeof(bool), typeof(BooleanType), true),
-                        new("name", typeof(string), typeof(StringType), "John Doe"),
-                        new("data", typeof(byte[]), typeof(BinaryType), UTF8Encoding.UTF8.GetBytes("abc123")),
-                        new("date", typeof(DateTime), typeof(Date32Type), new DateTime(2023, 9, 8)),
-                        new("timestamp", typeof(DateTimeOffset), typeof(TimestampType), new DateTimeOffset(new DateTime(2023, 9, 8, 12, 34, 56), TimeSpan.Zero)),
-                        new("interval", typeof(string), typeof(StringType), "178956969-11"),
-                        new("numbers", typeof(string), typeof(StringType), "[1,2,3]"),
-                        new("person", typeof(string), typeof(StringType), """{"name":"John Doe","age":30}"""),
-                        new("map", typeof(string), typeof(StringType), """{"age":"29","name":"Jane Doe"}""") // This is unexpected JSON. Expecting 29 to be a numeric and not string.
-                    ]
+                    ExpectedValues = standardExpectedValues
                 });
 
             sampleDataBuilder.Samples.Add(

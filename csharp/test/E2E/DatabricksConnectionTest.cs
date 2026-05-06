@@ -406,9 +406,11 @@ namespace AdbcDrivers.Databricks.Tests
         /// <summary>
         /// Tests that default namespace is correctly stored in the connection namespace.
         /// </summary>
+        // TODO: PECO-3009 - test hard-asserts DatabricksConnection type; fails for SEA's StatementExecutionConnection
         [SkippableFact]
         internal void DefaultNamespaceStoredInConnection()
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA uses StatementExecutionConnection, not DatabricksConnection (PECO-3009)");
             // Skip if default catalog or schema is not configured
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Catalog), "Default catalog not configured");
             Skip.If(string.IsNullOrEmpty(TestConfiguration.DbSchema), "Default schema not configured");
@@ -488,14 +490,22 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(expectedRuntimeCatalog, catalogFromRuntime);
             Assert.Equal(expectedRuntimeSchema, schemaFromRuntime);
 
-            // Assert statement object values
-            var dbStatement = (DatabricksStatement)statement;
-            Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
-            Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
+            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName
+            if (statement is DatabricksStatement dbStatement)
+            {
+                Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
+                Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
 
-            OutputHelper?.WriteLine(
-                $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
-                $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}, Statement catalog={dbStatement.CatalogName}");
+                OutputHelper?.WriteLine(
+                    $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
+                    $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}, Statement catalog={dbStatement.CatalogName}");
+            }
+            else
+            {
+                OutputHelper?.WriteLine(
+                    $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
+                    $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}");
+            }
         }
 
         /// <summary>
@@ -506,8 +516,10 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("false", "X-Trace-Id", "true")]
         [InlineData("TRUE", "X-Custom-Trace", "FALSE")]
         [InlineData("False", "custom-header", "True")]
+        // TODO: PECO-3009 - Assert.IsType<DatabricksConnection> fails for SEA's StatementExecutionConnection
         public void TracePropagationConfigurationTest(string tracePropagationEnabled, string traceParentHeaderName, string traceStateEnabled)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA uses StatementExecutionConnection, not DatabricksConnection (PECO-3009)");
             // Arrange
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             testConfig.TracePropagationEnabled = tracePropagationEnabled;
@@ -531,9 +543,10 @@ namespace AdbcDrivers.Databricks.Tests
         /// <summary>
         /// Tests that TrySetGetDirectResults uses DatabricksConnection's defaultGetDirectResults
         /// </summary>
-        [Fact]
+        [SkippableFact]
         public void TrySetGetDirectResults_UsesDatabricksDefaultGetDirectResults()
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "DirectResults is Thrift-only");
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             using var connection = NewConnection(testConfig);
             // Create a mock request object
