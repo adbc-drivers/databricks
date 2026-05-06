@@ -23,6 +23,7 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc.Extensions;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
+using AdbcDrivers.Databricks.StatementExecution;
 
 namespace AdbcDrivers.Databricks
 {
@@ -41,8 +42,6 @@ namespace AdbcDrivers.Databricks
     /// </summary>
     internal sealed class ComplexTypeSerializingStream : IArrowArrayStream
     {
-        private const string SparkSqlNameKey = "Spark:DataType:SqlName";
-
         private readonly IArrowArrayStream _inner;
         private readonly Schema _schema;
         private readonly HashSet<int> _complexColumnIndices;
@@ -105,7 +104,7 @@ namespace AdbcDrivers.Databricks
             {
                 Field field = schema.FieldsList[i];
                 if (field.Metadata != null &&
-                    field.Metadata.TryGetValue(SparkSqlNameKey, out string? sqlName) &&
+                    field.Metadata.TryGetValue(ColumnMetadataHelper.ArrowMetadataKey, out string? sqlName) &&
                     sqlName != null &&
                     (sqlName.Equals("ARRAY", StringComparison.OrdinalIgnoreCase) ||
                      sqlName.Equals("MAP", StringComparison.OrdinalIgnoreCase) ||

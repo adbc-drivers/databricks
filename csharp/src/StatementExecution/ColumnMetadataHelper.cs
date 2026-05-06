@@ -101,6 +101,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return upper;
         }
 
+        /// <summary>
+        /// Arrow field metadata key used to carry the Spark SQL type name.
+        /// Mirrors <c>ARROW_METADATA_KEY</c> in the JDBC driver
+        /// (<c>DatabricksJdbcConstants.java</c>).
+        /// </summary>
+        internal const string ArrowMetadataKey = "Spark:DataType:SqlName";
+
         // Corrections applied on top of GetBaseTypeName to produce the exact names
         // the Thrift server embeds in Spark:DataType:SqlName Arrow metadata.
         private static readonly Dictionary<string, string> s_sparkSqlNameOverrides = new(StringComparer.OrdinalIgnoreCase)
