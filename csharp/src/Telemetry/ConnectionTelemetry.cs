@@ -554,7 +554,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             int batchSize = GetBatchSize(properties);
             int asyncPollIntervalMillis = GetAsyncPollIntervalMillis(properties);
 
-            return new Proto.DriverConnectionParameters
+            var connectionParams = new Proto.DriverConnectionParameters
             {
                 HttpPath = httpPath ?? "",
                 Mode = Proto.DriverMode.Types.Type.Thrift,
@@ -579,6 +579,40 @@ namespace AdbcDrivers.Databricks.Telemetry
                 AutoCommit = true,
                 AsyncPollIntervalMillis = asyncPollIntervalMillis,
             };
+
+            // PECO-2995 (TELEM-16): emit discovery_mode_enabled and enable_token_cache.
+            // The C# driver hardcodes the OIDC token endpoint to https://{host}/oidc/v1/token
+            // (see OAuthClientCredentialsProvider and TokenExchangeClient) and never performs
+            // .well-known discovery, so discovery_mode_enabled is always false and
+            // discovery_url is intentionally left unset (no value to report).
+            // enable_token_cache is set to false: the in-memory dictionaries in
+            // TokenRefreshDelegatingHandler and MandatoryTokenExchangeDelegatingHandler are
+            // NOT what JDBC's enableTokenCache refers to (JDBC's feature is a U2M browser-flow
+            // on-disk cache, which this driver does not support). Each setter is wrapped in its
+            // own try/catch so a future per-field source change cannot kill the whole payload.
+            TrySetField(connectionParams, p => p.DiscoveryModeEnabled = false);
+            TrySetField(connectionParams, p => p.EnableTokenCache = false);
+
+            return connectionParams;
+        }
+
+        /// <summary>
+        /// Resilience helper: applies a single proto setter, swallowing any exception so a
+        /// per-field problem cannot break the entire telemetry payload. Mirrors the pattern
+        /// introduced in PECO-2996 for system-configuration fields.
+        /// </summary>
+        private static void TrySetField(
+            Proto.DriverConnectionParameters connectionParams,
+            Action<Proto.DriverConnectionParameters> setter)
+        {
+            try
+            {
+                setter(connectionParams);
+            }
+            catch
+            {
+                // Intentionally swallowed - telemetry must not impact driver operation.
+            }
         }
 
         // PECO-2997: report the async-execution poll interval (in milliseconds) used by
