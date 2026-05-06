@@ -18,6 +18,8 @@
 
 All notable changes to the C# Databricks ADBC driver are documented in this file.
 
+## [1.1.2] - Unreleased
+
 ## [1.1.1] - Unreleased
 
 ### Fixed
