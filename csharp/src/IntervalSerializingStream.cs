@@ -188,24 +188,34 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal static string FormatDuration(long rawValue, TimeUnit unit)
         {
-            long nanoseconds = unit switch
+            // Derive (wholeSeconds, subNanos) directly in the source unit to avoid intermediate
+            // nanosecond overflow. Multiplying rawValue * 1e9 (or * 1e6) to convert to nanoseconds
+            // first overflows int64 for values near the Databricks limit of ±106,751,991 days,
+            // which is representable in microseconds (Long.MAX_VALUE µs) but not in nanoseconds.
+            if (rawValue == long.MinValue) rawValue += 1;  // guard negation overflow
+            bool neg = rawValue < 0;
+            long abs = neg ? -rawValue : rawValue;
+
+            long wholeSeconds, subNanos;
+            switch (unit)
             {
-                TimeUnit.Second => rawValue * 1_000_000_000L,
-                TimeUnit.Millisecond => rawValue * 1_000_000L,
-                TimeUnit.Microsecond => rawValue * 1_000L,
-                TimeUnit.Nanosecond => rawValue,
-                _ => rawValue * 1_000L
-            };
-
-            // Mirror JDBC: negate upfront, format the absolute value, prepend sign.
-            // This matches the server output for negative intervals (e.g. -3 days 12:30:15
-            // → "-3 12:30:15.000000000", not the floor-carry form "-4 11:29:45.000000000").
-            if (nanoseconds == long.MinValue) nanoseconds += 1;  // guard negation overflow
-            bool neg = nanoseconds < 0;
-            if (neg) nanoseconds = -nanoseconds;
-
-            long wholeSeconds = nanoseconds / 1_000_000_000L;
-            long subNanos = nanoseconds % 1_000_000_000L;
+                case TimeUnit.Second:
+                    wholeSeconds = abs;
+                    subNanos = 0;
+                    break;
+                case TimeUnit.Millisecond:
+                    wholeSeconds = abs / 1_000L;
+                    subNanos = (abs % 1_000L) * 1_000_000L;
+                    break;
+                case TimeUnit.Nanosecond:
+                    wholeSeconds = abs / 1_000_000_000L;
+                    subNanos = abs % 1_000_000_000L;
+                    break;
+                default: // Microsecond (Databricks SEA default) and unknown units
+                    wholeSeconds = abs / 1_000_000L;
+                    subNanos = (abs % 1_000_000L) * 1_000L;
+                    break;
+            }
 
             long days = wholeSeconds / 86400L;
             long remainderSeconds = wholeSeconds % 86400L;

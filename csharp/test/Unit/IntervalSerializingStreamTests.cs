@@ -84,6 +84,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [InlineData(304_215_000_000L, "3 12:30:15.000000000")]                      // 3 d 12 h 30 m 15 s
         [InlineData(304_215_000_500L, "3 12:30:15.000500000")]                      // plus 500 us
         [InlineData(-304_215_000_000L, "-3 12:30:15.000000000")]                    // negative: matches JDBC and server
+        // Databricks boundary: ±106,751,991 days (Long.MAX_VALUE microseconds).
+        // These would silently overflow if converted to nanoseconds first (* 1_000).
+        [InlineData(9_223_372_022_400_000_000L, "106751991 00:00:00.000000000")]    // max_positive
+        [InlineData(-9_223_372_022_400_000_000L, "-106751991 00:00:00.000000000")]  // max_negative
+        [InlineData(9_223_372_022_399_999_999L, "106751990 23:59:59.999999000")]    // near_max
         public void FormatDuration_Microseconds_ReturnsExpectedString(long rawUs, string expected)
         {
             string actual = IntervalSerializingStream.FormatDuration(rawUs, TimeUnit.Microsecond);
@@ -102,17 +107,29 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public void FormatDuration_Seconds_ReturnsExpectedString()
         {
-            long rawS = 304_215L; // 3 days 12 h 30 m 15 s
+            // 3 days 12 h 30 m 15 s — and a large value that would overflow if multiplied to ns.
+            long rawS = 304_215L;
             string actual = IntervalSerializingStream.FormatDuration(rawS, TimeUnit.Second);
             Assert.Equal("3 12:30:15.000000000", actual);
+
+            // 106,751 days in seconds (just under the nanosecond overflow boundary)
+            long largeSec = 106_751L * 86_400L;
+            string largeActual = IntervalSerializingStream.FormatDuration(largeSec, TimeUnit.Second);
+            Assert.Equal("106751 00:00:00.000000000", largeActual);
         }
 
         [Fact]
         public void FormatDuration_Milliseconds_ReturnsExpectedString()
         {
-            long rawMs = 304_215_000L; // 3 days 12 h 30 m 15 s
+            // 3 days 12 h 30 m 15 s — and a large value that would overflow if multiplied to ns.
+            long rawMs = 304_215_000L;
             string actual = IntervalSerializingStream.FormatDuration(rawMs, TimeUnit.Millisecond);
             Assert.Equal("3 12:30:15.000000000", actual);
+
+            // 106,751 days in milliseconds (just under the nanosecond overflow boundary)
+            long largeMs = 106_751L * 86_400_000L;
+            string largeActual = IntervalSerializingStream.FormatDuration(largeMs, TimeUnit.Millisecond);
+            Assert.Equal("106751 00:00:00.000000000", largeActual);
         }
 
         // -----------------------------------------------------------------------
