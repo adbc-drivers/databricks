@@ -29,6 +29,9 @@ using Xunit.Abstractions;
 
 namespace AdbcDrivers.Databricks.Tests
 {
+    // Re-declare the orderer here so [Order(N)] is honored on this concrete
+    // class — see comment in DriverTests.cs for details.
+    [TestCaseOrderer("Apache.Arrow.Adbc.Tests.Xunit.TestOrderer", "Apache.Arrow.Adbc.Tests")]
     public class ClientTests : ClientTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public ClientTests(ITestOutputHelper? outputHelper)
