@@ -194,9 +194,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Get host URL
             if (string.IsNullOrEmpty(hostName))
             {
-                throw new ArgumentException(
+                throw new DatabricksException(
                     "Host name is required. Please provide it via 'hostName' parameter or via 'uri' parameter.",
-                    nameof(properties));
+                    AdbcStatusCode.InvalidArgument);
             }
             string baseUrl = $"https://{hostName}";
 
