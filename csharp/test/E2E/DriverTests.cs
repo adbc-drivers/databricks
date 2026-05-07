@@ -36,10 +36,10 @@ using Metadata = Apache.Arrow.Adbc.Tests.Metadata;
 namespace AdbcDrivers.Databricks.Tests
 {
     // The orderer is declared on the abstract base, but xUnit applies
-    // [TestCaseOrderer] from the concrete class — re-declare it here so
-    // [Order(N)] is honored. Without this, CanExecuteQuery runs before
-    // CanExecuteUpdate and fails because adbc_testing_table doesn't exist
-    // yet in the per-run schema.
+    // [TestCaseOrderer] from the concrete class — set it here so [Order(N)]
+    // is honored. Without this, CanExecuteQuery runs before CanExecuteUpdate
+    // and fails because adbc_testing_table doesn't exist yet in the per-run
+    // schema.
     [TestCaseOrderer("Apache.Arrow.Adbc.Tests.Xunit.TestOrderer", "Apache.Arrow.Adbc.Tests")]
     public class DriverTests : DriverTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
