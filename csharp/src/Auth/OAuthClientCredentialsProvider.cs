@@ -119,18 +119,14 @@ namespace AdbcDrivers.Databricks.Auth
             {
                 response = await _httpClient.SendAsync(request, cancellationToken);
 
-                if (!response.IsSuccessStatusCode)
+                // Map 401/403 to Unauthorized before EnsureSuccessStatusCode swallows the status context.
+                // Include HttpRequestException as inner exception so the Thrift path
+                // (HiveServer2Connection.IsUnauthorized via ContainsException) still works.
+                // The 3-arg HttpRequestException constructor with HttpStatusCode was added in .NET 5.
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                    response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 {
                     string errorBody = await response.Content.ReadAsStringAsync();
-                    var statusCode = response.StatusCode switch
-                    {
-                        System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
-                            => AdbcStatusCode.Unauthorized,
-                        _ => AdbcStatusCode.UnknownError,
-                    };
-                    // Include HttpRequestException as inner exception so the Thrift error handling path
-                    // (HiveServer2Connection.IsUnauthorized) can still find it via ContainsException.
-                    // The 3-arg constructor with HttpStatusCode was added in .NET 5.
 #if NET5_0_OR_GREATER
                     var httpEx = new HttpRequestException(
                         $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).",
@@ -142,9 +138,11 @@ namespace AdbcDrivers.Databricks.Auth
 #endif
                     throw new DatabricksException(
                         $"Failed to acquire OAuth access token: HTTP {(int)response.StatusCode} ({response.StatusCode}). Response: {errorBody}",
-                        statusCode,
+                        AdbcStatusCode.Unauthorized,
                         httpEx);
                 }
+
+                response.EnsureSuccessStatusCode();
             }
             catch (DatabricksException)
             {
