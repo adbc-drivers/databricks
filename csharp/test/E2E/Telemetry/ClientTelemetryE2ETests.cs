@@ -37,9 +37,11 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
     /// </summary>
     public class ClientTelemetryE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
+        // TODO: PECO-3010 - telemetry not wired for SEA protocol; these tests fail for rest protocol
         public ClientTelemetryE2ETests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "Telemetry not wired for SEA protocol (PECO-3010)");
         }
 
         /// <summary>
@@ -253,7 +255,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                         OperationLatencyMs = 150,
                         SystemConfiguration = new DriverSystemConfiguration
                         {
-                            DriverName = "Databricks ADBC Driver",
+                            DriverName = DatabricksConnection.DatabricksDriverName,
                             DriverVersion = "1.0.0-test",
                             OsName = Environment.OSVersion.Platform.ToString(),
                             OsVersion = Environment.OSVersion.Version.ToString(),

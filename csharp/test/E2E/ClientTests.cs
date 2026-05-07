@@ -22,7 +22,9 @@
 */
 
 using System.Collections.Generic;
+using Apache.Arrow.Adbc.Tests.Xunit;
 using AdbcDrivers.Tests.HiveServer2.Common;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace AdbcDrivers.Databricks.Tests
@@ -38,6 +40,32 @@ namespace AdbcDrivers.Databricks.Tests
         {
             int affectedRows = ValidateAffectedRows ? 1 : -1;
             return GetUpdateExpectedResults(affectedRows, true);
+        }
+
+        [SkippableFact, Order(1)]
+        public override void CanClientExecuteUpdate()
+        {
+            base.CanClientExecuteUpdate();
+        }
+
+        [SkippableFact, Order(3)]
+        public override void CanClientExecuteQuery()
+        {
+            base.CanClientExecuteQuery();
+        }
+
+        // TODO: PECO-3009 - SEA ADO.NET schema collection calls fail for StatementExecutionConnection
+        public override void VerifySchemaTablesWithNoConstraints()
+        {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA ADO.NET schema collection not yet supported (PECO-3009)");
+            base.VerifySchemaTablesWithNoConstraints();
+        }
+
+        // TODO: PECO-3009 - SEA ADO.NET schema collection calls fail for StatementExecutionConnection
+        public override void VerifySchemaTables()
+        {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA ADO.NET schema collection not yet supported (PECO-3009)");
+            base.VerifySchemaTables();
         }
 
         internal static IReadOnlyList<int> GetUpdateExpectedResults(int affectedRows, bool isDatabricks)

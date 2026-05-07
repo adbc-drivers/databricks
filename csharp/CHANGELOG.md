@@ -18,6 +18,28 @@
 
 All notable changes to the C# Databricks ADBC driver are documented in this file.
 
+## [1.1.2] - Unreleased
+
+### Added
+
+- Add straggler download detection and mitigation for CloudFetch (#183)
+- Add statement-level query tags support for SEA protocol (#434)
+
+### Fixed
+
+- Align INTERVAL and complex type columns to strings on SEA path (#440)
+- Catch object-not-found exceptions in SEA metadata (#388)
+- Return -1 for unknown affected rows in SEA `ExecuteUpdate` (#427)
+- Make telemetry init resilient and consolidate auth-type derivation (#421)
+- Populate poll metrics in connection telemetry (#420)
+- Populate `async_poll_interval_millis` in connection telemetry (#419)
+- Populate discovery telemetry fields (#438)
+- Add transient transport exceptions for quick failure detection (#435)
+- Default `use_desc_table_extended` to `true` for SEA/REST protocol (#425)
+- Use `ADBCDatabricksDriver` user agent for REST/SEA path (#407)
+- Emit upper-case `char_set_encoding` to match other drivers (#415)
+- Mark `ApplyServerSidePropertiesAsync` statements as internal calls (#417)
+
 ## [1.1.1] - Unreleased
 
 ### Fixed

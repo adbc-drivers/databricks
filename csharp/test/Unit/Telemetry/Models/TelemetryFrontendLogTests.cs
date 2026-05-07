@@ -178,7 +178,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry.Models
                         OperationLatencyMs = 150,
                         SystemConfiguration = new DriverSystemConfiguration
                         {
-                            DriverName = "Databricks ADBC Driver",
+                            DriverName = DatabricksConnection.DatabricksDriverName,
                             DriverVersion = "1.0.0",
                             OsName = "Windows",
                             RuntimeName = ".NET",

@@ -87,6 +87,64 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _metadataForeignCatalogName;
         private string? _metadataForeignSchemaName;
         private string? _metadataForeignTableName;
+        private string? _queryTags;
+
+        /// <summary>
+        /// Parses "key1:val1,key2:val2" into a list of QueryTag objects.
+        /// Keys cannot contain : or , so first : is always the key-value separator.
+        /// Values may contain escaped commas (\,) which are preserved.
+        /// </summary>
+        internal static List<QueryTag>? ParseQueryTags(string? queryTags)
+        {
+            if (string.IsNullOrEmpty(queryTags))
+                return null;
+
+            var tags = new List<QueryTag>();
+
+            // Split on unescaped commas — values may contain \,
+            var current = new System.Text.StringBuilder();
+            var tokens = new List<string>();
+            for (int i = 0; i < queryTags.Length; i++)
+            {
+                if (queryTags[i] == '\\' && i + 1 < queryTags.Length)
+                {
+                    current.Append(queryTags[i]);
+                    current.Append(queryTags[++i]);
+                }
+                else if (queryTags[i] == ',')
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+                else
+                {
+                    current.Append(queryTags[i]);
+                }
+            }
+            tokens.Add(current.ToString());
+
+            foreach (var token in tokens)
+            {
+                var trimmed = token.Trim();
+                if (trimmed.Length == 0) continue;
+
+                // Keys can't contain ':', so first ':' is always the delimiter
+                var colonIndex = trimmed.IndexOf(':');
+                if (colonIndex >= 0)
+                {
+                    tags.Add(new QueryTag
+                    {
+                        Key = trimmed.Substring(0, colonIndex),
+                        Value = trimmed.Substring(colonIndex + 1)
+                    });
+                }
+                else
+                {
+                    tags.Add(new QueryTag { Key = trimmed, Value = null });
+                }
+            }
+            return tags.Count > 0 ? tags : null;
+        }
 
         public StatementExecutionStatement(
             IStatementExecutionClient client,
@@ -183,11 +241,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 case ApacheParameters.QueryTimeoutSeconds:
                     break;
 
-                // DatabricksStatement-specific options: accept but ignore for now.
-                // TODO(PECOBLR-2259): Implement query_tags support for SEA. The SEA API uses a
-                // JSON array of {key, value} objects in the executestatement request body,
-                // unlike Thrift which sends a string in confOverlay.
                 case DatabricksParameters.QueryTags:
+                    _queryTags = value;
+                    break;
+
+                // DatabricksStatement-specific options: accept but ignore for now.
                 case DatabricksParameters.UseCloudFetch:
                 case DatabricksParameters.CanDecompressLz4:
                 case DatabricksParameters.MaxBytesPerFile:
@@ -254,7 +312,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ResultCompression = _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
-                IsMetadata = isMetadataExecution
+                IsMetadata = isMetadataExecution,
+                QueryTags = ParseQueryTags(_queryTags)
             };
 
             // Execute the statement
@@ -301,8 +360,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     }));
             }
 
-            // Create appropriate reader based on result disposition
+            // Create appropriate reader based on result disposition.
+            // All paths (inline, CloudFetch, empty) expose the manifest schema so that
+            // IntervalSerializingStream and ComplexTypeSerializingStream can detect columns
+            // uniformly via Spark:DataType:SqlName metadata rather than Arrow IPC types.
             IArrowArrayStream reader = CreateReader(response, cancellationToken);
+
+            // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
+            // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
+            reader = new IntervalSerializingStream(reader);
 
             // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
             // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
@@ -422,25 +488,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (hasExternalLinks)
             {
                 // Use CloudFetch for external links
-                return CreateCloudFetchReader(response);
+                return CreateCloudFetchReader(response, GetSchemaFromManifest(response.Manifest));
             }
             else if (response.Result != null && response.Result.Attachment != null && response.Result.Attachment.Length > 0)
             {
                 // Check if data is LZ4 compressed
                 bool isLz4Compressed = response.Manifest?.ResultCompression?.ToUpperInvariant() == "LZ4_FRAME";
 
-                // Inline results - may be split across multiple chunks
+                // Inline results - may be split across multiple chunks.
+                // Pass the manifest schema so the reader reports it instead of the IPC-embedded schema,
+                // keeping inline consistent with CloudFetch (which also uses the manifest schema).
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
-                    isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken);
+                    isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest));
             }
             else
             {
-                // No data rows, but the manifest contains schema information.
-                // Preserve the schema so callers get correct column metadata even
-                // when the queried table is empty — following the same pattern as
-                // the JDBC driver where ResultManifest schema is always extracted
-                // independently of data presence.
+                // No data rows (e.g. DDL): manifest may have columns_count=0.
+                // Fall back to an empty schema rather than throwing so DDL statements succeed.
                 Schema schema = TryGetSchemaFromManifest(response.Manifest) ?? new Schema.Builder().Build();
                 return new EmptyArrowArrayStream(schema);
             }
@@ -449,12 +514,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// Creates a CloudFetch reader for external link results.
         /// </summary>
-        private IArrowArrayStream CreateCloudFetchReader(ExecuteStatementResponse response)
+        private IArrowArrayStream CreateCloudFetchReader(ExecuteStatementResponse response, Schema manifestSchema)
         {
             var manifest = response.Manifest!;
-
-            // Build schema from manifest
-            var schema = GetSchemaFromManifest(manifest);
+            var schema = manifestSchema;
 
             // The Statement Execution API response structure:
             // - manifest.chunks: Array of ChunkInfo with metadata for ALL chunks (row counts, offsets, etc.)
@@ -487,9 +550,34 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Tries to extract the Arrow schema from the result manifest.
-        /// Returns <c>null</c> when the manifest contains no column definitions,
-        /// allowing callers to decide on a fallback (e.g. empty schema for no-data results).
+        /// Builds an Arrow <see cref="Schema"/> from the SEA result manifest, or returns
+        /// <c>null</c> when the manifest contains no column definitions.
+        ///
+        /// <para>
+        /// This schema is used by all three result paths (inline, CloudFetch, empty) so
+        /// that every path exposes the same schema to callers — matching the JDBC driver,
+        /// which uses the manifest schema exclusively and treats Arrow IPC bytes as a data
+        /// source only.
+        /// </para>
+        ///
+        /// <para>
+        /// Each field carries <see cref="ColumnMetadataHelper.ArrowMetadataKey"/>
+        /// (<c>Spark:DataType:SqlName</c>) in its metadata. For Thrift results the server
+        /// embeds this key directly in the Arrow IPC field metadata; for SEA results it may
+        /// be absent from the IPC. By computing it here from the manifest type name and
+        /// embedding it on every field, we give <see cref="IntervalSerializingStream"/> and
+        /// <see cref="ComplexTypeSerializingStream"/> a reliable detection signal regardless
+        /// of result path. JDBC achieves the same effect by falling back to
+        /// <c>ColumnInfo.typeText</c> (the raw manifest type string) when the IPC metadata
+        /// key is absent.
+        /// </para>
+        ///
+        /// <para>
+        /// INTERVAL, ARRAY, MAP, and STRUCT columns are mapped to <see cref="StringType"/>
+        /// because the stream wrappers convert the native Arrow arrays to strings. The
+        /// declared Arrow type and the actual array type in each batch must always agree;
+        /// this is the output contract.
+        /// </para>
         /// </summary>
         private Schema? TryGetSchemaFromManifest(ResultManifest manifest)
         {
@@ -501,20 +589,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var fields = new List<Field>();
             foreach (var column in manifest.Schema.Columns)
             {
-                var typeName = column.TypeName ?? string.Empty;
-                var arrowType = MapDatabricksTypeToArrowType(typeName);
-                // Embed the SQL type name as Arrow field metadata so that consumers
-                // (e.g. the PowerBI connector's AdjustNativeTypes) can read it via
-                // the "Spark:DataType:SqlName" key — the same metadata the Databricks
-                // server embeds in the Arrow IPC stream for non-empty results.
-                //
-                // Note: the Thrift server also sets "Spark:DataType:JsonType" (the JSON
-                // representation of the type, e.g. "{\"type\":\"integer\"}") alongside
-                // SqlName. That key is not read by any known consumer today, so we omit
-                // it here for now. Add it if a consumer requires it (PECO-2950).
+                var typeText = column.TypeText ?? string.Empty;
+                var arrowType = MapDatabricksTypeToArrowType(typeText);
                 var metadata = new Dictionary<string, string>
                 {
-                    ["Spark:DataType:SqlName"] = ColumnMetadataHelper.GetSparkSqlName(typeName)
+                    [ColumnMetadataHelper.ArrowMetadataKey] = typeText
                 };
                 fields.Add(new Field(column.Name, arrowType, true, metadata));
             }
@@ -523,12 +602,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Maps Databricks SQL type names to Arrow types.
+        /// Maps a Databricks SQL type name from the manifest to its Arrow output type.
+        ///
+        /// <para>
+        /// INTERVAL, ARRAY, MAP, and STRUCT are mapped to <see cref="StringType"/> because
+        /// <see cref="IntervalSerializingStream"/> and <see cref="ComplexTypeSerializingStream"/>
+        /// convert the native Arrow arrays (e.g. <c>YearMonthIntervalArray</c>, <c>ListArray</c>)
+        /// to <see cref="StringArray"/> at read time. The manifest schema is the output contract
+        /// exposed to callers, so the declared type must match the converted data type.
+        /// </para>
         /// </summary>
         private IArrowType MapDatabricksTypeToArrowType(string typeName)
         {
-            // Handle parameterized types (e.g., DECIMAL(10,2), VARCHAR(100))
-            var baseType = typeName.Split('(')[0].ToUpperInvariant();
+            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
 
             return baseType switch
             {
@@ -544,12 +630,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 "BINARY" or "VARBINARY" => BinaryType.Default,
                 "DATE" => Date32Type.Default,
                 "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
-                "INTERVAL" => StringType.Default, // Intervals as strings for now
-                "ARRAY" => StringType.Default, // Complex types as strings for now
-                "MAP" => StringType.Default,
-                "STRUCT" => StringType.Default,
+                // Converted to string by IntervalSerializingStream; StringType is the output contract.
+                "INTERVAL" => StringType.Default,
+                // Converted to JSON string by ComplexTypeSerializingStream; StringType is the output contract.
+                "ARRAY" or "MAP" or "STRUCT" => StringType.Default,
                 "NULL" or "VOID" => NullType.Default,
-                _ => StringType.Default // Default to string for unknown types
+                _ => StringType.Default
             };
         }
 
@@ -605,7 +691,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ResultCompression = _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
-                IsMetadata = false
+                IsMetadata = false,
+                QueryTags = ParseQueryTags(_queryTags)
             };
 
             // Execute the statement
@@ -635,9 +722,49 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new AdbcException("Statement was closed before results could be retrieved");
             }
 
-            // For updates, we don't need to read the results - just return the row count.
-            long rowCount = response.Manifest?.TotalRowCount ?? 0;
-            return new UpdateResult(rowCount);
+            // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
+            // column is num_affected_rows. DDL (CREATE TABLE, DROP TABLE, CTAS, etc.)
+            // returns no result data. Return -1 for DDL per the ADBC convention for
+            // "unknown or not applicable", matching what the Thrift path does.
+            return new UpdateResult(ReadNumAffectedRows(response.Manifest, response.Result));
+        }
+
+        private static long ReadNumAffectedRows(ResultManifest? manifest, ResultData? result)
+        {
+            // DML statements (INSERT/UPDATE/DELETE) return a 1-row ARROW_STREAM result whose
+            // single column is num_affected_rows. DDL (CREATE TABLE, DROP, CTAS) has no result
+            // data. Return -1 for DDL per the ADBC convention for "unknown/not applicable".
+            var attachment = result?.Attachment;
+            if (attachment != null && attachment.Length > 0)
+            {
+                try
+                {
+                    using var ms = new System.IO.MemoryStream(attachment);
+                    using var reader = new ArrowStreamReader(ms);
+                    var batch = reader.ReadNextRecordBatch();
+                    if (batch != null)
+                    {
+                        var fields = batch.Schema.FieldsList;
+                        int colIdx = -1;
+                        for (int i = 0; i < fields.Count; i++)
+                        {
+                            if (string.Equals(fields[i].Name, "num_affected_rows", StringComparison.OrdinalIgnoreCase))
+                            {
+                                colIdx = i;
+                                break;
+                            }
+                        }
+                        if (colIdx >= 0 && batch.Length > 0 && batch.Column(colIdx) is Int64Array arr)
+                            return arr.GetValue(0) ?? -1;
+                    }
+                }
+                catch
+                {
+                    // Fall through to -1
+                }
+            }
+
+            return -1;
         }
 
         /// <summary>
@@ -708,6 +835,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             private readonly ArrowStreamReader _streamReader;
             private readonly System.IO.MemoryStream _memoryStream;
+            private readonly Schema _schema;
             private bool _disposed;
 
             public InlineArrowStreamReader(
@@ -717,7 +845,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 bool isLz4Compressed,
                 int totalChunks,
                 System.Buffers.ArrayPool<byte> bufferPool,
-                CancellationToken cancellationToken)
+                CancellationToken cancellationToken,
+                Schema manifestSchema)
             {
                 if (firstChunkData == null || firstChunkData.Length == 0)
                 {
@@ -729,9 +858,29 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 _memoryStream = new System.IO.MemoryStream(allData);
                 _streamReader = new ArrowStreamReader(_memoryStream);
+                // Validate that the IPC schema column count matches the manifest schema.
+                // Type mismatches are expected (manifest uses StringType for interval/complex columns),
+                // but a count mismatch indicates a server bug or version skew and should fail loudly.
+                var ipcFieldCount = _streamReader.Schema.FieldsList.Count;
+                if (manifestSchema.FieldsList.Count != ipcFieldCount)
+                {
+                    var manifestFields = string.Join(", ", manifestSchema.FieldsList.Select(f => f.Name));
+                    var ipcFields = string.Join(", ", _streamReader.Schema.FieldsList.Select(f => f.Name));
+                    throw new AdbcException(
+                        $"Manifest schema has {manifestSchema.FieldsList.Count} fields but IPC data has {ipcFieldCount} fields. " +
+                        $"Manifest: [{manifestFields}], IPC: [{ipcFields}]");
+                }
+                // Use the manifest schema as the reported schema rather than the IPC-embedded schema.
+                // Arrow IPC files are self-describing, but the IPC schema carries native types
+                // (YearMonthIntervalType, ListType, etc.) while callers expect the output contract
+                // declared by the manifest (StringType for interval and complex columns). Keeping
+                // inline consistent with CloudFetch — which already uses GetSchemaFromManifest —
+                // lets IntervalSerializingStream and ComplexTypeSerializingStream detect and convert
+                // columns uniformly via Spark:DataType:SqlName metadata on every path.
+                _schema = manifestSchema;
             }
 
-            public Schema Schema => _streamReader.Schema;
+            public Schema Schema => _schema;
 
             public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
             {
@@ -930,7 +1079,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName)).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    activity?.AddEvent("statement.get_schemas.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
+                    return MetadataSchemaFactory.CreateEmptySchemasResult();
+                }
 
                 // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
                 // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
@@ -995,7 +1156,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     EscapePatternWildcardsInName(_metadataSchemaName),
                     EscapePatternWildcardsInName(_metadataTableName)).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    activity?.AddEvent("statement.get_tables.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
+                    return MetadataSchemaFactory.CreateEmptyTablesResult();
+                }
 
                 var tableCatBuilder = new StringArray.Builder();
                 var tableSchemaBuilder = new StringArray.Builder();
@@ -1073,12 +1246,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return FlatColumnsResultBuilder.BuildFlatColumnsResult(
                         System.Array.Empty<(string, string, string, TableInfo)>());
 
-                var batches = await _connection.ExecuteShowColumnsAsync(
-                    catalog,
-                    EscapePatternWildcardsInName(_metadataSchemaName),
-                    EscapePatternWildcardsInName(_metadataTableName),
-                    EscapePatternWildcardsInName(_metadataColumnName),
-                    cancellationToken).ConfigureAwait(false);
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteShowColumnsAsync(
+                        catalog,
+                        EscapePatternWildcardsInName(_metadataSchemaName),
+                        EscapePatternWildcardsInName(_metadataTableName),
+                        EscapePatternWildcardsInName(_metadataColumnName),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    activity?.AddEvent("statement.get_columns.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
+                    return FlatColumnsResultBuilder.BuildFlatColumnsResult(
+                        System.Array.Empty<(string, string, string, TableInfo)>());
+                }
 
                 var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
 
@@ -1166,7 +1351,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 catalogForTableName, _metadataSchemaName, _metadataTableName);
 
             string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
-            var batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
+            }
 
             string? resultJson = null;
             foreach (var batch in batches)
@@ -1281,7 +1475,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
                 activity?.SetTag("sql_query", sql);
-                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    activity?.AddEvent("statement.get_primary_keys.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
+                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
+                }
 
                 var keys = new List<(string, string, string, string, int, string)>();
                 int seq = 0;
@@ -1345,7 +1551,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
             string sql = new ShowForeignKeysCommand(fkCatalog!, fkSchema!, fkTable!).Build();
-            List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+            }
 
             var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
             int seq = 0;
