@@ -224,6 +224,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             properties.TryGetValue(DatabricksParameters.ResultCompression, out _resultCompression);
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
+            if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
+                directResults.Equals("false", StringComparison.OrdinalIgnoreCase))
+            {
+                _waitTimeoutSeconds = 0;
+            }
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
 
             // Memory pooling
