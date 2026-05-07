@@ -35,7 +35,6 @@ using Metadata = Apache.Arrow.Adbc.Tests.Metadata;
 
 namespace AdbcDrivers.Databricks.Tests
 {
-    // TODO: PECO-3006 - CanExecuteQuery/CanExecuteQueryAsync return 0 rows for SEA; fix result consumption in StatementExecutionStatement
     public class DriverTests : DriverTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public DriverTests(ITestOutputHelper? outputHelper)
@@ -86,10 +85,8 @@ namespace AdbcDrivers.Databricks.Tests
             GetObjectsTablesTest(tableNamePattern: tableName, expectedTableName: tableName);
         }
 
-        // TODO: PECO-3006 - SEA CanExecuteQuery returns 0 rows
         protected override void ValidateCanExecuteQuery(double? batchSizeFactor)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanExecuteQuery returns 0 rows (PECO-3006)");
             base.ValidateCanExecuteQuery(batchSizeFactor);
         }
 
@@ -107,11 +104,9 @@ namespace AdbcDrivers.Databricks.Tests
             base.CanExecuteUpdate();
         }
 
-        // TODO: PECO-3006 - SEA CanExecuteQueryAsync returns 0 rows
         [SkippableFact, Order(11)]
         public override async System.Threading.Tasks.Task CanExecuteQueryAsync()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanExecuteQueryAsync returns 0 rows (PECO-3006)");
             await base.CanExecuteQueryAsync();
         }
 

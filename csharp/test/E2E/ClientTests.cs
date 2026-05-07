@@ -48,11 +48,9 @@ namespace AdbcDrivers.Databricks.Tests
             base.CanClientExecuteUpdate();
         }
 
-        // TODO: PECO-3006 - SEA CanClientExecuteQuery returns 0 rows
         [SkippableFact, Order(3)]
         public override void CanClientExecuteQuery()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanClientExecuteQuery returns 0 rows (PECO-3006)");
             base.CanClientExecuteQuery();
         }
 
