@@ -115,11 +115,9 @@ namespace AdbcDrivers.Databricks.Tests
             await base.CanExecuteQueryAsync();
         }
 
-        // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
         [SkippableFact, Order(14)]
         public override void CanDetectInvalidServer()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA throws ArgumentException instead of AdbcException for invalid server (PECO-3007)");
             AdbcDriver driver = NewDriver;
             Assert.NotNull(driver);
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
@@ -130,7 +128,16 @@ namespace AdbcDrivers.Databricks.Tests
             bool hasHostName = parameters.TryGetValue(SparkParameters.HostName, out var hostName) && !string.IsNullOrEmpty(hostName);
             if (hasUri)
             {
-                parameters[AdbcOptions.Uri] = $"http://{host}/cliservice";
+                // For SEA the URI carries the warehouse path — preserve it and replace only the host
+                // so the connection attempt fails on DNS/network rather than on argument validation.
+                if (Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+                {
+                    parameters[AdbcOptions.Uri] = $"http://{host}{parsedUri.AbsolutePath}";
+                }
+                else
+                {
+                    parameters[AdbcOptions.Uri] = $"http://{host}/cliservice";
+                }
             }
             else if (hasHostName)
             {
