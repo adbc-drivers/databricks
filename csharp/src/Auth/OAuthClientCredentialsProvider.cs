@@ -118,37 +118,41 @@ namespace AdbcDrivers.Databricks.Auth
             try
             {
                 response = await _httpClient.SendAsync(request, cancellationToken);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    string errorBody = await response.Content.ReadAsStringAsync();
+                    var statusCode = response.StatusCode switch
+                    {
+                        System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
+                            => AdbcStatusCode.Unauthorized,
+                        _ => AdbcStatusCode.UnknownError,
+                    };
+                    // Include HttpRequestException as inner exception so the Thrift error handling path
+                    // (HiveServer2Connection.IsUnauthorized) can still find it via ContainsException.
+                    // The 3-arg constructor with HttpStatusCode was added in .NET 5.
+#if NET5_0_OR_GREATER
+                    var httpEx = new HttpRequestException(
+                        $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).",
+                        null,
+                        response.StatusCode);
+#else
+                    var httpEx = new HttpRequestException(
+                        $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).");
+#endif
+                    throw new DatabricksException(
+                        $"Failed to acquire OAuth access token: HTTP {(int)response.StatusCode} ({response.StatusCode}). Response: {errorBody}",
+                        statusCode,
+                        httpEx);
+                }
+            }
+            catch (DatabricksException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 throw new DatabricksException($"Failed to acquire OAuth access token: {ex.Message}", ex);
-            }
-
-            if (!response.IsSuccessStatusCode)
-            {
-                string errorBody = await response.Content.ReadAsStringAsync();
-                var statusCode = response.StatusCode switch
-                {
-                    System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
-                        => AdbcStatusCode.Unauthorized,
-                    _ => AdbcStatusCode.UnknownError,
-                };
-                // Include HttpRequestException as inner exception so the Thrift error handling path
-                // (HiveServer2Connection.IsUnauthorized) can still find it via ContainsException.
-                // The 3-arg constructor with HttpStatusCode was added in .NET 5.
-#if NET5_0_OR_GREATER
-                var httpEx = new HttpRequestException(
-                    $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).",
-                    null,
-                    response.StatusCode);
-#else
-                var httpEx = new HttpRequestException(
-                    $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).");
-#endif
-                throw new DatabricksException(
-                    $"Failed to acquire OAuth access token: HTTP {(int)response.StatusCode} ({response.StatusCode}). Response: {errorBody}",
-                    statusCode,
-                    httpEx);
             }
 
             string content = await response.Content.ReadAsStringAsync();
