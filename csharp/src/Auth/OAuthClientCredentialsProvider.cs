@@ -133,9 +133,16 @@ namespace AdbcDrivers.Databricks.Auth
                         => AdbcStatusCode.Unauthorized,
                     _ => AdbcStatusCode.UnknownError,
                 };
+                // Include HttpRequestException as inner exception so the Thrift error handling path
+                // (HiveServer2Connection.IsUnauthorized) can still find it via ContainsException.
+                var httpEx = new HttpRequestException(
+                    $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).",
+                    null,
+                    response.StatusCode);
                 throw new DatabricksException(
                     $"Failed to acquire OAuth access token: HTTP {(int)response.StatusCode} ({response.StatusCode}). Response: {errorBody}",
-                    statusCode);
+                    statusCode,
+                    httpEx);
             }
 
             string content = await response.Content.ReadAsStringAsync();
