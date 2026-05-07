@@ -119,10 +119,11 @@ namespace AdbcDrivers.Databricks.Auth
             {
                 response = await _httpClient.SendAsync(request, cancellationToken);
 
-                // Map 401/403 to Unauthorized before EnsureSuccessStatusCode swallows the status context.
-                // Include HttpRequestException as inner exception so the Thrift path
-                // (HiveServer2Connection.IsUnauthorized via ContainsException) still works.
-                // The 3-arg HttpRequestException constructor with HttpStatusCode was added in .NET 5.
+                // SEA re-throws DatabricksException as-is, so we must set AdbcStatusCode.Unauthorized here
+                // explicitly. The Thrift path does this differently: THttpTransport wraps all exceptions in
+                // TTransportException, and HiveServer2Connection.IsUnauthorized then walks the inner exception
+                // chain to find an HttpRequestException with StatusCode == 401. We preserve that chain by
+                // including HttpRequestException as the inner exception (3-arg ctor requires .NET 5+).
                 if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
                     response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 {
