@@ -116,11 +116,9 @@ namespace AdbcDrivers.Databricks.Tests
             await base.CanExecuteQueryAsync();
         }
 
-        // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
         [SkippableFact, Order(14)]
         public override void CanDetectInvalidServer()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA throws ArgumentException instead of AdbcException for invalid server (PECO-3007)");
             AdbcDriver driver = NewDriver;
             Assert.NotNull(driver);
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
@@ -150,11 +148,9 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.InRange(stopwatch.Elapsed, TimeSpan.FromSeconds(0), TimeSpan.FromMinutes(1));
         }
 
-        // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
         [SkippableFact, Order(13)]
         public override void CanDetectInvalidAuthentication()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns UnknownError status instead of Unauthorized (PECO-3007)");
             AdbcDriver driver = NewDriver;
             Assert.NotNull(driver);
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
