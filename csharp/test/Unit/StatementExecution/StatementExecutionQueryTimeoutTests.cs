@@ -156,7 +156,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task ExecuteQueryAsync_TimeoutExpires_ThrowsAdbcExceptionAndCancelsStatement()
+        public async Task ExecuteQueryAsync_TimeoutExpires_ThrowsTimeoutExceptionAndCancelsStatement()
         {
             SetupExecuteReturnsRunning();
 
@@ -175,7 +175,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             using var stmt = CreateStatement(queryTimeoutSeconds: 1, pollingIntervalMs: 50);
 
-            var ex = await Assert.ThrowsAsync<AdbcException>(() =>
+            var ex = await Assert.ThrowsAsync<TimeoutException>(() =>
                 stmt.ExecuteQueryAsync(CancellationToken.None));
 
             Assert.Contains("timed out", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -243,7 +243,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task ExecuteUpdateAsync_TimeoutExpires_ThrowsAdbcExceptionAndCancelsStatement()
+        public async Task ExecuteUpdateAsync_TimeoutExpires_ThrowsTimeoutExceptionAndCancelsStatement()
         {
             SetupExecuteReturnsRunning();
 
@@ -261,7 +261,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             using var stmt = CreateStatement(queryTimeoutSeconds: 1, pollingIntervalMs: 50);
 
-            var ex = await Assert.ThrowsAsync<AdbcException>(() =>
+            var ex = await Assert.ThrowsAsync<TimeoutException>(() =>
                 stmt.ExecuteUpdateAsync(CancellationToken.None));
 
             Assert.Contains("timed out", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -290,7 +290,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             using var stmt = CreateStatement(queryTimeoutSeconds: 1, pollingIntervalMs: 50);
 
-            var ex = await Assert.ThrowsAsync<AdbcException>(() =>
+            var ex = await Assert.ThrowsAsync<TimeoutException>(() =>
                 stmt.ExecuteQueryAsync(CancellationToken.None));
 
             Assert.Contains("timed out", ex.Message, StringComparison.OrdinalIgnoreCase);

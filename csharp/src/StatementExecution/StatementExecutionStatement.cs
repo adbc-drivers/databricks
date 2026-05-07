@@ -308,6 +308,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 return await ExecuteQueryInternalAsync(cts.Token, isMetadataExecution).ConfigureAwait(false);
             }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Cancel() was called (not an external caller token) — surface as TimeoutException to match Thrift behavior.
+                throw new TimeoutException("The query execution timed out or was cancelled. Consider increasing the query timeout value.", ex);
+            }
             finally
             {
                 lock (_cancelLock) { _executeCts = null; }
@@ -434,7 +439,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     // Best-effort; ignore cancel errors
                 }
-                throw new AdbcException(
+                throw new TimeoutException(
                     $"Query timed out after {_queryTimeoutSeconds} seconds (statement {statementId}). " +
                     $"Increase timeout via '{ApacheParameters.QueryTimeoutSeconds}' or set to 0 for no timeout.");
             }
