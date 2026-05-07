@@ -172,22 +172,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var clusterPathPattern = new System.Text.RegularExpressions.Regex(@"^/sql/protocolv1/o/\d+/[^/]+/?$");
                     if (clusterPathPattern.IsMatch(path))
                     {
-                        throw new ArgumentException(
+                        throw new DatabricksException(
                             "Statement Execution API requires a SQL Warehouse, not a general cluster. " +
                             $"The provided path '{path}' appears to be a general cluster endpoint. " +
-                            "Please use a SQL Warehouse path like '/sql/1.0/warehouses/{{warehouse_id}}' or '/sql/1.0/endpoints/{{warehouse_id}}'.",
-                            nameof(properties));
+                            "Please use a SQL Warehouse path like '/sql/1.0/warehouses/{warehouse_id}' or '/sql/1.0/endpoints/{warehouse_id}'.",
+                            AdbcStatusCode.InvalidArgument);
                     }
                 }
             }
 
             if (string.IsNullOrEmpty(warehouseId))
             {
-                throw new ArgumentException(
+                throw new DatabricksException(
                     "Warehouse ID is required for Statement Execution API. " +
                     "Please provide it via 'adbc.databricks.warehouse_id' parameter, include it in the 'path' parameter (e.g., '/sql/1.0/warehouses/your-warehouse-id'), " +
                     "or provide a full URI with the warehouse path.",
-                    nameof(properties));
+                    AdbcStatusCode.InvalidArgument);
             }
             _warehouseId = warehouseId;
 
@@ -340,7 +340,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
 
-            throw new ArgumentException("Host not found in connection properties. Please provide a valid host using either 'hostName' or 'uri' property.");
+            throw new DatabricksException("Host not found in connection properties. Please provide a valid host using either 'hostName' or 'uri' property.", AdbcStatusCode.InvalidArgument);
         }
 
         /// <summary>
