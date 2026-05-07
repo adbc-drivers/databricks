@@ -702,6 +702,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new InvalidOperationException("SQL query is required");
             }
 
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            lock (_cancelLock) { _executeCts = cts; }
+            try
+            {
+                return await ExecuteUpdateInternalAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("The query execution timed out or was cancelled. Consider increasing the query timeout value.", ex);
+            }
+            finally
+            {
+                lock (_cancelLock) { _executeCts = null; }
+                cts.Dispose();
+            }
+        }
+
+        private async Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
+        {
             // Build the execute statement request
             // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
