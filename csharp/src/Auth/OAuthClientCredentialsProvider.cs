@@ -28,6 +28,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.Auth
 {
@@ -117,11 +118,24 @@ namespace AdbcDrivers.Databricks.Auth
             try
             {
                 response = await _httpClient.SendAsync(request, cancellationToken);
-                response.EnsureSuccessStatusCode();
             }
             catch (Exception ex)
             {
                 throw new DatabricksException($"Failed to acquire OAuth access token: {ex.Message}", ex);
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                string errorBody = await response.Content.ReadAsStringAsync();
+                var statusCode = response.StatusCode switch
+                {
+                    System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
+                        => AdbcStatusCode.Unauthorized,
+                    _ => AdbcStatusCode.UnknownError,
+                };
+                throw new DatabricksException(
+                    $"Failed to acquire OAuth access token: HTTP {(int)response.StatusCode} ({response.StatusCode}). Response: {errorBody}",
+                    statusCode);
             }
 
             string content = await response.Content.ReadAsStringAsync();
