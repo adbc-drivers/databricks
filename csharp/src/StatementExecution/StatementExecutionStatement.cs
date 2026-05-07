@@ -176,8 +176,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _waitTimeoutSeconds = waitTimeoutSeconds;
             _pollingIntervalMs = pollingIntervalMs;
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
-            _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
-                properties, ApacheParameters.QueryTimeoutSeconds, 0);
+            if (properties.TryGetValue(ApacheParameters.QueryTimeoutSeconds, out string? queryTimeoutValue))
+            {
+                ApacheUtility.QueryTimeoutIsValid(ApacheParameters.QueryTimeoutSeconds, queryTimeoutValue, out int queryTimeoutSeconds);
+                _queryTimeoutSeconds = queryTimeoutSeconds;
+            }
+            if (properties.TryGetValue(ApacheParameters.BatchSize, out string? batchSizeValue))
+                SetOption(ApacheParameters.BatchSize, batchSizeValue);
+            if (properties.TryGetValue(ApacheParameters.PollTimeMilliseconds, out string? pollTimeValue))
+                SetOption(ApacheParameters.PollTimeMilliseconds, pollTimeValue);
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -233,12 +240,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     _escapePatternWildcards = bool.TryParse(value, out bool escape) && escape;
                     break;
 
-                // These options are readonly in SEA (set at connection level).
-                // Accept but ignore them to avoid NotImplemented exceptions for compatibility.
-                case ApacheParameters.PollTimeMilliseconds:
+                // These options are managed at the connection level in SEA, not per-statement.
+                // Validate the value for consistency with Thrift, then ignore it.
                 case ApacheParameters.BatchSize:
-                case ApacheParameters.BatchSizeStopCondition:
+                    if (!(!string.IsNullOrEmpty(value) && long.TryParse(value, out long _batchSize) && _batchSize > 0))
+                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than zero.");
+                    break;
+                case ApacheParameters.PollTimeMilliseconds:
+                    if (!(!string.IsNullOrEmpty(value) && int.TryParse(value, out int _pollTime) && _pollTime >= 0))
+                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than or equal to 0.");
+                    break;
                 case ApacheParameters.QueryTimeoutSeconds:
+                    ApacheUtility.QueryTimeoutIsValid(key, value, out _);
+                    break;
+                case ApacheParameters.BatchSizeStopCondition:
+                    ApacheUtility.BooleanIsValid(key, value, out _);
                     break;
 
                 case DatabricksParameters.QueryTags:
