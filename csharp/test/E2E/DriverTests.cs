@@ -128,10 +128,7 @@ namespace AdbcDrivers.Databricks.Tests
             bool hasHostName = parameters.TryGetValue(SparkParameters.HostName, out var hostName) && !string.IsNullOrEmpty(hostName);
             if (hasUri)
             {
-                // Preserve the path so the connection attempt fails on DNS/network rather than
-                // on argument validation (e.g. missing warehouse ID for SEA).
-                Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri);
-                parameters[AdbcOptions.Uri] = $"http://{host}{parsedUri?.AbsolutePath}";
+                parameters[AdbcOptions.Uri] = $"http://{host}/cliservice";
             }
             else if (hasHostName)
             {

@@ -137,6 +137,13 @@ namespace AdbcDrivers.Databricks
 
                 throw;
             }
+            catch (ArgumentException ae)
+            {
+                // Connection parameter validation (e.g. missing warehouse ID on SEA path) throws
+                // ArgumentException from the connection constructor before any network call.
+                // Wrap it so callers always see AdbcException rather than a raw ArgumentException.
+                throw new DatabricksException(ae.Message, AdbcStatusCode.InvalidArgument, ae);
+            }
         }
 
         /// <summary>
