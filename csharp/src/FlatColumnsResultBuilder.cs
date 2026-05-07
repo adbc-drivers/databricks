@@ -71,8 +71,7 @@ namespace AdbcDrivers.Databricks
 
                     if (info.Precision[i].HasValue) columnSizeBuilder.Append(info.Precision[i]!.Value); else columnSizeBuilder.AppendNull();
 
-                    int? bufLen = ColumnMetadataHelper.GetBufferLength(info.TypeName[i]);
-                    if (bufLen.HasValue) bufferLengthBuilder.Append(bufLen.Value); else bufferLengthBuilder.AppendNull();
+                    bufferLengthBuilder.AppendNull(); // JDBC spec: BUFFER_LENGTH is unused, always null
 
                     if (info.Scale[i].HasValue) decimalDigitsBuilder.Append(info.Scale[i]!.Value); else decimalDigitsBuilder.AppendNull();
 
