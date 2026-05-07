@@ -151,6 +151,63 @@ jobs:
           fi
           echo "Created schema: main.${PER_RUN_SCHEMA}"
 
+      # Pre-seed adbc_testing_table so tests that read it don't depend on
+      # CanExecuteUpdate (which runs the same SQL) running first. xUnit
+      # doesn't guarantee inter-class order, so without this seed the per-run
+      # schema is empty when StatementTests / ClientTests / etc. read the
+      # table, even though DriverTests.CanExecuteUpdate is supposed to seed
+      # it. Tests that do mutate the table still work — CREATE OR REPLACE
+      # rewrites it idempotently.
+      - name: Seed test data
+        if: steps.gate.outputs.run == 'true'
+        env:
+          OAUTH_TOKEN: ${{ steps.oauth.outputs.OAUTH_TOKEN }}
+          PER_RUN_SCHEMA: ${{ steps.schema.outputs.PER_RUN_SCHEMA }}
+          WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
+          DATABRICKS_SERVER_HOSTNAME: ${{ env.DATABRICKS_SERVER_HOSTNAME }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re, sys, urllib.request
+
+          with open("csharp/test/Resources/Databricks.sql") as f:
+              content = f.read()
+          # Strip line comments
+          content = re.sub(r"^\s*--.*$", "", content, flags=re.MULTILINE)
+          # Substitute the templated table name
+          full_table = f"main.{os.environ['PER_RUN_SCHEMA']}.adbc_testing_table"
+          content = content.replace("{ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE}", full_table)
+          # Split on ; — Databricks.sql has no semicolons inside string literals
+          statements = [s.strip() for s in content.split(";") if s.strip()]
+
+          host = os.environ["DATABRICKS_SERVER_HOSTNAME"]
+          token = os.environ["OAUTH_TOKEN"]
+          warehouse = os.environ["WAREHOUSE_ID"]
+          url = f"https://{host}/api/2.0/sql/statements"
+
+          for i, stmt in enumerate(statements, 1):
+              payload = json.dumps({
+                  "warehouse_id": warehouse,
+                  "statement": stmt,
+                  "wait_timeout": "30s",
+              }).encode()
+              req = urllib.request.Request(
+                  url, data=payload,
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(req) as resp:
+                  body = json.loads(resp.read())
+              state = body.get("status", {}).get("state", "")
+              if state != "SUCCEEDED":
+                  print(f"ERROR: statement {i} failed (state={state})")
+                  print(f"Statement: {stmt[:200]}")
+                  print(f"Response: {json.dumps(body, indent=2)}")
+                  sys.exit(1)
+              # Keep log noise low — first 80 chars per statement.
+              print(f"OK [{i}/{len(statements)}]: {stmt[:80].replace(chr(10), ' ')}")
+          print(f"Seeded {len(statements)} statements into main.{os.environ['PER_RUN_SCHEMA']}")
+          PYEOF
+
       - name: Create Databricks config file
         if: steps.gate.outputs.run == 'true'
         env:
