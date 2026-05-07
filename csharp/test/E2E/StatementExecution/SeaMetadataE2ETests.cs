@@ -47,6 +47,12 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
         }
 
+        private void SkipIfThriftNotSupported()
+        {
+            SkipIfNotConfigured();
+            Skip.If(TestConfiguration.Protocol == "rest", "Thrift protocol not available on SEA-only endpoint");
+        }
+
         private AdbcConnection CreateThriftConnection()
         {
             var parameters = GetDriverParameters(TestConfiguration);
@@ -126,7 +132,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task Thrift_GetCatalogs_ContainsMain()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var conn = CreateThriftConnection();
             var rows = await ReadMetadata(conn, "GetCatalogs");
             Assert.True(rows.Count > 0, "GetCatalogs should return at least one catalog");
@@ -146,7 +152,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task GetCatalogs_ThriftAndSEA_SameRowCount()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var thrift = CreateThriftConnection();
             using var sea = CreateSeaConnection();
             var thriftRows = await ReadMetadata(thrift, "GetCatalogs");
@@ -159,7 +165,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task Thrift_GetTables_ReturnsAllColumnTypes()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var conn = CreateThriftConnection();
             var rows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema);
             Assert.Contains(rows, r => r["TABLE_NAME"] == TestTable);
@@ -190,7 +196,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task GetTables_ThriftAndSEA_SameCount()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var thrift = CreateThriftConnection();
             using var sea = CreateSeaConnection();
             var thriftRows = await ReadMetadata(thrift, "GetTables", TestCatalog, TestSchema);
@@ -203,7 +209,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task Thrift_GetColumnsExtended_Returns20Columns()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var conn = CreateThriftConnection();
             var rows = await ReadMetadata(conn, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
             Assert.Equal(20, rows.Count);
@@ -221,7 +227,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task GetColumnsExtended_ThriftAndSEA_SameColumnNames()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var thrift = CreateThriftConnection();
             using var sea = CreateSeaConnection();
             var thriftRows = await ReadMetadata(thrift, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
@@ -240,7 +246,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task GetColumnsExtended_ThriftAndSEA_32ColumnSchema()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var thrift = CreateThriftConnection();
             using var sea = CreateSeaConnection();
             var thriftRows = await ReadMetadata(thrift, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
@@ -309,7 +315,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task Thrift_GetPrimaryKeys_ReturnsPKColumns()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var conn = CreateThriftConnection();
             var rows = await ReadMetadata(conn, "GetPrimaryKeys", TestCatalog, TestSchema, TestTable);
             Assert.Equal(2, rows.Count);
@@ -333,7 +339,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public void Thrift_GetTableSchema_Returns20Fields()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var conn = CreateThriftConnection();
             // Use cross_ref_customers to avoid Thrift NotImplementedException on complex types
             var schema = conn.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
@@ -354,7 +360,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public void GetTableSchema_ThriftAndSEA_SameFieldNames()
         {
-            SkipIfNotConfigured();
+            SkipIfThriftNotSupported();
             using var thrift = CreateThriftConnection();
             using var sea = CreateSeaConnection();
             var thriftSchema = thrift.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
