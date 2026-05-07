@@ -38,6 +38,16 @@ namespace AdbcDrivers.Databricks.Tests
 {
     public class DatabricksTestEnvironment : CommonTestEnvironment<DatabricksTestConfiguration>
     {
+        /// <summary>
+        /// Schema in the test workspace holding stable, hand-managed fixture
+        /// tables (<c>all_column_types</c>, <c>cross_ref_customers</c>, …).
+        /// Tests must treat this schema as read-only — never CREATE/DROP/INSERT
+        /// here. Per-run mutable state lives in
+        /// <c>TestConfiguration.Metadata.Schema</c>, which CI sets to a
+        /// per-run-unique schema. See docs/e2e-test-isolation-guidance.md.
+        /// </summary>
+        public const string FixtureSchema = "adbc_testing";
+
         public class Factory : Factory<DatabricksTestEnvironment>
         {
             public override DatabricksTestEnvironment Create(Func<AdbcConnection> getConnection) => new(getConnection);
