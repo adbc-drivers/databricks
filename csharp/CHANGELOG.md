@@ -18,7 +18,13 @@
 
 All notable changes to the C# Databricks ADBC driver are documented in this file.
 
-## [1.1.3] - Unreleased
+## [1.1.4] - Unreleased
+
+### Changed
+
+- Prefix telemetry config keys with `adbc.databricks` namespace (#452)
+
+## [1.1.3] - 2026-05-08
 
 ### Added
 
