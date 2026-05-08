@@ -322,14 +322,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         public void TelemetryConfiguration_PropertyKeys_AreCorrect()
         {
             // Assert
-            Assert.Equal("telemetry.enabled", TelemetryConfiguration.PropertyKeyEnabled);
-            Assert.Equal("telemetry.batch_size", TelemetryConfiguration.PropertyKeyBatchSize);
-            Assert.Equal("telemetry.flush_interval_ms", TelemetryConfiguration.PropertyKeyFlushIntervalMs);
-            Assert.Equal("telemetry.max_retries", TelemetryConfiguration.PropertyKeyMaxRetries);
-            Assert.Equal("telemetry.retry_delay_ms", TelemetryConfiguration.PropertyKeyRetryDelayMs);
-            Assert.Equal("telemetry.circuit_breaker_enabled", TelemetryConfiguration.PropertyKeyCircuitBreakerEnabled);
-            Assert.Equal("telemetry.circuit_breaker_threshold", TelemetryConfiguration.PropertyKeyCircuitBreakerThreshold);
-            Assert.Equal("telemetry.circuit_breaker_timeout_ms", TelemetryConfiguration.PropertyKeyCircuitBreakerTimeoutMs);
+            Assert.Equal("adbc.databricks.telemetry.enabled", TelemetryConfiguration.PropertyKeyEnabled);
+            Assert.Equal("adbc.databricks.telemetry.batch_size", TelemetryConfiguration.PropertyKeyBatchSize);
+            Assert.Equal("adbc.databricks.telemetry.flush_interval_ms", TelemetryConfiguration.PropertyKeyFlushIntervalMs);
+            Assert.Equal("adbc.databricks.telemetry.max_retries", TelemetryConfiguration.PropertyKeyMaxRetries);
+            Assert.Equal("adbc.databricks.telemetry.retry_delay_ms", TelemetryConfiguration.PropertyKeyRetryDelayMs);
+            Assert.Equal("adbc.databricks.telemetry.circuit_breaker_enabled", TelemetryConfiguration.PropertyKeyCircuitBreakerEnabled);
+            Assert.Equal("adbc.databricks.telemetry.circuit_breaker_threshold", TelemetryConfiguration.PropertyKeyCircuitBreakerThreshold);
+            Assert.Equal("adbc.databricks.telemetry.circuit_breaker_timeout_ms", TelemetryConfiguration.PropertyKeyCircuitBreakerTimeoutMs);
         }
 
         [Fact]
