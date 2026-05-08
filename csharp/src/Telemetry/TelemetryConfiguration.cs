@@ -27,42 +27,42 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// <summary>
         /// Property key for telemetry enabled flag in connection properties.
         /// </summary>
-        public const string PropertyKeyEnabled = "telemetry.enabled";
+        public const string PropertyKeyEnabled = "adbc.databricks.telemetry.enabled";
 
         /// <summary>
         /// Property key for batch size in connection properties.
         /// </summary>
-        public const string PropertyKeyBatchSize = "telemetry.batch_size";
+        public const string PropertyKeyBatchSize = "adbc.databricks.telemetry.batch_size";
 
         /// <summary>
         /// Property key for flush interval in connection properties.
         /// </summary>
-        public const string PropertyKeyFlushIntervalMs = "telemetry.flush_interval_ms";
+        public const string PropertyKeyFlushIntervalMs = "adbc.databricks.telemetry.flush_interval_ms";
 
         /// <summary>
         /// Property key for max retries in connection properties.
         /// </summary>
-        public const string PropertyKeyMaxRetries = "telemetry.max_retries";
+        public const string PropertyKeyMaxRetries = "adbc.databricks.telemetry.max_retries";
 
         /// <summary>
         /// Property key for retry delay in connection properties.
         /// </summary>
-        public const string PropertyKeyRetryDelayMs = "telemetry.retry_delay_ms";
+        public const string PropertyKeyRetryDelayMs = "adbc.databricks.telemetry.retry_delay_ms";
 
         /// <summary>
         /// Property key for circuit breaker enabled flag in connection properties.
         /// </summary>
-        public const string PropertyKeyCircuitBreakerEnabled = "telemetry.circuit_breaker_enabled";
+        public const string PropertyKeyCircuitBreakerEnabled = "adbc.databricks.telemetry.circuit_breaker_enabled";
 
         /// <summary>
         /// Property key for circuit breaker failure threshold in connection properties.
         /// </summary>
-        public const string PropertyKeyCircuitBreakerThreshold = "telemetry.circuit_breaker_threshold";
+        public const string PropertyKeyCircuitBreakerThreshold = "adbc.databricks.telemetry.circuit_breaker_threshold";
 
         /// <summary>
         /// Property key for circuit breaker timeout in connection properties.
         /// </summary>
-        public const string PropertyKeyCircuitBreakerTimeoutMs = "telemetry.circuit_breaker_timeout_ms";
+        public const string PropertyKeyCircuitBreakerTimeoutMs = "adbc.databricks.telemetry.circuit_breaker_timeout_ms";
 
         /// <summary>
         /// Environment variable key for telemetry enabled flag.

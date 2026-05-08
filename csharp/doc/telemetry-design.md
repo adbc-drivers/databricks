@@ -285,8 +285,8 @@ private Dictionary<string, string> MergePropertiesWithFeatureFlags(
 // Feature flags have long names, map to driver property names
 private static readonly Dictionary<string, string> FeatureFlagToPropertyMap = new()
 {
-    ["databricks.partnerplatform.clientConfigsFeatureFlags.enableTelemetryForAdbc"] = "telemetry.enabled",
-    ["databricks.partnerplatform.clientConfigsFeatureFlags.enableCloudFetch"] = "cloudfetch.enabled",
+    ["databricks.partnerplatform.clientConfigsFeatureFlags.enableTelemetryForAdbc"] = "adbc.databricks.telemetry.enabled",
+    ["databricks.partnerplatform.clientConfigsFeatureFlags.enableCloudFetch"] = "adbc.databricks.cloudfetch.enabled",
     // ... more mappings
 };
 ```
@@ -598,7 +598,7 @@ bool IsTelemetryEnabled()
     // - User property (highest priority)
     // - Feature flag (merged in)
     // - Or falls back to driver default
-    if (Properties.TryGetValue("telemetry.enabled", out var value))
+    if (Properties.TryGetValue("adbc.databricks.telemetry.enabled", out var value))
     {
         return bool.TryParse(value, out var result) && result;
     }
@@ -2529,7 +2529,7 @@ Each test creates a real connection with a `CapturingTelemetryExporter`, execute
 
 | Aspect | Details |
 |--------|---------|
-| **Setup** | Connection with `telemetry.enabled=false` |
+| **Setup** | Connection with `adbc.databricks.telemetry.enabled=false` |
 | **Action** | Execute any query |
 | **Expected** | No telemetry logs captured |
 | **Emission count** | 0 |
