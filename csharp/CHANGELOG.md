@@ -18,6 +18,18 @@
 
 All notable changes to the C# Databricks ADBC driver are documented in this file.
 
+## [1.1.3] - Unreleased
+
+### Added
+
+- Implement Cancel() for SEA protocol (#450)
+
+### Fixed
+
+- Map OAuth 401/403 to Unauthorized in SEA path (#447)
+- Isolate per-run mutable state to a per-job schema (#446)
+- Resolve package conflict warnings (#449)
+
 ## [1.1.2] - Unreleased
 
 ### Added
