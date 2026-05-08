@@ -115,8 +115,6 @@ namespace AdbcDrivers.Databricks.Tests
         [ClassData(typeof(LongRunningStatementTimeoutTestData))]
         internal override void StatementTimeoutTest(StatementWithExceptions statementWithExceptions)
         {
-            // TODO: PECO-3013 - SEA throws AdbcException instead of TimeoutException on query timeout
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA throws AdbcException not TimeoutException on timeout");
             base.StatementTimeoutTest(statementWithExceptions);
         }
 
@@ -126,7 +124,12 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData(LongRunningStatementTimeoutTestData.LongRunningQuery, "true", "false")]
         internal async Task DatabricksCanCancelStatementTest(string query, string enableRunAsyncInThriftOp, string enableDirectResults)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "EnableRunAsyncInThriftOp and EnableDirectResults are Thrift-only");
+            if (TestConfiguration.Protocol == "rest")
+            {
+                // SEA: Thrift flags don't apply; run basic cancel test directly
+                await base.CanCancelStatementTest(query);
+                return;
+            }
             string enableRunAsyncInThriftOpOrig = TestConfiguration.EnableRunAsyncInThriftOp;
             string enableDirectResultsOrig = TestConfiguration.EnableDirectResults;
             try

@@ -76,6 +76,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _currentStatementId;
         private string? _sqlQuery;
 
+        // Cancel support
+        private readonly object _cancelLock = new();
+        private CancellationTokenSource? _executeCts;
+
         // Metadata command support
         private bool _isMetadataCommand;
         private bool _escapePatternWildcards;
@@ -297,6 +301,27 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new InvalidOperationException("SQL query is required");
             }
 
+            // Create a linked token so Cancel() can interrupt this execution.
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            lock (_cancelLock) { _executeCts = cts; }
+            try
+            {
+                return await ExecuteQueryInternalAsync(cts.Token, isMetadataExecution).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Cancel() was called (not an external caller token) — surface as TimeoutException to match Thrift behavior.
+                throw new TimeoutException("The query execution timed out or was cancelled. Consider increasing the query timeout value.", ex);
+            }
+            finally
+            {
+                lock (_cancelLock) { _executeCts = null; }
+                cts.Dispose();
+            }
+        }
+
+        private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
+        {
             // Build the execute statement request
             // Note: warehouse_id is always required by the Databricks Statement Execution API
             // Note: catalog/schema cannot be set when session_id is provided (session has context)
@@ -414,7 +439,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     // Best-effort; ignore cancel errors
                 }
-                throw new AdbcException(
+                throw new TimeoutException(
                     $"Query timed out after {_queryTimeoutSeconds} seconds (statement {statementId}). " +
                     $"Increase timeout via '{ApacheParameters.QueryTimeoutSeconds}' or set to 0 for no timeout.");
             }
@@ -677,6 +702,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new InvalidOperationException("SQL query is required");
             }
 
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            lock (_cancelLock) { _executeCts = cts; }
+            try
+            {
+                return await ExecuteUpdateInternalAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("The query execution timed out or was cancelled. Consider increasing the query timeout value.", ex);
+            }
+            finally
+            {
+                lock (_cancelLock) { _executeCts = null; }
+                cts.Dispose();
+            }
+        }
+
+        private async Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
+        {
             // Build the execute statement request
             // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
@@ -797,6 +841,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     _currentStatementId = null;
                 }
+            }
+        }
+
+        public override void Cancel()
+        {
+            string? statementId;
+            lock (_cancelLock)
+            {
+                _executeCts?.Cancel();
+                statementId = _currentStatementId;
+            }
+            if (statementId != null)
+            {
+                try { _client.CancelStatementAsync(statementId, CancellationToken.None).GetAwaiter().GetResult(); }
+                catch { /* best-effort */ }
             }
         }
 
