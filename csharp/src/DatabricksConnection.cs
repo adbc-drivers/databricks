@@ -116,9 +116,11 @@ namespace AdbcDrivers.Databricks
         // Stopwatch covering the connection lifetime; started at construction and used to
         // measure session-open latency for the CREATE_SESSION telemetry event. The wall-clock
         // time between construction and HandleOpenSessionResponse encompasses transport setup
-        // and the OpenSession RPC, which is what we want to report.
+        // and the OpenSession RPC. This is wider than the OpenSession RPC alone (which is
+        // what JDBC measures); cross-driver dashboards should account for the difference.
         private readonly Stopwatch _connectionLifetimeStopwatch = Stopwatch.StartNew();
         private bool _sessionOpenTelemetryEmitted;
+        private bool _sessionDeleteTelemetryEmitted;
         internal TelemetrySessionContext? TelemetrySession => _telemetry.Session;
 
         /// <summary>
@@ -662,9 +664,17 @@ namespace AdbcDrivers.Databricks
             // Initialize telemetry after successful session creation
             InitializeTelemetry(activity);
 
-            // Emit CREATE_SESSION telemetry now that the session and telemetry client
-            // are wired up. Wrapped in try/catch defensively; telemetry must never fail
-            // the connection open path (PECO-2991).
+            EmitCreateSessionTelemetry(activity);
+        }
+
+        /// <summary>
+        /// Emits the CREATE_SESSION telemetry event. Internal so unit tests can call this
+        /// directly after injecting a fake <see cref="IConnectionTelemetry"/> via the
+        /// <see cref="TelemetryForTesting"/> seam, without needing to drive a full Thrift
+        /// session-open RPC.
+        /// </summary>
+        internal void EmitCreateSessionTelemetry(Activity? activity = null)
+        {
             try
             {
                 long elapsedMs = _connectionLifetimeStopwatch.ElapsedMilliseconds;
@@ -676,10 +686,27 @@ namespace AdbcDrivers.Databricks
                     error: null);
                 _sessionOpenTelemetryEmitted = true;
             }
-            catch
+            catch (Exception ex)
             {
-                // Telemetry must never impact driver operations.
+                activity?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", "CREATE_SESSION" }
+                    }));
             }
+        }
+
+        /// <summary>
+        /// Test seam allowing unit tests to substitute a fake <see cref="IConnectionTelemetry"/>
+        /// so they can verify the production code calls <c>EmitOperationTelemetry</c> at the
+        /// right lifecycle hooks. Production code never sets this property.
+        /// </summary>
+        internal IConnectionTelemetry TelemetryForTesting
+        {
+            get => _telemetry;
+            set => _telemetry = value;
         }
 
         /// <summary>
@@ -1027,26 +1054,7 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
-                // Emit DELETE_SESSION telemetry before tearing down the telemetry client
-                // so it gets flushed alongside any pending events. Mirrors the
-                // CREATE_SESSION emission in HandleOpenSessionResponse (PECO-2991).
-                try
-                {
-                    if (_sessionOpenTelemetryEmitted)
-                    {
-                        long elapsedMs = _connectionLifetimeStopwatch.ElapsedMilliseconds;
-                        _telemetry.EmitOperationTelemetry(
-                            Telemetry.Proto.Operation.Types.Type.DeleteSession,
-                            Telemetry.Proto.Statement.Types.Type.Unspecified,
-                            statementId: null,
-                            elapsedMs: elapsedMs,
-                            error: null);
-                    }
-                }
-                catch
-                {
-                    // Telemetry must never impact driver operations.
-                }
+                EmitDeleteSessionTelemetry();
 
                 // Clean up telemetry client
                 // This is synchronous because Dispose() cannot be async
@@ -1055,6 +1063,40 @@ namespace AdbcDrivers.Databricks
             }
 
             base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Emits the DELETE_SESSION telemetry event when a session was previously opened.
+        /// The actual close RPC happens later in <see cref="SparkHttpConnection"/>'s
+        /// dispose path, so <c>operation_latency_ms</c> is reported as 0 to avoid
+        /// conflating session lifetime with close latency. Idempotent across repeated
+        /// <see cref="Dispose(bool)"/> calls. Internal for test access.
+        /// </summary>
+        internal void EmitDeleteSessionTelemetry()
+        {
+            try
+            {
+                if (_sessionOpenTelemetryEmitted && !_sessionDeleteTelemetryEmitted)
+                {
+                    _sessionDeleteTelemetryEmitted = true;
+                    _telemetry.EmitOperationTelemetry(
+                        Telemetry.Proto.Operation.Types.Type.DeleteSession,
+                        Telemetry.Proto.Statement.Types.Type.Unspecified,
+                        statementId: null,
+                        elapsedMs: 0,
+                        error: null);
+                }
+            }
+            catch (Exception ex)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", "DELETE_SESSION" }
+                    }));
+            }
         }
 
         /// <summary>

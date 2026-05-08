@@ -270,15 +270,12 @@ namespace AdbcDrivers.Databricks.Telemetry
                 if (error != null)
                 {
                     ctx.HasError = true;
-                    try
-                    {
-                        ctx.ErrorName = error.GetType().Name;
-                        ctx.ErrorMessage = error.Message;
-                    }
-                    catch
-                    {
-                        // Some pathological exceptions can throw from .Message - swallow.
-                    }
+                    ctx.ErrorName = error.GetType().Name;
+                    // Note: error.Message is intentionally not captured. The proto's
+                    // DriverErrorInfo only emits error_name today (error_message field 3
+                    // is pending LPP review per sql_driver_telemetry.proto). When the
+                    // proto field lands, capture .Message here behind a try/catch
+                    // (some exceptions throw from their .Message property).
                 }
 
                 Proto.OssSqlDriverTelemetryLog log = ctx.BuildTelemetryLog();
@@ -303,9 +300,15 @@ namespace AdbcDrivers.Databricks.Telemetry
 
                 client.Enqueue(frontendLog);
             }
-            catch
+            catch (Exception ex)
             {
-                // Telemetry must never impact driver operations.
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", operationType.ToString() }
+                    }));
             }
         }
 

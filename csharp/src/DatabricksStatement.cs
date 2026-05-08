@@ -71,6 +71,12 @@ namespace AdbcDrivers.Databricks
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
         private StatementTelemetryContext? _pendingTelemetryContext; // Telemetry context pending emission on Dispose
 
+        // Stopwatch covering the lifetime of this statement, started at construction.
+        // Used to scope CANCEL_STATEMENT timing within the statement's lifetime; CLOSE_STATEMENT
+        // does not record a per-operation latency (the driver issues no server-side close RPC).
+        private readonly Stopwatch _statementLifetimeStopwatch = Stopwatch.StartNew();
+        private bool _closeStatementTelemetryEmitted;
+
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
         public DatabricksStatement(DatabricksConnection connection)
@@ -1281,49 +1287,54 @@ namespace AdbcDrivers.Databricks
                     _pendingTelemetryContext = null;
                 }
 
-                // Emit a CLOSE_STATEMENT telemetry event for every statement disposal,
+                // Emit a CLOSE_STATEMENT telemetry event once per statement disposal,
                 // independently of any EXECUTE_STATEMENT/metadata event already emitted.
                 // The driver doesn't issue a separate server-side close RPC here (the
-                // base AdbcStatement Dispose just releases local resources), but JDBC
-                // emits CLOSE_STATEMENT for the same lifecycle hook so analysts can
-                // count statement-close events; we match that behaviour (PECO-2991).
+                // base AdbcStatement Dispose just releases local resources), so
+                // operation_latency_ms is reported as 0 — this event is a lifecycle
+                // marker for analysts to count statement closures, matching JDBC.
+                // _closeStatementTelemetryEmitted makes the emission idempotent across
+                // repeated Dispose() calls (PECO-2991).
                 try
                 {
-                    var session = ((DatabricksConnection)Connection).TelemetrySession;
-                    if (session?.TelemetryClient != null)
+                    if (!_closeStatementTelemetryEmitted)
                     {
-                        long elapsedMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
-                        ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
-                            OperationType.CloseStatement,
-                            Telemetry.Proto.Statement.Types.Type.Unspecified,
-                            StatementId,
-                            elapsedMs,
-                            error: null);
+                        var session = ((DatabricksConnection)Connection).TelemetrySession;
+                        if (session?.TelemetryClient != null)
+                        {
+                            _closeStatementTelemetryEmitted = true;
+                            ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                                OperationType.CloseStatement,
+                                Telemetry.Proto.Statement.Types.Type.Unspecified,
+                                StatementId,
+                                elapsedMs: 0,
+                                error: null);
+                        }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Telemetry must never impact driver operations.
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "operation_type", "CLOSE_STATEMENT" }
+                        }));
                 }
             }
             base.Dispose(disposing);
         }
-
-        /// <summary>
-        /// Stopwatch covering the lifetime of this statement, started at construction.
-        /// Used to populate operation_latency_ms for CANCEL_STATEMENT and CLOSE_STATEMENT
-        /// telemetry events that don't have their own timing instrumentation.
-        /// </summary>
-        private readonly Stopwatch _statementLifetimeStopwatch = Stopwatch.StartNew();
 
         /// <inheritdoc/>
         public override void Cancel()
         {
             // Emit CANCEL_STATEMENT telemetry around the base cancel call so we capture
             // user-initiated cancels even when the cancellation token has already
-            // disposed the execute path's pending telemetry context. The base class
-            // never throws here (it just signals the token source) but we still
-            // protect callers with a try/finally for resilience (PECO-2991).
+            // disposed the execute path's pending telemetry context. base.Cancel()
+            // signals the cancellation token source and is idempotent across repeats
+            // (PECO-2991). Each invocation emits its own event so analysts can see
+            // duplicate user-initiated cancels.
             Exception? error = null;
             long startMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
             try
@@ -1351,9 +1362,15 @@ namespace AdbcDrivers.Databricks
                             error);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Telemetry must never impact driver operations.
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "operation_type", "CANCEL_STATEMENT" }
+                        }));
                 }
             }
         }
