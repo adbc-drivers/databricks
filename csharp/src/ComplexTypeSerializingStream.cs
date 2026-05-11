@@ -23,16 +23,38 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc.Extensions;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
+using AdbcDrivers.Databricks.StatementExecution;
 
 namespace AdbcDrivers.Databricks
 {
     /// <summary>
-    /// Wraps an <see cref="IArrowArrayStream"/> and converts columns of complex Arrow types
-    /// (LIST, MAP represented as LIST of STRUCTs, STRUCT) into STRING columns containing
-    /// their JSON representation.
+    /// Wraps an <see cref="IArrowArrayStream"/> and converts ARRAY, MAP, and STRUCT columns
+    /// into STRING columns containing their JSON representation.
     ///
-    /// This is applied when EnableComplexDatatypeSupport=false (the default), so that SEA
+    /// <para>
+    /// Applied when <c>EnableComplexDatatypeSupport=false</c> (the default) so that SEA
     /// results match the legacy Thrift behavior of returning JSON strings for complex types.
+    /// </para>
+    ///
+    /// <para><strong>Why both schema and data must be converted:</strong>
+    /// Arrow streaming is strongly typed: the <see cref="Schema"/> and the arrays inside each
+    /// <see cref="RecordBatch"/> must agree on the column type. The manifest schema (built by
+    /// <c>TryGetSchemaFromManifest</c>) already declares complex columns as
+    /// <see cref="StringType"/>, so this stream only needs to convert the native Arrow arrays
+    /// (<c>ListArray</c>, <c>StructArray</c>, etc.) to <see cref="StringArray"/> at read time.
+    /// The schema it exposes to callers is the inner stream's schema unchanged.
+    /// </para>
+    ///
+    /// <para><strong>Column detection:</strong>
+    /// Complex columns are identified by the <c>Spark:DataType:SqlName</c> field metadata
+    /// (<see cref="ColumnMetadataHelper.ArrowMetadataKey"/>) that
+    /// <c>TryGetSchemaFromManifest</c> embeds when building the manifest schema. This is
+    /// the same key the Databricks server embeds in Arrow IPC field metadata for Thrift results
+    /// (and that the JDBC driver reads as <c>ARROW_METADATA_KEY</c>). Detecting via this
+    /// metadata — rather than by inspecting the Arrow field type — is necessary because the
+    /// manifest schema already uses <see cref="StringType"/> for complex columns, making
+    /// Arrow-type-based detection always return false.
+    /// </para>
     /// </summary>
     internal sealed class ComplexTypeSerializingStream : IArrowArrayStream
     {
@@ -43,7 +65,8 @@ namespace AdbcDrivers.Databricks
         public ComplexTypeSerializingStream(IArrowArrayStream inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            (_schema, _complexColumnIndices) = BuildStringSchema(inner.Schema);
+            _schema = inner.Schema;
+            _complexColumnIndices = DetectComplexColumns(_schema);
         }
 
         public Schema Schema => _schema;
@@ -86,33 +109,28 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Builds a new schema where all complex-type fields are replaced with StringType,
-        /// and returns the set of column indices that were converted.
+        /// Detects complex columns by inspecting the <c>Spark:DataType:SqlName</c> metadata
+        /// on each field. This works for all result paths because they all expose the manifest
+        /// schema, which carries that metadata and already types complex columns as StringType.
         /// </summary>
-        private static (Schema schema, HashSet<int> complexIndices) BuildStringSchema(Schema original)
+        private static HashSet<int> DetectComplexColumns(Schema schema)
         {
-            List<Field> fields = new List<Field>(original.FieldsList.Count);
             HashSet<int> indices = new HashSet<int>();
-
-            for (int i = 0; i < original.FieldsList.Count; i++)
+            for (int i = 0; i < schema.FieldsList.Count; i++)
             {
-                Field field = original.FieldsList[i];
-                if (IsComplexType(field.DataType))
+                Field field = schema.FieldsList[i];
+                if (field.Metadata != null &&
+                    field.Metadata.TryGetValue(ColumnMetadataHelper.ArrowMetadataKey, out string? sqlName) &&
+                    sqlName != null &&
+                    (sqlName.StartsWith("ARRAY", StringComparison.OrdinalIgnoreCase) ||
+                     sqlName.StartsWith("MAP", StringComparison.OrdinalIgnoreCase) ||
+                     sqlName.StartsWith("STRUCT", StringComparison.OrdinalIgnoreCase)))
                 {
-                    fields.Add(new Field(field.Name, StringType.Default, field.IsNullable, field.Metadata));
                     indices.Add(i);
                 }
-                else
-                {
-                    fields.Add(field);
-                }
             }
-
-            return (new Schema(fields, original.Metadata), indices);
+            return indices;
         }
-
-        private static bool IsComplexType(IArrowType type) =>
-            type is ListType || type is MapType || type is StructType;
 
         // --- JSON serialization helpers ---
 

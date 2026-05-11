@@ -255,7 +255,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                         OperationLatencyMs = 150,
                         SystemConfiguration = new DriverSystemConfiguration
                         {
-                            DriverName = "Databricks ADBC Driver",
+                            DriverName = DatabricksConnection.DatabricksDriverName,
                             DriverVersion = "1.0.0-test",
                             OsName = Environment.OSVersion.Platform.ToString(),
                             OsVersion = Environment.OSVersion.Version.ToString(),

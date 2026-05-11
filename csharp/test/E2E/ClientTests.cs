@@ -29,6 +29,10 @@ using Xunit.Abstractions;
 
 namespace AdbcDrivers.Databricks.Tests
 {
+    // The orderer is declared on the abstract base, but xUnit applies
+    // [TestCaseOrderer] from the concrete class — set it here so [Order(N)]
+    // is honored. See comment in DriverTests.cs for details.
+    [TestCaseOrderer("Apache.Arrow.Adbc.Tests.Xunit.TestOrderer", "Apache.Arrow.Adbc.Tests")]
     public class ClientTests : ClientTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public ClientTests(ITestOutputHelper? outputHelper)
@@ -42,19 +46,15 @@ namespace AdbcDrivers.Databricks.Tests
             return GetUpdateExpectedResults(affectedRows, true);
         }
 
-        // TODO: PECO-3012 - SEA ExecuteUpdate returns 0 affected rows instead of -1
         [SkippableFact, Order(1)]
         public override void CanClientExecuteUpdate()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanClientExecuteUpdate returns 0 affected rows instead of -1 (PECO-3012)");
             base.CanClientExecuteUpdate();
         }
 
-        // TODO: PECO-3006 - SEA CanClientExecuteQuery returns 0 rows
         [SkippableFact, Order(3)]
         public override void CanClientExecuteQuery()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanClientExecuteQuery returns 0 rows (PECO-3006)");
             base.CanClientExecuteQuery();
         }
 

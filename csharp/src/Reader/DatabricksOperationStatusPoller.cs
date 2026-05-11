@@ -25,6 +25,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
@@ -44,6 +45,7 @@ namespace AdbcDrivers.Databricks.Reader
         private readonly int _requestTimeoutSeconds;
         private readonly IResponse _response;
         private readonly IActivityTracer? _activityTracer;
+        private readonly StatementTelemetryContext? _telemetryContext;
         // internal cancellation token source - won't affect the external token
         private CancellationTokenSource? _internalCts;
         private Task? _operationStatusPollingTask;
@@ -61,13 +63,15 @@ namespace AdbcDrivers.Databricks.Reader
             IResponse response,
             int heartbeatIntervalSeconds = DatabricksConstants.DefaultOperationStatusPollingIntervalSeconds,
             int requestTimeoutSeconds = DatabricksConstants.DefaultOperationStatusRequestTimeoutSeconds,
-            IActivityTracer? activityTracer = null)
+            IActivityTracer? activityTracer = null,
+            StatementTelemetryContext? telemetryContext = null)
         {
             _statement = statement ?? throw new ArgumentNullException(nameof(statement));
             _response = response;
             _heartbeatIntervalSeconds = heartbeatIntervalSeconds;
             _requestTimeoutSeconds = requestTimeoutSeconds;
             _activityTracer = activityTracer;
+            _telemetryContext = telemetryContext;
         }
 
         public bool IsStarted => _operationStatusPollingTask != null;
@@ -135,13 +139,26 @@ namespace AdbcDrivers.Databricks.Reader
                     timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
 
                     TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
+                    Stopwatch pollStopwatch = Stopwatch.StartNew();
                     TGetOperationStatusResp response = await _statement.Client.GetOperationStatus(request, timeoutCts.Token).ConfigureAwait(false);
+                    pollStopwatch.Stop();
 
                     // Successful poll — reset failure counter
                     consecutiveFailures = 0;
 
                     // Track poll count for telemetry
                     _pollCount++;
+
+                    // Update per-statement telemetry context (PECO-2992) so the proto fields
+                    // n_operation_status_calls and operation_status_latency_millis are populated
+                    // from the actual polling activity. Counts only successful polls so the
+                    // ratio of total latency to count yields meaningful per-call latency.
+                    if (_telemetryContext != null)
+                    {
+                        _telemetryContext.PollCount = (_telemetryContext.PollCount ?? 0) + 1;
+                        _telemetryContext.PollLatencyMs =
+                            (_telemetryContext.PollLatencyMs ?? 0) + pollStopwatch.ElapsedMilliseconds;
+                    }
 
                     activity?.SetTag(StatementExecutionEvent.PollCount, _pollCount);
                     activity?.AddEvent(new ActivityEvent("operation_status_poller.poll_success",

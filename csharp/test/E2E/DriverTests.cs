@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2.Spark;
@@ -34,8 +35,12 @@ using Metadata = Apache.Arrow.Adbc.Tests.Metadata;
 
 namespace AdbcDrivers.Databricks.Tests
 {
-    // TODO: PECO-3006 - CanExecuteQuery/CanExecuteQueryAsync return 0 rows for SEA; fix result consumption in StatementExecutionStatement
-    // TODO: PECO-3012 - CanExecuteUpdate/CanClientExecuteUpdate return 0 affected rows instead of -1; map null affected-rows to -1 in StatementExecutionStatement.ExecuteUpdate
+    // The orderer is declared on the abstract base, but xUnit applies
+    // [TestCaseOrderer] from the concrete class — set it here so [Order(N)]
+    // is honored. Without this, CanExecuteQuery runs before CanExecuteUpdate
+    // and fails because adbc_testing_table doesn't exist yet in the per-run
+    // schema.
+    [TestCaseOrderer("Apache.Arrow.Adbc.Tests.Xunit.TestOrderer", "Apache.Arrow.Adbc.Tests")]
     public class DriverTests : DriverTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public DriverTests(ITestOutputHelper? outputHelper)
@@ -86,10 +91,8 @@ namespace AdbcDrivers.Databricks.Tests
             GetObjectsTablesTest(tableNamePattern: tableName, expectedTableName: tableName);
         }
 
-        // TODO: PECO-3006 - SEA CanExecuteQuery returns 0 rows
         protected override void ValidateCanExecuteQuery(double? batchSizeFactor)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanExecuteQuery returns 0 rows (PECO-3006)");
             base.ValidateCanExecuteQuery(batchSizeFactor);
         }
 
@@ -101,56 +104,53 @@ namespace AdbcDrivers.Databricks.Tests
             base.CanGetObjectsAll();
         }
 
-        // TODO: PECO-3012 - SEA ExecuteUpdate returns 0 affected rows instead of -1
         [SkippableFact, Order(1)]
         public override void CanExecuteUpdate()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA ExecuteUpdate returns 0 affected rows instead of -1 (PECO-3012)");
             base.CanExecuteUpdate();
         }
 
-        // TODO: PECO-3006 - SEA CanExecuteQueryAsync returns 0 rows
         [SkippableFact, Order(11)]
         public override async System.Threading.Tasks.Task CanExecuteQueryAsync()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanExecuteQueryAsync returns 0 rows (PECO-3006)");
             await base.CanExecuteQueryAsync();
         }
 
-        // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
         [SkippableFact, Order(14)]
         public override void CanDetectInvalidServer()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA throws ArgumentException instead of AdbcException for invalid server (PECO-3007)");
             AdbcDriver driver = NewDriver;
             Assert.NotNull(driver);
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
+            Stopwatch stopwatch = new();
 
+            var host = "unknownhost.azure.com";
             bool hasUri = parameters.TryGetValue(AdbcOptions.Uri, out var uri) && !string.IsNullOrEmpty(uri);
             bool hasHostName = parameters.TryGetValue(SparkParameters.HostName, out var hostName) && !string.IsNullOrEmpty(hostName);
             if (hasUri)
             {
-                parameters[AdbcOptions.Uri] = "http://unknownhost.azure.com/cliservice";
+                parameters[AdbcOptions.Uri] = $"http://{host}/cliservice";
             }
             else if (hasHostName)
             {
-                parameters[SparkParameters.HostName] = "unknownhost.azure.com";
+                parameters[SparkParameters.HostName] = host;
             }
             else
             {
                 Assert.Fail($"Unexpected configuration. Must provide '{AdbcOptions.Uri}' or '{SparkParameters.HostName}'.");
             }
 
+            stopwatch.Restart();
             AdbcDatabase database = driver.Open(parameters);
             AdbcException exception = Assert.ThrowsAny<AdbcException>(() => database.Connect(parameters));
-            OutputHelper?.WriteLine(exception.Message);
+            stopwatch.Stop();
+            OutputHelper?.WriteLine($"host: '{host}' - elapsed time: {stopwatch.Elapsed} - \n{exception.Message}");
+            Assert.InRange(stopwatch.Elapsed, TimeSpan.FromSeconds(0), TimeSpan.FromMinutes(1));
         }
 
-        // TODO: PECO-3007 - SEA returns UnknownError instead of Unauthorized; fix HTTP status code mapping in StatementExecutionClient
         [SkippableFact, Order(13)]
         public override void CanDetectInvalidAuthentication()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns UnknownError status instead of Unauthorized (PECO-3007)");
             AdbcDriver driver = NewDriver;
             Assert.NotNull(driver);
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
