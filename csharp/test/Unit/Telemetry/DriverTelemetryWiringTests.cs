@@ -146,6 +146,26 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
+        public void EmitDeleteSessionTelemetry_ForwardsLatencyAndError()
+        {
+            // Production code times base.Dispose (which runs TCloseSessionReq) and passes
+            // the elapsed ms + any thrown exception to EmitDeleteSessionTelemetry. Verify
+            // both flow through to the captured telemetry call.
+            using var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            connection.EmitCreateSessionTelemetry();
+            var rpcError = new InvalidOperationException("close session failed");
+            connection.EmitDeleteSessionTelemetry(elapsedMs: 73, error: rpcError);
+
+            int deleteIdx = fake.Calls.IndexOf(OperationType.DeleteSession);
+            Assert.True(deleteIdx >= 0);
+            Assert.Equal(73, fake.LatenciesByOp[OperationType.DeleteSession]);
+            Assert.Same(rpcError, fake.Errors[deleteIdx]);
+        }
+
+        [Fact]
         public void Dispose_CalledTwice_FiresDeleteSessionOnlyOnce()
         {
             var connection = CreateConnection();

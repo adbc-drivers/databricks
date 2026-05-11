@@ -1054,12 +1054,36 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
-                EmitDeleteSessionTelemetry();
+                // Order matters here:
+                // 1. base.Dispose runs the TCloseSessionReq RPC (in HiveServer2Connection.DisposeClient);
+                //    time it so DELETE_SESSION can report real operation_latency_ms.
+                // 2. Emit DELETE_SESSION with the captured latency (telemetry client is still alive).
+                // 3. Flush + release the telemetry client via DisposeTelemetryAsync so the
+                //    queued event is exported before we return.
+                long closeSessionElapsedMs = 0;
+                Exception? closeSessionError = null;
+                var closeStopwatch = Stopwatch.StartNew();
+                try
+                {
+                    base.Dispose(disposing);
+                }
+                catch (Exception ex)
+                {
+                    closeSessionError = ex;
+                    throw;
+                }
+                finally
+                {
+                    closeStopwatch.Stop();
+                    closeSessionElapsedMs = closeStopwatch.ElapsedMilliseconds;
+                    EmitDeleteSessionTelemetry(closeSessionElapsedMs, closeSessionError);
 
-                // Clean up telemetry client
-                // This is synchronous because Dispose() cannot be async
-                // We use GetAwaiter().GetResult() to block, which is acceptable in Dispose
-                DisposeTelemetryAsync().GetAwaiter().GetResult();
+                    // Clean up telemetry client.
+                    // This is synchronous because Dispose() cannot be async; we block on
+                    // GetAwaiter().GetResult(), which is acceptable in Dispose.
+                    DisposeTelemetryAsync().GetAwaiter().GetResult();
+                }
+                return;
             }
 
             base.Dispose(disposing);
@@ -1067,12 +1091,12 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Emits the DELETE_SESSION telemetry event when a session was previously opened.
-        /// The actual close RPC happens later in <see cref="SparkHttpConnection"/>'s
-        /// dispose path, so <c>operation_latency_ms</c> is reported as 0 to avoid
-        /// conflating session lifetime with close latency. Idempotent across repeated
-        /// <see cref="Dispose(bool)"/> calls. Internal for test access.
+        /// <paramref name="elapsedMs"/> is the measured duration of <c>base.Dispose</c>,
+        /// which is dominated by the <c>TCloseSessionReq</c> RPC in
+        /// <see cref="AdbcDrivers.HiveServer2.HiveServer2Connection.DisposeClient"/>.
+        /// Idempotent across repeated <see cref="Dispose(bool)"/> calls. Internal for test access.
         /// </summary>
-        internal void EmitDeleteSessionTelemetry()
+        internal void EmitDeleteSessionTelemetry(long elapsedMs = 0, Exception? error = null)
         {
             try
             {
@@ -1083,8 +1107,8 @@ namespace AdbcDrivers.Databricks
                         Telemetry.Proto.Operation.Types.Type.DeleteSession,
                         Telemetry.Proto.Statement.Types.Type.Unspecified,
                         statementId: null,
-                        elapsedMs: 0,
-                        error: null);
+                        elapsedMs: elapsedMs,
+                        error: error);
                 }
             }
             catch (Exception ex)
