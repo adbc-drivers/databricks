@@ -59,6 +59,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public List<OperationType> Calls { get; } = new();
             public List<Exception?> Errors { get; } = new();
             public List<string?> StatementIds { get; } = new();
+            public Dictionary<OperationType, long> LatenciesByOp { get; } = new();
             public TelemetrySessionContext? Session { get; }
                 = new TelemetrySessionContext
                 {
@@ -82,6 +83,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 Calls.Add(operationType);
                 Errors.Add(error);
                 StatementIds.Add(statementId);
+                LatenciesByOp[operationType] = elapsedMs;
             }
 
             public Task DisposeAsync()
@@ -173,6 +175,41 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             statement.Dispose();
 
             Assert.Contains(OperationType.CloseStatement, fake.Calls);
+        }
+
+        [Fact]
+        public void StatementDispose_PassesCapturedRpcLatencyToTelemetry()
+        {
+            // DatabricksCompositeReader stashes the TCloseOperationReq RPC latency on the
+            // statement; statement Dispose should forward it as operation_latency_ms.
+            using var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            var statement = new DatabricksStatement(connection);
+            statement.CloseStatementRpcLatencyMs = 42;
+            statement.Dispose();
+
+            Assert.Contains(OperationType.CloseStatement, fake.Calls);
+            Assert.Equal(42, fake.LatenciesByOp[OperationType.CloseStatement]);
+        }
+
+        [Fact]
+        public void StatementDispose_ForwardsCapturedRpcError()
+        {
+            using var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            var statement = new DatabricksStatement(connection);
+            var rpcError = new InvalidOperationException("close failed");
+            statement.CloseStatementRpcLatencyMs = 5;
+            statement.CloseStatementRpcError = rpcError;
+            statement.Dispose();
+
+            int closeIdx = fake.Calls.IndexOf(OperationType.CloseStatement);
+            Assert.True(closeIdx >= 0);
+            Assert.Same(rpcError, fake.Errors[closeIdx]);
         }
 
         [Fact]

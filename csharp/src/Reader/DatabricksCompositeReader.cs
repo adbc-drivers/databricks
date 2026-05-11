@@ -241,8 +241,30 @@ namespace AdbcDrivers.Databricks.Reader
                             // CloudFetchReader is protocol-agnostic and does not send CloseOperation,
                             // so we must not rely on the contained reader to do it.
                             activity?.AddEvent("composite_reader.close_operation");
-                            _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
-                                .ConfigureAwait(false).GetAwaiter().GetResult();
+                            // Time the TCloseOperationReq RPC so CLOSE_STATEMENT telemetry
+                            // emitted later from DatabricksStatement.Dispose can report the
+                            // actual server-side close latency (PECO-2991).
+                            var closeStopwatch = Stopwatch.StartNew();
+                            Exception? closeError = null;
+                            try
+                            {
+                                _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
+                                    .ConfigureAwait(false).GetAwaiter().GetResult();
+                            }
+                            catch (Exception ex)
+                            {
+                                closeError = ex;
+                                throw;
+                            }
+                            finally
+                            {
+                                closeStopwatch.Stop();
+                                if (_statement is DatabricksStatement dbxStatement)
+                                {
+                                    dbxStatement.CloseStatementRpcLatencyMs = closeStopwatch.ElapsedMilliseconds;
+                                    dbxStatement.CloseStatementRpcError = closeError;
+                                }
+                            }
                             if (_activeReader != null)
                             {
                                 activity?.AddEvent("composite_reader.disposing_active_reader", [

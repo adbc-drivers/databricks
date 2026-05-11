@@ -72,10 +72,15 @@ namespace AdbcDrivers.Databricks
         private StatementTelemetryContext? _pendingTelemetryContext; // Telemetry context pending emission on Dispose
 
         // Stopwatch covering the lifetime of this statement, started at construction.
-        // Used to scope CANCEL_STATEMENT timing within the statement's lifetime; CLOSE_STATEMENT
-        // does not record a per-operation latency (the driver issues no server-side close RPC).
+        // Used to scope CANCEL_STATEMENT timing within the statement's lifetime.
         private readonly Stopwatch _statementLifetimeStopwatch = Stopwatch.StartNew();
         private bool _closeStatementTelemetryEmitted;
+
+        // Populated by DatabricksCompositeReader.Dispose when it issues TCloseOperationReq
+        // to the server. Lets us report the actual close-RPC latency in the CLOSE_STATEMENT
+        // telemetry event emitted at statement Dispose, instead of a meaningless 0.
+        internal long? CloseStatementRpcLatencyMs { get; set; }
+        internal Exception? CloseStatementRpcError { get; set; }
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -1289,10 +1294,12 @@ namespace AdbcDrivers.Databricks
 
                 // Emit a CLOSE_STATEMENT telemetry event once per statement disposal,
                 // independently of any EXECUTE_STATEMENT/metadata event already emitted.
-                // The driver doesn't issue a separate server-side close RPC here (the
-                // base AdbcStatement Dispose just releases local resources), so
-                // operation_latency_ms is reported as 0 — this event is a lifecycle
-                // marker for analysts to count statement closures, matching JDBC.
+                // operation_latency_ms reflects the TCloseOperationReq RPC duration when
+                // the result reader actually closed the operation server-side
+                // (DatabricksCompositeReader stashes that timing here); if no close RPC
+                // was issued (e.g. user disposed the statement without consuming results,
+                // or the operation was already closed by direct-results), elapsedMs is 0
+                // and the event acts purely as a lifecycle marker.
                 // _closeStatementTelemetryEmitted makes the emission idempotent across
                 // repeated Dispose() calls (PECO-2991).
                 try
@@ -1307,8 +1314,8 @@ namespace AdbcDrivers.Databricks
                                 OperationType.CloseStatement,
                                 Telemetry.Proto.Statement.Types.Type.Unspecified,
                                 StatementId,
-                                elapsedMs: 0,
-                                error: null);
+                                elapsedMs: CloseStatementRpcLatencyMs ?? 0,
+                                error: CloseStatementRpcError);
                         }
                     }
                 }
