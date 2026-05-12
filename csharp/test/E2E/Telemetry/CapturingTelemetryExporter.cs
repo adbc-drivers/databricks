@@ -20,20 +20,36 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 
 namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
 {
     /// <summary>
-    /// A telemetry exporter that captures all exported logs for test assertions.
+    /// A telemetry exporter that captures exported logs for test assertions.
     /// Thread-safe for concurrent export calls.
     /// </summary>
+    /// <remarks>
+    /// By default the exporter excludes the PECO-2991 lifecycle events
+    /// (CREATE_SESSION, DELETE_SESSION, CANCEL_STATEMENT, CLOSE_STATEMENT) so
+    /// existing tests written against EXECUTE_STATEMENT / metadata events keep
+    /// using <c>logs[0]</c> and <c>AssertLogCount(logs, 1)</c> unchanged. Tests
+    /// that need to observe lifecycle events should set
+    /// <see cref="CaptureLifecycleEvents"/> to <c>true</c>.
+    /// </remarks>
     internal sealed class CapturingTelemetryExporter : ITelemetryExporter
     {
         private readonly ConcurrentBag<TelemetryFrontendLog> _exportedLogs = new ConcurrentBag<TelemetryFrontendLog>();
         private int _exportCallCount;
 
         /// <summary>
-        /// Gets all captured telemetry logs.
+        /// When false (default), session/statement lifecycle events
+        /// (CREATE_SESSION, DELETE_SESSION, CANCEL_STATEMENT, CLOSE_STATEMENT)
+        /// are silently dropped at export time. Set to true to capture every log.
+        /// </summary>
+        public bool CaptureLifecycleEvents { get; set; }
+
+        /// <summary>
+        /// Gets all captured telemetry logs (after lifecycle filtering, if enabled).
         /// </summary>
         public IReadOnlyCollection<TelemetryFrontendLog> ExportedLogs => _exportedLogs;
 
@@ -50,6 +66,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             {
                 foreach (var log in logs)
                 {
+                    if (!CaptureLifecycleEvents && IsLifecycleEvent(log))
+                    {
+                        continue;
+                    }
                     _exportedLogs.Add(log);
                 }
             }
@@ -64,6 +84,15 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         {
             while (_exportedLogs.TryTake(out _)) { }
             Interlocked.Exchange(ref _exportCallCount, 0);
+        }
+
+        private static bool IsLifecycleEvent(TelemetryFrontendLog log)
+        {
+            var opType = log.Entry?.SqlDriverLog?.SqlOperation?.OperationDetail?.OperationType;
+            return opType == Operation.Types.Type.CreateSession
+                || opType == Operation.Types.Type.DeleteSession
+                || opType == Operation.Types.Type.CloseStatement
+                || opType == Operation.Types.Type.CancelStatement;
         }
     }
 }

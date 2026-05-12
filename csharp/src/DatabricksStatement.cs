@@ -84,6 +84,17 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal StatementTelemetryContext? PendingTelemetryContext { get; private set; }
 
+        // Stopwatch covering the lifetime of this statement, started at construction.
+        // Used to scope CANCEL_STATEMENT timing within the statement's lifetime.
+        private readonly Stopwatch _statementLifetimeStopwatch = Stopwatch.StartNew();
+        private bool _closeStatementTelemetryEmitted;
+
+        // Populated by DatabricksCompositeReader.Dispose when it issues TCloseOperationReq
+        // to the server. Lets us report the actual close-RPC latency in the CLOSE_STATEMENT
+        // telemetry event emitted at statement Dispose, instead of a meaningless 0.
+        internal long? CloseStatementRpcLatencyMs { get; set; }
+        internal Exception? CloseStatementRpcError { get; set; }
+
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
         public DatabricksStatement(DatabricksConnection connection)
@@ -1287,13 +1298,103 @@ namespace AdbcDrivers.Databricks
         /// <param name="disposing">True if disposing managed resources.</param>
         protected override void Dispose(bool disposing)
         {
-            if (disposing && PendingTelemetryContext != null)
+            if (disposing)
             {
-                // Emit telemetry now that results have been consumed
-                EmitTelemetry(PendingTelemetryContext);
-                PendingTelemetryContext = null;
+                if (PendingTelemetryContext != null)
+                {
+                    // Emit telemetry now that results have been consumed
+                    EmitTelemetry(PendingTelemetryContext);
+                    PendingTelemetryContext = null;
+                }
+
+                // Emit a CLOSE_STATEMENT telemetry event once per statement disposal,
+                // independently of any EXECUTE_STATEMENT/metadata event already emitted.
+                // operation_latency_ms reflects the TCloseOperationReq RPC duration when
+                // the result reader actually closed the operation server-side
+                // (DatabricksCompositeReader stashes that timing here); if no close RPC
+                // was issued (e.g. user disposed the statement without consuming results,
+                // or the operation was already closed by direct-results), elapsedMs is 0
+                // and the event acts purely as a lifecycle marker.
+                // _closeStatementTelemetryEmitted makes the emission idempotent across
+                // repeated Dispose() calls (PECO-2991).
+                try
+                {
+                    if (!_closeStatementTelemetryEmitted)
+                    {
+                        var session = ((DatabricksConnection)Connection).TelemetrySession;
+                        if (session?.TelemetryClient != null)
+                        {
+                            _closeStatementTelemetryEmitted = true;
+                            ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                                OperationType.CloseStatement,
+                                Telemetry.Proto.Statement.Types.Type.Unspecified,
+                                StatementId,
+                                elapsedMs: CloseStatementRpcLatencyMs ?? 0,
+                                error: CloseStatementRpcError);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "operation_type", "CLOSE_STATEMENT" }
+                        }));
+                }
             }
             base.Dispose(disposing);
+        }
+
+        /// <inheritdoc/>
+        public override void Cancel()
+        {
+            // Emit CANCEL_STATEMENT telemetry around the base cancel call so we capture
+            // user-initiated cancels even when the cancellation token has already
+            // disposed the execute path's pending telemetry context. base.Cancel()
+            // signals the cancellation token source and is idempotent across repeats
+            // (PECO-2991). Each invocation emits its own event so analysts can see
+            // duplicate user-initiated cancels.
+            Exception? error = null;
+            long startMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
+            try
+            {
+                base.Cancel();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                throw;
+            }
+            finally
+            {
+                try
+                {
+                    var session = ((DatabricksConnection)Connection).TelemetrySession;
+                    if (session?.TelemetryClient != null)
+                    {
+                        long elapsedMs = _statementLifetimeStopwatch.ElapsedMilliseconds - startMs;
+                        ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                            OperationType.CancelStatement,
+                            Telemetry.Proto.Statement.Types.Type.Unspecified,
+                            StatementId,
+                            elapsedMs,
+                            error);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "operation_type", "CANCEL_STATEMENT" }
+                        }));
+                }
+            }
         }
     }
 }

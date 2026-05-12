@@ -113,6 +113,14 @@ namespace AdbcDrivers.Databricks
 
         // Telemetry
         private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
+        // Stopwatch covering the connection lifetime; started at construction and used to
+        // measure session-open latency for the CREATE_SESSION telemetry event. The wall-clock
+        // time between construction and HandleOpenSessionResponse encompasses transport setup
+        // and the OpenSession RPC. This is wider than the OpenSession RPC alone (which is
+        // what JDBC measures); cross-driver dashboards should account for the difference.
+        private readonly Stopwatch _connectionLifetimeStopwatch = Stopwatch.StartNew();
+        private bool _sessionOpenTelemetryEmitted;
+        private bool _sessionDeleteTelemetryEmitted;
         internal TelemetrySessionContext? TelemetrySession => _telemetry.Session;
 
         /// <summary>
@@ -663,6 +671,50 @@ namespace AdbcDrivers.Databricks
 
             // Initialize telemetry after successful session creation
             InitializeTelemetry(activity);
+
+            EmitCreateSessionTelemetry(activity);
+        }
+
+        /// <summary>
+        /// Emits the CREATE_SESSION telemetry event. Internal so unit tests can call this
+        /// directly after injecting a fake <see cref="IConnectionTelemetry"/> via the
+        /// <see cref="TelemetryForTesting"/> seam, without needing to drive a full Thrift
+        /// session-open RPC.
+        /// </summary>
+        internal void EmitCreateSessionTelemetry(Activity? activity = null)
+        {
+            try
+            {
+                long elapsedMs = _connectionLifetimeStopwatch.ElapsedMilliseconds;
+                _telemetry.EmitOperationTelemetry(
+                    Telemetry.Proto.Operation.Types.Type.CreateSession,
+                    Telemetry.Proto.Statement.Types.Type.Unspecified,
+                    statementId: null,
+                    elapsedMs: elapsedMs,
+                    error: null);
+                _sessionOpenTelemetryEmitted = true;
+            }
+            catch (Exception ex)
+            {
+                activity?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", "CREATE_SESSION" }
+                    }));
+            }
+        }
+
+        /// <summary>
+        /// Test seam allowing unit tests to substitute a fake <see cref="IConnectionTelemetry"/>
+        /// so they can verify the production code calls <c>EmitOperationTelemetry</c> at the
+        /// right lifecycle hooks. Production code never sets this property.
+        /// </summary>
+        internal IConnectionTelemetry TelemetryForTesting
+        {
+            get => _telemetry;
+            set => _telemetry = value;
         }
 
         /// <summary>
@@ -1011,19 +1063,99 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
-                // Clean up telemetry client
-                // This is synchronous because Dispose() cannot be async
-                // We use GetAwaiter().GetResult() to block, which is acceptable in Dispose
-                DisposeTelemetryAsync().GetAwaiter().GetResult();
+                // Order matters here:
+                // 1. base.Dispose runs the TCloseSessionReq RPC (in HiveServer2Connection.DisposeClient);
+                //    time it so DELETE_SESSION can report real operation_latency_ms.
+                // 2. Emit DELETE_SESSION with the captured latency (telemetry client is still alive).
+                // 3. Flush + release the telemetry client via DisposeTelemetryAsync so the
+                //    queued event is exported before we return.
+                long closeSessionElapsedMs = 0;
+                Exception? closeSessionError = null;
+                var closeStopwatch = Stopwatch.StartNew();
+                try
+                {
+                    base.Dispose(disposing);
+                }
+                catch (Exception ex)
+                {
+                    closeSessionError = ex;
+                    throw;
+                }
+                finally
+                {
+                    closeStopwatch.Stop();
+                    closeSessionElapsedMs = closeStopwatch.ElapsedMilliseconds;
+                    EmitDeleteSessionTelemetry(closeSessionElapsedMs, closeSessionError);
+
+                    // Clean up telemetry client.
+                    // This is synchronous because Dispose() cannot be async; we block on
+                    // GetAwaiter().GetResult(), which is acceptable in Dispose.
+                    DisposeTelemetryAsync().GetAwaiter().GetResult();
+                }
+                return;
             }
 
             base.Dispose(disposing);
         }
 
         /// <summary>
+        /// Emits the DELETE_SESSION telemetry event when a session was previously opened.
+        /// <paramref name="elapsedMs"/> is the measured duration of <c>base.Dispose</c>,
+        /// which is dominated by the <c>TCloseSessionReq</c> RPC in
+        /// <see cref="AdbcDrivers.HiveServer2.HiveServer2Connection.DisposeClient"/>.
+        /// Idempotent across repeated <see cref="Dispose(bool)"/> calls. Internal for test access.
+        /// </summary>
+        internal void EmitDeleteSessionTelemetry(long elapsedMs = 0, Exception? error = null)
+        {
+            try
+            {
+                if (_sessionOpenTelemetryEmitted && !_sessionDeleteTelemetryEmitted)
+                {
+                    _sessionDeleteTelemetryEmitted = true;
+                    _telemetry.EmitOperationTelemetry(
+                        Telemetry.Proto.Operation.Types.Type.DeleteSession,
+                        Telemetry.Proto.Statement.Types.Type.Unspecified,
+                        statementId: null,
+                        elapsedMs: elapsedMs,
+                        error: error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", "DELETE_SESSION" }
+                    }));
+            }
+        }
+
+        /// <summary>
         /// Disposes telemetry client asynchronously.
         /// </summary>
         private Task DisposeTelemetryAsync() => _telemetry.DisposeAsync();
+
+        /// <summary>
+        /// Statement-facing entry point for emitting telemetry for discrete statement
+        /// operations (CANCEL_STATEMENT, CLOSE_STATEMENT) that don't have their own
+        /// execute path. Delegates to the connection's telemetry implementation.
+        /// </summary>
+        internal void EmitStatementOperationTelemetry(
+            Telemetry.Proto.Operation.Types.Type operationType,
+            Telemetry.Proto.Statement.Types.Type statementType,
+            string? statementId,
+            long elapsedMs,
+            Exception? error)
+        {
+            _telemetry.EmitOperationTelemetry(
+                operationType,
+                statementType,
+                statementId,
+                elapsedMs,
+                error);
+        }
 
         /// <summary>
         /// Gets operating system information.

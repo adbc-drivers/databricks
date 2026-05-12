@@ -45,7 +45,9 @@ namespace AdbcDrivers.Databricks.Telemetry
 
         public TelemetrySessionContext? Session { get; }
 
-        private ConnectionTelemetry(
+        // Internal so unit tests can construct an instance with a mock ITelemetryClient
+        // (the public Create() factory always wires up the real TelemetryClientManager).
+        internal ConnectionTelemetry(
             string host,
             ITelemetryClient telemetryClient,
             TelemetrySessionContext session)
@@ -241,6 +243,86 @@ namespace AdbcDrivers.Databricks.Telemetry
             }
 
             return result;
+        }
+
+        public void EmitOperationTelemetry(
+            Proto.Operation.Types.Type operationType,
+            Proto.Statement.Types.Type statementType,
+            string? statementId,
+            long elapsedMs,
+            Exception? error)
+        {
+            // Defensive: never throw into driver paths. Every step is wrapped because the
+            // session context could be partially populated (e.g. CREATE_SESSION fires before
+            // SessionId is set on the proto path) and proto-building must not fail callers.
+            try
+            {
+                ITelemetryClient? client = _telemetryClient;
+                if (client == null || Session == null)
+                {
+                    return;
+                }
+
+                StatementTelemetryContext ctx;
+                try
+                {
+                    ctx = new StatementTelemetryContext(Session)
+                    {
+                        OperationType = operationType,
+                        StatementType = statementType,
+                        StatementId = statementId,
+                        ResultFormat = Proto.ExecutionResult.Types.Format.InlineArrow,
+                        IsCompressed = false,
+                    };
+                }
+                catch
+                {
+                    return;
+                }
+
+                if (error != null)
+                {
+                    ctx.HasError = true;
+                    ctx.ErrorName = error.GetType().Name;
+                    // Note: error.Message is intentionally not captured. The proto's
+                    // DriverErrorInfo only emits error_name today (error_message field 3
+                    // is pending LPP review per sql_driver_telemetry.proto). When the
+                    // proto field lands, capture .Message here behind a try/catch
+                    // (some exceptions throw from their .Message property).
+                }
+
+                Proto.OssSqlDriverTelemetryLog log = ctx.BuildTelemetryLog();
+                // Override the Stopwatch-derived latency with the caller-provided elapsed
+                // time so the recorded latency reflects the actual operation, not the
+                // negligible time spent inside this helper.
+                log.OperationLatencyMs = elapsedMs;
+
+                var frontendLog = new TelemetryFrontendLog
+                {
+                    WorkspaceId = ctx.WorkspaceId,
+                    FrontendLogEventId = System.Guid.NewGuid().ToString(),
+                    Context = new FrontendLogContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    },
+                    Entry = new FrontendLogEntry
+                    {
+                        SqlDriverLog = log,
+                    },
+                };
+
+                client.Enqueue(frontendLog);
+            }
+            catch (Exception ex)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", operationType.ToString() }
+                    }));
+            }
         }
 
         public async Task DisposeAsync()
