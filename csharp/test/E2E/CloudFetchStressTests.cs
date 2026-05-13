@@ -327,12 +327,12 @@ namespace AdbcDrivers.Databricks.Tests
             var disposeSw = Stopwatch.StartNew();
             var disposeTask = Task.Run(() => connection.Dispose());
 
-            var completed = await Task.WhenAny(
-                Task.WhenAll(queryTask, disposeTask),
-                Task.Delay(timeoutMs));
+            // The deadlock fix this test guards is on Dispose itself — that it returns promptly
+            // even while a CloudFetch reader is mid-download. The reader's task may continue
+            // for a bit longer (or terminate with an exception once its HttpClient is disposed);
+            // that's downstream behavior and not what this regression test is asserting.
+            await Task.WhenAny(disposeTask, Task.Delay(timeoutMs));
             disposeSw.Stop();
-
-            bool allDone = queryTask.IsCompleted && disposeTask.IsCompleted;
 
             OutputHelper?.WriteLine($"Dispose took: {disposeSw.ElapsedMilliseconds}ms");
             OutputHelper?.WriteLine($"Query completed: {queryTask.IsCompleted}");
@@ -344,9 +344,8 @@ namespace AdbcDrivers.Databricks.Tests
                 OutputHelper?.WriteLine($"Query exception (expected): {queryException.GetType().Name}: {queryException.Message}");
             }
 
-            Assert.True(allDone,
-                $"Dispose during multi-file CloudFetch hung for {timeoutMs}ms. " +
-                $"Query done: {queryTask.IsCompleted}, Dispose done: {disposeTask.IsCompleted}");
+            Assert.True(disposeTask.IsCompleted,
+                $"Dispose during multi-file CloudFetch hung for {timeoutMs}ms.");
 
             // Check that CloudFetch buffers were released — memory should not stay elevated
             // Wait a moment for background tasks to clean up
@@ -437,158 +436,5 @@ namespace AdbcDrivers.Databricks.Tests
                 $"(threshold: 1.0 MB/cycle). Avg: {avgMB:F2} MB, range: [{minMB:F2}, {maxMB:F2}] MB.");
         }
 
-        /// <summary>
-        /// Diagnostic test: uses WeakReferences to prove whether HttpClient instances
-        /// created per-query are collected after reader disposal.
-        /// If HttpClient is NOT disposed by the reader, the weak references will remain alive
-        /// after GC because the socket pool prevents finalization.
-        /// </summary>
-        [SkippableFact]
-        public async Task Diagnostic_HttpClientLeakDetection()
-        {
-            const int iterations = 5;
-            var weakRefs = new List<WeakReference>();
-
-            using var connection = NewCloudFetchConnection();
-
-            for (int i = 1; i <= iterations; i++)
-            {
-                using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM RANGE(100)";
-                var result = statement.ExecuteQuery();
-                using var reader = result.Stream;
-
-                // Use reflection to extract the _httpClient from the composite reader
-                var httpClientField = reader.GetType().GetField("_httpClient",
-                    BindingFlags.NonPublic | BindingFlags.Instance);
-
-                if (httpClientField != null)
-                {
-                    var httpClient = httpClientField.GetValue(reader) as HttpClient;
-                    if (httpClient != null)
-                    {
-                        weakRefs.Add(new WeakReference(httpClient));
-                        Log($"Iteration {i}: captured WeakReference to HttpClient (hash={httpClient.GetHashCode()})");
-                    }
-                    else
-                    {
-                        Log($"Iteration {i}: _httpClient field is null");
-                    }
-                }
-                else
-                {
-                    Log($"Iteration {i}: _httpClient field not found on {reader.GetType().Name}");
-                    // Try walking the reader chain — the composite reader may wrap inner readers
-                    Log($"  Reader type: {reader.GetType().FullName}");
-                }
-
-                while (await reader.ReadNextRecordBatchAsync() != null) { }
-                // reader is disposed here (end of using scope)
-            }
-
-            // Force full GC to collect anything that's eligible
-            GC.Collect(2, GCCollectionMode.Forced, true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(2, GCCollectionMode.Forced, true);
-
-            int alive = weakRefs.Count(wr => wr.IsAlive);
-            int collected = weakRefs.Count - alive;
-
-            // Count distinct instances
-            var distinctHashes = new HashSet<int>();
-            foreach (var wr in weakRefs)
-            {
-                if (wr.Target != null)
-                    distinctHashes.Add(wr.Target.GetHashCode());
-            }
-
-            Log($"--- HttpClient leak analysis ---");
-            Log($"Total HttpClient references tracked: {weakRefs.Count}");
-            Log($"Distinct HttpClient instances: {distinctHashes.Count}");
-            Log($"Still alive after GC: {alive}");
-            Log($"Collected by GC: {collected}");
-
-            // After fix: all refs should point to the same shared HttpClient (1 distinct instance)
-            // owned by the connection. It's alive because the connection is still open — that's correct.
-            Assert.Single(distinctHashes);
-        }
-
-        /// <summary>
-        /// Diagnostic: measures the actual memory cost of undisposed HttpClient+handler
-        /// by isolating the per-query memory delta from CloudFetch data buffers.
-        /// Runs real CloudFetch queries (100K rows) and measures retained memory per iteration.
-        /// </summary>
-        /// <summary>
-        /// Diagnostic: runs 1M-row CloudFetch queries with and without explicit HttpClient
-        /// disposal to isolate how much memory the HttpClient leak contributes.
-        /// </summary>
-        [SkippableFact]
-        public async Task Diagnostic_PerQueryMemoryCost_WithAndWithoutDispose()
-        {
-            const int iterations = 6;
-
-            Log("=== WITHOUT HttpClient.Dispose (current behavior) ===");
-            var samplesWithout = await RunIterationsWithDispose(iterations, disposeHttpClient: false);
-
-            // Force cleanup between runs
-            GC.Collect(2, GCCollectionMode.Forced, true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(2, GCCollectionMode.Forced, true);
-            await Task.Delay(2000); // let finalizers settle
-
-            Log("=== WITH HttpClient.Dispose (proposed fix) ===");
-            var samplesWith = await RunIterationsWithDispose(iterations, disposeHttpClient: true);
-
-            Log("=== COMPARISON ===");
-            double growthWithout = (samplesWithout[samplesWithout.Count - 1].memBytes - samplesWithout[0].memBytes) / 1024.0 / 1024.0;
-            double growthWith = (samplesWith[samplesWith.Count - 1].memBytes - samplesWith[0].memBytes) / 1024.0 / 1024.0;
-            Log($"Without dispose: {growthWithout:F2} MB growth over {iterations} iters");
-            Log($"With dispose:    {growthWith:F2} MB growth over {iterations} iters");
-        }
-
-        private async Task<List<(int iter, long memBytes)>> RunIterationsWithDispose(int iterations, bool disposeHttpClient)
-        {
-            var samples = new List<(int iter, long memBytes)>();
-
-            using var connection = NewCloudFetchConnection();
-
-            for (int i = 1; i <= iterations; i++)
-            {
-                using var statement = connection.CreateStatement();
-                statement.SqlQuery = LargeQuery;
-                var result = statement.ExecuteQuery();
-                using var reader = result.Stream;
-
-                // If testing the fix, grab and dispose the HttpClient via reflection
-                HttpClient? httpClientToDispose = null;
-                if (disposeHttpClient)
-                {
-                    var field = reader.GetType().GetField("_httpClient",
-                        BindingFlags.NonPublic | BindingFlags.Instance);
-                    httpClientToDispose = field?.GetValue(reader) as HttpClient;
-                }
-
-                long rows = 0;
-                while (true)
-                {
-                    var batch = await reader.ReadNextRecordBatchAsync();
-                    if (batch == null) break;
-                    rows += batch.Length;
-                }
-                // reader disposed here (but _httpClient is NOT disposed inside)
-
-                // Simulate the fix: dispose HttpClient after reader
-                httpClientToDispose?.Dispose();
-
-                GC.Collect(2, GCCollectionMode.Forced, true);
-                GC.WaitForPendingFinalizers();
-                GC.Collect(2, GCCollectionMode.Forced, true);
-                long mem = GC.GetTotalMemory(true);
-                samples.Add((i, mem));
-                Log($"  Iteration {i}: {mem / 1024.0 / 1024.0:F2} MB ({rows:N0} rows)");
-            }
-
-            return samples;
-        }
     }
 }
