@@ -86,12 +86,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 connection: connection);
         }
 
-        private static ResultManifest BuildManifest(params (string name, string typeName)[] columns)
+        private static ResultManifest BuildManifest(params (string name, string typeName, string typeText)[] columns)
         {
             var columnInfos = new List<ColumnInfo>();
-            foreach (var (name, typeName) in columns)
+            foreach (var (name, typeName, typeText) in columns)
             {
-                columnInfos.Add(new ColumnInfo { Name = name, TypeName = typeName });
+                columnInfos.Add(new ColumnInfo { Name = name, TypeName = typeName, TypeText = typeText });
             }
 
             return new ResultManifest
@@ -107,7 +107,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public async Task ExecuteQuery_EmptyTable_SchemaContainsCorrectColumns()
         {
             // Arrange: server returns SUCCEEDED with schema but no data
-            var manifest = BuildManifest(("id", "INT"), ("name", "STRING"), ("score", "DOUBLE"));
+            var manifest = BuildManifest(("id", "INT", "INT"), ("name", "STRING", "STRING"), ("score", "DOUBLE", "DOUBLE"));
 
             var mockClient = new Mock<IStatementExecutionClient>();
             mockClient
@@ -145,14 +145,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public async Task ExecuteQuery_EmptyTable_ArrowTypesAreMappedCorrectly()
         {
             // Arrange: various Databricks SQL types
+            // TypeName is the bare Spark alias; TypeText is the canonical SQL name (matching real server).
             var manifest = BuildManifest(
-                ("a", "INT"),
-                ("b", "BIGINT"),
-                ("c", "STRING"),
-                ("d", "BOOLEAN"),
-                ("e", "DOUBLE"),
-                ("f", "DATE"),
-                ("g", "TIMESTAMP"));
+                ("a", "INT",       "INT"),
+                ("b", "LONG",      "BIGINT"),
+                ("c", "STRING",    "STRING"),
+                ("d", "BOOLEAN",   "BOOLEAN"),
+                ("e", "DOUBLE",    "DOUBLE"),
+                ("f", "DATE",      "DATE"),
+                ("g", "TIMESTAMP", "TIMESTAMP"));
 
             var mockClient = new Mock<IStatementExecutionClient>();
             mockClient
@@ -187,7 +188,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public async Task ExecuteQuery_EmptyTable_FieldsHaveSparkSqlNameMetadata()
         {
             // Arrange: server returns SUCCEEDED with schema but no data
-            var manifest = BuildManifest(("id", "INT"), ("name", "STRING"));
+            var manifest = BuildManifest(("id", "INT", "INT"), ("name", "STRING", "STRING"));
 
             var mockClient = new Mock<IStatementExecutionClient>();
             mockClient
@@ -219,10 +220,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public async Task ExecuteQuery_EmptyTable_SqlNameAliasesNormalized()
         {
-            // Arrange: SEA server returns Spark-internal aliases (LONG, BYTE, SHORT)
-            // rather than canonical SQL names. Verify they are normalized to the values
-            // PowerBI's DatabricksTypeMap expects (BIGINT, TINYINT, SMALLINT).
-            var manifest = BuildManifest(("a", "LONG"), ("b", "BYTE"), ("c", "SHORT"));
+            // Arrange: TypeName uses Spark aliases; TypeText carries canonical SQL names (matching real server).
+            var manifest = BuildManifest(
+                ("a", "LONG",  "BIGINT"),
+                ("b", "BYTE",  "TINYINT"),
+                ("c", "SHORT", "SMALLINT"));
 
             var mockClient = new Mock<IStatementExecutionClient>();
             mockClient

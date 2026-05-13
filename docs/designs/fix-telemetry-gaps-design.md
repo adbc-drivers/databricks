@@ -115,7 +115,7 @@ flowchart TD
 | `client_app_name` | **NOT SET** | Should come from connection property or user-agent |
 | `locale_name` | Populated | CultureInfo.CurrentCulture |
 | `char_set_encoding` | Populated | Encoding.Default.WebName |
-| `process_name` | Populated | Process name |
+| `process_name` | Populated | Entry assembly name (fallback: OS process name) — PECO-2989 |
 
 #### DriverConnectionParameters (47 fields)
 
@@ -142,8 +142,8 @@ flowchart TD
 | Proto Field | Status | Notes |
 |---|---|---|
 | `statement_type` | Populated | QUERY or UPDATE |
-| `is_compressed` | Populated | From LZ4 flag |
-| `execution_result` | Populated | INLINE_ARROW or EXTERNAL_LINKS |
+| `is_compressed` | Populated | From the server's actual per-result compression flag (`TGetResultSetMetadataResp.Lz4Compressed`), exposed via `DatabricksCompositeReader.IsLz4Compressed` (PECO-2988). Same flag drives both the inline `DatabricksReader` and the CloudFetch decompression paths, so the value is correct for whichever path the result took. Not derived from the connection-level LZ4 capability flag. |
+| `execution_result` | Populated | From the active reader on `DatabricksCompositeReader.IsCloudFetchActive` (PECO-2978): `EXTERNAL_LINKS` when the server returned result links and the CloudFetch reader was selected, else `INLINE_ARROW`. Not derived from the connection-level `useCloudFetch` capability flag. |
 | `chunk_id` | Not applicable | For individual chunk failure events |
 | `retry_count` | **NOT SET** | Should track retries |
 | `chunk_details` | **NOT WIRED** | `SetChunkDetails()` exists but is never called (see below) |

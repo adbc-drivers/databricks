@@ -172,38 +172,38 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var clusterPathPattern = new System.Text.RegularExpressions.Regex(@"^/sql/protocolv1/o/\d+/[^/]+/?$");
                     if (clusterPathPattern.IsMatch(path))
                     {
-                        throw new ArgumentException(
+                        throw new DatabricksException(
                             "Statement Execution API requires a SQL Warehouse, not a general cluster. " +
                             $"The provided path '{path}' appears to be a general cluster endpoint. " +
-                            "Please use a SQL Warehouse path like '/sql/1.0/warehouses/{{warehouse_id}}' or '/sql/1.0/endpoints/{{warehouse_id}}'.",
-                            nameof(properties));
+                            "Please use a SQL Warehouse path like '/sql/1.0/warehouses/{warehouse_id}' or '/sql/1.0/endpoints/{warehouse_id}'.",
+                            AdbcStatusCode.InvalidArgument);
                     }
                 }
             }
 
             if (string.IsNullOrEmpty(warehouseId))
             {
-                throw new ArgumentException(
+                throw new DatabricksException(
                     "Warehouse ID is required for Statement Execution API. " +
                     "Please provide it via 'adbc.databricks.warehouse_id' parameter, include it in the 'path' parameter (e.g., '/sql/1.0/warehouses/your-warehouse-id'), " +
                     "or provide a full URI with the warehouse path.",
-                    nameof(properties));
+                    AdbcStatusCode.InvalidArgument);
             }
             _warehouseId = warehouseId;
 
             // Get host URL
             if (string.IsNullOrEmpty(hostName))
             {
-                throw new ArgumentException(
+                throw new DatabricksException(
                     "Host name is required. Please provide it via 'hostName' parameter or via 'uri' parameter.",
-                    nameof(properties));
+                    AdbcStatusCode.InvalidArgument);
             }
             string baseUrl = $"https://{hostName}";
 
             // Connection feature flags — parse before catalog/schema loading that depends on them
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
-            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, false);
+            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
 
             // Session configuration
             // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
@@ -224,6 +224,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             properties.TryGetValue(DatabricksParameters.ResultCompression, out _resultCompression);
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
+            if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
+                directResults.Equals("false", StringComparison.OrdinalIgnoreCase))
+            {
+                _waitTimeoutSeconds = 0;
+            }
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
 
             // Memory pooling
@@ -340,19 +345,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
 
-            throw new ArgumentException("Host not found in connection properties. Please provide a valid host using either 'hostName' or 'uri' property.");
+            throw new DatabricksException("Host not found in connection properties. Please provide a valid host using either 'hostName' or 'uri' property.", AdbcStatusCode.InvalidArgument);
         }
 
         /// <summary>
         /// Builds the user agent string for HTTP requests.
-        /// Format: DatabricksJDBCDriverOSS/{version} (ADBC)
-        /// Uses DatabricksJDBCDriverOSS prefix for server-side feature compatibility.
+        /// Format: ADBCDatabricksDriver/{version} REST
         /// </summary>
         private string GetUserAgent(IReadOnlyDictionary<string, string> properties)
         {
-            // Use DatabricksJDBCDriverOSS prefix for server-side feature compatibility
-            // (e.g., INLINE_OR_EXTERNAL_LINKS disposition support)
-            string baseUserAgent = $"DatabricksJDBCDriverOSS/{DatabricksConnection.DriverVersion} (ADBC)";
+            string baseUserAgent = $"{DatabricksConnection.DatabricksDriverName.Replace(" ", "")}/{DatabricksConnection.DriverVersion} REST";
 
             // Check if a client has provided a user-agent entry
             string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
@@ -597,7 +599,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // IGetObjectsDataProvider interface), the value passed to ShowSchemasCommand is used
             // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return System.Array.Empty<(string, string)>();
+            }
 
             // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
@@ -636,7 +647,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, CancellationToken cancellationToken)
         {
             string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return System.Array.Empty<(string, string, string, string)>();
+            }
             var result = new List<(string, string, string, string)>();
             foreach (var batch in batches)
             {
@@ -674,7 +694,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            var batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return;
+            }
 
             var tablePositions = new Dictionary<string, int>();
 

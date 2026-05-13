@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -44,7 +45,9 @@ namespace AdbcDrivers.Databricks.Telemetry
 
         public TelemetrySessionContext? Session { get; }
 
-        private ConnectionTelemetry(
+        // Internal so unit tests can construct an instance with a mock ITelemetryClient
+        // (the public Create() factory always wires up the real TelemetryClientManager).
+        internal ConnectionTelemetry(
             string host,
             ITelemetryClient telemetryClient,
             TelemetrySessionContext session)
@@ -102,16 +105,29 @@ namespace AdbcDrivers.Databricks.Telemetry
                     true,
                     telemetryConfig);
 
+                // PECO-2998 / PECO-2996: build each session field defensively. Previously a single
+                // exception inside BuildSystemConfiguration / BuildDriverConnectionParams would
+                // either propagate to the outer catch (yielding NoOp telemetry) or — depending
+                // on the build order — leave a partially-populated session. Both nested
+                // auth_mech/auth_flow and the top-level auth_type must always agree, so we derive
+                // them from a single helper that can never drop one without the other.
+                Proto.DriverSystemConfiguration systemConfiguration =
+                    SafeBuildSystemConfiguration(assemblyVersion, activity);
+                Proto.DriverConnectionParameters driverConnectionParams =
+                    SafeBuildDriverConnectionParams(
+                        properties, host, enableDirectResults, useDescTableExtended,
+                        connectTimeoutMilliseconds, activity);
+                string authType = SafeDetermineAuthType(properties, activity);
+
                 var session = new TelemetrySessionContext
                 {
                     SessionId = sessionHandle?.SessionId?.Guid != null
                         ? new System.Guid(sessionHandle.SessionId.Guid).ToString()
                         : null,
                     TelemetryClient = telemetryClient,
-                    SystemConfiguration = BuildSystemConfiguration(assemblyVersion),
-                    DriverConnectionParams = BuildDriverConnectionParams(
-                        properties, host, enableDirectResults, useDescTableExtended, connectTimeoutMilliseconds),
-                    AuthType = DetermineAuthType(properties)
+                    SystemConfiguration = systemConfiguration,
+                    DriverConnectionParams = driverConnectionParams,
+                    AuthType = authType
                 };
 
                 activity?.AddEvent(new ActivityEvent("telemetry.initialization.success",
@@ -229,6 +245,86 @@ namespace AdbcDrivers.Databricks.Telemetry
             return result;
         }
 
+        public void EmitOperationTelemetry(
+            Proto.Operation.Types.Type operationType,
+            Proto.Statement.Types.Type statementType,
+            string? statementId,
+            long elapsedMs,
+            Exception? error)
+        {
+            // Defensive: never throw into driver paths. Every step is wrapped because the
+            // session context could be partially populated (e.g. CREATE_SESSION fires before
+            // SessionId is set on the proto path) and proto-building must not fail callers.
+            try
+            {
+                ITelemetryClient? client = _telemetryClient;
+                if (client == null || Session == null)
+                {
+                    return;
+                }
+
+                StatementTelemetryContext ctx;
+                try
+                {
+                    ctx = new StatementTelemetryContext(Session)
+                    {
+                        OperationType = operationType,
+                        StatementType = statementType,
+                        StatementId = statementId,
+                        ResultFormat = Proto.ExecutionResult.Types.Format.InlineArrow,
+                        IsCompressed = false,
+                    };
+                }
+                catch
+                {
+                    return;
+                }
+
+                if (error != null)
+                {
+                    ctx.HasError = true;
+                    ctx.ErrorName = error.GetType().Name;
+                    // Note: error.Message is intentionally not captured. The proto's
+                    // DriverErrorInfo only emits error_name today (error_message field 3
+                    // is pending LPP review per sql_driver_telemetry.proto). When the
+                    // proto field lands, capture .Message here behind a try/catch
+                    // (some exceptions throw from their .Message property).
+                }
+
+                Proto.OssSqlDriverTelemetryLog log = ctx.BuildTelemetryLog();
+                // Override the Stopwatch-derived latency with the caller-provided elapsed
+                // time so the recorded latency reflects the actual operation, not the
+                // negligible time spent inside this helper.
+                log.OperationLatencyMs = elapsedMs;
+
+                var frontendLog = new TelemetryFrontendLog
+                {
+                    WorkspaceId = ctx.WorkspaceId,
+                    FrontendLogEventId = System.Guid.NewGuid().ToString(),
+                    Context = new FrontendLogContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    },
+                    Entry = new FrontendLogEntry
+                    {
+                        SqlDriverLog = log,
+                    },
+                };
+
+                client.Enqueue(frontendLog);
+            }
+            catch (Exception ex)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", operationType.ToString() }
+                    }));
+            }
+        }
+
         public async Task DisposeAsync()
         {
             try
@@ -299,25 +395,161 @@ namespace AdbcDrivers.Databricks.Telemetry
                 () => CreateSystemConfiguration(assemblyVersion))!;
         }
 
+        // ── PECO-2998 / PECO-2996: Safe wrappers used by Create() ────────────────────────
+        // Each wrapper either returns the real builder's output or a best-effort fallback
+        // proto that still populates the always-derivable fields (driver_name,
+        // runtime_vendor, the constant connection-param flags, and an "unknown" auth_type
+        // string). This keeps the session non-null on partial-init failures so that the
+        // first row from the connection still reports identifying data instead of being
+        // dropped via the outer NoOp fallback.
+
+        internal static Proto.DriverSystemConfiguration SafeBuildSystemConfiguration(
+            string assemblyVersion, Activity? activity)
+        {
+            try
+            {
+                return BuildSystemConfiguration(assemblyVersion);
+            }
+            catch (Exception ex)
+            {
+                activity?.AddEvent(new ActivityEvent("telemetry.system_configuration.fallback",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+                return new Proto.DriverSystemConfiguration
+                {
+                    DriverVersion = assemblyVersion ?? string.Empty,
+                    DriverName = DatabricksConnection.DatabricksDriverName,
+                    RuntimeVendor = "Microsoft"
+                };
+            }
+        }
+
+        internal static Proto.DriverConnectionParameters SafeBuildDriverConnectionParams(
+            IReadOnlyDictionary<string, string> properties,
+            string host,
+            bool enableDirectResults,
+            bool useDescTableExtended,
+            int connectTimeoutMilliseconds,
+            Activity? activity)
+        {
+            try
+            {
+                return BuildDriverConnectionParams(
+                    properties, host, enableDirectResults, useDescTableExtended,
+                    connectTimeoutMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                activity?.AddEvent(new ActivityEvent("telemetry.driver_connection_params.fallback",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+
+                // Fallback that still surfaces the always-derivable, driver-side constants.
+                // Auth descriptors fall back to Unspecified rather than guessing.
+                return new Proto.DriverConnectionParameters
+                {
+                    HttpPath = string.Empty,
+                    Mode = Proto.DriverMode.Types.Type.Thrift,
+                    HostInfo = new Proto.HostDetails
+                    {
+                        HostUrl = host ?? string.Empty,
+                        Port = DefaultHttpsPort
+                    },
+                    AuthMech = Proto.DriverAuthMech.Types.Type.Unspecified,
+                    AuthFlow = Proto.DriverAuthFlow.Types.Type.Unspecified,
+                    EnableArrow = true,
+                    EnableDirectResults = enableDirectResults,
+                    SocketTimeout = connectTimeoutMilliseconds > 0 ? connectTimeoutMilliseconds / 1000 : 0,
+                    EnableComplexDatatypeSupport = useDescTableExtended,
+                    AutoCommit = true,
+                };
+            }
+        }
+
+        internal static string SafeDetermineAuthType(
+            IReadOnlyDictionary<string, string> properties, Activity? activity)
+        {
+            try
+            {
+                return DetermineAuthType(properties);
+            }
+            catch (Exception ex)
+            {
+                activity?.AddEvent(new ActivityEvent("telemetry.auth_type.fallback",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+                return "other";
+            }
+        }
+
         private static Proto.DriverSystemConfiguration CreateSystemConfiguration(string assemblyVersion)
         {
-            var osVersion = System.Environment.OSVersion;
-            var processName = Process.GetCurrentProcess().ProcessName;
-            return new Proto.DriverSystemConfiguration
+            // PECO-2996: build the proto field-by-field with each value wrapped in a safe-getter.
+            // Previously a single throw inside e.g. RuntimeInformation.OSArchitecture would
+            // propagate to ConnectionTelemetry.Create's outer catch and discard ALL telemetry
+            // for that connection. Now any individual field that fails simply falls back to
+            // empty / a sensible default, so always-derivable fields (driver_name,
+            // runtime_vendor) are populated even on partially-failing init paths.
+            var config = new Proto.DriverSystemConfiguration
             {
-                DriverVersion = assemblyVersion,
-                DriverName = "Databricks ADBC Driver",
-                OsName = osVersion.Platform.ToString(),
-                OsVersion = GetOsVersion(),
-                OsArch = RuntimeInformation.OSArchitecture.ToString(),
-                RuntimeName = RuntimeInformation.FrameworkDescription,
-                RuntimeVersion = System.Environment.Version.ToString(),
+                DriverVersion = assemblyVersion ?? string.Empty,
+                DriverName = DatabricksConnection.DatabricksDriverName,
+                // runtime_vendor is a process-wide constant for .NET — always emit it so the
+                // 110-row gap reported in PECO-2996 closes regardless of which other lookup
+                // throws.
                 RuntimeVendor = "Microsoft",
-                LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name,
-                CharSetEncoding = System.Text.Encoding.Default.WebName,
-                ProcessName = processName,
-                ClientAppName = processName
             };
+
+            TrySet(() => config.OsName = System.Environment.OSVersion.Platform.ToString());
+            TrySet(() => config.OsVersion = GetOsVersion());
+            TrySet(() => config.OsArch = RuntimeInformation.OSArchitecture.ToString());
+            TrySet(() => config.RuntimeName = RuntimeInformation.FrameworkDescription);
+            TrySet(() => config.RuntimeVersion = System.Environment.Version.ToString());
+            TrySet(() => config.LocaleName = System.Globalization.CultureInfo.CurrentCulture.Name);
+            // Normalize to upper-case (e.g. "UTF-8") to match the casing emitted by the
+            // OSS JDBC and DatabricksJDBC drivers; .NET Core / Linux returns "utf-8".
+            TrySet(() => config.CharSetEncoding = System.Text.Encoding.Default.WebName.ToUpperInvariant());
+
+            // Prefer the entry assembly name so process_name reflects the actual application
+            // (e.g. "MyApp") rather than the .NET host executable name ("dotnet"). Fall back
+            // to the OS process name when there is no entry assembly (e.g. unmanaged hosts).
+            string? processName = null;
+            TrySet(() => processName = Assembly.GetEntryAssembly()?.GetName().Name);
+            if (string.IsNullOrEmpty(processName))
+            {
+                TrySet(() => processName = Process.GetCurrentProcess().ProcessName);
+            }
+            if (!string.IsNullOrEmpty(processName))
+            {
+                config.ProcessName = processName!;
+                config.ClientAppName = processName!;
+            }
+
+            return config;
+        }
+
+        // Run an action and swallow any exception. Used to keep CreateSystemConfiguration
+        // resilient on a per-field basis without polluting it with try/catch boilerplate.
+        // Telemetry must never impact driver operations.
+        private static void TrySet(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch
+            {
+                // Intentionally swallowed.
+            }
         }
 
         // Returns a human-readable OS version string, preferring the distro "PRETTY_NAME"
@@ -399,32 +631,12 @@ namespace AdbcDrivers.Databricks.Telemetry
             properties.TryGetValue(SparkParameters.Path, out string? httpPath);
             int port = ResolvePort(properties);
 
-            var authMech = Proto.DriverAuthMech.Types.Type.Unspecified;
-            var authFlow = Proto.DriverAuthFlow.Types.Type.Unspecified;
-
-            properties.TryGetValue(SparkParameters.AuthType, out string? authType);
-            properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
-
-            bool isOAuth = SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue)
-                && authTypeValue == SparkAuthType.OAuth;
-
-            if (isOAuth)
-            {
-                authMech = Proto.DriverAuthMech.Types.Type.Oauth;
-                authFlow = !string.IsNullOrEmpty(grantType) &&
-                           grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials
-                    ? Proto.DriverAuthFlow.Types.Type.ClientCredentials
-                    : Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
-            }
-            else
-            {
-                authMech = Proto.DriverAuthMech.Types.Type.Pat;
-                authFlow = Proto.DriverAuthFlow.Types.Type.TokenPassthrough;
-            }
+            AuthDescriptors auth = DetermineAuthDescriptors(properties);
 
             int batchSize = GetBatchSize(properties);
+            int asyncPollIntervalMillis = GetAsyncPollIntervalMillis(properties);
 
-            return new Proto.DriverConnectionParameters
+            var connectionParams = new Proto.DriverConnectionParameters
             {
                 HttpPath = httpPath ?? "",
                 Mode = Proto.DriverMode.Types.Type.Thrift,
@@ -433,36 +645,145 @@ namespace AdbcDrivers.Databricks.Telemetry
                     // Bare hostname, matching JDBC. Scheme is implicit (always https) and
                     // port is reported in the sibling Port field, so including them here
                     // was redundant and forced analysts to normalize across drivers.
-                    HostUrl = host,
+                    HostUrl = host ?? string.Empty,
                     Port = port
                 },
-                AuthMech = authMech,
-                AuthFlow = authFlow,
+                AuthMech = auth.AuthMech,
+                AuthFlow = auth.AuthFlow,
+                // PECO-2996: these flags are best-effort constants and must always be populated,
+                // even on partial-init paths. They reflect driver-side behavior that doesn't
+                // depend on any backend negotiation.
                 EnableArrow = true,
                 RowsFetchedPerBlock = batchSize,
-                SocketTimeout = connectTimeoutMilliseconds / 1000,
+                SocketTimeout = connectTimeoutMilliseconds > 0 ? connectTimeoutMilliseconds / 1000 : 0,
                 EnableDirectResults = enableDirectResults,
                 EnableComplexDatatypeSupport = useDescTableExtended,
                 AutoCommit = true,
+                AsyncPollIntervalMillis = asyncPollIntervalMillis,
             };
+
+            // PECO-2995 (TELEM-16): emit discovery_mode_enabled and enable_token_cache.
+            // The C# driver hardcodes the OIDC token endpoint to https://{host}/oidc/v1/token
+            // (see OAuthClientCredentialsProvider and TokenExchangeClient) and never performs
+            // .well-known discovery, so discovery_mode_enabled is always false and
+            // discovery_url is intentionally left unset (no value to report).
+            // enable_token_cache is set to false: the in-memory dictionaries in
+            // TokenRefreshDelegatingHandler and MandatoryTokenExchangeDelegatingHandler are
+            // NOT what JDBC's enableTokenCache refers to (JDBC's feature is a U2M browser-flow
+            // on-disk cache, which this driver does not support). Each setter is wrapped in its
+            // own try/catch so a future per-field source change cannot kill the whole payload.
+            TrySetField(connectionParams, p => p.DiscoveryModeEnabled = false);
+            TrySetField(connectionParams, p => p.EnableTokenCache = false);
+
+            return connectionParams;
         }
 
-        private static string DetermineAuthType(IReadOnlyDictionary<string, string> properties)
+        /// <summary>
+        /// Resilience helper: applies a single proto setter, swallowing any exception so a
+        /// per-field problem cannot break the entire telemetry payload. Mirrors the pattern
+        /// introduced in PECO-2996 for system-configuration fields.
+        /// </summary>
+        private static void TrySetField(
+            Proto.DriverConnectionParameters connectionParams,
+            Action<Proto.DriverConnectionParameters> setter)
         {
+            try
+            {
+                setter(connectionParams);
+            }
+            catch
+            {
+                // Intentionally swallowed - telemetry must not impact driver operation.
+            }
+        }
+
+        // PECO-2997: report the async-execution poll interval (in milliseconds) used by
+        // DatabricksStatement when polling for query completion. The driver overrides
+        // the Apache base default (500ms) with DefaultAsyncExecPollIntervalMs (100ms);
+        // callers can override via ApacheParameters.PollTimeMilliseconds.
+        private static int GetAsyncPollIntervalMillis(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(ApacheParameters.PollTimeMilliseconds, out string? pollTimeStr) &&
+                int.TryParse(pollTimeStr, out int pollTime) && pollTime > 0)
+            {
+                return pollTime;
+            }
+            return DatabricksConstants.DefaultAsyncExecPollIntervalMs;
+        }
+
+        /// <summary>
+        /// Derives the nested <c>auth_mech</c>/<c>auth_flow</c> and the top-level
+        /// <c>auth_type</c> string together so they cannot drift.
+        /// </summary>
+        /// <remarks>
+        /// PECO-2998: prior to this consolidation, <see cref="BuildDriverConnectionParams"/>
+        /// keyed off <c>SparkParameters.AuthType</c> while <c>DetermineAuthType</c> keyed off
+        /// <c>OAuthGrantType</c> alone, so dashboards saw mismatches such as
+        /// <c>auth_mech=OAUTH</c> with <c>auth_type=NULL</c> (or worse, <c>auth_type=pat</c>
+        /// for OAuth U2M token passthrough). Both fields are now derived from a single
+        /// branching decision.
+        /// </remarks>
+        private static AuthDescriptors DetermineAuthDescriptors(IReadOnlyDictionary<string, string> properties)
+        {
+            properties.TryGetValue(SparkParameters.AuthType, out string? authType);
             properties.TryGetValue(DatabricksParameters.OAuthGrantType, out string? grantType);
 
-            if (!string.IsNullOrEmpty(grantType))
+            bool isOAuth = SparkAuthTypeParser.TryParse(authType, out SparkAuthType authTypeValue)
+                && authTypeValue == SparkAuthType.OAuth;
+
+            if (isOAuth)
             {
-                return $"oauth-{grantType}";
+                bool isClientCredentials = !string.IsNullOrEmpty(grantType) &&
+                    grantType == DatabricksConstants.OAuthGrantTypes.ClientCredentials;
+
+                return new AuthDescriptors(
+                    Proto.DriverAuthMech.Types.Type.Oauth,
+                    isClientCredentials
+                        ? Proto.DriverAuthFlow.Types.Type.ClientCredentials
+                        : Proto.DriverAuthFlow.Types.Type.TokenPassthrough,
+                    // Top-level auth_type must reflect the actual OAuth shape, not just the
+                    // optional grant_type property. When grant_type is absent (U2M access-token
+                    // passthrough) the previous code returned "pat" or "other" even though
+                    // auth_mech=OAUTH — that is the 90-row drift fixed by PECO-2998.
+                    !string.IsNullOrEmpty(grantType)
+                        ? $"oauth-{grantType}"
+                        : "oauth-access_token");
             }
 
+            // PAT / token-based or unspecified.
             properties.TryGetValue(SparkParameters.Token, out string? token);
-            if (!string.IsNullOrEmpty(token))
+            string topLevelAuthType = !string.IsNullOrEmpty(token) ? "pat" : "other";
+            return new AuthDescriptors(
+                Proto.DriverAuthMech.Types.Type.Pat,
+                Proto.DriverAuthFlow.Types.Type.TokenPassthrough,
+                topLevelAuthType);
+        }
+
+        /// <summary>
+        /// Determines the top-level <c>auth_type</c> string consistently with
+        /// <see cref="BuildDriverConnectionParams"/>. Exposed as <c>internal</c> so the
+        /// telemetry init path and unit tests can call it directly.
+        /// </summary>
+        internal static string DetermineAuthType(IReadOnlyDictionary<string, string> properties)
+        {
+            return DetermineAuthDescriptors(properties).AuthType;
+        }
+
+        private readonly struct AuthDescriptors
+        {
+            public AuthDescriptors(
+                Proto.DriverAuthMech.Types.Type authMech,
+                Proto.DriverAuthFlow.Types.Type authFlow,
+                string authType)
             {
-                return "pat";
+                AuthMech = authMech;
+                AuthFlow = authFlow;
+                AuthType = authType;
             }
 
-            return "other";
+            public Proto.DriverAuthMech.Types.Type AuthMech { get; }
+            public Proto.DriverAuthFlow.Types.Type AuthFlow { get; }
+            public string AuthType { get; }
         }
 
         private static int GetBatchSize(IReadOnlyDictionary<string, string> properties)

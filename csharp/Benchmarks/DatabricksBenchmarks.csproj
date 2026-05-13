@@ -18,6 +18,8 @@
     <PackageReference Include="BenchmarkDotNet" />
     <PackageReference Include="K4os.Compression.LZ4" />
     <PackageReference Include="K4os.Compression.LZ4.Streams" />
+    <PackageReference Include="System.Collections.Immutable" />
+    <PackageReference Include="System.Reflection.Metadata" />
   </ItemGroup>
 
   <ItemGroup>

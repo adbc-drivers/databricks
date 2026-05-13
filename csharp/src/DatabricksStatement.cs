@@ -69,7 +69,31 @@ namespace AdbcDrivers.Databricks
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
-        private StatementTelemetryContext? _pendingTelemetryContext; // Telemetry context pending emission on Dispose
+
+        /// <summary>
+        /// Telemetry context for the current statement execution, pending emission on Dispose.
+        /// Set before calling base.ExecuteQueryAsync()/ExecuteQuery() so that
+        /// <see cref="DatabricksConnection.NewReader{T}"/> can forward it to the
+        /// composite reader and operation status poller. The poller increments
+        /// <see cref="StatementTelemetryContext.PollCount"/> and accumulates
+        /// <see cref="StatementTelemetryContext.PollLatencyMs"/> on each
+        /// GetOperationStatus call so the emitted telemetry log carries the
+        /// <c>n_operation_status_calls</c> and <c>operation_status_latency_millis</c>
+        /// fields (PECO-2992). After a successful execute the same instance remains
+        /// here until <see cref="EmitTelemetry"/> is invoked from Dispose.
+        /// </summary>
+        internal StatementTelemetryContext? PendingTelemetryContext { get; private set; }
+
+        // Stopwatch covering the lifetime of this statement, started at construction.
+        // Used to scope CANCEL_STATEMENT timing within the statement's lifetime.
+        private readonly Stopwatch _statementLifetimeStopwatch = Stopwatch.StartNew();
+        private bool _closeStatementTelemetryEmitted;
+
+        // Populated by DatabricksCompositeReader.Dispose when it issues TCloseOperationReq
+        // to the server. Lets us report the actual close-RPC latency in the CLOSE_STATEMENT
+        // telemetry event emitted at statement Dispose, instead of a meaningless 0.
+        internal long? CloseStatementRpcLatencyMs { get; set; }
+        internal Exception? CloseStatementRpcError { get; set; }
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -113,7 +137,11 @@ namespace AdbcDrivers.Databricks
             var ctx = new StatementTelemetryContext(session);
             ctx.OperationType = OperationType.ExecuteStatement;
             ctx.StatementType = statementType;
-            ctx.IsCompressed = canDecompressLz4;
+            // IsCompressed and ResultFormat are populated from the actual result stream in
+            // EmitTelemetry, not the connection-level capability flags. Defaults here cover error
+            // and unconsumed paths (PECO-2988, PECO-2978).
+            ctx.IsCompressed = false;
+            ctx.ResultFormat = ExecutionResultFormat.InlineArrow;
             ctx.IsInternalCall = IsInternalCall;
             return ctx;
         }
@@ -156,9 +184,9 @@ namespace AdbcDrivers.Databricks
         private void RecordSuccess(StatementTelemetryContext ctx)
         {
             ctx.RecordFirstBatchReady();
-            ctx.ResultFormat = useCloudFetch
-                ? ExecutionResultFormat.ExternalLinks
-                : ExecutionResultFormat.InlineArrow;
+            // ResultFormat is populated from the actual active reader in EmitTelemetry (PECO-2978);
+            // setting it here from the connection-level useCloudFetch flag mislabels inline results
+            // as EXTERNAL_LINKS whenever CloudFetch is enabled on the connection.
             ctx.StatementId = StatementId;
             CaptureRetryCount(ctx);
         }
@@ -190,12 +218,13 @@ namespace AdbcDrivers.Databricks
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
             if (ctx == null) return base.ExecuteQuery();
 
+            // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
+            PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = base.ExecuteQuery();
                 _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
-                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
             catch (Exception ex)
@@ -203,7 +232,7 @@ namespace AdbcDrivers.Databricks
                 RecordError(ctx, ex);
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
-                _pendingTelemetryContext = null; // Clear to avoid double emission
+                PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
         }
@@ -215,12 +244,13 @@ namespace AdbcDrivers.Databricks
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
             if (ctx == null) return await base.ExecuteQueryAsync();
 
+            // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
+            PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
                 _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
-                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
             catch (Exception ex)
@@ -228,7 +258,7 @@ namespace AdbcDrivers.Databricks
                 RecordError(ctx, ex);
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
-                _pendingTelemetryContext = null; // Clear to avoid double emission
+                PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
         }
@@ -238,11 +268,11 @@ namespace AdbcDrivers.Databricks
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return base.ExecuteUpdate();
 
+            PendingTelemetryContext = ctx;
             try
             {
                 UpdateResult result = base.ExecuteUpdate();
                 RecordSuccess(ctx);
-                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
             catch (Exception ex)
@@ -250,7 +280,7 @@ namespace AdbcDrivers.Databricks
                 RecordError(ctx, ex);
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
-                _pendingTelemetryContext = null; // Clear to avoid double emission
+                PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
         }
@@ -260,11 +290,11 @@ namespace AdbcDrivers.Databricks
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return await base.ExecuteUpdateAsync();
 
+            PendingTelemetryContext = ctx;
             try
             {
                 UpdateResult result = await base.ExecuteUpdateAsync();
                 RecordSuccess(ctx);
-                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
             catch (Exception ex)
@@ -272,7 +302,7 @@ namespace AdbcDrivers.Databricks
                 RecordError(ctx, ex);
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
-                _pendingTelemetryContext = null; // Clear to avoid double emission
+                PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
         }
@@ -283,8 +313,8 @@ namespace AdbcDrivers.Databricks
             {
                 ctx.RecordResultsConsumed();
 
-                // Extract chunk metrics if this was a CloudFetch query
-                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped)
+                // Extract chunk metrics if this was a CloudFetch query.
+                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped).
                 ChunkMetrics? metrics = null;
                 if (_lastQueryResult?.Stream is CloudFetchReader cfReader)
                 {
@@ -307,6 +337,19 @@ namespace AdbcDrivers.Databricks
                     {
                         // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
                     }
+                }
+
+                // Source IsCompressed and ResultFormat from the active reader, not connection-level
+                // capability flags. The composite reader holds the server-reported truth for both:
+                // IsLz4Compressed mirrors TGetResultSetMetadataResp.Lz4Compressed (drives both inline
+                // and CloudFetch decompression), and IsCloudFetchActive reflects whether the server
+                // returned result links for this statement (PECO-2988, PECO-2978).
+                if (_lastQueryResult?.Stream is DatabricksCompositeReader composite)
+                {
+                    ctx.IsCompressed = composite.IsLz4Compressed;
+                    ctx.ResultFormat = composite.IsCloudFetchActive
+                        ? ExecutionResultFormat.ExternalLinks
+                        : ExecutionResultFormat.InlineArrow;
                 }
 
                 // Set chunk details if we have metrics and at least one chunk was iterated
@@ -1255,13 +1298,103 @@ namespace AdbcDrivers.Databricks
         /// <param name="disposing">True if disposing managed resources.</param>
         protected override void Dispose(bool disposing)
         {
-            if (disposing && _pendingTelemetryContext != null)
+            if (disposing)
             {
-                // Emit telemetry now that results have been consumed
-                EmitTelemetry(_pendingTelemetryContext);
-                _pendingTelemetryContext = null;
+                if (PendingTelemetryContext != null)
+                {
+                    // Emit telemetry now that results have been consumed
+                    EmitTelemetry(PendingTelemetryContext);
+                    PendingTelemetryContext = null;
+                }
+
+                // Emit a CLOSE_STATEMENT telemetry event once per statement disposal,
+                // independently of any EXECUTE_STATEMENT/metadata event already emitted.
+                // operation_latency_ms reflects the TCloseOperationReq RPC duration when
+                // the result reader actually closed the operation server-side
+                // (DatabricksCompositeReader stashes that timing here); if no close RPC
+                // was issued (e.g. user disposed the statement without consuming results,
+                // or the operation was already closed by direct-results), elapsedMs is 0
+                // and the event acts purely as a lifecycle marker.
+                // _closeStatementTelemetryEmitted makes the emission idempotent across
+                // repeated Dispose() calls (PECO-2991).
+                try
+                {
+                    if (!_closeStatementTelemetryEmitted)
+                    {
+                        var session = ((DatabricksConnection)Connection).TelemetrySession;
+                        if (session?.TelemetryClient != null)
+                        {
+                            _closeStatementTelemetryEmitted = true;
+                            ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                                OperationType.CloseStatement,
+                                Telemetry.Proto.Statement.Types.Type.Unspecified,
+                                StatementId,
+                                elapsedMs: CloseStatementRpcLatencyMs ?? 0,
+                                error: CloseStatementRpcError);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "operation_type", "CLOSE_STATEMENT" }
+                        }));
+                }
             }
             base.Dispose(disposing);
+        }
+
+        /// <inheritdoc/>
+        public override void Cancel()
+        {
+            // Emit CANCEL_STATEMENT telemetry around the base cancel call so we capture
+            // user-initiated cancels even when the cancellation token has already
+            // disposed the execute path's pending telemetry context. base.Cancel()
+            // signals the cancellation token source and is idempotent across repeats
+            // (PECO-2991). Each invocation emits its own event so analysts can see
+            // duplicate user-initiated cancels.
+            Exception? error = null;
+            long startMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
+            try
+            {
+                base.Cancel();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                throw;
+            }
+            finally
+            {
+                try
+                {
+                    var session = ((DatabricksConnection)Connection).TelemetrySession;
+                    if (session?.TelemetryClient != null)
+                    {
+                        long elapsedMs = _statementLifetimeStopwatch.ElapsedMilliseconds - startMs;
+                        ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                            OperationType.CancelStatement,
+                            Telemetry.Proto.Statement.Types.Type.Unspecified,
+                            StatementId,
+                            elapsedMs,
+                            error);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "operation_type", "CANCEL_STATEMENT" }
+                        }));
+                }
+            }
         }
     }
 }

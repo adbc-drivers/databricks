@@ -37,6 +37,16 @@ namespace AdbcDrivers.Databricks.Telemetry
             return operation();
         }
 
+        public void EmitOperationTelemetry(
+            Proto.Operation.Types.Type operationType,
+            Proto.Statement.Types.Type statementType,
+            string? statementId,
+            long elapsedMs,
+            Exception? error)
+        {
+            // No-op
+        }
+
         public Task DisposeAsync() => Task.CompletedTask;
     }
 }

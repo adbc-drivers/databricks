@@ -229,7 +229,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void Constructor_MissingHostName_ThrowsArgumentException()
+        public void Constructor_MissingHostName_ThrowsDatabricksException()
         {
             // Arrange
             var properties = new Dictionary<string, string>
@@ -239,11 +239,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             };
 
             // Act & Assert
-            Assert.Throws<ArgumentException>(() => new StatementExecutionConnection(properties));
+            var ex = Assert.Throws<DatabricksException>(() => new StatementExecutionConnection(properties));
+            Assert.Equal(AdbcStatusCode.InvalidArgument, ex.Status);
         }
 
         [Fact]
-        public void Constructor_MissingWarehouseId_ThrowsArgumentException()
+        public void Constructor_MissingWarehouseId_ThrowsDatabricksException()
         {
             // Arrange
             var properties = new Dictionary<string, string>
@@ -253,7 +254,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             };
 
             // Act & Assert
-            Assert.Throws<ArgumentException>(() => new StatementExecutionConnection(properties));
+            var ex = Assert.Throws<DatabricksException>(() => new StatementExecutionConnection(properties));
+            Assert.Equal(AdbcStatusCode.InvalidArgument, ex.Status);
         }
     }
 }

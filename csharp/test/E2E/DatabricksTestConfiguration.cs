@@ -72,5 +72,8 @@ namespace AdbcDrivers.Databricks.Tests
 
         [JsonPropertyName("maxBytesPerFetchRequest"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public string MaxBytesPerFetchRequest { get; set; } = string.Empty;
+
+        [JsonPropertyName("protocol"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public string Protocol { get; set; } = string.Empty;
     }
 }

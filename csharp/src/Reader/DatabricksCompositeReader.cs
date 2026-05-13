@@ -27,6 +27,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using AdbcDrivers.HiveServer2.Hive2;
@@ -65,13 +66,18 @@ namespace AdbcDrivers.Databricks.Reader
         /// <param name="schema">The Arrow schema.</param>
         /// <param name="isLz4Compressed">Whether the results are LZ4 compressed.</param>
         /// <param name="httpClient">The HTTP client for CloudFetch operations.</param>
+        /// <param name="operationPoller">Optional injected poller (for testing). If null, a default one is created.</param>
+        /// <param name="telemetryContext">Optional per-statement telemetry context. The default poller forwards
+        /// poll-count and per-poll latency into this context so <c>n_operation_status_calls</c> and
+        /// <c>operation_status_latency_millis</c> are populated in the emitted telemetry log (PECO-2992).</param>
         internal DatabricksCompositeReader(
             IHiveServer2Statement statement,
             Schema schema,
             IResponse response,
             bool isLz4Compressed,
             HttpClient httpClient,
-            IOperationStatusPoller? operationPoller = null)
+            IOperationStatusPoller? operationPoller = null,
+            StatementTelemetryContext? telemetryContext = null)
             : base(statement)
         {
             _statement = statement ?? throw new ArgumentNullException(nameof(statement));
@@ -89,7 +95,13 @@ namespace AdbcDrivers.Databricks.Reader
             }
             if (_response.DirectResults?.ResultSet?.HasMoreRows ?? true)
             {
-                operationStatusPoller = operationPoller ?? new DatabricksOperationStatusPoller(_statement, response, GetHeartbeatIntervalFromConnection(), GetRequestTimeoutFromConnection(), activityTracer: this);
+                operationStatusPoller = operationPoller ?? new DatabricksOperationStatusPoller(
+                    _statement,
+                    response,
+                    GetHeartbeatIntervalFromConnection(),
+                    GetRequestTimeoutFromConnection(),
+                    activityTracer: this,
+                    telemetryContext: telemetryContext);
                 operationStatusPoller.Start();
             }
         }
@@ -241,8 +253,30 @@ namespace AdbcDrivers.Databricks.Reader
                             // CloudFetchReader is protocol-agnostic and does not send CloseOperation,
                             // so we must not rely on the contained reader to do it.
                             activity?.AddEvent("composite_reader.close_operation");
-                            _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
-                                .ConfigureAwait(false).GetAwaiter().GetResult();
+                            // Time the TCloseOperationReq RPC so CLOSE_STATEMENT telemetry
+                            // emitted later from DatabricksStatement.Dispose can report the
+                            // actual server-side close latency (PECO-2991).
+                            var closeStopwatch = Stopwatch.StartNew();
+                            Exception? closeError = null;
+                            try
+                            {
+                                _ = HiveServer2Reader.CloseOperationAsync(_statement, _response)
+                                    .ConfigureAwait(false).GetAwaiter().GetResult();
+                            }
+                            catch (Exception ex)
+                            {
+                                closeError = ex;
+                                throw;
+                            }
+                            finally
+                            {
+                                closeStopwatch.Stop();
+                                if (_statement is DatabricksStatement dbxStatement)
+                                {
+                                    dbxStatement.CloseStatementRpcLatencyMs = closeStopwatch.ElapsedMilliseconds;
+                                    dbxStatement.CloseStatementRpcError = closeError;
+                                }
+                            }
                             if (_activeReader != null)
                             {
                                 activity?.AddEvent("composite_reader.disposing_active_reader", [
@@ -321,5 +355,22 @@ namespace AdbcDrivers.Databricks.Reader
             // Not using CloudFetch or reader not initialized yet
             return null;
         }
+
+        /// <summary>
+        /// Gets the server-reported LZ4 compression state for this result set
+        /// (from <c>TGetResultSetMetadataResp.Lz4Compressed</c>). Drives the LZ4 decompression
+        /// branch in both the inline <see cref="DatabricksReader"/> and the CloudFetch pipeline,
+        /// so it is the single source of truth for telemetry's <c>is_compressed</c> field.
+        /// </summary>
+        public bool IsLz4Compressed => _isLz4Compressed;
+
+        /// <summary>
+        /// Gets a value indicating whether the active reader is a <see cref="CloudFetchReader"/>.
+        /// Reflects the server's actual choice for this result set (presence of result links in the
+        /// fetch response, see <see cref="ShouldUseCloudFetch"/>), not the connection-level
+        /// <c>useCloudFetch</c> capability flag. Returns <c>false</c> before the first read, when the
+        /// active reader has not been initialized yet.
+        /// </summary>
+        public bool IsCloudFetchActive => _activeReader is CloudFetchReader;
     }
 }

@@ -25,6 +25,8 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.Proto;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Hive.Service.Rpc.Thrift;
 using Moq;
@@ -208,6 +210,82 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             // Assert
             Assert.True(pollCount > 0, "Should have polled at least once");
             _mockClient.Verify(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        }
+
+        [Fact]
+        public async Task UpdatesTelemetryContextOnEachSuccessfulPoll()
+        {
+            // Arrange — pass in a per-statement telemetry context (PECO-2992) so the poller
+            // can populate PollCount / PollLatencyMs which are read by
+            // StatementTelemetryContext.BuildTelemetryLog() to set
+            // n_operation_status_calls and operation_status_latency_millis.
+            var sessionContext = new TelemetrySessionContext
+            {
+                SessionId = "test-session",
+                WorkspaceId = 42L
+            };
+            var telemetryContext = new StatementTelemetryContext(sessionContext);
+
+            using var poller = new DatabricksOperationStatusPoller(
+                _mockStatement.Object,
+                _mockResponse.Object,
+                _heartbeatIntervalSeconds,
+                telemetryContext: telemetryContext);
+
+            int observedPolls = 0;
+            _mockClient.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TGetOperationStatusResp { OperationState = TOperationState.RUNNING_STATE })
+                .Callback(() => Interlocked.Increment(ref observedPolls));
+
+            // Act
+            poller.Start();
+            await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds * 3));
+            poller.Stop();
+
+            // Assert — the context should have been updated with at least one poll's worth of data.
+            Assert.True(observedPolls > 0, "Should have polled at least once");
+            Assert.NotNull(telemetryContext.PollCount);
+            Assert.True(telemetryContext.PollCount!.Value > 0,
+                $"PollCount should be > 0, got {telemetryContext.PollCount}");
+            Assert.NotNull(telemetryContext.PollLatencyMs);
+            Assert.True(telemetryContext.PollLatencyMs!.Value >= 0,
+                $"PollLatencyMs should be >= 0, got {telemetryContext.PollLatencyMs}");
+            // PollCount in the context should match the number of times we observed
+            // the GetOperationStatus mock complete successfully (within polling concurrency).
+            Assert.True(telemetryContext.PollCount!.Value <= observedPolls + 1,
+                $"PollCount {telemetryContext.PollCount} should not greatly exceed observed polls {observedPolls}");
+
+            // Build the proto and confirm the values flow through to the wire-level fields.
+            OssSqlDriverTelemetryLog log = telemetryContext.BuildTelemetryLog();
+            Assert.NotNull(log.SqlOperation);
+            Assert.NotNull(log.SqlOperation.OperationDetail);
+            Assert.Equal(telemetryContext.PollCount!.Value,
+                log.SqlOperation.OperationDetail.NOperationStatusCalls);
+            Assert.Equal(telemetryContext.PollLatencyMs!.Value,
+                log.SqlOperation.OperationDetail.OperationStatusLatencyMillis);
+        }
+
+        [Fact]
+        public async Task DoesNotUpdateTelemetryContextWhenNoneProvided()
+        {
+            // Arrange — backwards-compatibility check: when no context is provided,
+            // the poller still works and does not throw.
+            using var poller = new DatabricksOperationStatusPoller(
+                _mockStatement.Object,
+                _mockResponse.Object,
+                _heartbeatIntervalSeconds);
+            int observedPolls = 0;
+            _mockClient.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TGetOperationStatusResp())
+                .Callback(() => Interlocked.Increment(ref observedPolls));
+
+            // Act
+            poller.Start();
+            await Task.Delay(TimeSpan.FromSeconds(_heartbeatIntervalSeconds * 2));
+            poller.Stop();
+
+            // Assert
+            Assert.True(observedPolls > 0);
         }
 
         [Fact]

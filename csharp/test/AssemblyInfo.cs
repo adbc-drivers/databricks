@@ -16,9 +16,10 @@
 
 using Xunit;
 
-// E2E tests run against a single shared Databricks workspace and share fixture
-// tables under main.adbc_testing. Cross-class parallelism races on these
-// tables (e.g. one class DROPs+CREATEs while another reads), causing flaky
-// merge-queue failures. Serialize the whole assembly to avoid the races.
+// E2E tests run against a single shared Databricks workspace. Even with
+// per-run schema isolation in CI, two test classes inside the same job may
+// still race on the per-run schema (e.g. one CREATEs a table while another
+// reads). Serialize the whole assembly to avoid those intra-job races.
 // Within-class test order is already sequential by xUnit default.
+// See docs/e2e-test-isolation-guidance.md.
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
