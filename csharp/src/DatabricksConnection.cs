@@ -57,6 +57,12 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
+        /// Takes precedence over <see cref="DefaultConfigEnvironmentVariable"/> when both are set.
+        /// </summary>
+        public const string AdbcConfigEnvironmentVariable = "ADBC_DATABRICKS_CONFIG_FILE";
+
+        /// <summary>
+        /// The environment variable name that contains the path to the default Databricks configuration file.
         /// </summary>
         public const string DefaultConfigEnvironmentVariable = "DATABRICKS_CONFIG_FILE";
 
