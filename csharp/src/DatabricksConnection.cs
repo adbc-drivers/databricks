@@ -533,8 +533,16 @@ namespace AdbcDrivers.Databricks
 
         public override AdbcStatement CreateStatement()
         {
-            DatabricksStatement statement = new DatabricksStatement(this);
-            return statement;
+            // Inject the per-statement observer at construction so DatabricksStatement is
+            // not coupled to ((DatabricksConnection)Connection).TelemetrySession at runtime.
+            // When telemetry is disabled (or the session has no live client), we hand the
+            // statement a NullObserver so every observer hook call is a no-op without
+            // requiring null-checks at the callsite.
+            TelemetrySessionContext? session = TelemetrySession;
+            IStatementOperationObserver observer = session?.TelemetryClient != null
+                ? (IStatementOperationObserver)new TelemetryObserver(session)
+                : NullObserver.Instance;
+            return new DatabricksStatement(this, observer);
         }
 
         protected override TOpenSessionReq CreateSessionRequest()
