@@ -727,12 +727,20 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private void InitializeTelemetry(Activity? activity = null)
         {
+            // Convert TSessionHandle -> string at the transport boundary so
+            // ConnectionTelemetry.Create stays transport-agnostic. SEA will pass its
+            // server-assigned session id string directly.
+            string sessionId = SessionHandle?.SessionId?.Guid != null
+                ? new Guid(SessionHandle.SessionId.Guid).ToString()
+                : string.Empty;
+
             _telemetry = Telemetry.ConnectionTelemetry.Create(
                 properties: Properties,
                 host: GetHost(),
                 assemblyVersion: s_assemblyVersion,
                 oauthTokenProvider: _oauthTokenProvider,
-                sessionHandle: SessionHandle,
+                sessionId: sessionId,
+                mode: Telemetry.Proto.DriverMode.Types.Type.Thrift,
                 enableDirectResults: _enableDirectResults,
                 useDescTableExtended: _useDescTableExtended,
                 connectTimeoutMilliseconds: ConnectTimeoutMilliseconds,
