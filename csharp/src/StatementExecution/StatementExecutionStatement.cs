@@ -33,6 +33,9 @@ using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
+using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -347,92 +350,118 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
         {
-            // Build the execute statement request
-            // Note: warehouse_id is always required by the Databricks Statement Execution API
-            // Note: catalog/schema cannot be set when session_id is provided (session has context)
-            var request = new ExecuteStatementRequest
-            {
-                Statement = _sqlQuery,
-                WarehouseId = _warehouseId,
-                SessionId = _sessionId,
-                Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
-                Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
-                Disposition = _resultDisposition,
-                Format = _resultFormat,
-                ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
-                OnWaitTimeout = "CONTINUE",
-                IsMetadata = isMetadataExecution,
-                QueryTags = ParseQueryTags(_queryTags)
-            };
+            // Telemetry: signal OnExecuteStarted before submitting the statement. ExecuteQueryInternalAsync
+            // only runs for the non-metadata path (metadata commands short-circuit to
+            // ExecuteMetadataCommandAsync above), so stmtType is always Query and opType is ExecuteStatement.
+            // isCompressed reflects the requested result compression — the manifest may override later
+            // but the observer's first signal records what we asked for.
+            bool isCompressed = !string.IsNullOrEmpty(_resultCompression)
+                && string.Equals(_resultCompression, "LZ4_FRAME", StringComparison.OrdinalIgnoreCase);
+            _observer.OnExecuteStarted(StatementType.Query, OperationType.ExecuteStatement, isCompressed);
 
-            // Execute the statement
-            var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
-            _currentStatementId = response.StatementId;
-
-            // Handle query status according to Databricks API documentation:
-            // PENDING: waiting for warehouse - continue polling
-            // RUNNING: running - continue polling
-            // SUCCEEDED: execution was successful, result data available for fetch
-            // FAILED: execution failed; reason for failure described in accompanying error message
-            // CANCELED: user canceled; can come from explicit cancel call, or timeout with on_wait_timeout=CANCEL
-            // CLOSED: execution successful, and statement closed; result no longer available for fetch
-            var state = response.Status?.State;
-            if (state == "PENDING" || state == "RUNNING")
+            try
             {
-                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
-                state = response.Status?.State;
+                // Build the execute statement request
+                // Note: warehouse_id is always required by the Databricks Statement Execution API
+                // Note: catalog/schema cannot be set when session_id is provided (session has context)
+                var request = new ExecuteStatementRequest
+                {
+                    Statement = _sqlQuery,
+                    WarehouseId = _warehouseId,
+                    SessionId = _sessionId,
+                    Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
+                    Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
+                    Disposition = _resultDisposition,
+                    Format = _resultFormat,
+                    ResultCompression = _resultCompression,
+                    WaitTimeout = $"{_waitTimeoutSeconds}s",
+                    OnWaitTimeout = "CONTINUE",
+                    IsMetadata = isMetadataExecution,
+                    QueryTags = ParseQueryTags(_queryTags)
+                };
+
+                // Execute the statement
+                var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
+                _currentStatementId = response.StatementId;
+
+                // Telemetry: signal OnExecuteSucceeded as soon as the server has accepted the statement
+                // and a statement id is known. ResultFormat is left Unspecified here because the
+                // SeaResultFormatMapper helper that derives this from the manifest is being added in a
+                // parallel phase 6 PR; once that lands this call will be updated to pass the mapped value.
+                _observer.OnExecuteSucceeded(response.StatementId ?? string.Empty, ExecutionResultFormat.Unspecified);
+
+                // Handle query status according to Databricks API documentation:
+                // PENDING: waiting for warehouse - continue polling
+                // RUNNING: running - continue polling
+                // SUCCEEDED: execution was successful, result data available for fetch
+                // FAILED: execution failed; reason for failure described in accompanying error message
+                // CANCELED: user canceled; can come from explicit cancel call, or timeout with on_wait_timeout=CANCEL
+                // CLOSED: execution successful, and statement closed; result no longer available for fetch
+                var state = response.Status?.State;
+                if (state == "PENDING" || state == "RUNNING")
+                {
+                    response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                    state = response.Status?.State;
+                }
+
+                // Check for terminal error states
+                if (state == "FAILED")
+                {
+                    var error = response.Status?.Error;
+                    throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                }
+                if (state == "CANCELED")
+                {
+                    throw new AdbcException("Statement execution was canceled");
+                }
+                if (state == "CLOSED")
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
+
+                // Check for truncated results warning
+                if (response.Manifest?.Truncated == true)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("statement.results_truncated",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "total_row_count", response.Manifest.TotalRowCount },
+                            { "total_byte_count", response.Manifest.TotalByteCount }
+                        }));
+                }
+
+                // Create appropriate reader based on result disposition.
+                // All paths (inline, CloudFetch, empty) expose the manifest schema so that
+                // IntervalSerializingStream and ComplexTypeSerializingStream can detect columns
+                // uniformly via Spark:DataType:SqlName metadata rather than Arrow IPC types.
+                IArrowArrayStream reader = CreateReader(response, cancellationToken);
+
+                // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
+                // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
+                reader = new IntervalSerializingStream(reader);
+
+                // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
+                // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
+                if (!_enableComplexDatatypeSupport)
+                {
+                    reader = new ComplexTypeSerializingStream(reader);
+                }
+
+                // Get schema from reader
+                var schema = reader.Schema;
+
+                // Return query result - use 0 if row count is not available
+                long rowCount = response.Manifest?.TotalRowCount ?? 0;
+                return new QueryResult(rowCount, reader);
             }
-
-            // Check for terminal error states
-            if (state == "FAILED")
+            catch (Exception ex)
             {
-                var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                // Telemetry: signal OnError on any failure path (server error, terminal FAILED/CANCELED/CLOSED
+                // state, polling cancellation, reader construction). The observer contract guarantees the call
+                // swallows exceptions, so no try/catch is wrapped around the observer call itself.
+                _observer.OnError(ex);
+                throw;
             }
-            if (state == "CANCELED")
-            {
-                throw new AdbcException("Statement execution was canceled");
-            }
-            if (state == "CLOSED")
-            {
-                throw new AdbcException("Statement was closed before results could be retrieved");
-            }
-
-            // Check for truncated results warning
-            if (response.Manifest?.Truncated == true)
-            {
-                Activity.Current?.AddEvent(new ActivityEvent("statement.results_truncated",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "total_row_count", response.Manifest.TotalRowCount },
-                        { "total_byte_count", response.Manifest.TotalByteCount }
-                    }));
-            }
-
-            // Create appropriate reader based on result disposition.
-            // All paths (inline, CloudFetch, empty) expose the manifest schema so that
-            // IntervalSerializingStream and ComplexTypeSerializingStream can detect columns
-            // uniformly via Spark:DataType:SqlName metadata rather than Arrow IPC types.
-            IArrowArrayStream reader = CreateReader(response, cancellationToken);
-
-            // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
-            // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
-            reader = new IntervalSerializingStream(reader);
-
-            // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
-            // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
-            if (!_enableComplexDatatypeSupport)
-            {
-                reader = new ComplexTypeSerializingStream(reader);
-            }
-
-            // Get schema from reader
-            var schema = reader.Schema;
-
-            // Return query result - use 0 if row count is not available
-            long rowCount = response.Manifest?.TotalRowCount ?? 0;
-            return new QueryResult(rowCount, reader);
         }
 
         /// <summary>
@@ -477,6 +506,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private async Task<ExecuteStatementResponse> PollUntilCompleteAsync(string statementId, CancellationToken cancellationToken)
         {
+            // Telemetry: accumulate the count and wall-clock latency of GetStatementAsync calls so we can
+            // emit a single OnPollCompleted on terminal state. Per IStatementOperationObserver, latencyMs is
+            // "sum of wall-clock time spent in poll calls" — i.e. the GetStatementAsync calls themselves,
+            // not the inter-poll Task.Delay backoff. OnPollCompleted is intentionally NOT called on
+            // cancellation/exception paths: those flow through ExecuteQueryInternalAsync's catch and trigger
+            // OnError; emitting a partial poll record there would muddle the telemetry contract.
+            int pollCount = 0;
+            long totalPollLatencyMs = 0;
+            var pollStopwatch = new Stopwatch();
+
             while (true)
             {
                 // Check for cancellation before each polling iteration
@@ -488,8 +527,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Check for cancellation after delay
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Get statement status
+                // Get statement status (timed for poll telemetry)
+                pollCount++;
+                pollStopwatch.Restart();
                 var response = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
+                pollStopwatch.Stop();
+                totalPollLatencyMs += pollStopwatch.ElapsedMilliseconds;
 
                 // Convert GetStatementResponse to ExecuteStatementResponse
                 var executeResponse = new ExecuteStatementResponse
@@ -507,6 +550,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     state == "CANCELED" ||
                     state == "CLOSED")
                 {
+                    // Telemetry: emit exactly once on terminal state with accumulated count/latency.
+                    _observer.OnPollCompleted(pollCount, totalPollLatencyMs);
                     return executeResponse;
                 }
 
