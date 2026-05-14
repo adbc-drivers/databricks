@@ -32,8 +32,8 @@ Ship end-to-end SEA client telemetry to production parity with Thrift — connec
 Replace `TSessionHandle? sessionHandle` with `string sessionId`. Add `DriverMode.Types.Type mode` parameter. Remove the hardcoded `DriverMode.Types.Type.Thrift` at `ConnectionTelemetry.cs:458` and `:642`.
 
 **Files touched:**
-- `csharp/src/Drivers/Databricks/Telemetry/ConnectionTelemetry.cs`
-- `csharp/src/Drivers/Databricks/DatabricksConnection.cs` (single Thrift call site, convert `sessionHandle.SessionId.Guid.ToString()` at boundary)
+- `csharp/src/Telemetry/ConnectionTelemetry.cs`
+- `csharp/src/DatabricksConnection.cs` (single Thrift call site, convert `sessionHandle.SessionId.Guid.ToString()` at boundary)
 
 **Acceptance criteria:**
 - All existing telemetry unit tests pass unchanged.
@@ -49,10 +49,10 @@ Replace `TSessionHandle? sessionHandle` with `string sessionId`. Add `DriverMode
 Create the interface and three implementations per design §5.1 and §12.
 
 **New files:**
-- `csharp/src/Drivers/Databricks/Telemetry/IStatementOperationObserver.cs`
-- `csharp/src/Drivers/Databricks/Telemetry/TelemetryObserver.cs` (uses `Safe(Action)` helper pattern from design §12)
-- `csharp/src/Drivers/Databricks/Telemetry/NullObserver.cs` (singleton)
-- `csharp/src/Drivers/Databricks/Telemetry/SafeObserver.cs` (decorator)
+- `csharp/src/Telemetry/IStatementOperationObserver.cs`
+- `csharp/src/Telemetry/TelemetryObserver.cs` (uses `Safe(Action)` helper pattern from design §12)
+- `csharp/src/Telemetry/NullObserver.cs` (singleton)
+- `csharp/src/Telemetry/SafeObserver.cs` (decorator)
 
 **Acceptance criteria:**
 - Interface contract documented: methods MUST NOT throw, thread-safe, `OnFinalized` is terminal and idempotent.
@@ -78,7 +78,7 @@ Create the interface and three implementations per design §5.1 and §12.
 Static helper that maps wire `disposition` × manifest state → proto `ExecutionResult.Format`. Per design §8.
 
 **New files:**
-- `csharp/src/Drivers/Databricks/StatementExecution/SeaResultFormatMapper.cs`
+- `csharp/src/StatementExecution/SeaResultFormatMapper.cs`
 
 **Acceptance criteria:**
 - Unit tests covering all four cells in §8 table:
@@ -96,7 +96,7 @@ Static helper that maps wire `disposition` × manifest state → proto `Executio
 Mechanical refactor: replace the private telemetry methods (`CreateTelemetryContext`, `CreateMetadataTelemetryContext`, `RecordSuccess`, `RecordError`, `EmitTelemetry`) with `_observer: IStatementOperationObserver` field calls. Behavior unchanged.
 
 **Files touched:**
-- `csharp/src/Drivers/Databricks/DatabricksStatement.cs`
+- `csharp/src/DatabricksStatement.cs`
 
 **Acceptance criteria:**
 - All existing Thrift telemetry unit tests pass unchanged.
@@ -114,7 +114,7 @@ Mechanical refactor: replace the private telemetry methods (`CreateTelemetryCont
 Mirror the Thrift pattern at `DatabricksConnection.cs:594-724`. Add `_telemetry: IConnectionTelemetry` field. Call `ConnectionTelemetry.Create(...)` in `OpenAsync` after `CreateSessionAsync` succeeds, emit `CREATE_SESSION` event, then on `Dispose` emit `DELETE_SESSION` and run `DisposeAsync` with 5-second timeout.
 
 **Files touched:**
-- `csharp/src/Drivers/Databricks/StatementExecution/StatementExecutionConnection.cs`
+- `csharp/src/StatementExecution/StatementExecutionConnection.cs`
 
 **Acceptance criteria:**
 - `OpenAsync` succeeds even if telemetry initialization throws (telemetry is fail-open; falls back to `NullConnectionTelemetry`).
@@ -141,7 +141,7 @@ The meatiest task. Add `_observer: IStatementOperationObserver` field (defaults 
 7. `OnFinalized` — `Dispose` (line 817)
 
 **Files touched:**
-- `csharp/src/Drivers/Databricks/StatementExecution/StatementExecutionStatement.cs`
+- `csharp/src/StatementExecution/StatementExecutionStatement.cs`
 
 **Acceptance criteria:**
 - Manual test: execute a SELECT via REST, verify a telemetry record arrives with `statement_id`, `result_format`, `operation_latency_ms`, `poll_count`, `result_set_ready_latency_millis`, `result_set_consumption_latency_millis` populated.
@@ -160,7 +160,7 @@ The meatiest task. Add `_observer: IStatementOperationObserver` field (defaults 
 Mirror the Thrift integration test set per design §15.
 
 **New files:**
-- `csharp/test/Drivers/Databricks/Telemetry/SeaTelemetryIntegrationTests.cs` (or similar)
+- `csharp/test/E2E/Telemetry/SeaTelemetryIntegrationTests.cs` (or similar)
 
 **Test cases:**
 - `Sea_ExecuteQuery_EmitsTelemetryWithStatementId`
