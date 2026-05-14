@@ -145,3 +145,34 @@ Each IGetObjectsDataProvider method makes one server call. Total RPCs by depth:
 | DbSchemas | + GetSchemasAsync | 2 |
 | Tables | + GetTablesAsync | 3 |
 | All | + PopulateColumnInfoAsync | 4 |
+
+## Fast Metadata Query (`DESC TABLE EXTENDED ... STATIC ONLY`)
+
+`GetColumnsExtended` runs `DESC TABLE EXTENDED <table> AS JSON` to fetch column +
+key metadata in a single round-trip. Runtime PR #198486 added a `STATIC ONLY`
+modifier to that command which makes the server return catalog metadata only
+(no Delta log access, no Mesa RPCs, no other expensive I/O). When opted in via
+`adbc.databricks.enable_fast_metadata_query`, the driver emits the new modifier
+**and** pairs it with the protocol-specific off-WLM routing signal so the
+fast-metadata path takes effect end-to-end:
+
+| Protocol | SQL emitted | Off-WLM signal | Where |
+|---|---|---|---|
+| SEA | `DESC TABLE EXTENDED <t> STATIC ONLY AS JSON` | HTTP header `x-databricks-sea-can-run-fully-sync: true` | Header is unconditionally set on metadata calls via `ExecuteMetadataSqlAsync` → `IsMetadata=true` → `StatementExecutionClient.cs:225`. SEA always targets a warehouse, so the flag alone gates the SQL change. |
+| Thrift | `DESC TABLE EXTENDED <t> STATIC ONLY AS JSON` | `TExecuteStatementReq.RunAsync = false` on the descStmt | `DatabricksStatement.GetColumnsExtendedAsync` flips both when `adbc.databricks.enable_fast_metadata_query=true` AND the connection path matches `/sql/1.0/(warehouses\|endpoints)/{id}` (general clusters: flag is ignored). |
+
+Both signals together are required:
+
+- `STATIC ONLY` without off-WLM routing → server uses the lightweight metadata
+  path but the request is still queued through WLM.
+- Off-WLM routing without `STATIC ONLY` → request bypasses WLM but the server
+  still does the full metadata scan.
+
+### Fallback safety
+
+`STATIC ONLY` requires `AS JSON` per the runtime grammar; older servers without
+PR #198486 reject the new keyword with parse error `INVALID_STATIC_ONLY_USAGE`
+(SQL state `42601`). The existing `catch (HiveServer2Exception ex) when
+(ex.SqlState == "42601" || ex.SqlState == "20000")` in
+`DatabricksStatement.GetColumnsExtendedAsync` already handles this and falls back
+to the base `GetColumns + GetPrimaryKeys + GetCrossReference` implementation.
