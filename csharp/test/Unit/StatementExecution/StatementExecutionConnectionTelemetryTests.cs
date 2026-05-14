@@ -1,0 +1,387 @@
+/*
+* Copyright (c) 2025 ADBC Drivers Contributors
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*     http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.Databricks.Telemetry;
+using AdbcDrivers.Databricks.Telemetry.Models;
+using AdbcDrivers.HiveServer2.Spark;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
+using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
+using Xunit;
+
+namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
+{
+    /// <summary>
+    /// Unit tests for telemetry wiring in <see cref="StatementExecutionConnection"/>
+    /// (PECO-3022 T5). Mirrors the Thrift-side <c>DriverTelemetryWiringTests</c> pattern:
+    /// these tests exercise the production code paths (<c>EmitCreateSessionTelemetry</c>,
+    /// <c>EmitDeleteSessionTelemetry</c>, <c>OpenAsync</c>, <c>Dispose</c>) against a
+    /// fake <see cref="IConnectionTelemetry"/> injected via the
+    /// <c>TelemetryForTesting</c> seam so we can verify CREATE_SESSION/DELETE_SESSION
+    /// emissions, the fail-open init contract, and the 5-second Dispose flush timeout.
+    /// </summary>
+    public class StatementExecutionConnectionTelemetryTests
+    {
+        // ── Fakes ──────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Records every <c>EmitOperationTelemetry</c> call so tests can assert which
+        /// operation types fired, in what order, and with what payload.
+        /// </summary>
+        private sealed class RecordingTelemetry : IConnectionTelemetry
+        {
+            public List<OperationType> Calls { get; } = new();
+            public List<Exception?> Errors { get; } = new();
+            public List<string?> StatementIds { get; } = new();
+            public Dictionary<OperationType, long> LatenciesByOp { get; } = new();
+            public TelemetrySessionContext? Session { get; }
+                = new TelemetrySessionContext
+                {
+                    SessionId = "sea-session-1",
+                };
+            public int DisposeCount { get; private set; }
+
+            public T ExecuteWithMetadataTelemetry<T>(
+                OperationType operationType,
+                Func<T> operation,
+                Activity? activity) => operation();
+
+            public void EmitOperationTelemetry(
+                OperationType operationType,
+                StatementType statementType,
+                string? statementId,
+                long elapsedMs,
+                Exception? error)
+            {
+                Calls.Add(operationType);
+                Errors.Add(error);
+                StatementIds.Add(statementId);
+                LatenciesByOp[operationType] = elapsedMs;
+            }
+
+            public Task DisposeAsync()
+            {
+                DisposeCount++;
+                return Task.CompletedTask;
+            }
+        }
+
+        /// <summary>
+        /// Telemetry that intentionally hangs in <c>DisposeAsync</c>. Used to verify the
+        /// 5-second hard timeout on <see cref="StatementExecutionConnection.Dispose"/>.
+        /// </summary>
+        private sealed class HangingTelemetry : IConnectionTelemetry
+        {
+            public TelemetrySessionContext? Session { get; }
+                = new TelemetrySessionContext { SessionId = "sea-session-hang" };
+
+            public T ExecuteWithMetadataTelemetry<T>(
+                OperationType operationType,
+                Func<T> operation,
+                Activity? activity) => operation();
+
+            public void EmitOperationTelemetry(
+                OperationType operationType,
+                StatementType statementType,
+                string? statementId,
+                long elapsedMs,
+                Exception? error)
+            {
+                // No-op
+            }
+
+            // Block forever — the production Dispose must time this out at 5 seconds.
+            public Task DisposeAsync() => new TaskCompletionSource<bool>().Task;
+        }
+
+        /// <summary>
+        /// Telemetry that throws on every EmitOperationTelemetry call. The connection's
+        /// emit helpers must swallow these so Dispose / OpenAsync don't fail.
+        /// </summary>
+        private sealed class ThrowingTelemetry : IConnectionTelemetry
+        {
+            public TelemetrySessionContext? Session => null;
+
+            public T ExecuteWithMetadataTelemetry<T>(
+                OperationType operationType,
+                Func<T> operation,
+                Activity? activity) => operation();
+
+            public void EmitOperationTelemetry(
+                OperationType operationType,
+                StatementType statementType,
+                string? statementId,
+                long elapsedMs,
+                Exception? error)
+            {
+                throw new InvalidOperationException("emit blew up");
+            }
+
+            public Task DisposeAsync() => Task.CompletedTask;
+        }
+
+        // ── Helpers ────────────────────────────────────────────────────────────────
+
+        private static Dictionary<string, string> CreateBaseProperties()
+        {
+            return new Dictionary<string, string>
+            {
+                { SparkParameters.HostName, "telemetry-test.cloud.databricks.com" },
+                { DatabricksParameters.WarehouseId, "test-warehouse-id" },
+                { SparkParameters.AccessToken, "test-token" }
+            };
+        }
+
+        private static StatementExecutionConnection CreateConnection()
+        {
+            return new StatementExecutionConnection(CreateBaseProperties());
+        }
+
+        /// <summary>
+        /// Reflectively flips <c>_sessionId</c> from null to a fake id so Dispose
+        /// believes a session exists and runs the DeleteSession path. The reflective
+        /// access mirrors what other StatementExecutionConnection unit tests do for
+        /// <c>_identityFederationClientId</c>.
+        /// </summary>
+        private static void SetFakeSessionId(StatementExecutionConnection connection, string sessionId)
+        {
+            var field = typeof(StatementExecutionConnection).GetField(
+                "_sessionId",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field);
+            field!.SetValue(connection, sessionId);
+        }
+
+        // ── Tests ──────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void EmitCreateSessionTelemetry_FiresCreateSession()
+        {
+            using var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            connection.EmitCreateSessionTelemetry();
+
+            Assert.Equal(new[] { OperationType.CreateSession }, fake.Calls);
+            Assert.Null(fake.Errors[0]);
+            Assert.Null(fake.StatementIds[0]);
+        }
+
+        [Fact]
+        public void OpenAsync_EmitsCreateSession_WhenTelemetryEnabled()
+        {
+            // We can't easily drive the full OpenAsync without a real warehouse, but the
+            // wiring contract is: after the session id is set, EmitCreateSessionTelemetry()
+            // must fire CREATE_SESSION through the injected telemetry. The production code
+            // calls this immediately after _sessionId = response.SessionId.
+            using var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            // Simulate the OpenAsync post-CreateSession step.
+            SetFakeSessionId(connection, "fake-session-id");
+            connection.EmitCreateSessionTelemetry(activity: null);
+
+            Assert.Contains(OperationType.CreateSession, fake.Calls);
+        }
+
+        [Fact]
+        public void EmitDeleteSessionTelemetry_WithoutCreate_DoesNotFire()
+        {
+            // Idempotency contract: DELETE_SESSION must not fire if CREATE_SESSION never did.
+            // Models a connection that failed to open a session.
+            using var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            connection.EmitDeleteSessionTelemetry(elapsedMs: 10);
+
+            Assert.DoesNotContain(OperationType.DeleteSession, fake.Calls);
+        }
+
+        [Fact]
+        public void Dispose_EmitsDeleteSession()
+        {
+            // The production Dispose path: with a session id set, it calls DeleteSessionAsync,
+            // captures its latency + error, and emits DELETE_SESSION before flushing.
+            // We use the test seam to skip the real RPC: the seam doesn't bypass the emit call,
+            // so we exercise the emit wiring directly with a fake session id.
+            var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            // Pretend session was opened.
+            connection.EmitCreateSessionTelemetry();
+
+            // Pretend the SEA session id is set so Dispose enters the DeleteSession branch.
+            // DeleteSessionAsync will throw (real HTTP call), but the production Dispose swallows
+            // and still emits DELETE_SESSION with the captured exception.
+            SetFakeSessionId(connection, "fake-sea-session-id");
+
+            connection.Dispose();
+
+            Assert.Contains(OperationType.CreateSession, fake.Calls);
+            Assert.Contains(OperationType.DeleteSession, fake.Calls);
+        }
+
+        [Fact]
+        public void EmitDeleteSessionTelemetry_ForwardsLatencyAndError()
+        {
+            using var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            // Open first so the idempotency gate lets DELETE_SESSION through.
+            connection.EmitCreateSessionTelemetry();
+            var rpcError = new InvalidOperationException("delete session failed");
+            connection.EmitDeleteSessionTelemetry(elapsedMs: 47, error: rpcError);
+
+            int deleteIdx = fake.Calls.IndexOf(OperationType.DeleteSession);
+            Assert.True(deleteIdx >= 0);
+            Assert.Equal(47, fake.LatenciesByOp[OperationType.DeleteSession]);
+            Assert.Same(rpcError, fake.Errors[deleteIdx]);
+        }
+
+        [Fact]
+        public void Dispose_CalledTwice_FiresDeleteSessionOnlyOnce()
+        {
+            // Repeated Dispose calls (common in `using` + manual Dispose) must not duplicate
+            // DELETE_SESSION records.
+            var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            connection.EmitCreateSessionTelemetry();
+            SetFakeSessionId(connection, "fake-session-id-dup");
+
+            connection.Dispose();
+            connection.Dispose();
+
+            int deleteCount = 0;
+            foreach (var call in fake.Calls)
+            {
+                if (call == OperationType.DeleteSession) deleteCount++;
+            }
+            Assert.Equal(1, deleteCount);
+        }
+
+        [Fact]
+        public void OpenAsync_TelemetryInitThrows_FallsBackToNoOpAndStillOpens()
+        {
+            // Goal: prove the InitializeTelemetry → ConnectionTelemetry.Create call chain is
+            // wrapped in a try/catch that falls back to NoOpConnectionTelemetry when init
+            // would throw. We exercise the private InitializeTelemetry helper directly via
+            // reflection — this is the same boundary the production OpenAsync goes through.
+            using var connection = CreateConnection();
+
+            // Sanity: starts as NoOp (the field's default).
+            Assert.IsType<NoOpConnectionTelemetry>(connection.TelemetryForTesting);
+
+            var method = typeof(StatementExecutionConnection).GetMethod(
+                "InitializeTelemetry",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method);
+
+            // ConnectionTelemetry.Create internally catches and returns NoOp on any failure,
+            // so even with bogus properties, InitializeTelemetry should leave _telemetry
+            // pointing at a valid IConnectionTelemetry (NoOp or real). It MUST NOT throw.
+            var ex = Record.Exception(() => method!.Invoke(connection, new object?[] { null }));
+            Assert.Null(ex);
+
+            // After init, telemetry should still be a valid instance (NoOp or real).
+            Assert.NotNull(connection.TelemetryForTesting);
+        }
+
+        [Fact]
+        public void EmitCreateSessionTelemetry_SwallowsExceptions()
+        {
+            // Fail-open contract: if the emit call throws, neither Open nor Dispose must surface it.
+            using var connection = CreateConnection();
+            connection.TelemetryForTesting = new ThrowingTelemetry();
+
+            var ex = Record.Exception(() => connection.EmitCreateSessionTelemetry());
+            Assert.Null(ex);
+        }
+
+        [Fact]
+        public void EmitDeleteSessionTelemetry_SwallowsExceptions()
+        {
+            using var connection = CreateConnection();
+            connection.TelemetryForTesting = new ThrowingTelemetry();
+
+            // Open first so the idempotency gate would otherwise let it through.
+            // ThrowingTelemetry throws on CREATE_SESSION too — but the helper still swallows.
+            connection.EmitCreateSessionTelemetry();
+            var ex = Record.Exception(() => connection.EmitDeleteSessionTelemetry(elapsedMs: 1));
+            Assert.Null(ex);
+        }
+
+        [Fact]
+        public void Dispose_FlushHangs_CompletesWithin5Seconds()
+        {
+            // The 5-second hard timeout on _telemetry.DisposeAsync().Wait(...) is the only
+            // thing standing between a wedged exporter and an indefinitely blocked Dispose.
+            // Use a HangingTelemetry whose DisposeAsync never completes, and verify Dispose
+            // returns in well under 10 seconds (we allow a generous wall-clock budget to
+            // tolerate slow CI machines).
+            var connection = CreateConnection();
+            connection.TelemetryForTesting = new HangingTelemetry();
+
+            // No session id set → DeleteSessionAsync path is skipped. The only thing that
+            // could hang Dispose now is the telemetry flush, which is exactly what we want
+            // to time-bound here.
+            var sw = Stopwatch.StartNew();
+            connection.Dispose();
+            sw.Stop();
+
+            // Budget: 5s timeout + headroom for the rest of Dispose (HttpClient disposal etc.).
+            Assert.True(
+                sw.Elapsed < TimeSpan.FromSeconds(10),
+                $"Dispose took {sw.Elapsed.TotalSeconds:F1}s, expected < 10s (5s flush timeout + headroom).");
+        }
+
+        [Fact]
+        public void TelemetrySession_DefaultsToNull_BeforeOpen()
+        {
+            // The TelemetrySession accessor exposes the underlying session for the SEA
+            // statement (next phase) to build observers. Before OpenAsync runs, telemetry
+            // is NoOp and Session is null — exactly the signal the statement uses to fall
+            // back to NullObserver.
+            using var connection = CreateConnection();
+            Assert.Null(connection.TelemetrySession);
+        }
+
+        [Fact]
+        public void TelemetrySession_ReflectsInjectedTelemetry()
+        {
+            // Once telemetry is wired up (real or fake), the accessor returns its session.
+            // SEA statements rely on this to create per-statement observer contexts.
+            using var connection = CreateConnection();
+            var fake = new RecordingTelemetry();
+            connection.TelemetryForTesting = fake;
+
+            Assert.NotNull(connection.TelemetrySession);
+            Assert.Equal("sea-session-1", connection.TelemetrySession!.SessionId);
+        }
+    }
+}

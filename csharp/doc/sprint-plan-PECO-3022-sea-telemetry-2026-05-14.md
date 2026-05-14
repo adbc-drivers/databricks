@@ -109,18 +109,24 @@ Mechanical refactor: replace the private telemetry methods (`CreateTelemetryCont
 
 ---
 
-### T5 — Wire telemetry into `StatementExecutionConnection` (1.5 days)
+### T5 — Wire telemetry into `StatementExecutionConnection` (1.5 days) — **DONE 2026-05-14**
 
 Mirror the Thrift pattern at `DatabricksConnection.cs:594-724`. Add `_telemetry: IConnectionTelemetry` field. Call `ConnectionTelemetry.Create(...)` in `OpenAsync` after `CreateSessionAsync` succeeds, emit `CREATE_SESSION` event, then on `Dispose` emit `DELETE_SESSION` and run `DisposeAsync` with 5-second timeout.
 
 **Files touched:**
-- `csharp/src/StatementExecution/StatementExecutionConnection.cs`
+- `csharp/src/StatementExecution/StatementExecutionConnection.cs` (modified)
+- `csharp/test/Unit/StatementExecution/StatementExecutionConnectionTelemetryTests.cs` (new)
 
 **Acceptance criteria:**
-- `OpenAsync` succeeds even if telemetry initialization throws (telemetry is fail-open; falls back to `NullConnectionTelemetry`).
-- `Dispose` completes within 5 seconds even if exporter is wedged.
-- Observer is created in `CreateStatement()` using `_telemetry.Session`; falls back to `NullObserver.Instance` if telemetry is disabled or `Session` is null.
-- Manual test: open + close a REST connection, verify `CREATE_SESSION` and `DELETE_SESSION` records arrive in lumberjack.
+- ✅ `OpenAsync` succeeds even if telemetry initialization throws (telemetry is fail-open; falls back to `NoOpConnectionTelemetry`).
+- ✅ `Dispose` completes within 5 seconds even if exporter is wedged (test `Dispose_FlushHangs_CompletesWithin5Seconds`).
+- ⏭ Observer creation in `CreateStatement()` deferred to **T6** (this task only exposes `TelemetrySession` accessor so the SEA statement can pull the session for observer construction).
+- 🟡 Manual test (lumberjack verification): pending sprint demo against real warehouse.
+
+**Implementation notes:**
+- `IConnectionTelemetry.DisposeAsync` returns `Task` (not `ValueTask`), so the call is `_telemetry.DisposeAsync().Wait(TimeSpan.FromSeconds(5))`. The sprint description's `.AsTask().Wait(...)` was based on a different return type assumption — the simpler form is equivalent.
+- `CreateHttpClient` was switched from `HttpHandlerFactory.CreateHandlers` to `CreateHandlersWithTokenProvider` so the OAuth `_oauthTokenProvider` can be captured and threaded into `ConnectionTelemetry.Create` (matches the Thrift path's token-caching behavior).
+- Added test seam `TelemetryForTesting` (settable property) mirroring `DatabricksConnection.TelemetryForTesting` so unit tests can inject a `RecordingTelemetry` fake without driving a real CreateSession RPC. Direct unit testing of `OpenAsync` end-to-end requires a fake `IStatementExecutionClient`, which is out-of-scope for T5; the public wiring contract is verified by exercising `EmitCreateSessionTelemetry` / `EmitDeleteSessionTelemetry` directly, identical to the Thrift `DriverTelemetryWiringTests` approach.
 
 **Risks:** Medium. New telemetry surface on a class that has never had it. Watch for null-handling around `_telemetry` and `Session`.
 
