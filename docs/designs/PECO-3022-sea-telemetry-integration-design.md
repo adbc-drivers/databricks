@@ -336,7 +336,31 @@ sequenceDiagram
 
 ### Fail-open contract
 
-Every method on `IStatementOperationObserver` and `IConnectionTelemetry` must swallow all exceptions. `TelemetryObserver` and `ConnectionTelemetry` both implement this via per-method try/catch logging at `TRACE`. Callsites contain **zero try/catch around observer/telemetry calls** — the contract pushes that concern into the implementations exactly once.
+Every method on `IStatementOperationObserver` and `IConnectionTelemetry` must swallow all exceptions. Callsites contain **zero try/catch around observer/telemetry calls** — the contract pushes that concern into the implementations exactly once.
+
+**Implementation pattern:** `TelemetryObserver` uses a single private helper rather than per-method try/catch boilerplate, keeping method bodies as one-line action delegates:
+
+```csharp
+private static void Safe(Action action) {
+    try { action(); }
+    catch (Exception ex) { Log.Trace(ex, "telemetry observer suppressed exception"); }
+}
+
+public void OnExecuteStarted(Statement.Types.Type stmt, Operation.Types.Type op, bool compressed) =>
+    Safe(() => {
+        _ctx.StatementType = stmt;
+        _ctx.OperationType = op;
+        _ctx.IsCompressed   = compressed;
+    });
+
+public void OnPollCompleted(int count, long latencyMs) =>
+    Safe(() => {
+        _ctx.PollCount     = count;
+        _ctx.PollLatencyMs = latencyMs;
+    });
+```
+
+This concentrates the try/catch in exactly one place per observer impl. The tiny per-call lambda allocation is acceptable — these methods are called O(1) times per statement.
 
 The optional `SafeObserver` decorator is available for future third-party observer implementations that may not honor the contract; it wraps any inner observer with a defensive try/catch per method.
 
