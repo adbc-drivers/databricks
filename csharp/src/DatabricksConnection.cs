@@ -90,6 +90,7 @@ namespace AdbcDrivers.Databricks
         private const bool DefaultRateLimitRetry = true;
         private const bool DefaultTransportErrorRetry = true;
         private bool _useDescTableExtended = false;
+        private bool _enableFastMetadataQuery = false;
 
         // Trace propagation configuration
         private bool _tracePropagationEnabled = true;
@@ -196,6 +197,7 @@ namespace AdbcDrivers.Databricks
             _useCloudFetch = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseCloudFetch, _useCloudFetch);
             _canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.CanDecompressLz4, _canDecompressLz4);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseDescTableExtended, _useDescTableExtended);
+            _enableFastMetadataQuery = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableFastMetadataQuery, _enableFastMetadataQuery);
             _runAsyncInThrift = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableRunAsyncInThriftOp, _runAsyncInThrift);
             _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableComplexDatatypeSupport, _enableComplexDatatypeSupport);
 
@@ -362,6 +364,55 @@ namespace AdbcDrivers.Databricks
         /// Check if current connection can use `DESC TABLE EXTENDED` query
         /// </summary>
         internal bool CanUseDescTableExtended => _useDescTableExtended && ServerProtocolVersion != null && FeatureVersionNegotiator.SupportsDESCTableExtended(ServerProtocolVersion.Value);
+
+        private static readonly System.Text.RegularExpressions.Regex s_warehousePathPattern =
+            new System.Text.RegularExpressions.Regex(@"^/sql/1\.0/(warehouses|endpoints)/[^/]+/?$");
+
+        private bool? _isWarehousePathCached;
+
+        /// <summary>
+        /// True when the configured connection path targets a DBSQL warehouse
+        /// (/sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}). False for general
+        /// clusters (/sql/protocolv1/o/{orgId}/{clusterId}) or when no path is set.
+        /// </summary>
+        internal bool IsWarehousePath
+        {
+            get
+            {
+                if (_isWarehousePathCached.HasValue)
+                {
+                    return _isWarehousePathCached.Value;
+                }
+
+                string? path = null;
+                if (Properties.TryGetValue(SparkParameters.Path, out string? rawPath) && !string.IsNullOrEmpty(rawPath))
+                {
+                    path = rawPath;
+                }
+                else if (Properties.TryGetValue(AdbcOptions.Uri, out string? uri)
+                    && !string.IsNullOrEmpty(uri)
+                    && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+                {
+                    path = parsedUri.AbsolutePath;
+                }
+
+                if (!string.IsNullOrEmpty(path))
+                {
+                    int q = path!.IndexOf('?');
+                    if (q >= 0) path = path.Substring(0, q);
+                }
+
+                _isWarehousePathCached = !string.IsNullOrEmpty(path) && s_warehousePathPattern.IsMatch(path!);
+                return _isWarehousePathCached.Value;
+            }
+        }
+
+        /// <summary>
+        /// True when the driver should opt into the fast metadata query path. Requires
+        /// both the connection flag and a DBSQL warehouse path; otherwise false.
+        /// See <see cref="DatabricksParameters.EnableFastMetadataQuery"/>.
+        /// </summary>
+        internal bool UseFastMetadataQuery => _enableFastMetadataQuery && IsWarehousePath;
 
         /// <summary>
         /// Gets whether PK/FK metadata call is enabled

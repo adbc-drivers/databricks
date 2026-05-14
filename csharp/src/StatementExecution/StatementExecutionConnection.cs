@@ -63,6 +63,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly bool _enablePKFK;
         private readonly bool _enableMultipleCatalogSupport;
         private readonly bool _useDescTableExtended;
+        private readonly bool _enableFastMetadataQuery;
 
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
@@ -204,6 +205,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, false);
+            _enableFastMetadataQuery = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableFastMetadataQuery, false);
 
             // Session configuration
             // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
@@ -810,6 +812,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// Default: false (falls back to GetColumns + GetPrimaryKeys + GetCrossReference).
         /// </summary>
         internal bool UseDescTableExtended => _useDescTableExtended;
+
+        /// <summary>
+        /// Whether to append the STATIC ONLY modifier to DESC TABLE EXTENDED AS JSON.
+        /// SEA always targets a DBSQL warehouse, so the flag alone is sufficient (no
+        /// warehouse-path check needed). The metadata-query header is already sent by
+        /// <see cref="ExecuteMetadataSqlAsync"/>, which provides the SEA equivalent of
+        /// Thrift's RunAsync=false signal.
+        /// Default: false.
+        /// </summary>
+        internal bool EnableFastMetadataQuery => _enableFastMetadataQuery;
 
         /// <summary>
         /// Returns the session's default catalog. Used by statements when

@@ -79,6 +79,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
+        public void TestEnableFastMetadataQueryParameterExists()
+        {
+            Assert.Equal("adbc.databricks.enable_fast_metadata_query", DatabricksParameters.EnableFastMetadataQuery);
+        }
+
+        [Fact]
         public void TestAllRestParametersUseCorrectPrefix()
         {
             // Verify REST-specific parameters use "adbc.databricks.rest." prefix
