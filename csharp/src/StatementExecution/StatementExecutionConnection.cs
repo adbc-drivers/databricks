@@ -622,9 +622,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Creates a new statement for query execution.
+        /// Constructs a per-statement <see cref="IStatementOperationObserver"/> bound to
+        /// this connection's telemetry session — a <see cref="TelemetryObserver"/> when
+        /// telemetry is enabled and the session has a live client, otherwise
+        /// <see cref="NullObserver.Instance"/>. This mirrors the Thrift-side
+        /// <see cref="DatabricksConnection.CreateStatement"/> wiring and gives all
+        /// subsequent hookpoint commits a non-null target in the statement.
         /// </summary>
         public override AdbcStatement CreateStatement()
         {
+            // Inject the observer at construction so StatementExecutionStatement is not
+            // coupled to TelemetrySession at runtime. When telemetry is disabled (NoOp
+            // connection telemetry → Session is null) or the session has no live client
+            // (configuration/circuit breaker), we hand the statement a NullObserver so
+            // every hookpoint call is a fail-open no-op without callsite null-checks.
+            TelemetrySessionContext? session = TelemetrySession;
+            IStatementOperationObserver observer = session?.TelemetryClient != null
+                ? (IStatementOperationObserver)new TelemetryObserver(session)
+                : NullObserver.Instance;
+
             return new StatementExecutionStatement(
                 _client,
                 _sessionId,
@@ -640,7 +656,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _recyclableMemoryStreamManager,
                 _lz4BufferPool,
                 _cloudFetchHttpClient,
-                this); // Pass connection as TracingConnection for tracing support
+                this, // Pass connection as TracingConnection for tracing support
+                observer);
         }
 
         public override void SetOption(string key, string? value)

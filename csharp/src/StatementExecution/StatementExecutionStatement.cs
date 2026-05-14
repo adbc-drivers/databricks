@@ -25,6 +25,7 @@ using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.Databricks.Result;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
@@ -71,6 +72,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Connection reference for metadata queries
         private readonly StatementExecutionConnection _connection;
+
+        /// <summary>
+        /// Observer for this statement's operational lifecycle. Injected at construction by
+        /// <see cref="StatementExecutionConnection.CreateStatement"/> — a
+        /// <see cref="TelemetryObserver"/> bound to the connection's
+        /// <see cref="TelemetrySessionContext"/> when telemetry is enabled, otherwise
+        /// <see cref="NullObserver.Instance"/>. Subsequent hookpoint commits will route the
+        /// statement's lifecycle calls (execute, poll, first-batch, consumed, error, finalized)
+        /// through this field. <b>Never null</b> — callsites do not need to null-check.
+        /// </summary>
+        private readonly IStatementOperationObserver _observer;
 
         // Statement state
         private string? _currentStatementId;
@@ -165,7 +177,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Microsoft.IO.RecyclableMemoryStreamManager recyclableMemoryStreamManager,
             System.Buffers.ArrayPool<byte> lz4BufferPool,
             HttpClient httpClient,
-            StatementExecutionConnection connection)
+            StatementExecutionConnection connection,
+            IStatementOperationObserver? observer = null)
             : base(connection)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
@@ -186,12 +199,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+            // Defaulting to NullObserver — never null — lets every hookpoint callsite skip
+            // null-checks (design §12). Callers that want telemetry pass a TelemetryObserver
+            // bound to the connection's TelemetrySessionContext.
+            _observer = observer ?? NullObserver.Instance;
 
             // Match Thrift: statement starts with connection's default catalog.
             // When enableMultipleCatalogSupport=true, this is the catalog from config (e.g. "main").
             // When false, _catalog is null (not set from config), matching Thrift behavior.
             _metadataCatalogName = catalog;
         }
+
+        /// <summary>
+        /// Internal accessor for the injected observer. Exposed so unit tests can verify
+        /// that <see cref="StatementExecutionConnection.CreateStatement"/> wired the correct
+        /// observer type (TelemetryObserver when telemetry is enabled, NullObserver otherwise).
+        /// Production code uses the <c>_observer</c> field directly.
+        /// </summary>
+        internal IStatementOperationObserver Observer => _observer;
 
         /// <summary>
         /// Gets or sets the SQL query to execute.

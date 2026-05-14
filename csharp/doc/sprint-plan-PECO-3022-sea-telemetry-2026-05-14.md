@@ -136,6 +136,8 @@ Mirror the Thrift pattern at `DatabricksConnection.cs:594-724`. Add `_telemetry:
 
 ### T6 — Wire telemetry into `StatementExecutionStatement` (3 days)
 
+**Setup portion DONE 2026-05-14**: `_observer: IStatementOperationObserver` field added to `StatementExecutionStatement` (defaulted to `NullObserver.Instance`), constructor takes an optional `IStatementOperationObserver?` parameter, and `StatementExecutionConnection.CreateStatement` constructs a `TelemetryObserver` bound to `TelemetrySession` when telemetry is enabled (and `session.TelemetryClient != null`), or falls back to `NullObserver.Instance` otherwise. No hookpoint calls wired yet — those land in the subsequent commits below. Unit tests: `StatementExecutionStatementObserverInjectionTests` (6 tests covering field shape, default coercion, telemetry-enabled/disabled branches, and per-statement freshness).
+
 The meatiest task. Add `_observer: IStatementOperationObserver` field (defaults to `NullObserver.Instance`, set by `StatementExecutionConnection.CreateStatement`). Call observer methods at all 7 hookpoints per design §6:
 
 1. `OnExecuteStarted` — `ExecuteQueryInternalAsync` before `_client.ExecuteStatementAsync` (line 345)
