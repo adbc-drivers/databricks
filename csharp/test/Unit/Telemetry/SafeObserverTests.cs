@@ -55,6 +55,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public long? FirstBatchReadyMs;
             public long? ConsumedMs;
             public ChunkMetrics? ChunkMetrics;
+            public ExecutionResultFormat? ReaderInspectedFormat;
+            public bool? ReaderInspectedCompressed;
             public Exception? Error;
             public int FinalizedCallCount;
 
@@ -96,6 +98,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             {
                 Calls.Add(nameof(OnChunksDownloaded));
                 ChunkMetrics = metrics;
+            }
+
+            public void OnReaderInspected(ExecutionResultFormat resultFormat, bool isCompressed)
+            {
+                Calls.Add(nameof(OnReaderInspected));
+                ReaderInspectedFormat = resultFormat;
+                ReaderInspectedCompressed = isCompressed;
             }
 
             public void OnError(Exception ex)
@@ -156,6 +165,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 throw new InvalidOperationException("OnChunksDownloaded boom");
             }
 
+            public void OnReaderInspected(ExecutionResultFormat resultFormat, bool isCompressed)
+            {
+                CallCount++;
+                throw new InvalidOperationException("OnReaderInspected boom");
+            }
+
             public void OnError(Exception ex)
             {
                 CallCount++;
@@ -193,6 +208,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             safe.OnPollCompleted(count: 5, latencyMs: 87);
             safe.OnFirstBatchReady(latencyMs: 120);
             safe.OnChunksDownloaded(metrics);
+            safe.OnReaderInspected(ExecutionResultFormat.ExternalLinks, isCompressed: true);
             safe.OnConsumed(latencyMs: 350);
             safe.OnError(error);
             safe.OnFinalized();
@@ -206,6 +222,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                     nameof(IStatementOperationObserver.OnPollCompleted),
                     nameof(IStatementOperationObserver.OnFirstBatchReady),
                     nameof(IStatementOperationObserver.OnChunksDownloaded),
+                    nameof(IStatementOperationObserver.OnReaderInspected),
                     nameof(IStatementOperationObserver.OnConsumed),
                     nameof(IStatementOperationObserver.OnError),
                     nameof(IStatementOperationObserver.OnFinalized),
@@ -222,6 +239,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             Assert.Equal(120, inner.FirstBatchReadyMs);
             Assert.Equal(350, inner.ConsumedMs);
             Assert.Same(metrics, inner.ChunkMetrics);
+            Assert.Equal(ExecutionResultFormat.ExternalLinks, inner.ReaderInspectedFormat);
+            Assert.True(inner.ReaderInspectedCompressed);
             Assert.Same(error, inner.Error);
             Assert.Equal(1, inner.FinalizedCallCount);
 
@@ -267,13 +286,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                     safe.OnFirstBatchReady(latencyMs: 1);
                     safe.OnConsumed(latencyMs: 1);
                     safe.OnChunksDownloaded(new ChunkMetrics());
+                    safe.OnReaderInspected(ExecutionResultFormat.ExternalLinks, isCompressed: true);
                     safe.OnError(new InvalidOperationException("propagated error"));
                     safe.OnFinalized();
                 });
                 Assert.Null(captured);
 
-                // Inner observer was invoked exactly once per method (eight methods).
-                Assert.Equal(8, throwing.CallCount);
+                // Inner observer was invoked exactly once per method (nine methods).
+                Assert.Equal(9, throwing.CallCount);
             }
 
             // Activity has now stopped; ActivityStopped callback populates capturedEvents.
@@ -281,7 +301,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             List<ActivityEvent> suppressions = capturedEvents
                 .Where(e => e.Name == "telemetry.observer.suppressed")
                 .ToList();
-            Assert.Equal(8, suppressions.Count);
+            Assert.Equal(9, suppressions.Count);
 
             // Each suppression event must carry diagnostic tags identifying SafeObserver
             // as the source and including the inner exception's type and message —

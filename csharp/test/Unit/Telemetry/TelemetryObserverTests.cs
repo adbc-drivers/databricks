@@ -255,6 +255,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 observer.OnFirstBatchReady(latencyMs: -1);
                 observer.OnConsumed(latencyMs: -1);
                 observer.OnChunksDownloaded(null!);
+                observer.OnReaderInspected(ExecutionResultFormat.Unspecified, isCompressed: false);
                 observer.OnError(null!);
                 observer.OnError(new InvalidOperationException("boom"));
                 observer.OnFinalized();
@@ -343,6 +344,49 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             // Assert: subsequent calls do not overwrite the earliest observed latency.
             Assert.Equal(50, observer.Context.FirstBatchReadyMs);
+        }
+
+        [Fact]
+        public void TelemetryObserver_OnReaderInspected_OverridesResultFormatAndCompression()
+        {
+            // Arrange: OnExecuteStarted seeds the placeholder defaults (InlineArrow / false)
+            // that the legacy CreateTelemetryContext helper stamped. The reader inspection
+            // hook fires later from the finalize path and must overwrite both fields with
+            // the server-reported truth (PECO-2988, PECO-2978).
+            (TelemetryObserver observer, CapturingTelemetryClient client) = CreateObserver();
+            observer.OnExecuteStarted(StatementType.Query, OperationType.ExecuteStatement, isCompressed: false);
+            observer.OnExecuteSucceeded("stmt-rdr", ExecutionResultFormat.InlineArrow);
+
+            // Act: simulate the CloudFetch + LZ4 case where the active reader reports
+            // a different result format and compression flag than the defaults.
+            observer.OnReaderInspected(ExecutionResultFormat.ExternalLinks, isCompressed: true);
+            observer.OnFinalized();
+
+            // Assert: context reflects the post-inspection values, and the emitted log
+            // carries them through to the proto fields.
+            Assert.Equal(ExecutionResultFormat.ExternalLinks, observer.Context.ResultFormat);
+            Assert.True(observer.Context.IsCompressed);
+            OssSqlDriverTelemetryLog log = client.Logs[0].Entry!.SqlDriverLog!;
+            Assert.Equal(ExecutionResultFormat.ExternalLinks, log.SqlOperation.ExecutionResult);
+            Assert.True(log.SqlOperation.IsCompressed);
+        }
+
+        [Fact]
+        public void TelemetryObserver_OnReaderInspected_DoesNotThrow_WhenInvokedBeforeExecuteStart()
+        {
+            // Arrange: caller invokes OnReaderInspected directly without an OnExecuteStarted
+            // prelude. The method must be idempotent-friendly and never throw, per the
+            // fail-open contract.
+            (TelemetryObserver observer, _) = CreateObserver();
+
+            // Act + Assert
+            Exception? captured = Record.Exception(() =>
+                observer.OnReaderInspected(ExecutionResultFormat.InlineArrow, isCompressed: false));
+            Assert.Null(captured);
+
+            // The fields it touches must reflect the invocation even without a prior call.
+            Assert.Equal(ExecutionResultFormat.InlineArrow, observer.Context.ResultFormat);
+            Assert.False(observer.Context.IsCompressed);
         }
 
         [Fact]

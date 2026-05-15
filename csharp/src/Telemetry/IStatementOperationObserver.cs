@@ -98,6 +98,22 @@ namespace AdbcDrivers.Databricks.Telemetry
         void OnChunksDownloaded(ChunkMetrics metrics);
 
         /// <summary>
+        /// Called once after the active result reader has been inspected, with the values
+        /// that should override any defaults previously stamped on the observer at execute
+        /// time. The statement invokes this from the finalize path so the emitted record
+        /// reflects the server-reported truth for the active reader (PECO-2988, PECO-2978)
+        /// rather than the connection-level capability flags used as placeholders earlier
+        /// in the lifecycle. Implementations should overwrite their stored result-format
+        /// and compression fields unconditionally.
+        /// </summary>
+        /// <param name="resultFormat">The result format reported by the active reader
+        /// (e.g. <see cref="ExecutionResultFormat.ExternalLinks"/> when CloudFetch is
+        /// active, <see cref="ExecutionResultFormat.InlineArrow"/> otherwise).</param>
+        /// <param name="isCompressed">Whether the active reader's payload is LZ4-compressed,
+        /// per the server's <c>TGetResultSetMetadataResp.Lz4Compressed</c> flag.</param>
+        void OnReaderInspected(ExecutionResultFormat resultFormat, bool isCompressed);
+
+        /// <summary>
         /// Called once if the statement execution fails. Implementations should record the
         /// error and continue to accept further calls; an explicit <see cref="OnFinalized"/>
         /// call is still required to terminate the observer.

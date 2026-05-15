@@ -93,6 +93,10 @@ namespace AdbcDrivers.Databricks.Telemetry
             Safe(() => _inner.OnChunksDownloaded(metrics));
 
         /// <inheritdoc />
+        public void OnReaderInspected(ExecutionResultFormat resultFormat, bool isCompressed) =>
+            Safe(() => _inner.OnReaderInspected(resultFormat, isCompressed));
+
+        /// <inheritdoc />
         public void OnError(Exception ex) =>
             Safe(() => _inner.OnError(ex));
 

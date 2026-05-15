@@ -153,6 +153,19 @@ namespace AdbcDrivers.Databricks.Telemetry
             });
 
         /// <inheritdoc />
+        public void OnReaderInspected(ExecutionResultFormat resultFormat, bool isCompressed) =>
+            Safe(() =>
+            {
+                // Overwrite the placeholders stamped at OnExecuteStarted time with the
+                // server-reported truth for the active reader (PECO-2988, PECO-2978).
+                // Mutating the same fields directly preserves byte-identical output vs.
+                // the legacy EmitTelemetry helper, which set both fields immediately
+                // before BuildTelemetryLog.
+                _ctx.ResultFormat = resultFormat;
+                _ctx.IsCompressed = isCompressed;
+            });
+
+        /// <inheritdoc />
         public void OnError(Exception ex) =>
             Safe(() =>
             {

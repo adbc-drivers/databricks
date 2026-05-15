@@ -47,6 +47,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 observer.OnFirstBatchReady(latencyMs: 100);
                 observer.OnConsumed(latencyMs: 200);
                 observer.OnChunksDownloaded(new ChunkMetrics());
+                observer.OnReaderInspected(ExecutionResultFormat.ExternalLinks, isCompressed: true);
                 observer.OnError(new InvalidOperationException("boom"));
                 observer.OnFinalized();
             }

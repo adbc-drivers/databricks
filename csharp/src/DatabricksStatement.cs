@@ -418,16 +418,17 @@ namespace AdbcDrivers.Databricks
             // capability flags. The composite reader holds the server-reported truth for both:
             // IsLz4Compressed mirrors TGetResultSetMetadataResp.Lz4Compressed (drives both inline
             // and CloudFetch decompression), and IsCloudFetchActive reflects whether the server
-            // returned result links for this statement (PECO-2988, PECO-2978). Mutating the
-            // observer's underlying context preserves byte-identical output vs. the legacy
-            // EmitTelemetry helper, which mutated the same fields immediately before
-            // BuildTelemetryLog.
-            if (ctx != null && _lastQueryResult?.Stream is DatabricksCompositeReader composite)
+            // returned result links for this statement (PECO-2988, PECO-2978). The observer's
+            // OnReaderInspected hook overwrites the same fields the legacy EmitTelemetry helper
+            // mutated immediately before BuildTelemetryLog, preserving byte-identical output
+            // without leaking the observer's internal StatementTelemetryContext to the statement.
+            if (_lastQueryResult?.Stream is DatabricksCompositeReader composite)
             {
-                ctx.IsCompressed = composite.IsLz4Compressed;
-                ctx.ResultFormat = composite.IsCloudFetchActive
-                    ? ExecutionResultFormat.ExternalLinks
-                    : ExecutionResultFormat.InlineArrow;
+                _observer.OnReaderInspected(
+                    resultFormat: composite.IsCloudFetchActive
+                        ? ExecutionResultFormat.ExternalLinks
+                        : ExecutionResultFormat.InlineArrow,
+                    isCompressed: composite.IsLz4Compressed);
             }
 
             // Only emit chunk metrics if at least one chunk was iterated; avoids leaking the

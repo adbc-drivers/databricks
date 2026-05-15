@@ -79,6 +79,12 @@ namespace AdbcDrivers.Databricks.Telemetry
         }
 
         /// <inheritdoc />
+        public void OnReaderInspected(ExecutionResultFormat resultFormat, bool isCompressed)
+        {
+            // No-op.
+        }
+
+        /// <inheritdoc />
         public void OnError(Exception ex)
         {
             // No-op.

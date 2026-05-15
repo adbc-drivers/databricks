@@ -100,6 +100,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             public long? FirstBatchReadyMs;
             public long? ConsumedMs;
             public ChunkMetrics? Chunks;
+            public ExecutionResultFormat? ReaderInspectedFormat;
+            public bool? ReaderInspectedCompressed;
             public Exception? Error;
             public int FinalizedCallCount;
 
@@ -141,6 +143,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             {
                 Calls.Add(nameof(OnChunksDownloaded));
                 Chunks = metrics;
+            }
+
+            public void OnReaderInspected(ExecutionResultFormat resultFormat, bool isCompressed)
+            {
+                Calls.Add(nameof(OnReaderInspected));
+                ReaderInspectedFormat = resultFormat;
+                ReaderInspectedCompressed = isCompressed;
             }
 
             public void OnError(Exception ex)
