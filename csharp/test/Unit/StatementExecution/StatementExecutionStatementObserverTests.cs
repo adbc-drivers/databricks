@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -26,7 +27,10 @@ using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow;
 using Apache.Arrow.Adbc;
+using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
 using Microsoft.IO;
 using Moq;
 using Moq.Protected;
@@ -93,7 +97,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 Calls.Add(nameof(OnPollCompleted));
             }
 
-            public void OnFirstBatchReady(long latencyMs) => Calls.Add(nameof(OnFirstBatchReady));
+            public Action<long>? OnFirstBatchReadyCallback;
+            public void OnFirstBatchReady(long latencyMs)
+            {
+                OnFirstBatchReadyCallback?.Invoke(latencyMs);
+                Calls.Add(nameof(OnFirstBatchReady));
+            }
             public void OnConsumed(long latencyMs) => Calls.Add(nameof(OnConsumed));
             public void OnChunksDownloaded(ChunkMetrics metrics) => Calls.Add(nameof(OnChunksDownloaded));
 
@@ -535,6 +544,200 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             int finalizeIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFinalized));
             Assert.True(errorIndex >= 0);
             Assert.True(finalizeIndex > errorIndex);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_InlinePath_CallsOnFirstBatchReady_OnceWithNonNegativeLatency()
+        {
+            // OnFirstBatchReady is wired at reader construction (gap G3 / design §6 row 4). For the
+            // inline path the signal fires once chunk-0 attachment bytes are already in the response
+            // — i.e. immediately before the InlineArrowStreamReader ctor — carrying elapsed-since-
+            // execute-start as latencyMs. This test pins:
+            //   1. exactly-once invocation,
+            //   2. non-negative latency (wall-clock; zero is valid on fast in-process mocks),
+            //   3. ordering between OnExecuteSucceeded and OnFirstBatchReady (server must accept the
+            //      statement before first batch can be "ready").
+            var observer = new RecordingObserver();
+            var (ipcBytes, manifest) = BuildSingleColumnInlineArrowResult();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData { Attachment = ipcBytes },
+                });
+
+            long? capturedLatency = null;
+            observer.OnFirstBatchReadyCallback = ms => capturedLatency = ms;
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            // Dispose the returned stream so we don't leak the underlying ArrowStreamReader.
+            result.Stream?.Dispose();
+
+            int firstBatchCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnFirstBatchReady));
+            Assert.Equal(1, firstBatchCallCount);
+
+            // Non-negative wall-clock: anything else indicates a stopwatch wiring bug
+            // (e.g. read before Start()).
+            Assert.NotNull(capturedLatency);
+            Assert.True(capturedLatency >= 0,
+                $"OnFirstBatchReady latency must be non-negative, got {capturedLatency}.");
+
+            // OnExecuteSucceeded must precede OnFirstBatchReady — the statement is accepted by the
+            // server first, then results become available. Reversing this order would imply we are
+            // reporting first-batch latency for a statement the server hasn't acknowledged.
+            int succeededIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnExecuteSucceeded));
+            int firstBatchIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFirstBatchReady));
+            Assert.True(succeededIndex >= 0);
+            Assert.True(firstBatchIndex > succeededIndex);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_CloudFetchPath_CallsOnFirstBatchReady_OnceWithNonNegativeLatency()
+        {
+            // CloudFetch counterpart to the inline test above. With Manifest.Chunks[0].ExternalLinks
+            // populated, CreateReader routes through CreateCloudFetchReader, which fires
+            // OnFirstBatchReady at the top of the method before invoking the factory. We don't drive
+            // the download itself (the factory's HTTP calls go through a mocked handler) — the test
+            // only pins the observer wiring at reader construction.
+            var observer = new RecordingObserver();
+            long? capturedLatency = null;
+            observer.OnFirstBatchReadyCallback = ms => capturedLatency = ms;
+
+            var manifest = new ResultManifest
+            {
+                Format = "ARROW_STREAM",
+                Schema = new ResultSchema
+                {
+                    Columns = new List<ColumnInfo>
+                    {
+                        new() { Name = "c0", TypeName = "INT", TypeText = "INT" }
+                    }
+                },
+                TotalRowCount = 0,
+                TotalChunkCount = 1,
+                Chunks = new List<ResultChunk>
+                {
+                    new()
+                    {
+                        ChunkIndex = 0,
+                        RowCount = 0,
+                        RowOffset = 0,
+                        ByteCount = 0,
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            // URL is not actually downloaded by this test: the CloudFetch factory
+                            // queues a background fetch through the mocked HttpClient. Dispose
+                            // cancels any in-flight work.
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    }
+                },
+            };
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData
+                    {
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            // Dispose the returned stream so the background download manager shuts down cleanly
+            // without leaving tasks attempting to hit example.invalid.
+            result.Stream?.Dispose();
+
+            int firstBatchCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnFirstBatchReady));
+            Assert.Equal(1, firstBatchCallCount);
+
+            Assert.NotNull(capturedLatency);
+            Assert.True(capturedLatency >= 0,
+                $"OnFirstBatchReady latency must be non-negative, got {capturedLatency}.");
+
+            int succeededIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnExecuteSucceeded));
+            int firstBatchIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFirstBatchReady));
+            Assert.True(succeededIndex >= 0);
+            Assert.True(firstBatchIndex > succeededIndex);
+        }
+
+        /// <summary>
+        /// Builds a single-column ("c0", INT) inline result: a manifest + matching Arrow IPC stream
+        /// bytes. InlineArrowStreamReader cross-validates that the manifest schema and the IPC
+        /// embedded schema have the same field count (count mismatches throw; type mismatches are
+        /// expected), so the manifest column count and the writer's schema column count must agree.
+        /// </summary>
+        private static (byte[] ipcBytes, ResultManifest manifest) BuildSingleColumnInlineArrowResult()
+        {
+            var ipcSchema = new Schema.Builder()
+                .Field(new Field("c0", Int32Type.Default, nullable: true))
+                .Build();
+
+            using var ms = new MemoryStream();
+            using (var writer = new ArrowStreamWriter(ms, ipcSchema, leaveOpen: true))
+            {
+                // A single empty record batch is sufficient: the test exercises reader construction
+                // and observer wiring, not data correctness. RecordBatch requires at least one array,
+                // so we pass an empty Int32Array with length 0.
+                var emptyArray = new Int32Array.Builder().Build();
+                var batch = new RecordBatch(ipcSchema, new IArrowArray[] { emptyArray }, 0);
+                writer.WriteRecordBatch(batch);
+                writer.WriteEnd();
+            }
+            var ipcBytes = ms.ToArray();
+
+            var manifest = new ResultManifest
+            {
+                Format = "ARROW_STREAM",
+                Schema = new ResultSchema
+                {
+                    Columns = new List<ColumnInfo>
+                    {
+                        new() { Name = "c0", TypeName = "INT", TypeText = "INT" }
+                    }
+                },
+                TotalRowCount = 0,
+                TotalChunkCount = 1,
+                Chunks = new List<ResultChunk>
+                {
+                    // Single-chunk inline: chunk count of 1 means InlineArrowStreamReader.FetchAllChunksAsync
+                    // does not loop to fetch additional chunks via GetResultChunkAsync.
+                    new()
+                    {
+                        ChunkIndex = 0,
+                        RowCount = 0,
+                        RowOffset = 0,
+                        ByteCount = ipcBytes.Length,
+                    }
+                },
+            };
+
+            return (ipcBytes, manifest);
         }
 
         [Fact]

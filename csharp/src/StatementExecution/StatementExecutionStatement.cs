@@ -97,6 +97,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private bool _executeStarted;
 
+        /// <summary>
+        /// Wall-clock stopwatch started in lockstep with
+        /// <see cref="IStatementOperationObserver.OnExecuteStarted"/> and read at reader-
+        /// construction time to supply the <c>latencyMs</c> argument for
+        /// <see cref="IStatementOperationObserver.OnFirstBatchReady"/>. Mirrors the Thrift
+        /// path's <c>StatementTelemetryContext.ExecuteStopwatch</c> so SEA reports the same
+        /// <c>result_set_ready_latency_millis</c> semantic — elapsed time from execute start
+        /// to the moment first-batch data is available to the reader.
+        /// </summary>
+        private readonly Stopwatch _executeStopwatch = new Stopwatch();
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
@@ -373,6 +384,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // and even if it did, treating a partially-observed execute as "started" matches
             // the Thrift path's BeginExecuteTelemetry ordering.
             _executeStarted = true;
+            // Start the stopwatch alongside OnExecuteStarted so OnFirstBatchReady can report
+            // elapsed-since-execute-start as its latencyMs argument (gap G3 / design §6 row 4).
+            _executeStopwatch.Start();
             _observer.OnExecuteStarted(StatementType.Query, OperationType.ExecuteStatement, isCompressed);
 
             try
@@ -614,6 +628,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Pass the manifest schema so the reader reports it instead of the IPC-embedded schema,
                 // keeping inline consistent with CloudFetch (which also uses the manifest schema).
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
+
+                // Telemetry: signal OnFirstBatchReady at reader construction (gap G3 / design §6 row 4).
+                // The chunk-0 attachment is already inlined in the response, so first-batch data is
+                // available before the reader is built. Firing here (rather than inside the nested
+                // InlineArrowStreamReader ctor) keeps the observer wiring on the outer class and
+                // excludes the synchronous FetchAllChunksAsync work for chunks 1..N from
+                // result_set_ready_latency_millis — that subsequent work is measured by OnConsumed.
+                _observer.OnFirstBatchReady(_executeStopwatch.ElapsedMilliseconds);
+
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
                     isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest));
             }
@@ -631,6 +654,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private IArrowArrayStream CreateCloudFetchReader(ExecuteStatementResponse response, Schema manifestSchema)
         {
+            // Telemetry: signal OnFirstBatchReady at reader construction (gap G3 / design §6 row 4).
+            // Reaching this method means the polling loop has terminated SUCCESSFULLY and the server
+            // returned a manifest with external links — i.e. chunk-0 is ready to be downloaded. The
+            // latencyMs argument is elapsed-since-execute-start, matching Thrift's
+            // result_set_ready_latency_millis semantic. Calling here (before the factory) keeps the
+            // measurement consistent with the inline path, which also fires before reader construction.
+            _observer.OnFirstBatchReady(_executeStopwatch.ElapsedMilliseconds);
+
             var manifest = response.Manifest!;
             var schema = manifestSchema;
 
