@@ -103,7 +103,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 OnFirstBatchReadyCallback?.Invoke(latencyMs);
                 Calls.Add(nameof(OnFirstBatchReady));
             }
-            public void OnConsumed(long latencyMs) => Calls.Add(nameof(OnConsumed));
+            public Action<long>? OnConsumedCallback;
+            public void OnConsumed(long latencyMs)
+            {
+                OnConsumedCallback?.Invoke(latencyMs);
+                Calls.Add(nameof(OnConsumed));
+            }
             public void OnChunksDownloaded(ChunkMetrics metrics) => Calls.Add(nameof(OnChunksDownloaded));
 
             public void OnError(Exception ex)
@@ -684,6 +689,161 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             int firstBatchIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFirstBatchReady));
             Assert.True(succeededIndex >= 0);
             Assert.True(firstBatchIndex > succeededIndex);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_InlinePath_ReaderDispose_CallsOnConsumed_OnceWithLatencyAtLeastFirstBatchReady()
+        {
+            // OnConsumed is wired at the outermost reader-decorator Dispose (gap G3 / design §6 row 5).
+            // For the inline path this fires when the consumer disposes the IArrowArrayStream returned
+            // by ExecuteQuery. This test pins:
+            //   1. exactly-once invocation (idempotent on repeated Dispose),
+            //   2. latency monotonicity: OnConsumed latency >= OnFirstBatchReady latency, because both
+            //      read the same execute-time Stopwatch and Dispose strictly follows reader construction,
+            //   3. ordering: OnConsumed fires after OnFirstBatchReady (i.e. reader construction precedes
+            //      consumption end).
+            var observer = new RecordingObserver();
+            var (ipcBytes, manifest) = BuildSingleColumnInlineArrowResult();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData { Attachment = ipcBytes },
+                });
+
+            long? firstBatchLatency = null;
+            long? consumedLatency = null;
+            observer.OnFirstBatchReadyCallback = ms => firstBatchLatency = ms;
+            observer.OnConsumedCallback = ms => consumedLatency = ms;
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Before Dispose, OnConsumed must NOT have fired — the consumer has not signaled
+            // end-of-consumption yet. Asserting absence here guards against a wiring bug that
+            // would fire OnConsumed at reader construction (effectively duplicating
+            // OnFirstBatchReady).
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnConsumed), observer.Calls);
+
+            // First Dispose triggers OnConsumed; second Dispose must be a no-op (idempotency).
+            result.Stream?.Dispose();
+            result.Stream?.Dispose();
+
+            int consumedCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnConsumed));
+            Assert.Equal(1, consumedCallCount);
+
+            Assert.NotNull(firstBatchLatency);
+            Assert.NotNull(consumedLatency);
+            Assert.True(consumedLatency >= firstBatchLatency,
+                $"OnConsumed latency ({consumedLatency}) must be >= OnFirstBatchReady latency ({firstBatchLatency}).");
+
+            // OnFirstBatchReady must precede OnConsumed: the reader can't be consumed before
+            // it exists. Reversing this order would imply Dispose ran before construction.
+            int firstBatchIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFirstBatchReady));
+            int consumedIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnConsumed));
+            Assert.True(firstBatchIndex >= 0);
+            Assert.True(consumedIndex > firstBatchIndex);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_CloudFetchPath_ReaderDispose_CallsOnConsumed_OnceWithLatencyAtLeastFirstBatchReady()
+        {
+            // CloudFetch counterpart to the inline test above. The outermost ConsumptionObservingStream
+            // wraps the CloudFetchReader, so the consumer's Dispose still drives OnConsumed even though
+            // the inner reader's actual download work is async — we don't need to wait for chunk fetches
+            // to complete to validate the observer wiring.
+            var observer = new RecordingObserver();
+            long? firstBatchLatency = null;
+            long? consumedLatency = null;
+            observer.OnFirstBatchReadyCallback = ms => firstBatchLatency = ms;
+            observer.OnConsumedCallback = ms => consumedLatency = ms;
+
+            var manifest = new ResultManifest
+            {
+                Format = "ARROW_STREAM",
+                Schema = new ResultSchema
+                {
+                    Columns = new List<ColumnInfo>
+                    {
+                        new() { Name = "c0", TypeName = "INT", TypeText = "INT" }
+                    }
+                },
+                TotalRowCount = 0,
+                TotalChunkCount = 1,
+                Chunks = new List<ResultChunk>
+                {
+                    new()
+                    {
+                        ChunkIndex = 0,
+                        RowCount = 0,
+                        RowOffset = 0,
+                        ByteCount = 0,
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            // URL is not actually downloaded — Dispose cancels any in-flight work.
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    }
+                },
+            };
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData
+                    {
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Pre-Dispose absence: same rationale as the inline test — guards against firing
+            // OnConsumed at construction time.
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnConsumed), observer.Calls);
+
+            // Idempotent Dispose. The second call must not produce a second OnConsumed,
+            // otherwise downstream telemetry would double-count consumption latency for a
+            // consumer that defensively disposes multiple times.
+            result.Stream?.Dispose();
+            result.Stream?.Dispose();
+
+            int consumedCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnConsumed));
+            Assert.Equal(1, consumedCallCount);
+
+            Assert.NotNull(firstBatchLatency);
+            Assert.NotNull(consumedLatency);
+            Assert.True(consumedLatency >= firstBatchLatency,
+                $"OnConsumed latency ({consumedLatency}) must be >= OnFirstBatchReady latency ({firstBatchLatency}).");
+
+            int firstBatchIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFirstBatchReady));
+            int consumedIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnConsumed));
+            Assert.True(firstBatchIndex >= 0);
+            Assert.True(consumedIndex > firstBatchIndex);
         }
 
         /// <summary>

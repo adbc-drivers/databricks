@@ -481,6 +481,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     reader = new ComplexTypeSerializingStream(reader);
                 }
 
+                // Telemetry: wrap the final reader so OnConsumed fires at consumer Dispose
+                // (gap G3 / design §6 row 5). Wrapping at the outermost layer covers both the
+                // inline and CloudFetch paths uniformly — every inner transform
+                // (IntervalSerializingStream, ComplexTypeSerializingStream, the underlying
+                // InlineArrowStreamReader / CloudFetchReader) already propagates Dispose to its
+                // inner stream, so the consumer's Dispose reaches this wrapper first and
+                // ElapsedMilliseconds captures the full consume-window before teardown costs are
+                // incurred. The wrapper is idempotent — OnConsumed is signaled exactly once even
+                // if Dispose is invoked multiple times.
+                reader = new ConsumptionObservingStream(reader, _observer, _executeStopwatch);
+
                 // Get schema from reader
                 var schema = reader.Schema;
 
@@ -956,6 +967,74 @@ namespace AdbcDrivers.Databricks.StatementExecution
             public void Dispose()
             {
                 // Nothing to dispose
+            }
+        }
+
+        /// <summary>
+        /// Decorator that wraps the final result reader and signals
+        /// <see cref="IStatementOperationObserver.OnConsumed"/> exactly once at consumer
+        /// Dispose (gap G3 / design §6 row 5). The <c>latencyMs</c> argument is
+        /// elapsed-since-execute-start so the telemetry field
+        /// <c>result_latency.result_set_consumption_latency_millis</c> represents the
+        /// total wall-clock from execute → reader consumption end, matching the Thrift
+        /// path's <c>StatementTelemetryContext.ExecuteStopwatch</c> semantic.
+        ///
+        /// <para><strong>Placement:</strong> wrapping at the outermost transform layer
+        /// (after <see cref="IntervalSerializingStream"/> and
+        /// <see cref="ComplexTypeSerializingStream"/>) is intentional. Each inner
+        /// transform already forwards <see cref="Dispose"/> to its inner stream, so the
+        /// consumer's Dispose reaches this wrapper first and the stopwatch read captures
+        /// the full consume window before teardown costs are incurred. Firing inside the
+        /// nested <see cref="InlineArrowStreamReader"/> would miss the CloudFetch path;
+        /// firing inside the shared <c>CloudFetchReader</c> would also re-emit on Thrift
+        /// queries that share the same reader class.</para>
+        ///
+        /// <para><strong>Idempotency:</strong> only the first Dispose signals
+        /// <c>OnConsumed</c>; subsequent calls are no-ops. The observer contract is
+        /// fail-open (SafeObserver swallows exceptions), but the try/finally guarantees
+        /// inner cleanup even if a hand-rolled observer bypasses that contract.</para>
+        /// </summary>
+        private sealed class ConsumptionObservingStream : IArrowArrayStream
+        {
+            private readonly IArrowArrayStream _inner;
+            private readonly IStatementOperationObserver _observer;
+            private readonly Stopwatch _executeStopwatch;
+            private bool _disposed;
+
+            public ConsumptionObservingStream(
+                IArrowArrayStream inner,
+                IStatementOperationObserver observer,
+                Stopwatch executeStopwatch)
+            {
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+                _observer = observer ?? throw new ArgumentNullException(nameof(observer));
+                _executeStopwatch = executeStopwatch ?? throw new ArgumentNullException(nameof(executeStopwatch));
+            }
+
+            public Schema Schema => _inner.Schema;
+
+            public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+                => _inner.ReadNextRecordBatchAsync(cancellationToken);
+
+            public void Dispose()
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+                _disposed = true;
+
+                // Read the stopwatch before disposing the inner stream so the latency
+                // reflects "time until the consumer let go", not "time until inner teardown
+                // completes". try/finally guarantees inner cleanup even on observer fault.
+                try
+                {
+                    _observer.OnConsumed(_executeStopwatch.ElapsedMilliseconds);
+                }
+                finally
+                {
+                    _inner.Dispose();
+                }
             }
         }
 
