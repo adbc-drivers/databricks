@@ -155,9 +155,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             if (lz4BufferPool == null) throw new ArgumentNullException(nameof(lz4BufferPool));
             if (statement == null) throw new ArgumentNullException(nameof(statement));
 
-            // Determine if LZ4 compression is enabled
-            bool isLz4Compressed = properties.TryGetValue(DatabricksParameters.CanDecompressLz4, out var canDecompress) &&
-                                   canDecompress.Equals("true", StringComparison.OrdinalIgnoreCase);
+            // Whether the *server actually compressed* the result. CanDecompressLz4 is just
+            // the client advertising capability — the server may still return uncompressed data,
+            // in which case manifest.ResultCompression is null or != "LZ4_FRAME". Trusting the
+            // request flag instead of the manifest causes the downloader to LZ4-decode raw Arrow
+            // IPC bytes and fail with "LZ4 frame magic number expected". Matches the inline path
+            // logic in StatementExecutionStatement.CreateReaderFromExecuteResponse.
+            bool isLz4Compressed = manifest.ResultCompression?.Equals("LZ4_FRAME", StringComparison.OrdinalIgnoreCase) == true;
 
             // Build configuration from connection properties
             var config = CloudFetchConfiguration.FromProperties(properties, schema, isLz4Compressed);
