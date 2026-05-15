@@ -470,6 +470,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // uniformly via Spark:DataType:SqlName metadata rather than Arrow IPC types.
                 IArrowArrayStream reader = CreateReader(response, cancellationToken);
 
+                // Capture the underlying CloudFetchReader (if any) before any wrapping layers.
+                // ConsumptionObservingStream uses this at Dispose to snapshot chunk metrics and
+                // fire OnChunksDownloaded — gating on a non-null reference is what makes the
+                // inline path skip OnChunksDownloaded entirely (gap G3 / design §6 row 5).
+                // CreateReader returns one of CloudFetchReader, InlineArrowStreamReader, or
+                // EmptyArrowArrayStream, so the `as` cast cleanly partitions the two SEA paths
+                // without needing an out-parameter on CreateReader.
+                CloudFetchReader? cloudFetchReader = reader as CloudFetchReader;
+
                 // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
                 // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
                 reader = new IntervalSerializingStream(reader);
@@ -481,16 +490,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     reader = new ComplexTypeSerializingStream(reader);
                 }
 
-                // Telemetry: wrap the final reader so OnConsumed fires at consumer Dispose
-                // (gap G3 / design §6 row 5). Wrapping at the outermost layer covers both the
-                // inline and CloudFetch paths uniformly — every inner transform
-                // (IntervalSerializingStream, ComplexTypeSerializingStream, the underlying
-                // InlineArrowStreamReader / CloudFetchReader) already propagates Dispose to its
-                // inner stream, so the consumer's Dispose reaches this wrapper first and
-                // ElapsedMilliseconds captures the full consume-window before teardown costs are
-                // incurred. The wrapper is idempotent — OnConsumed is signaled exactly once even
-                // if Dispose is invoked multiple times.
-                reader = new ConsumptionObservingStream(reader, _observer, _executeStopwatch);
+                // Telemetry: wrap the final reader so OnConsumed (and OnChunksDownloaded on the
+                // CloudFetch path) fire at consumer Dispose (gap G3 / design §6 row 5). Wrapping
+                // at the outermost layer covers both the inline and CloudFetch paths uniformly —
+                // every inner transform (IntervalSerializingStream, ComplexTypeSerializingStream,
+                // the underlying InlineArrowStreamReader / CloudFetchReader) already propagates
+                // Dispose to its inner stream, so the consumer's Dispose reaches this wrapper
+                // first and ElapsedMilliseconds captures the full consume-window before teardown
+                // costs are incurred. The wrapper is idempotent — both observer signals fire at
+                // most once even if Dispose is invoked multiple times. Passing a non-null
+                // cloudFetchReader is the CloudFetch-path opt-in for OnChunksDownloaded; the
+                // inline path passes null and OnChunksDownloaded is intentionally never fired.
+                reader = new ConsumptionObservingStream(reader, _observer, _executeStopwatch, cloudFetchReader);
 
                 // Get schema from reader
                 var schema = reader.Schema;
@@ -972,9 +983,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Decorator that wraps the final result reader and signals
-        /// <see cref="IStatementOperationObserver.OnConsumed"/> exactly once at consumer
-        /// Dispose (gap G3 / design §6 row 5). The <c>latencyMs</c> argument is
-        /// elapsed-since-execute-start so the telemetry field
+        /// <see cref="IStatementOperationObserver.OnConsumed"/> (and
+        /// <see cref="IStatementOperationObserver.OnChunksDownloaded"/> on the CloudFetch
+        /// path) exactly once at consumer Dispose (gap G3 / design §6 rows 5–6). The
+        /// <c>latencyMs</c> argument is elapsed-since-execute-start so the telemetry field
         /// <c>result_latency.result_set_consumption_latency_millis</c> represents the
         /// total wall-clock from execute → reader consumption end, matching the Thrift
         /// path's <c>StatementTelemetryContext.ExecuteStopwatch</c> semantic.
@@ -989,26 +1001,44 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// firing inside the shared <c>CloudFetchReader</c> would also re-emit on Thrift
         /// queries that share the same reader class.</para>
         ///
+        /// <para><strong>CloudFetch chunk metrics:</strong> when constructed with a
+        /// non-null <c>cloudFetchReader</c>, Dispose snapshots <c>GetChunkMetrics()</c>
+        /// before disposing the inner chain — the inner Dispose tears down the download
+        /// manager, so we must query the aggregator while it is still live. If the
+        /// aggregator throws or returns null we fall back to a fresh empty
+        /// <see cref="ChunkMetrics"/> (the design's documented dependency on the gap-fix
+        /// plumbing: proto fields are nullable on the wire, and an empty metrics object
+        /// is preferable to dropping the signal entirely). The inline path passes
+        /// <c>null</c> here and <see cref="IStatementOperationObserver.OnChunksDownloaded"/>
+        /// is never fired — matching the Thrift path, which gates emission on the result
+        /// stream actually being a <c>CloudFetchReader</c>.</para>
+        ///
         /// <para><strong>Idempotency:</strong> only the first Dispose signals
-        /// <c>OnConsumed</c>; subsequent calls are no-ops. The observer contract is
-        /// fail-open (SafeObserver swallows exceptions), but the try/finally guarantees
-        /// inner cleanup even if a hand-rolled observer bypasses that contract.</para>
+        /// <c>OnConsumed</c> / <c>OnChunksDownloaded</c>; subsequent calls are no-ops.
+        /// The observer contract is fail-open (SafeObserver swallows exceptions), but the
+        /// try/finally guarantees inner cleanup even if a hand-rolled observer bypasses
+        /// that contract.</para>
         /// </summary>
         private sealed class ConsumptionObservingStream : IArrowArrayStream
         {
             private readonly IArrowArrayStream _inner;
             private readonly IStatementOperationObserver _observer;
             private readonly Stopwatch _executeStopwatch;
+            private readonly CloudFetchReader? _cloudFetchReader;
             private bool _disposed;
 
             public ConsumptionObservingStream(
                 IArrowArrayStream inner,
                 IStatementOperationObserver observer,
-                Stopwatch executeStopwatch)
+                Stopwatch executeStopwatch,
+                CloudFetchReader? cloudFetchReader = null)
             {
                 _inner = inner ?? throw new ArgumentNullException(nameof(inner));
                 _observer = observer ?? throw new ArgumentNullException(nameof(observer));
                 _executeStopwatch = executeStopwatch ?? throw new ArgumentNullException(nameof(executeStopwatch));
+                // Nullable on purpose — non-null only on the CloudFetch path. The inline
+                // and empty paths intentionally do not signal OnChunksDownloaded.
+                _cloudFetchReader = cloudFetchReader;
             }
 
             public Schema Schema => _inner.Schema;
@@ -1024,11 +1054,37 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 _disposed = true;
 
-                // Read the stopwatch before disposing the inner stream so the latency
-                // reflects "time until the consumer let go", not "time until inner teardown
-                // completes". try/finally guarantees inner cleanup even on observer fault.
+                // Read the stopwatch and snapshot chunk metrics BEFORE disposing the inner
+                // stream so the latency reflects "time until the consumer let go" rather than
+                // "time until inner teardown completes", and so the chunk metrics aggregator
+                // (held by the inner CloudFetchReader's download manager) is still live when
+                // we query it. try/finally guarantees inner cleanup even on observer fault.
                 try
                 {
+                    // CloudFetch path only: snapshot metrics before the inner chain disposes.
+                    // Fall back to a fresh ChunkMetrics if the aggregator throws or returns
+                    // null — telemetry must never fail driver operations, and the proto
+                    // fields are nullable so an empty metrics object is a valid wire payload.
+                    if (_cloudFetchReader != null)
+                    {
+                        ChunkMetrics metrics;
+                        try
+                        {
+                            metrics = _cloudFetchReader.GetChunkMetrics() ?? new ChunkMetrics();
+                        }
+                        catch
+                        {
+                            metrics = new ChunkMetrics();
+                        }
+
+                        // Emit before OnConsumed to match the Thrift path's emission order in
+                        // DatabricksStatement.FinalizeExecuteTelemetry — chunk_details and
+                        // result_latency end up on the same OssSqlDriverTelemetryLog regardless
+                        // of order, but keeping a single canonical sequence simplifies any
+                        // future record-assembly reasoning.
+                        _observer.OnChunksDownloaded(metrics);
+                    }
+
                     _observer.OnConsumed(_executeStopwatch.ElapsedMilliseconds);
                 }
                 finally

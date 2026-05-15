@@ -109,7 +109,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 OnConsumedCallback?.Invoke(latencyMs);
                 Calls.Add(nameof(OnConsumed));
             }
-            public void OnChunksDownloaded(ChunkMetrics metrics) => Calls.Add(nameof(OnChunksDownloaded));
+            public ChunkMetrics? CapturedChunkMetrics;
+            public void OnChunksDownloaded(ChunkMetrics metrics)
+            {
+                CapturedChunkMetrics = metrics;
+                Calls.Add(nameof(OnChunksDownloaded));
+            }
 
             public void OnError(Exception ex)
             {
@@ -844,6 +849,239 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             int consumedIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnConsumed));
             Assert.True(firstBatchIndex >= 0);
             Assert.True(consumedIndex > firstBatchIndex);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_CloudFetchPath_ReaderDispose_CallsOnChunksDownloaded_OnceWithNonNullMetrics()
+        {
+            // gap G3 / design §6 row 5–6: on the CloudFetch path, ConsumptionObservingStream
+            // must signal OnChunksDownloaded exactly once when the consumer disposes the result
+            // stream. This is the SEA counterpart to DatabricksStatement.FinalizeExecuteTelemetry's
+            // Thrift-side emission, and it shares the same observer downstream — the
+            // OssSqlDriverTelemetryLog's chunk_details field comes from this call.
+            //
+            // The test deliberately does NOT drive an actual chunk download (example.invalid never
+            // resolves), so the captured ChunkMetrics will be the aggregator's default/empty state.
+            // The contract is "fire exactly once with a non-null ChunkMetrics", not "fire only when
+            // we successfully downloaded chunks" — the proto fields are nullable so an empty
+            // ChunkMetrics is a valid wire payload, and dropping the signal here would silently
+            // omit the field for any CloudFetch query that the consumer disposes early.
+            var observer = new RecordingObserver();
+
+            var manifest = new ResultManifest
+            {
+                Format = "ARROW_STREAM",
+                Schema = new ResultSchema
+                {
+                    Columns = new List<ColumnInfo>
+                    {
+                        new() { Name = "c0", TypeName = "INT", TypeText = "INT" }
+                    }
+                },
+                TotalRowCount = 0,
+                TotalChunkCount = 1,
+                Chunks = new List<ResultChunk>
+                {
+                    new()
+                    {
+                        ChunkIndex = 0,
+                        RowCount = 0,
+                        RowOffset = 0,
+                        ByteCount = 0,
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    }
+                },
+            };
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData
+                    {
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Pre-Dispose: OnChunksDownloaded must not have fired yet — the wrapper defers it to
+            // consumer Dispose so the aggregator has a chance to accumulate chunk timings.
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnChunksDownloaded), observer.Calls);
+
+            // First Dispose fires OnChunksDownloaded; second Dispose must be a no-op (idempotency).
+            // Double-firing would cause TelemetryObserver to overwrite the chunk_details on the
+            // in-flight log, which is the right behavior in the singleton case but masks a wiring
+            // bug if Dispose is called twice.
+            result.Stream?.Dispose();
+            result.Stream?.Dispose();
+
+            int chunksDownloadedCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnChunksDownloaded));
+            Assert.Equal(1, chunksDownloadedCallCount);
+
+            // The captured metrics must be a non-null ChunkMetrics — even when no chunks were
+            // actually downloaded the wrapper falls back to a fresh ChunkMetrics rather than
+            // dropping the signal. Pinning non-null guards against a wiring regression that
+            // would pass `default(ChunkMetrics)` (== null for a reference type) and silently
+            // null-coalesce on the receiving end.
+            Assert.NotNull(observer.CapturedChunkMetrics);
+
+            // Emission order vs. OnConsumed: ConsumptionObservingStream emits OnChunksDownloaded
+            // BEFORE OnConsumed to match the Thrift path's emission order in
+            // DatabricksStatement.FinalizeExecuteTelemetry. Both end up on the same telemetry log
+            // regardless, but pinning the order here keeps SEA and Thrift behaviorally identical.
+            int chunksIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnChunksDownloaded));
+            int consumedIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnConsumed));
+            Assert.True(chunksIndex >= 0);
+            Assert.True(consumedIndex > chunksIndex,
+                $"OnChunksDownloaded (index {chunksIndex}) must precede OnConsumed (index {consumedIndex}).");
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_CloudFetchPath_ReaderDispose_FiresOnChunksDownloaded_WithEmptyMetricsWhenAggregatorEmpty()
+        {
+            // Gap-fix dependency fallback (gap G3 / design §6 row 6): if the ChunkMetrics
+            // aggregator is unavailable or empty at Dispose time, ConsumptionObservingStream
+            // must still fire OnChunksDownloaded with a non-null, default-valued ChunkMetrics
+            // rather than throw or skip the signal. The design's stated fallback contract is
+            // "pass ChunkMetrics.Empty" — operationally that's a fresh `new ChunkMetrics()`,
+            // which is what CloudFetchReader.GetChunkMetrics returns when its download manager
+            // has been disposed and no _cachedChunkMetrics was captured.
+            //
+            // Scenario covered: consumer disposes the result stream before any chunk has
+            // actually been iterated by the reader. The CloudFetchDownloader aggregator state
+            // is still at its initial defaults (TotalChunksIterated=0, etc.) — i.e. effectively
+            // "no metrics yet" — and the wrapper must tolerate that without throwing.
+            var observer = new RecordingObserver();
+
+            var manifest = new ResultManifest
+            {
+                Format = "ARROW_STREAM",
+                Schema = new ResultSchema
+                {
+                    Columns = new List<ColumnInfo>
+                    {
+                        new() { Name = "c0", TypeName = "INT", TypeText = "INT" }
+                    }
+                },
+                TotalRowCount = 0,
+                TotalChunkCount = 1,
+                Chunks = new List<ResultChunk>
+                {
+                    new()
+                    {
+                        ChunkIndex = 0,
+                        RowCount = 0,
+                        RowOffset = 0,
+                        ByteCount = 0,
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    }
+                },
+            };
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData
+                    {
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // The fail-open contract is asserted by NOT wrapping this Dispose in a try/catch:
+            // if the wrapper or the aggregator throws synchronously, the test fails outright.
+            // The wrapper internally catches aggregator exceptions and substitutes a fresh
+            // ChunkMetrics, but the no-chunks-iterated path here exercises the more common
+            // "default values" branch of that fallback.
+            result.Stream?.Dispose();
+
+            Assert.Contains(nameof(IStatementOperationObserver.OnChunksDownloaded), observer.Calls);
+
+            // The metrics object must be non-null. We do not assert specific field values
+            // because the aggregator may report partial state (e.g. TotalChunksPresent=1 for the
+            // queued-but-not-downloaded chunk). The contract this test pins is "non-null,
+            // non-throwing fallback", not "exactly default-constructed".
+            Assert.NotNull(observer.CapturedChunkMetrics);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_InlinePath_ReaderDispose_DoesNotCallOnChunksDownloaded()
+        {
+            // gap G3 / design §6 row 6: OnChunksDownloaded is a CloudFetch-only signal — the
+            // chunk_details proto field has no meaning for inline results (there are no chunks
+            // to download). The wrapper achieves this by accepting a nullable CloudFetchReader
+            // argument and only firing OnChunksDownloaded when it is non-null. The inline path
+            // returns an InlineArrowStreamReader, so the `as CloudFetchReader` cast at the
+            // callsite produces null and the signal is skipped.
+            //
+            // Firing OnChunksDownloaded on the inline path would silently emit chunk_details with
+            // all-zero values, which is indistinguishable on the wire from "CloudFetch query that
+            // downloaded zero chunks" — a real and useful signal. Mixing the two would make the
+            // telemetry field useless for downstream analysis.
+            var observer = new RecordingObserver();
+            var (ipcBytes, manifest) = BuildSingleColumnInlineArrowResult();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData { Attachment = ipcBytes },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Dispose the result stream to drive the wrapper's OnConsumed call — that one must
+            // still fire on the inline path. We rely on it firing as the witness that Dispose
+            // actually ran the wrapper (otherwise the absence of OnChunksDownloaded would be a
+            // false negative caused by Dispose never being invoked at all).
+            result.Stream?.Dispose();
+
+            Assert.Contains(nameof(IStatementOperationObserver.OnConsumed), observer.Calls);
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnChunksDownloaded), observer.Calls);
+            Assert.Null(observer.CapturedChunkMetrics);
         }
 
         /// <summary>
