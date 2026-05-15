@@ -383,5 +383,89 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.NotNull(connection.TelemetrySession);
             Assert.Equal("sea-session-1", connection.TelemetrySession!.SessionId);
         }
+
+        // ── Connect-timeout telemetry source (gap D1) ──────────────────────────────
+        //
+        // The SEA connection must stamp the telemetry payload's socket_timeout from a
+        // connection-establishment timeout — NOT from _waitTimeoutSeconds, which is the
+        // SEA query-wait (CONTINUE) timeout and a semantically different concept.
+
+        private static int GetConnectTimeoutFieldValue(StatementExecutionConnection connection)
+        {
+            var field = typeof(StatementExecutionConnection).GetField(
+                "_connectTimeoutMilliseconds",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field);
+            return (int)field!.GetValue(connection)!;
+        }
+
+        private static int GetWaitTimeoutSecondsFieldValue(StatementExecutionConnection connection)
+        {
+            var field = typeof(StatementExecutionConnection).GetField(
+                "_waitTimeoutSeconds",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field);
+            return (int)field!.GetValue(connection)!;
+        }
+
+        [Fact]
+        public void ConnectTimeoutMilliseconds_DefaultsTo30Seconds_WhenPropertyAbsent()
+        {
+            // No ConnectTimeoutMilliseconds property is set. The default must match the
+            // Thrift path's HiveServer2Connection.ConnectTimeoutMillisecondsDefault (30000 ms)
+            // so dashboards filtering on socket_timeout see consistent values across transports.
+            using var connection = CreateConnection();
+
+            Assert.Equal(30000, GetConnectTimeoutFieldValue(connection));
+        }
+
+        [Fact]
+        public void ConnectTimeoutMilliseconds_ReadsFromSparkParametersConnectTimeoutMilliseconds()
+        {
+            // Source-of-truth check: the SEA connection must read the same connection-string
+            // property the Thrift path reads (SparkParameters.ConnectTimeoutMilliseconds).
+            var properties = CreateBaseProperties();
+            properties[SparkParameters.ConnectTimeoutMilliseconds] = "45000";
+            using var connection = new StatementExecutionConnection(properties);
+
+            Assert.Equal(45000, GetConnectTimeoutFieldValue(connection));
+        }
+
+        [Fact]
+        public void ConnectTimeoutMilliseconds_IsNotDerivedFromWaitTimeoutSeconds()
+        {
+            // Regression guard for gap D1: the previous code passed
+            //   (int)TimeSpan.FromSeconds(_waitTimeoutSeconds).TotalMilliseconds
+            // as connectTimeoutMilliseconds, which silently mislabeled SEA telemetry records
+            // (10s wait_timeout → 10000ms socket_timeout). The two concepts must be independent.
+            var properties = CreateBaseProperties();
+            properties[DatabricksParameters.WaitTimeout] = "7"; // SEA CONTINUE timeout (seconds)
+            properties[SparkParameters.ConnectTimeoutMilliseconds] = "55000";
+            using var connection = new StatementExecutionConnection(properties);
+
+            int waitTimeoutSeconds = GetWaitTimeoutSecondsFieldValue(connection);
+            int connectTimeoutMs = GetConnectTimeoutFieldValue(connection);
+
+            Assert.Equal(7, waitTimeoutSeconds);
+            Assert.Equal(55000, connectTimeoutMs);
+            // The mislabel bug would produce 7000ms here — assert it doesn't.
+            Assert.NotEqual(
+                (int)TimeSpan.FromSeconds(waitTimeoutSeconds).TotalMilliseconds,
+                connectTimeoutMs);
+        }
+
+        [Fact]
+        public void ConnectTimeoutMilliseconds_NotAffectedByEnableDirectResultsFalse()
+        {
+            // Direct-results=false flips _waitTimeoutSeconds to 0 in the SEA path. The connect
+            // timeout (a connection-establishment concept) must remain independent of that.
+            var properties = CreateBaseProperties();
+            properties[DatabricksParameters.EnableDirectResults] = "false";
+            properties[SparkParameters.ConnectTimeoutMilliseconds] = "20000";
+            using var connection = new StatementExecutionConnection(properties);
+
+            Assert.Equal(0, GetWaitTimeoutSecondsFieldValue(connection));
+            Assert.Equal(20000, GetConnectTimeoutFieldValue(connection));
+        }
     }
 }

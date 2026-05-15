@@ -100,6 +100,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly bool _useDescTableExtended;
         private readonly bool _applySSPWithQueries;
 
+        // Default connect-timeout value used when the connection string omits one.
+        // Mirrors the Thrift path's HiveServer2Connection.ConnectTimeoutMillisecondsDefault
+        // so dashboards filtering on socket_timeout see consistent values across both transports.
+        private const int ConnectTimeoutMillisecondsDefault = 30000;
+
+        // Connect timeout in milliseconds, read from the same connection-string property the
+        // Thrift path uses (SparkParameters.ConnectTimeoutMilliseconds). Used only to stamp the
+        // telemetry payload's socket_timeout field — distinct from _waitTimeoutSeconds, which is
+        // the SEA query-wait (CONTINUE) timeout and unrelated to the connection-establishment
+        // timeout the telemetry field represents.
+        private readonly int _connectTimeoutMilliseconds;
+
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
         private readonly System.Buffers.ArrayPool<byte> _lz4BufferPool;
@@ -276,6 +288,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // heavier than Thrift's 100 ms default — but both protocols share the same property.
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
                 properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
+
+            // Connect timeout — used only for telemetry-init stamping (socket_timeout field).
+            // Read from the same connection-string property the Thrift path uses so SEA and
+            // Thrift records agree on the same source. NOT derived from _waitTimeoutSeconds:
+            // that field is the SEA CONTINUE/query-wait timeout, a semantically different concept.
+            _connectTimeoutMilliseconds = PropertyHelper.GetIntPropertyWithValidation(
+                properties, SparkParameters.ConnectTimeoutMilliseconds, ConnectTimeoutMillisecondsDefault);
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
@@ -504,7 +523,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     mode: Telemetry.Proto.DriverMode.Types.Type.Sea,
                     enableDirectResults: true,
                     useDescTableExtended: _useDescTableExtended,
-                    connectTimeoutMilliseconds: (int)TimeSpan.FromSeconds(_waitTimeoutSeconds).TotalMilliseconds,
+                    connectTimeoutMilliseconds: _connectTimeoutMilliseconds,
                     activity: activity);
             }
             catch (Exception ex)
