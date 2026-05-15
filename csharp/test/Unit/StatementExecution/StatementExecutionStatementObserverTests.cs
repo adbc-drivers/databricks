@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -425,6 +426,130 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Same(networkError, observer.Error);
             Assert.DoesNotContain(nameof(IStatementOperationObserver.OnExecuteSucceeded), observer.Calls);
             Assert.Contains(nameof(IStatementOperationObserver.OnError), observer.Calls);
+        }
+
+        [Fact]
+        public async Task Dispose_AfterSuccessfulExecute_CallsOnFinalizedExactlyOnce()
+        {
+            // OnFinalized is the terminal observer signal — it is the only path that builds an
+            // OssSqlDriverTelemetryLog and enqueues it for export. After a successful execute,
+            // Dispose must fire OnFinalized exactly once so SEA telemetry actually reaches
+            // eng_lumberjack. Without this call every other hookpoint just mutates an in-memory
+            // context that is garbage-collected on dispose.
+            var observer = new RecordingObserver();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = BuildManifestWithSingleColumn(),
+                    Result = new ResultData { Attachment = null },
+                });
+            // Stub CloseStatementAsync so Dispose's awaited Task does not NRE; the production
+            // dispose path swallows close errors but we want the observer call to be the only
+            // assertable side-effect of dispose here.
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Pre-dispose: OnFinalized must not have fired yet — production code defers it to
+            // Dispose so chunk-metrics / consumed-time can be captured from the reader first.
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnFinalized), observer.Calls);
+
+            stmt.Dispose();
+
+            int finalizeCalls = observer.Calls.Count(c => c == nameof(IStatementOperationObserver.OnFinalized));
+            Assert.Equal(1, finalizeCalls);
+            // OnFinalized must be the last observer call: anything after it would mutate an
+            // already-emitted log and never reach the wire.
+            Assert.Equal(nameof(IStatementOperationObserver.OnFinalized), observer.Calls[observer.Calls.Count - 1]);
+        }
+
+        [Fact]
+        public async Task Dispose_AfterErrorPath_CallsOnFinalizedOnce()
+        {
+            // Error path: ExecuteQueryInternalAsync's catch fired OnError. Dispose must still
+            // fire OnFinalized so the error log reaches eng_lumberjack — without this call the
+            // error case produces no telemetry at all. The TelemetryObserver enforces exactly-
+            // once finalize via Interlocked.CompareExchange, so even if a future hookpoint adds
+            // its own finalize call on the error path, the dispose-time call here remains
+            // idempotent against the real observer; this test asserts the recorder sees a
+            // single Dispose-driven OnFinalized.
+            var observer = new RecordingObserver();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus
+                    {
+                        State = "FAILED",
+                        Error = new StatementError
+                        {
+                            Message = "SQL syntax error",
+                            ErrorCode = "SYNTAX_ERROR"
+                        }
+                    },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "NOT VALID SQL";
+
+            await Assert.ThrowsAsync<AdbcException>(() => stmt.ExecuteQueryAsync(CancellationToken.None));
+
+            // Sanity: error path fired OnError but not OnFinalized — the latter is dispose-driven.
+            Assert.Contains(nameof(IStatementOperationObserver.OnError), observer.Calls);
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnFinalized), observer.Calls);
+
+            stmt.Dispose();
+
+            int finalizeCalls = observer.Calls.Count(c => c == nameof(IStatementOperationObserver.OnFinalized));
+            Assert.Equal(1, finalizeCalls);
+            // OnError must precede OnFinalized so the terminal log reflects the failure state.
+            int errorIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnError));
+            int finalizeIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFinalized));
+            Assert.True(errorIndex >= 0);
+            Assert.True(finalizeIndex > errorIndex);
+        }
+
+        [Fact]
+        public void Dispose_WithoutExecute_DoesNotCallOnFinalized()
+        {
+            // A statement that was never executed must not trigger OnFinalized() — doing so
+            // would enqueue an empty execute-statement log with no statement id, no operation
+            // type, and no latencies. The gate is the _executeStarted flag set in lockstep
+            // with OnExecuteStarted; without it, every short-lived statement (e.g. a caller
+            // that constructs a statement and then bails before SetSqlQuery) would pollute
+            // eng_lumberjack.
+            var observer = new RecordingObserver();
+            var mockClient = new Mock<IStatementExecutionClient>();
+
+            var stmt = CreateStatement(mockClient.Object, observer);
+
+            stmt.Dispose();
+
+            Assert.Empty(observer.Calls);
         }
     }
 }

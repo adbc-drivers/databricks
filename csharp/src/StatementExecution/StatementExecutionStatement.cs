@@ -87,6 +87,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private readonly IStatementOperationObserver _observer;
 
+        /// <summary>
+        /// Tracks whether <see cref="IStatementOperationObserver.OnExecuteStarted"/> has been
+        /// fired for this statement. Gates the terminal
+        /// <see cref="IStatementOperationObserver.OnFinalized"/> call in <see cref="Dispose"/>:
+        /// when a statement is disposed without ever being executed, the observer must not
+        /// enqueue an empty execute-statement log. Mirrors the gate used in the Thrift
+        /// <c>DatabricksStatement</c> path so SEA and Thrift produce byte-identical telemetry
+        /// for the never-executed-then-disposed shape.
+        /// </summary>
+        private bool _executeStarted;
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
@@ -357,6 +368,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // but the observer's first signal records what we asked for.
             bool isCompressed = !string.IsNullOrEmpty(_resultCompression)
                 && string.Equals(_resultCompression, "LZ4_FRAME", StringComparison.OrdinalIgnoreCase);
+            // _executeStarted is set in lockstep with OnExecuteStarted so the dispose-path
+            // finalize call only fires when execute actually began. Setting before the observer
+            // call is safe: the observer contract guarantees OnExecuteStarted does not throw,
+            // and even if it did, treating a partially-observed execute as "started" matches
+            // the Thrift path's BeginExecuteTelemetry ordering.
+            _executeStarted = true;
             _observer.OnExecuteStarted(StatementType.Query, OperationType.ExecuteStatement, isCompressed);
 
             try
@@ -853,6 +870,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     _currentStatementId = null;
                 }
+            }
+
+            // Terminal observer signal: build the OssSqlDriverTelemetryLog and enqueue it for
+            // background export. Gated on _executeStarted so a never-executed statement does
+            // not produce a stray empty log (mirrors the Thrift path's _executeStarted gate).
+            // The observer's own OnFinalized is idempotent via Interlocked CAS, so subsequent
+            // Dispose() calls or an error path that also finalizes are no-ops downstream — this
+            // call is the only place SEA telemetry reaches eng_lumberjack today, so it must
+            // fire for every executed statement regardless of CloseStatementAsync's outcome.
+            if (_executeStarted)
+            {
+                _observer.OnFinalized();
             }
         }
 
