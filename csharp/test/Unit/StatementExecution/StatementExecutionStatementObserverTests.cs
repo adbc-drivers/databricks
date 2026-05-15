@@ -253,9 +253,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public async Task ExecuteQuery_CallsOnExecuteSucceeded_WithStatementId()
         {
             // OnExecuteSucceeded must fire once the server has accepted the statement and a
-            // statement id is known, carrying that id forward to the observer. ResultFormat is
-            // stubbed as Unspecified until the SeaResultFormatMapper helper lands in the parallel
-            // phase 6 PR.
+            // statement id is known, carrying that id forward to the observer. The result format
+            // is derived by SeaResultFormatMapper from (disposition, format, response): with
+            // disposition=INLINE_OR_EXTERNAL_LINKS and a manifest carrying no external_links,
+            // this maps to InlineArrow (the auto-disposition + inline-attachment cell of §8).
             var observer = new RecordingObserver();
 
             var mockClient = new Mock<IStatementExecutionClient>();
@@ -277,8 +278,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             await stmt.ExecuteQueryAsync(CancellationToken.None);
 
             Assert.Equal(StatementId, observer.ExecuteSucceededStatementId);
-            // Stub format value until SeaResultFormatMapper lands.
-            Assert.Equal(ExecutionResultFormat.Unspecified, observer.ExecuteSucceededFormat);
+            // SeaResultFormatMapper now populates a real value; gap-2 verifies the callsite
+            // no longer passes the Unspecified placeholder.
+            Assert.NotNull(observer.ExecuteSucceededFormat);
+            Assert.NotEqual(ExecutionResultFormat.Unspecified, observer.ExecuteSucceededFormat);
+            Assert.Equal(ExecutionResultFormat.InlineArrow, observer.ExecuteSucceededFormat);
 
             // OnExecuteStarted must precede OnExecuteSucceeded — order matters for telemetry record
             // assembly downstream.

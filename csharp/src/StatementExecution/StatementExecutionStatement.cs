@@ -33,7 +33,6 @@ using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
-using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
 using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
 
@@ -402,10 +401,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _currentStatementId = response.StatementId;
 
                 // Telemetry: signal OnExecuteSucceeded as soon as the server has accepted the statement
-                // and a statement id is known. ResultFormat is left Unspecified here because the
-                // SeaResultFormatMapper helper that derives this from the manifest is being added in a
-                // parallel phase 6 PR; once that lands this call will be updated to pass the mapped value.
-                _observer.OnExecuteSucceeded(response.StatementId ?? string.Empty, ExecutionResultFormat.Unspecified);
+                // and a statement id is known. SeaResultFormatMapper.Map derives the typed proto enum
+                // from the (disposition, format) request pair plus the observed response shape; for
+                // PENDING responses with no manifest yet, the auto-disposition cells fall back to
+                // Unspecified, which is acceptable because phase 5 fires this hookpoint before
+                // polling.
+                _observer.OnExecuteSucceeded(
+                    response.StatementId ?? string.Empty,
+                    SeaResultFormatMapper.Map(_resultDisposition, _resultFormat, response));
 
                 // Handle query status according to Databricks API documentation:
                 // PENDING: waiting for warehouse - continue polling
