@@ -19,6 +19,7 @@ use crate::reader::cloudfetch::parse_arrow_ipc;
 use crate::types::sea::CompressionCodec;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
+use arrow_select::concat::concat_batches;
 use driverbase::error::ErrorHelper;
 use std::collections::VecDeque;
 
@@ -43,10 +44,15 @@ impl InlineArrowProvider {
     /// Create a new provider from raw Arrow IPC bytes.
     ///
     /// Decompresses (if needed) and parses the Arrow IPC stream into RecordBatches.
+    /// When `batch_merge_target_rows > 0`, consecutive batches are coalesced into
+    /// larger batches of approximately that many rows. This matches the CloudFetch
+    /// path's batch-merge behavior and reduces per-batch overhead at language
+    /// bindings (PyO3, etc.). Pass 0 to disable.
     ///
     /// # Arguments
     /// * `attachment` - Raw Arrow IPC bytes (decoded from base64)
     /// * `compression` - Compression codec used (from manifest.result_compression)
+    /// * `batch_merge_target_rows` - Target rows per merged batch (0 = pass through)
     ///
     /// # Returns
     /// A new provider with parsed batches ready for iteration
@@ -54,7 +60,12 @@ impl InlineArrowProvider {
     /// # Errors
     /// - If decompression fails
     /// - If Arrow IPC parsing fails
-    pub fn new(attachment: Vec<u8>, compression: CompressionCodec) -> Result<Self> {
+    /// - If batch concatenation fails (e.g. mismatched schemas across batches)
+    pub fn new(
+        attachment: Vec<u8>,
+        compression: CompressionCodec,
+        batch_merge_target_rows: usize,
+    ) -> Result<Self> {
         if attachment.is_empty() {
             tracing::debug!("Empty attachment, creating empty provider");
             return Ok(Self {
@@ -74,13 +85,20 @@ impl InlineArrowProvider {
             DatabricksErrorHelper::io().message(format!("Failed to parse inline Arrow data: {}", e))
         })?;
 
-        let schema = batches.first().map(|b| b.schema());
-
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         tracing::debug!(
             "Parsed inline Arrow data: {} batches, {} total rows",
             batches.len(),
-            batches.iter().map(|b| b.num_rows()).sum::<usize>()
+            total_rows
         );
+
+        let batches = if batch_merge_target_rows > 0 && batches.len() > 1 {
+            merge_batches(batches, batch_merge_target_rows)?
+        } else {
+            batches
+        };
+
+        let schema = batches.first().map(|b| b.schema());
 
         Ok(Self {
             batches: VecDeque::from(batches),
@@ -104,6 +122,51 @@ impl InlineArrowProvider {
     pub fn has_more(&self) -> bool {
         !self.batches.is_empty()
     }
+}
+
+/// Coalesce consecutive batches into larger batches of approximately `target_rows`.
+///
+/// Mirrors the CloudFetch batch-merge logic but operates on a fully materialized
+/// inline batch list (no streaming). The last produced batch may be smaller than
+/// the target.
+fn merge_batches(batches: Vec<RecordBatch>, target_rows: usize) -> Result<Vec<RecordBatch>> {
+    if batches.len() <= 1 {
+        return Ok(batches);
+    }
+    let schema = batches[0].schema();
+    let mut result: Vec<RecordBatch> = Vec::new();
+    let mut pending: Vec<RecordBatch> = Vec::new();
+    let mut accumulated: usize = 0;
+
+    for batch in batches {
+        accumulated += batch.num_rows();
+        pending.push(batch);
+        if accumulated >= target_rows {
+            result.push(flush(&schema, &mut pending)?);
+            accumulated = 0;
+        }
+    }
+    if !pending.is_empty() {
+        result.push(flush(&schema, &mut pending)?);
+    }
+    tracing::debug!(
+        "Inline batch merge: produced {} batches (target {} rows/batch)",
+        result.len(),
+        target_rows
+    );
+    Ok(result)
+}
+
+fn flush(schema: &SchemaRef, pending: &mut Vec<RecordBatch>) -> Result<RecordBatch> {
+    if pending.len() == 1 {
+        return Ok(pending.drain(..).next().unwrap());
+    }
+    let merged = concat_batches(schema, &*pending).map_err(|e| {
+        DatabricksErrorHelper::invalid_state()
+            .message(format!("Failed to merge inline batches: {}", e))
+    })?;
+    pending.clear();
+    Ok(merged)
 }
 
 #[cfg(test)]
@@ -157,7 +220,7 @@ mod tests {
         let batch = create_test_batch(100);
         let ipc_data = create_test_arrow_ipc(&[batch]);
 
-        let mut provider = InlineArrowProvider::new(ipc_data, CompressionCodec::None).unwrap();
+        let mut provider = InlineArrowProvider::new(ipc_data, CompressionCodec::None, 0).unwrap();
 
         // Check schema
         assert!(provider.schema().is_some());
@@ -190,7 +253,7 @@ mod tests {
         }
 
         let mut provider =
-            InlineArrowProvider::new(compressed, CompressionCodec::Lz4Frame).unwrap();
+            InlineArrowProvider::new(compressed, CompressionCodec::Lz4Frame, 0).unwrap();
 
         let batch = provider.next_batch().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 100);
@@ -202,7 +265,7 @@ mod tests {
         let batch2 = create_test_batch(30);
         let ipc_data = create_test_arrow_ipc(&[batch1, batch2]);
 
-        let mut provider = InlineArrowProvider::new(ipc_data, CompressionCodec::None).unwrap();
+        let mut provider = InlineArrowProvider::new(ipc_data, CompressionCodec::None, 0).unwrap();
 
         // First batch
         let batch = provider.next_batch().unwrap().unwrap();
@@ -218,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_inline_provider_with_empty_data() {
-        let provider = InlineArrowProvider::new(vec![], CompressionCodec::None).unwrap();
+        let provider = InlineArrowProvider::new(vec![], CompressionCodec::None, 0).unwrap();
 
         assert!(provider.schema().is_none());
         assert!(!provider.has_more());
@@ -228,7 +291,7 @@ mod tests {
     fn test_inline_provider_with_invalid_data() {
         let invalid_data = b"this is not valid arrow ipc data".to_vec();
 
-        let result = InlineArrowProvider::new(invalid_data, CompressionCodec::None);
+        let result = InlineArrowProvider::new(invalid_data, CompressionCodec::None, 0);
         assert!(result.is_err());
     }
 }
