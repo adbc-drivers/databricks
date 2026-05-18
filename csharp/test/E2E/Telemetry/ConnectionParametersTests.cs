@@ -38,7 +38,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
-            Skip.If(TestConfiguration.Protocol == "rest", "Connection parameters telemetry tests are Thrift-only");
         }
 
         /// <summary>
