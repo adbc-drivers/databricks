@@ -628,19 +628,30 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Maps a Databricks SQL type name from the manifest to its Arrow output type.
-        ///
-        /// <para>
-        /// INTERVAL, ARRAY, MAP, and STRUCT are mapped to <see cref="StringType"/> because
-        /// <see cref="IntervalSerializingStream"/> and <see cref="ComplexTypeSerializingStream"/>
-        /// convert the native Arrow arrays (e.g. <c>YearMonthIntervalArray</c>, <c>ListArray</c>)
-        /// to <see cref="StringArray"/> at read time. The manifest schema is the output contract
-        /// exposed to callers, so the declared type must match the converted data type.
-        /// </para>
+        /// INTERVAL/ARRAY/MAP/STRUCT default to <see cref="StringType"/> because the stream
+        /// wrappers convert their native arrays to strings to match legacy Thrift behavior.
+        /// When <see cref="_enableComplexDatatypeSupport"/> is true, ARRAY/MAP/STRUCT are
+        /// parsed into native nested Arrow types via <see cref="ParseComplexType"/> so the
+        /// (unwrapped) batches and the declared schema agree.
         /// </summary>
         private IArrowType MapDatabricksTypeToArrowType(string typeName)
         {
             var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
+            if (baseType is "ARRAY" or "MAP" or "STRUCT")
+            {
+                return _enableComplexDatatypeSupport ? ParseComplexType(typeName) : StringType.Default;
+            }
+            return MapPrimitiveType(typeName);
+        }
 
+        /// <summary>
+        /// Maps a primitive (non-complex) Databricks SQL type name to its Arrow type.
+        /// Shared by <see cref="MapDatabricksTypeToArrowType"/> for top-level columns and by
+        /// <see cref="ParseComplexType"/> for primitive leaves inside ARRAY/MAP/STRUCT.
+        /// </summary>
+        private static IArrowType MapPrimitiveType(string typeName)
+        {
+            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
             return baseType switch
             {
                 "BOOLEAN" => BooleanType.Default,
@@ -655,19 +666,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 "BINARY" or "VARBINARY" => BinaryType.Default,
                 "DATE" => Date32Type.Default,
                 "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
-                // Converted to string by IntervalSerializingStream; StringType is the output contract.
+                // INTERVAL is converted to string by IntervalSerializingStream; StringType is the output contract.
                 "INTERVAL" => StringType.Default,
-                // Converted to JSON string by ComplexTypeSerializingStream; StringType is the output contract.
-                "ARRAY" or "MAP" or "STRUCT" => StringType.Default,
                 "NULL" or "VOID" => NullType.Default,
-                _ => StringType.Default
+                _ => StringType.Default,
             };
         }
 
         /// <summary>
         /// Parses a DECIMAL type to determine precision and scale.
         /// </summary>
-        private IArrowType ParseDecimalType(string typeName)
+        private static IArrowType ParseDecimalType(string typeName)
         {
             // Default precision and scale
             int precision = 38;
@@ -682,6 +691,82 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             return new Decimal128Type(precision, scale);
+        }
+
+        /// <summary>
+        /// Parses a Databricks SQL complex type string (e.g. <c>ARRAY&lt;INT&gt;</c>,
+        /// <c>MAP&lt;STRING,INT&gt;</c>, <c>STRUCT&lt;a:INT,b:STRING&gt;</c>, including
+        /// nested forms) into the corresponding native Arrow type. Falls back to
+        /// <see cref="StringType"/> on any parse failure — callers can rely on this,
+        /// the method never throws.
+        /// </summary>
+        internal static IArrowType ParseComplexType(string typeName)
+        {
+            if (string.IsNullOrWhiteSpace(typeName)) return StringType.Default;
+            try { return ParseSqlType(typeName.Trim()); }
+            catch (FormatException) { return StringType.Default; }
+        }
+
+        private static IArrowType ParseSqlType(string s)
+        {
+            s = s.Trim();
+            int lt = s.IndexOf('<');
+            if (lt < 0) return MapPrimitiveType(s);
+            // The matching '>' must be the last character; reject trailing junk.
+            if (!s.EndsWith(">") || FindMatching(s, lt) != s.Length - 1) throw new FormatException();
+            string baseName = s.Substring(0, lt).Trim().ToUpperInvariant();
+            string inner = s.Substring(lt + 1, s.Length - lt - 2);
+
+            if (baseName == "ARRAY") return new ListType(ParseSqlType(inner));
+            if (baseName == "MAP")
+            {
+                var kv = SplitTopLevel(inner, ',');
+                if (kv.Count != 2) throw new FormatException();
+                return new MapType(ParseSqlType(kv[0]), ParseSqlType(kv[1]));
+            }
+            if (baseName == "STRUCT")
+            {
+                var fields = new List<Field>();
+                foreach (string part in SplitTopLevel(inner, ','))
+                {
+                    string p = part.Trim();
+                    // Field syntax: "name:type" or "name type" (colon optional per Databricks grammar).
+                    int sep = p.IndexOf(':');
+                    if (sep < 0) sep = p.IndexOf(' ');
+                    if (sep < 0) throw new FormatException();
+                    fields.Add(new Field(p.Substring(0, sep).Trim(), ParseSqlType(p.Substring(sep + 1)), nullable: true));
+                }
+                return new StructType(fields);
+            }
+            return StringType.Default;
+        }
+
+        /// <summary>Splits <paramref name="s"/> at occurrences of <paramref name="sep"/> that are at bracket depth 0.</summary>
+        private static List<string> SplitTopLevel(string s, char sep)
+        {
+            var parts = new List<string>();
+            int depth = 0, start = 0;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c == '<' || c == '(') depth++;
+                else if (c == '>' || c == ')') depth--;
+                else if (c == sep && depth == 0) { parts.Add(s.Substring(start, i - start)); start = i + 1; }
+            }
+            parts.Add(s.Substring(start));
+            return parts;
+        }
+
+        /// <summary>Returns the index of the '>' that matches the '&lt;' at <paramref name="ltPos"/>, or -1 if unbalanced.</summary>
+        private static int FindMatching(string s, int ltPos)
+        {
+            int depth = 0;
+            for (int i = ltPos; i < s.Length; i++)
+            {
+                if (s[i] == '<') depth++;
+                else if (s[i] == '>' && --depth == 0) return i;
+            }
+            return -1;
         }
 
         /// <summary>
