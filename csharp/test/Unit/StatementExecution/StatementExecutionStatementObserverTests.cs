@@ -232,9 +232,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Single(callsAtExecuteTime!);
             Assert.Equal(nameof(IStatementOperationObserver.OnExecuteStarted), callsAtExecuteTime![0]);
 
-            // Non-metadata path: stmtType is Query, opType is ExecuteStatement.
+            // Non-metadata path: stmtType is Query, opType is ExecuteStatementAsync. SEA is
+            // always async on the wire (submit + poll), so the operation_type recorded in
+            // telemetry must be EXECUTE_STATEMENT_ASYNC, distinct from the synchronous
+            // EXECUTE_STATEMENT that the Thrift path (DatabricksStatement) emits.
             Assert.Equal(StatementType.Query, observer.ExecuteStartedStmtType);
-            Assert.Equal(OperationType.ExecuteStatement, observer.ExecuteStartedOpType);
+            Assert.Equal(OperationType.ExecuteStatementAsync, observer.ExecuteStartedOpType);
             // resultCompression was null in this statement, so isCompressed must be false.
             Assert.False(observer.ExecuteStartedIsCompressed);
         }

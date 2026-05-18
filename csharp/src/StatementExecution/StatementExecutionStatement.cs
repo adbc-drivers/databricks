@@ -373,9 +373,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             // Telemetry: signal OnExecuteStarted before submitting the statement. ExecuteQueryInternalAsync
             // only runs for the non-metadata path (metadata commands short-circuit to
-            // ExecuteMetadataCommandAsync above), so stmtType is always Query and opType is ExecuteStatement.
-            // isCompressed reflects the requested result compression — the manifest may override later
-            // but the observer's first signal records what we asked for.
+            // ExecuteMetadataCommandAsync above), so stmtType is always Query and opType is
+            // ExecuteStatementAsync — SEA is always async on the wire (the client submits a
+            // statement and polls for completion), so the operation_type recorded in telemetry must
+            // be EXECUTE_STATEMENT_ASYNC rather than the synchronous EXECUTE_STATEMENT used on the
+            // Thrift path. isCompressed reflects the requested result compression — the manifest
+            // may override later but the observer's first signal records what we asked for.
             bool isCompressed = !string.IsNullOrEmpty(_resultCompression)
                 && string.Equals(_resultCompression, "LZ4_FRAME", StringComparison.OrdinalIgnoreCase);
             // _executeStarted is set in lockstep with OnExecuteStarted so the dispose-path
@@ -387,7 +390,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Start the stopwatch alongside OnExecuteStarted so OnFirstBatchReady can report
             // elapsed-since-execute-start as its latencyMs argument (gap G3 / design §6 row 4).
             _executeStopwatch.Start();
-            _observer.OnExecuteStarted(StatementType.Query, OperationType.ExecuteStatement, isCompressed);
+            _observer.OnExecuteStarted(StatementType.Query, OperationType.ExecuteStatementAsync, isCompressed);
 
             try
             {
