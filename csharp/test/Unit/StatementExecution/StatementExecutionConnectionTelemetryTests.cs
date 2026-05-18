@@ -509,5 +509,92 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal(55, session.DriverConnectionParams!.SocketTimeout);
             Assert.NotEqual(GetWaitTimeoutSecondsFieldValue(connection), session.DriverConnectionParams.SocketTimeout);
         }
+
+        // ── enable_direct_results telemetry source (gap B10) ───────────────────────
+        //
+        // The SEA connection must stamp the telemetry payload's enable_direct_results from
+        // the DatabricksParameters.EnableDirectResults user property — NOT from a hardcoded
+        // literal. The previous code passed `enableDirectResults: true` unconditionally,
+        // making the field useless on dashboards that filter by user configuration.
+
+        private static bool GetEnableDirectResultsFieldValue(StatementExecutionConnection connection)
+        {
+            var field = typeof(StatementExecutionConnection).GetField(
+                "_enableDirectResults",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field);
+            return (bool)field!.GetValue(connection)!;
+        }
+
+        [Fact]
+        public void EnableDirectResults_DefaultsToTrue_WhenPropertyAbsent()
+        {
+            // No EnableDirectResults property is set. The default must match the Thrift path
+            // (DatabricksConnection._enableDirectResults defaults to true) so dashboards see
+            // consistent values across transports for callers that never tuned this flag.
+            using var connection = CreateConnection();
+
+            Assert.True(GetEnableDirectResultsFieldValue(connection));
+        }
+
+        [Fact]
+        public void EnableDirectResults_ReadsFalseFromConnectionProperties()
+        {
+            // Property dictionary check: the SEA connection must read the same
+            // DatabricksParameters.EnableDirectResults property the Thrift path reads
+            // and honor "false" rather than hardcoding true.
+            var properties = CreateBaseProperties();
+            properties[DatabricksParameters.EnableDirectResults] = "false";
+            using var connection = new StatementExecutionConnection(properties);
+
+            Assert.False(GetEnableDirectResultsFieldValue(connection));
+        }
+
+        [Fact]
+        public void EnableDirectResults_ReadsTrueFromConnectionProperties()
+        {
+            // Explicit "true" must also be read from the property — not from a
+            // hardcoded default — so the property is the source of truth.
+            var properties = CreateBaseProperties();
+            properties[DatabricksParameters.EnableDirectResults] = "true";
+            using var connection = new StatementExecutionConnection(properties);
+
+            Assert.True(GetEnableDirectResultsFieldValue(connection));
+        }
+
+        [Fact]
+        public void InitializeTelemetry_ForwardsEnableDirectResultsToConnectionParams()
+        {
+            // End-to-end wiring guard: exercise the real InitializeTelemetry →
+            // ConnectionTelemetry.Create path with telemetry enabled, then read back the
+            // resulting session's driver_connection_params.enable_direct_results. This proves
+            // the argument passed to ConnectionTelemetry.Create is _enableDirectResults, NOT
+            // the prior hardcoded literal `true`. Without the fix, this assertion fails
+            // because the field is always true regardless of user configuration.
+            var properties = CreateBaseProperties();
+            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+            properties[DatabricksParameters.EnableDirectResults] = "false";
+
+            using var connection = new StatementExecutionConnection(properties);
+
+            // Sanity: the field reflects the user-supplied "false".
+            Assert.False(GetEnableDirectResultsFieldValue(connection));
+
+            var method = typeof(StatementExecutionConnection).GetMethod(
+                "InitializeTelemetry",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method);
+            method!.Invoke(connection, new object?[] { null });
+
+            // ConnectionTelemetry.Create is `Never throws` — if init failed we'd get NoOp
+            // back with Session == null. The field-level tests above still cover the
+            // source-of-truth contract if this end-to-end assertion can't run.
+            var session = connection.TelemetrySession;
+            Assert.NotNull(session);
+            Assert.NotNull(session!.DriverConnectionParams);
+
+            // The bug pattern produced `true` here regardless of user config.
+            Assert.False(session.DriverConnectionParams!.EnableDirectResults);
+        }
     }
 }

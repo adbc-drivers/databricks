@@ -100,6 +100,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly bool _useDescTableExtended;
         private readonly bool _applySSPWithQueries;
 
+        // Direct-results capability flag — read from the same connection-string property the
+        // Thrift path uses (DatabricksParameters.EnableDirectResults). Mirrored into the
+        // telemetry payload's enable_direct_results field so dashboards reflect the user's
+        // actual configuration rather than a hardcoded literal. Defaults to true, matching
+        // DatabricksConnection (Thrift) defaults.
+        private readonly bool _enableDirectResults;
+
         // Default connect-timeout value used when the connection string omits one.
         // Mirrors the Thrift path's HiveServer2Connection.ConnectTimeoutMillisecondsDefault
         // so dashboards filtering on socket_timeout see consistent values across both transports.
@@ -258,6 +265,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // the server validates differently in CreateSession vs SET) get the same semantics
             // on SEA. JDBC has no equivalent flag — this is parity with the Thrift driver only.
             _applySSPWithQueries = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.ApplySSPWithQueries, false);
+            _enableDirectResults = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableDirectResults, true);
 
             // Session configuration
             // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
@@ -532,7 +540,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     oauthTokenProvider: _oauthTokenProvider,
                     sessionId: _sessionId ?? string.Empty,
                     mode: Telemetry.Proto.DriverMode.Types.Type.Sea,
-                    enableDirectResults: true,
+                    enableDirectResults: _enableDirectResults,
                     useDescTableExtended: _useDescTableExtended,
                     connectTimeoutMilliseconds: _connectTimeoutMilliseconds,
                     activity: activity);
