@@ -108,6 +108,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private readonly Stopwatch _executeStopwatch = new Stopwatch();
 
+        /// <summary>
+        /// Reference to the outermost <see cref="ConsumptionObservingStream"/> wrapping the
+        /// reader returned by a successful execute. Tracked so <see cref="Dispose"/> can
+        /// invoke <see cref="ConsumptionObservingStream.EnsureObserverSignaled"/> when the
+        /// consumer abandons the reader without disposing it — guaranteeing
+        /// <see cref="IStatementOperationObserver.OnConsumed"/> (and, on the CloudFetch
+        /// path, <see cref="IStatementOperationObserver.OnChunksDownloaded"/>) fire on
+        /// every successful EXECUTE record before <see cref="IStatementOperationObserver.OnFinalized"/>
+        /// emits the log. Null on the error path (no reader was constructed) and on the
+        /// never-executed path. Mirrors the Thrift driver's <c>EmitTelemetry</c> contract,
+        /// which always calls <c>RecordResultsConsumed</c> regardless of reader iteration.
+        /// </summary>
+        private ConsumptionObservingStream? _consumptionStream;
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
@@ -467,6 +481,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         }));
                 }
 
+                // Telemetry: signal OnFirstBatchReady once the polling loop has confirmed SUCCEEDED
+                // state (gap B4 / "reader latencies on 100% of successful EXECUTE records"). Firing
+                // here rather than inside CreateReader / CreateCloudFetchReader covers ALL successful
+                // paths uniformly — inline-arrow with attachment bytes, CloudFetch with external
+                // links, AND the two empty-result paths (null manifest, manifest-without-data) that
+                // produce an EmptyArrowArrayStream. Without this earlier firepoint, empty-result
+                // executions would report only OnConsumed and no OnFirstBatchReady — populating
+                // result_set_consumption_latency_millis but leaving result_set_ready_latency_millis
+                // unset, which the lumberjack analysis surfaced as the 22% missing-latency tail.
+                // The TelemetryObserver's "first wins" guard makes any downstream redundant fires a
+                // no-op; this is the single canonical fire-point for SEA.
+                _observer.OnFirstBatchReady(_executeStopwatch.ElapsedMilliseconds);
+
                 // Create appropriate reader based on result disposition.
                 // All paths (inline, CloudFetch, empty) expose the manifest schema so that
                 // IntervalSerializingStream and ComplexTypeSerializingStream can detect columns
@@ -504,7 +531,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // most once even if Dispose is invoked multiple times. Passing a non-null
                 // cloudFetchReader is the CloudFetch-path opt-in for OnChunksDownloaded; the
                 // inline path passes null and OnChunksDownloaded is intentionally never fired.
-                reader = new ConsumptionObservingStream(reader, _observer, _executeStopwatch, cloudFetchReader);
+                //
+                // Tracking the wrapper in _consumptionStream lets Statement.Dispose call
+                // EnsureObserverSignaled() before OnFinalized, guaranteeing OnConsumed fires on
+                // EVERY successful EXECUTE record even when the consumer abandons the reader
+                // without disposing it (gap B4). EnsureObserverSignaled() is idempotent with the
+                // wrapper's own Dispose, so whichever path runs first wins and the other is a
+                // no-op — matching the Thrift driver's RecordResultsConsumed-on-statement-dispose
+                // behavior.
+                var consumptionStream = new ConsumptionObservingStream(reader, _observer, _executeStopwatch, cloudFetchReader);
+                _consumptionStream = consumptionStream;
+                reader = consumptionStream;
 
                 // Get schema from reader
                 var schema = reader.Schema;
@@ -652,16 +689,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Inline results - may be split across multiple chunks.
                 // Pass the manifest schema so the reader reports it instead of the IPC-embedded schema,
                 // keeping inline consistent with CloudFetch (which also uses the manifest schema).
+                // OnFirstBatchReady is fired by ExecuteQueryInternalAsync before this method is called,
+                // covering all reader paths (inline, CloudFetch, empty) from a single fire-point so
+                // result_set_ready_latency_millis populates on 100% of successful EXECUTE records.
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
-
-                // Telemetry: signal OnFirstBatchReady at reader construction (gap G3 / design §6 row 4).
-                // The chunk-0 attachment is already inlined in the response, so first-batch data is
-                // available before the reader is built. Firing here (rather than inside the nested
-                // InlineArrowStreamReader ctor) keeps the observer wiring on the outer class and
-                // excludes the synchronous FetchAllChunksAsync work for chunks 1..N from
-                // result_set_ready_latency_millis — that subsequent work is measured by OnConsumed.
-                _observer.OnFirstBatchReady(_executeStopwatch.ElapsedMilliseconds);
-
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
                     isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest));
             }
@@ -679,14 +710,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private IArrowArrayStream CreateCloudFetchReader(ExecuteStatementResponse response, Schema manifestSchema)
         {
-            // Telemetry: signal OnFirstBatchReady at reader construction (gap G3 / design §6 row 4).
-            // Reaching this method means the polling loop has terminated SUCCESSFULLY and the server
-            // returned a manifest with external links — i.e. chunk-0 is ready to be downloaded. The
-            // latencyMs argument is elapsed-since-execute-start, matching Thrift's
-            // result_set_ready_latency_millis semantic. Calling here (before the factory) keeps the
-            // measurement consistent with the inline path, which also fires before reader construction.
-            _observer.OnFirstBatchReady(_executeStopwatch.ElapsedMilliseconds);
-
+            // OnFirstBatchReady is fired by ExecuteQueryInternalAsync before CreateReader dispatches
+            // here, covering inline, CloudFetch, and empty paths from a single fire-point. This keeps
+            // result_set_ready_latency_millis populated on 100% of successful EXECUTE records (gap B4).
             var manifest = response.Manifest!;
             var schema = manifestSchema;
 
@@ -931,6 +957,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
 
+            // Safety net for reader latency telemetry (gap B4): if a successful execute
+            // constructed a result reader but the consumer abandoned it without calling
+            // Dispose, OnConsumed (and OnChunksDownloaded on the CloudFetch path) would
+            // never fire — leaving result_set_consumption_latency_millis unset on every
+            // such record. The lumberjack analysis of 22% missing-latency records traced
+            // back to exactly this pattern. EnsureObserverSignaled fires the missing
+            // observer signals NOW (using the same execute-time Stopwatch the reader's
+            // own Dispose would have used) without disposing the inner stream, so a
+            // later consumer Dispose still releases inner resources and the second
+            // signal attempt is a no-op via the wrapper's idempotency gate. Matches the
+            // Thrift driver's EmitTelemetry, which always calls RecordResultsConsumed
+            // on statement Dispose regardless of whether the consumer iterated the reader.
+            _consumptionStream?.EnsureObserverSignaled();
+
             // Terminal observer signal: build the OssSqlDriverTelemetryLog and enqueue it for
             // background export. Gated on _executeStarted so a never-executed statement does
             // not produce a stray empty log (mirrors the Thrift path's _executeStarted gate).
@@ -1028,7 +1068,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             private readonly IStatementOperationObserver _observer;
             private readonly Stopwatch _executeStopwatch;
             private readonly CloudFetchReader? _cloudFetchReader;
-            private bool _disposed;
+
+            // Separate gates so consumer Dispose and statement-Dispose safety-net can be
+            // ordered independently. _observerSignaled is the once-only guard for the
+            // observer signals (OnChunksDownloaded + OnConsumed); _disposed is the once-
+            // only guard for inner-stream teardown. Both use Interlocked CAS so concurrent
+            // invocation from the reader's disposal thread and the statement's dispose
+            // thread is safe (per IStatementOperationObserver thread-safety contract).
+            private int _observerSignaled;
+            private int _disposed;
 
             public ConsumptionObservingStream(
                 IArrowArrayStream inner,
@@ -1049,46 +1097,70 @@ namespace AdbcDrivers.Databricks.StatementExecution
             public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
                 => _inner.ReadNextRecordBatchAsync(cancellationToken);
 
-            public void Dispose()
+            /// <summary>
+            /// Fires <see cref="IStatementOperationObserver.OnChunksDownloaded"/> (CloudFetch
+            /// path only) and <see cref="IStatementOperationObserver.OnConsumed"/> exactly
+            /// once, in that order, then returns without touching the inner stream. Safe to
+            /// call multiple times and from multiple threads — subsequent calls are no-ops
+            /// via the <c>_observerSignaled</c> Interlocked CAS gate. Invoked from
+            /// <see cref="StatementExecutionStatement.Dispose"/> as a safety net so reader
+            /// latency telemetry fires on EVERY successful EXECUTE record, even when the
+            /// consumer abandons the result reader without disposing it (gap B4). Also
+            /// invoked from <see cref="Dispose"/> itself so the consumer's normal flow still
+            /// produces these signals before inner teardown.
+            /// </summary>
+            public void EnsureObserverSignaled()
             {
-                if (_disposed)
+                if (System.Threading.Interlocked.CompareExchange(ref _observerSignaled, 1, 0) != 0)
                 {
                     return;
                 }
-                _disposed = true;
 
-                // Read the stopwatch and snapshot chunk metrics BEFORE disposing the inner
-                // stream so the latency reflects "time until the consumer let go" rather than
-                // "time until inner teardown completes", and so the chunk metrics aggregator
-                // (held by the inner CloudFetchReader's download manager) is still live when
-                // we query it. try/finally guarantees inner cleanup even on observer fault.
-                try
+                // Read the stopwatch and snapshot chunk metrics BEFORE the inner stream is
+                // disposed (the consumer may not have called Dispose yet, but if they have,
+                // we're racing with their Dispose). The chunk metrics aggregator is held by
+                // the inner CloudFetchReader's download manager; querying it before any
+                // inner teardown lets us capture state even when statement-Dispose runs
+                // first. Fall back to an empty ChunkMetrics if the aggregator throws or
+                // returns null — telemetry must never fail driver operations, and the
+                // proto fields are nullable so an empty metrics object is a valid payload.
+                if (_cloudFetchReader != null)
                 {
-                    // CloudFetch path only: snapshot metrics before the inner chain disposes.
-                    // Fall back to a fresh ChunkMetrics if the aggregator throws or returns
-                    // null — telemetry must never fail driver operations, and the proto
-                    // fields are nullable so an empty metrics object is a valid wire payload.
-                    if (_cloudFetchReader != null)
+                    ChunkMetrics metrics;
+                    try
                     {
-                        ChunkMetrics metrics;
-                        try
-                        {
-                            metrics = _cloudFetchReader.GetChunkMetrics() ?? new ChunkMetrics();
-                        }
-                        catch
-                        {
-                            metrics = new ChunkMetrics();
-                        }
-
-                        // Emit before OnConsumed to match the Thrift path's emission order in
-                        // DatabricksStatement.FinalizeExecuteTelemetry — chunk_details and
-                        // result_latency end up on the same OssSqlDriverTelemetryLog regardless
-                        // of order, but keeping a single canonical sequence simplifies any
-                        // future record-assembly reasoning.
-                        _observer.OnChunksDownloaded(metrics);
+                        metrics = _cloudFetchReader.GetChunkMetrics() ?? new ChunkMetrics();
+                    }
+                    catch
+                    {
+                        metrics = new ChunkMetrics();
                     }
 
-                    _observer.OnConsumed(_executeStopwatch.ElapsedMilliseconds);
+                    // Emit before OnConsumed to match the Thrift path's emission order in
+                    // DatabricksStatement.FinalizeExecuteTelemetry — chunk_details and
+                    // result_latency end up on the same OssSqlDriverTelemetryLog regardless
+                    // of order, but keeping a single canonical sequence simplifies any
+                    // future record-assembly reasoning.
+                    _observer.OnChunksDownloaded(metrics);
+                }
+
+                _observer.OnConsumed(_executeStopwatch.ElapsedMilliseconds);
+            }
+
+            public void Dispose()
+            {
+                if (System.Threading.Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                {
+                    return;
+                }
+
+                // Fire observer signals first (if not already signaled by the statement's
+                // safety net) so the stopwatch read captures "time until the consumer let
+                // go" rather than "time until inner teardown completes". try/finally
+                // guarantees inner cleanup even on observer fault.
+                try
+                {
+                    EnsureObserverSignaled();
                 }
                 finally
                 {

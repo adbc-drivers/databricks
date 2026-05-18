@@ -1142,6 +1142,355 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
+        public async Task Dispose_AfterSuccessfulExecute_InlinePath_FiresOnConsumed_EvenWhenReaderNeverDisposed()
+        {
+            // Gap B4: reader latencies populated on only 78% of SEA EXECUTE records — the
+            // missing 22% trace back to statements whose consumer abandons the result reader
+            // without disposing it. Without a safety net in Statement.Dispose, the wrapping
+            // ConsumptionObservingStream never sees a Dispose call, so OnConsumed (and on
+            // CloudFetch path OnChunksDownloaded) never fire, leaving
+            // result_set_consumption_latency_millis unset.
+            //
+            // Inline-path scenario: ExecuteQueryAsync returns a reader, the consumer drops
+            // the reference without disposing, then disposes the statement. The statement-
+            // side safety net (ConsumptionObservingStream.EnsureObserverSignaled invoked
+            // from Statement.Dispose before OnFinalized) must fire OnConsumed exactly once
+            // with a latency >= OnFirstBatchReady, and OnConsumed must precede OnFinalized.
+            var observer = new RecordingObserver();
+            var (ipcBytes, manifest) = BuildSingleColumnInlineArrowResult();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData { Attachment = ipcBytes },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            long? firstBatchLatency = null;
+            long? consumedLatency = null;
+            observer.OnFirstBatchReadyCallback = ms => firstBatchLatency = ms;
+            observer.OnConsumedCallback = ms => consumedLatency = ms;
+
+            var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Consumer abandons the reader — does NOT dispose result.Stream. This is the
+            // exact production shape that produced the 22% missing-latency tail.
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnConsumed), observer.Calls);
+
+            stmt.Dispose();
+
+            // OnConsumed must have fired exactly once via the statement-Dispose safety net.
+            int consumedCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnConsumed));
+            Assert.Equal(1, consumedCallCount);
+
+            // Latency monotonicity: both reads share the execute-time Stopwatch, and the
+            // statement-Dispose path strictly follows reader construction, so the consumed
+            // latency must be >= the first-batch latency.
+            Assert.NotNull(firstBatchLatency);
+            Assert.NotNull(consumedLatency);
+            Assert.True(consumedLatency >= firstBatchLatency,
+                $"OnConsumed latency ({consumedLatency}) must be >= OnFirstBatchReady latency ({firstBatchLatency}).");
+
+            // Inline path: OnChunksDownloaded must NOT fire (no chunks to download).
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnChunksDownloaded), observer.Calls);
+
+            // OnConsumed must precede OnFinalized so the consumption latency makes it onto
+            // the telemetry log before emission.
+            int consumedIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnConsumed));
+            int finalizeIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFinalized));
+            Assert.True(consumedIndex >= 0);
+            Assert.True(finalizeIndex > consumedIndex,
+                $"OnConsumed (index {consumedIndex}) must precede OnFinalized (index {finalizeIndex}).");
+        }
+
+        [Fact]
+        public async Task Dispose_AfterSuccessfulExecute_CloudFetchPath_FiresOnConsumedAndOnChunksDownloaded_EvenWhenReaderNeverDisposed()
+        {
+            // Gap B4 CloudFetch counterpart: same abandonment pattern as the inline test,
+            // but ConsumptionObservingStream was wrapped around a CloudFetchReader so the
+            // statement-Dispose safety net must fire BOTH OnChunksDownloaded (with a fresh
+            // ChunkMetrics fallback) and OnConsumed. Without this fix, CloudFetch-path
+            // abandonment records had neither chunk_details nor result_set_consumption_
+            // latency_millis populated.
+            var observer = new RecordingObserver();
+            long? firstBatchLatency = null;
+            long? consumedLatency = null;
+            observer.OnFirstBatchReadyCallback = ms => firstBatchLatency = ms;
+            observer.OnConsumedCallback = ms => consumedLatency = ms;
+
+            var manifest = new ResultManifest
+            {
+                Format = "ARROW_STREAM",
+                Schema = new ResultSchema
+                {
+                    Columns = new List<ColumnInfo>
+                    {
+                        new() { Name = "c0", TypeName = "INT", TypeText = "INT" }
+                    }
+                },
+                TotalRowCount = 0,
+                TotalChunkCount = 1,
+                Chunks = new List<ResultChunk>
+                {
+                    new()
+                    {
+                        ChunkIndex = 0,
+                        RowCount = 0,
+                        RowOffset = 0,
+                        ByteCount = 0,
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    }
+                },
+            };
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData
+                    {
+                        ExternalLinks = new List<ExternalLink>
+                        {
+                            new() { ExternalLinkUrl = "https://example.invalid/chunk0" }
+                        }
+                    },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Consumer abandons the reader — exact shape of the missing-latency production records.
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnConsumed), observer.Calls);
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnChunksDownloaded), observer.Calls);
+
+            stmt.Dispose();
+
+            int consumedCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnConsumed));
+            int chunksDownloadedCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnChunksDownloaded));
+            Assert.Equal(1, consumedCallCount);
+            Assert.Equal(1, chunksDownloadedCallCount);
+
+            // Non-null fallback ChunkMetrics, even when the aggregator was never populated
+            // (consumer never iterated, so no chunks were actually downloaded).
+            Assert.NotNull(observer.CapturedChunkMetrics);
+
+            // Latency invariants.
+            Assert.NotNull(firstBatchLatency);
+            Assert.NotNull(consumedLatency);
+            Assert.True(consumedLatency >= firstBatchLatency,
+                $"OnConsumed latency ({consumedLatency}) must be >= OnFirstBatchReady latency ({firstBatchLatency}).");
+
+            // Emission order: OnChunksDownloaded → OnConsumed → OnFinalized.
+            int chunksIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnChunksDownloaded));
+            int consumedIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnConsumed));
+            int finalizeIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFinalized));
+            Assert.True(chunksIndex >= 0);
+            Assert.True(consumedIndex > chunksIndex);
+            Assert.True(finalizeIndex > consumedIndex);
+        }
+
+        [Fact]
+        public async Task Dispose_AfterSuccessfulExecute_SafetyNet_IsIdempotentWithReaderDispose()
+        {
+            // Idempotency contract: when BOTH the consumer disposes the reader AND the
+            // statement-Dispose safety net runs, each observer signal must fire EXACTLY
+            // once. Whichever path wins the race fires the signal; the other path's
+            // call is a no-op via the wrapper's _observerSignaled Interlocked CAS gate.
+            // Without this property the wrapper could double-count consumption latency
+            // for consumers that defensively dispose the reader before disposing the
+            // statement (the common case).
+            var observer = new RecordingObserver();
+            var (ipcBytes, manifest) = BuildSingleColumnInlineArrowResult();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = manifest,
+                    Result = new ResultData { Attachment = ipcBytes },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Consumer disposes reader (normal flow): fires OnConsumed.
+            result.Stream?.Dispose();
+            // Statement.Dispose then runs the safety net: must NOT re-fire OnConsumed.
+            stmt.Dispose();
+
+            int consumedCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnConsumed));
+            Assert.Equal(1, consumedCallCount);
+
+            int finalizeCalls = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnFinalized));
+            Assert.Equal(1, finalizeCalls);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_EmptyResultPath_NullManifest_FiresOnFirstBatchReadyAndOnConsumed()
+        {
+            // Gap B4: empty-result paths (null manifest, manifest-without-data) used to
+            // bypass OnFirstBatchReady entirely because the original wiring fired it inside
+            // CreateReader's inline branch and CreateCloudFetchReader. After this fix
+            // OnFirstBatchReady is fired in ExecuteQueryInternalAsync before CreateReader
+            // dispatches, so ALL successful paths — including null-manifest DDL responses —
+            // populate result_set_ready_latency_millis. OnConsumed must also fire (via the
+            // statement-Dispose safety net) so the consumer Dispose isn't required for
+            // empty-result records.
+            var observer = new RecordingObserver();
+            long? firstBatchLatency = null;
+            long? consumedLatency = null;
+            observer.OnFirstBatchReadyCallback = ms => firstBatchLatency = ms;
+            observer.OnConsumedCallback = ms => consumedLatency = ms;
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    // Null manifest is the "no results" shape — e.g. DDL statements that
+                    // don't return a result set. CreateReader returns EmptyArrowArrayStream
+                    // which has no underlying reader to fire OnFirstBatchReady internally.
+                    Manifest = null,
+                    Result = null,
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "CREATE TABLE foo (id INT)";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // OnFirstBatchReady must fire even though no data was returned.
+            int firstBatchCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnFirstBatchReady));
+            Assert.Equal(1, firstBatchCallCount);
+            Assert.NotNull(firstBatchLatency);
+            Assert.True(firstBatchLatency >= 0);
+
+            stmt.Dispose();
+
+            // OnConsumed must fire via the statement-Dispose safety net.
+            int consumedCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnConsumed));
+            Assert.Equal(1, consumedCallCount);
+            Assert.NotNull(consumedLatency);
+            Assert.True(consumedLatency >= firstBatchLatency);
+
+            // Empty path has no CloudFetchReader, so OnChunksDownloaded must NOT fire.
+            Assert.DoesNotContain(nameof(IStatementOperationObserver.OnChunksDownloaded), observer.Calls);
+        }
+
+        [Fact]
+        public async Task ExecuteQuery_EmptyResultPath_ManifestWithoutData_FiresOnFirstBatchReady()
+        {
+            // Companion to the null-manifest test above: a manifest is present (with schema)
+            // but no Result.Attachment and no external links. This is the "DDL with column
+            // metadata" shape, and the original wiring also missed OnFirstBatchReady here
+            // because CreateReader's inline branch (where the call lived) was never reached.
+            var observer = new RecordingObserver();
+            long? firstBatchLatency = null;
+            observer.OnFirstBatchReadyCallback = ms => firstBatchLatency = ms;
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = BuildManifestWithSingleColumn(),
+                    // No Attachment and no ExternalLinks: routes to the else-branch of
+                    // CreateReader that returns EmptyArrowArrayStream(schema).
+                    Result = new ResultData { Attachment = null },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SELECT 1 WHERE 1=0";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            int firstBatchCallCount = observer.Calls
+                .Count(c => c == nameof(IStatementOperationObserver.OnFirstBatchReady));
+            Assert.Equal(1, firstBatchCallCount);
+            Assert.NotNull(firstBatchLatency);
+            Assert.True(firstBatchLatency >= 0);
+
+            // OnExecuteSucceeded must precede OnFirstBatchReady: the server accepts the
+            // statement before any results are "ready" to be reported.
+            int succeededIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnExecuteSucceeded));
+            int firstBatchIndex = observer.Calls.IndexOf(nameof(IStatementOperationObserver.OnFirstBatchReady));
+            Assert.True(succeededIndex >= 0);
+            Assert.True(firstBatchIndex > succeededIndex);
+
+            // Dispose the result to clean up; OnConsumed will fire from reader.Dispose
+            // here since we're inside a `using` block scope below.
+            result.Stream?.Dispose();
+            Assert.Contains(nameof(IStatementOperationObserver.OnConsumed), observer.Calls);
+        }
+
+        [Fact]
         public void Dispose_WithoutExecute_DoesNotCallOnFinalized()
         {
             // A statement that was never executed must not trigger OnFinalized() — doing so
