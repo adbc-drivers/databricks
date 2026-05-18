@@ -467,5 +467,47 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal(0, GetWaitTimeoutSecondsFieldValue(connection));
             Assert.Equal(20000, GetConnectTimeoutFieldValue(connection));
         }
+
+        [Fact]
+        public void InitializeTelemetry_ForwardsConnectTimeoutToSocketTimeoutField()
+        {
+            // End-to-end wiring guard: exercise the real InitializeTelemetry →
+            // ConnectionTelemetry.Create path with telemetry enabled, then read back the
+            // resulting session's driver_connection_params.socket_timeout. This proves the
+            // argument passed to ConnectionTelemetry.Create is _connectTimeoutMilliseconds
+            // (in ms, divided to seconds inside BuildDriverConnectionParams), NOT
+            // _waitTimeoutSeconds. Without the fix, the bug pattern produced socket_timeout
+            // in the 0–10s range (mirroring DatabricksParameters.WaitTimeout, default 10s).
+            var properties = CreateBaseProperties();
+            properties[TelemetryConfiguration.PropertyKeyEnabled] = "true";
+            properties[SparkParameters.ConnectTimeoutMilliseconds] = "55000";
+            properties[DatabricksParameters.WaitTimeout] = "7";
+
+            using var connection = new StatementExecutionConnection(properties);
+
+            // Sanity: the two fields are distinct so we can disambiguate which one feeds
+            // socket_timeout downstream.
+            Assert.Equal(7, GetWaitTimeoutSecondsFieldValue(connection));
+            Assert.Equal(55000, GetConnectTimeoutFieldValue(connection));
+
+            var method = typeof(StatementExecutionConnection).GetMethod(
+                "InitializeTelemetry",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method);
+            method!.Invoke(connection, new object?[] { null });
+
+            // ConnectionTelemetry.Create is `Never throws` — if init failed we'd get NoOp
+            // back with Session == null. Skip if the unit-test environment doesn't permit
+            // building a real telemetry client; the field-level tests above still cover
+            // the source-of-truth contract.
+            var session = connection.TelemetrySession;
+            Assert.NotNull(session);
+            Assert.NotNull(session!.DriverConnectionParams);
+
+            // socket_timeout is in seconds (proto field is int64-seconds). 55000ms → 55s.
+            // Critically: NOT 7 (which would mean the value came from _waitTimeoutSeconds).
+            Assert.Equal(55, session.DriverConnectionParams!.SocketTimeout);
+            Assert.NotEqual(GetWaitTimeoutSecondsFieldValue(connection), session.DriverConnectionParams.SocketTimeout);
+        }
     }
 }
