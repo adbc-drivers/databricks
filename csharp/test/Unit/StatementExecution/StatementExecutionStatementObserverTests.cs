@@ -133,6 +133,23 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             string? resultCompression = null,
             int pollingIntervalMs = 1)
         {
+            return CreateStatementWithConnection(
+                client, observer, out _, resultCompression, pollingIntervalMs);
+        }
+
+        /// <summary>
+        /// Overload that also returns the owning connection so tests can inject a fake
+        /// <see cref="IConnectionTelemetry"/> via <see cref="StatementExecutionConnection.TelemetryForTesting"/>
+        /// and assert on connection-level telemetry events (CREATE_SESSION, DELETE_SESSION,
+        /// CLOSE_STATEMENT) emitted by the statement's lifecycle paths.
+        /// </summary>
+        private static StatementExecutionStatement CreateStatementWithConnection(
+            IStatementExecutionClient client,
+            IStatementOperationObserver observer,
+            out StatementExecutionConnection connection,
+            string? resultCompression = null,
+            int pollingIntervalMs = 1)
+        {
             var properties = new Dictionary<string, string>
             {
                 { SparkParameters.HostName, "test.databricks.com" },
@@ -154,7 +171,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 });
             var httpClient = new HttpClient(handlerMock.Object);
 
-            var connection = new StatementExecutionConnection(properties, httpClient);
+            connection = new StatementExecutionConnection(properties, httpClient);
             return new StatementExecutionStatement(
                 client,
                 sessionId: "session-1",
@@ -174,6 +191,43 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 httpClient: httpClient,
                 connection: connection,
                 observer: observer);
+        }
+
+        /// <summary>
+        /// Records every <c>EmitOperationTelemetry</c> call so tests can assert which
+        /// connection-level operation events fired and with what payload. Mirrors the
+        /// <c>RecordingTelemetry</c> fake used in <c>StatementExecutionConnectionTelemetryTests</c>.
+        /// </summary>
+        private sealed class RecordingTelemetry : IConnectionTelemetry
+        {
+            public List<OperationType> Calls { get; } = new();
+            public List<Exception?> Errors { get; } = new();
+            public List<string?> StatementIds { get; } = new();
+            public List<StatementType> StatementTypes { get; } = new();
+            public Dictionary<OperationType, long> LatenciesByOp { get; } = new();
+            public TelemetrySessionContext? Session { get; }
+                = new TelemetrySessionContext { SessionId = "sea-session-1" };
+
+            public T ExecuteWithMetadataTelemetry<T>(
+                OperationType operationType,
+                Func<T> operation,
+                System.Diagnostics.Activity? activity) => operation();
+
+            public void EmitOperationTelemetry(
+                OperationType operationType,
+                StatementType statementType,
+                string? statementId,
+                long elapsedMs,
+                Exception? error)
+            {
+                Calls.Add(operationType);
+                Errors.Add(error);
+                StatementIds.Add(statementId);
+                StatementTypes.Add(statementType);
+                LatenciesByOp[operationType] = elapsedMs;
+            }
+
+            public Task DisposeAsync() => Task.CompletedTask;
         }
 
         private static ResultManifest BuildManifestWithSingleColumn()
@@ -1507,6 +1561,226 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.Dispose();
 
             Assert.Empty(observer.Calls);
+        }
+
+        [Fact]
+        public async Task Dispose_AfterSuccessfulExecute_EmitsCloseStatementTelemetry_WithStatementId()
+        {
+            // Parity gap with Thrift (gap-5): the Thrift path's DatabricksStatement.Dispose emits a
+            // CLOSE_STATEMENT operation event for every disposed statement so lumberjack receives
+            // ~one CLOSE_STATEMENT per execute. SEA's Dispose used to call only OnFinalized()
+            // (which builds the EXECUTE_STATEMENT_ASYNC log) and never fired the connection-level
+            // CLOSE_STATEMENT event — producing zero CLOSE_STATEMENT records in prod despite Thrift
+            // shipping ~86% of executes. This test pins the wiring: with the statement id assigned
+            // by the server, Dispose must fire exactly one CLOSE_STATEMENT through the connection's
+            // telemetry, carrying that statement id.
+            var observer = new RecordingObserver();
+            var telemetry = new RecordingTelemetry();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = BuildManifestWithSingleColumn(),
+                    Result = new ResultData { Attachment = null },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var stmt = CreateStatementWithConnection(
+                mockClient.Object, observer, out var connection);
+            connection.TelemetryForTesting = telemetry;
+            stmt.SqlQuery = "SELECT 1";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+            stmt.Dispose();
+
+            // Exactly one CLOSE_STATEMENT event, carrying the server-assigned statement id and
+            // the unspecified statement type (matching the Thrift path's CloseStatement emission
+            // in DatabricksStatement.Dispose).
+            int closeCount = telemetry.Calls.Count(c => c == OperationType.CloseStatement);
+            Assert.Equal(1, closeCount);
+            int closeIdx = telemetry.Calls.IndexOf(OperationType.CloseStatement);
+            Assert.Equal(StatementId, telemetry.StatementIds[closeIdx]);
+            Assert.Equal(StatementType.Unspecified, telemetry.StatementTypes[closeIdx]);
+            // Successful close RPC — no error attached.
+            Assert.Null(telemetry.Errors[closeIdx]);
+        }
+
+        [Fact]
+        public async Task Dispose_AfterSuccessfulExecute_CloseStatementElapsedMs_IsBoundedByStatementLifetime()
+        {
+            // CLOSE_STATEMENT's operation_latency_ms reflects the wall-clock duration of the
+            // CloseStatementAsync RPC issued at Dispose. That duration is necessarily bounded by
+            // the total statement lifetime (execute → dispose), since the close RPC happens
+            // strictly inside Dispose. Pin both: non-negative and <= lifetime.
+            var observer = new RecordingObserver();
+            var telemetry = new RecordingTelemetry();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = BuildManifestWithSingleColumn(),
+                    Result = new ResultData { Attachment = null },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var stmt = CreateStatementWithConnection(
+                mockClient.Object, observer, out var connection);
+            connection.TelemetryForTesting = telemetry;
+            stmt.SqlQuery = "SELECT 1";
+
+            var lifetimeStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+            stmt.Dispose();
+            lifetimeStopwatch.Stop();
+
+            Assert.True(telemetry.LatenciesByOp.ContainsKey(OperationType.CloseStatement));
+            long closeElapsedMs = telemetry.LatenciesByOp[OperationType.CloseStatement];
+            // Wall-clock latency must be non-negative.
+            Assert.True(closeElapsedMs >= 0,
+                $"CLOSE_STATEMENT elapsedMs must be >= 0, got {closeElapsedMs}.");
+            // And bounded by the full statement lifetime (execute + dispose). Add small slack
+            // for stopwatch quantization between the inner close-RPC stopwatch and the outer
+            // test stopwatch.
+            Assert.True(closeElapsedMs <= lifetimeStopwatch.ElapsedMilliseconds + 50,
+                $"CLOSE_STATEMENT elapsedMs ({closeElapsedMs}) exceeds statement lifetime " +
+                $"({lifetimeStopwatch.ElapsedMilliseconds}ms).");
+        }
+
+        [Fact]
+        public async Task Dispose_CloseStatementRpcThrows_StillEmitsCloseStatementWithError()
+        {
+            // The Thrift path's CLOSE_STATEMENT event carries the close-RPC error when the RPC
+            // fails; we record the event regardless so the lifecycle marker still reaches
+            // lumberjack and the error tag preserves the failure shape. SEA must do the same:
+            // a failed CloseStatementAsync (e.g. network error) must not suppress the event.
+            var observer = new RecordingObserver();
+            var telemetry = new RecordingTelemetry();
+            var closeError = new HttpRequestException("close RPC failed");
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = BuildManifestWithSingleColumn(),
+                    Result = new ResultData { Attachment = null },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(closeError);
+
+            var stmt = CreateStatementWithConnection(
+                mockClient.Object, observer, out var connection);
+            connection.TelemetryForTesting = telemetry;
+            stmt.SqlQuery = "SELECT 1";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+            // Dispose must not surface the RPC failure (best-effort cleanup contract).
+            var disposeEx = Record.Exception(() => stmt.Dispose());
+            Assert.Null(disposeEx);
+
+            int closeIdx = telemetry.Calls.IndexOf(OperationType.CloseStatement);
+            Assert.True(closeIdx >= 0, "CLOSE_STATEMENT must still fire when the close RPC throws.");
+            Assert.Equal(StatementId, telemetry.StatementIds[closeIdx]);
+            // The thrown exception must be threaded through into the event payload so analysts
+            // can see which CLOSE_STATEMENT events failed at the wire.
+            Assert.Same(closeError, telemetry.Errors[closeIdx]);
+        }
+
+        [Fact]
+        public async Task Dispose_CalledTwice_EmitsCloseStatementOnlyOnce()
+        {
+            // Repeated Dispose() calls (common in `using` + manual dispose patterns) must not
+            // duplicate CLOSE_STATEMENT records. The idempotency gate is
+            // _closeStatementTelemetryEmitted in the statement (mirroring Thrift's gate).
+            var observer = new RecordingObserver();
+            var telemetry = new RecordingTelemetry();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = BuildManifestWithSingleColumn(),
+                    Result = new ResultData { Attachment = null },
+                });
+            mockClient
+                .Setup(c => c.CloseStatementAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var stmt = CreateStatementWithConnection(
+                mockClient.Object, observer, out var connection);
+            connection.TelemetryForTesting = telemetry;
+            stmt.SqlQuery = "SELECT 1";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+            stmt.Dispose();
+            stmt.Dispose();
+
+            int closeCount = telemetry.Calls.Count(c => c == OperationType.CloseStatement);
+            Assert.Equal(1, closeCount);
+        }
+
+        [Fact]
+        public void Dispose_WithoutExecute_StillEmitsCloseStatementAsLifecycleMarker()
+        {
+            // A statement that was never executed never had a statement id assigned, so no close
+            // RPC fires (elapsedMs = 0). The Thrift path still emits CLOSE_STATEMENT in this
+            // shape as a lifecycle marker (the comment in DatabricksStatement.Dispose calls this
+            // out explicitly). SEA must match so the connection-level statement lifecycle event
+            // count is consistent across drivers.
+            var observer = new RecordingObserver();
+            var telemetry = new RecordingTelemetry();
+            var mockClient = new Mock<IStatementExecutionClient>();
+
+            var stmt = CreateStatementWithConnection(
+                mockClient.Object, observer, out var connection);
+            connection.TelemetryForTesting = telemetry;
+
+            stmt.Dispose();
+
+            // Observer hookpoints (OnExecuteStarted/OnFinalized/...) must not fire — never-
+            // executed statements remain off the EXECUTE_STATEMENT_ASYNC ledger.
+            Assert.Empty(observer.Calls);
+
+            // But CLOSE_STATEMENT must still fire, with no statement id and zero elapsed time.
+            int closeIdx = telemetry.Calls.IndexOf(OperationType.CloseStatement);
+            Assert.True(closeIdx >= 0, "CLOSE_STATEMENT must fire even when no execute ran.");
+            Assert.Null(telemetry.StatementIds[closeIdx]);
+            Assert.Equal(0, telemetry.LatenciesByOp[OperationType.CloseStatement]);
+            Assert.Null(telemetry.Errors[closeIdx]);
         }
     }
 }

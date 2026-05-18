@@ -621,6 +621,43 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
+        /// Statement-facing entry point for emitting telemetry for discrete statement
+        /// operations (CLOSE_STATEMENT, CANCEL_STATEMENT) that don't have their own
+        /// execute path. Delegates to the connection's telemetry implementation and
+        /// swallows any exception thrown by the emit call so statement Dispose never
+        /// surfaces a telemetry failure to the consumer. Mirrors the Thrift-side
+        /// <see cref="DatabricksConnection.EmitStatementOperationTelemetry"/> entry
+        /// point used by <c>DatabricksStatement.Dispose</c>.
+        /// </summary>
+        internal void EmitStatementOperationTelemetry(
+            Telemetry.Proto.Operation.Types.Type operationType,
+            Telemetry.Proto.Statement.Types.Type statementType,
+            string? statementId,
+            long elapsedMs,
+            Exception? error)
+        {
+            try
+            {
+                _telemetry.EmitOperationTelemetry(
+                    operationType,
+                    statementType,
+                    statementId,
+                    elapsedMs,
+                    error);
+            }
+            catch (Exception ex)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", operationType.ToString() }
+                    }));
+            }
+        }
+
+        /// <summary>
         /// Creates a new statement for query execution.
         /// Constructs a per-statement <see cref="IStatementOperationObserver"/> bound to
         /// this connection's telemetry session — a <see cref="TelemetryObserver"/> when

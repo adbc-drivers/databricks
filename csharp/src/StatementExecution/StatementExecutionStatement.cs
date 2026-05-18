@@ -122,6 +122,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private ConsumptionObservingStream? _consumptionStream;
 
+        /// <summary>
+        /// Idempotency gate for the CLOSE_STATEMENT operation telemetry emitted at
+        /// <see cref="Dispose"/>. Mirrors the Thrift driver's
+        /// <c>_closeStatementTelemetryEmitted</c> field — repeated <c>Dispose()</c> calls
+        /// (common in <c>using</c> + manual dispose patterns) must not produce duplicate
+        /// CLOSE_STATEMENT records.
+        /// </summary>
+        private bool _closeStatementTelemetryEmitted;
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
@@ -930,8 +939,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public override void Dispose()
         {
+            // Capture the statement id and close-RPC outcome locally so we can populate the
+            // CLOSE_STATEMENT telemetry event below even after _currentStatementId is cleared.
+            string? closedStatementId = _currentStatementId;
+            long closeRpcElapsedMs = 0;
+            Exception? closeRpcError = null;
+            bool closeRpcAttempted = false;
+
             if (_currentStatementId != null)
             {
+                var closeStopwatch = Stopwatch.StartNew();
                 try
                 {
                     // Close statement synchronously during dispose
@@ -940,11 +957,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         {
                             { "statement_id", _currentStatementId }
                         }));
+                    closeRpcAttempted = true;
                     _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
                     // Best effort - ignore errors during dispose
+                    closeRpcError = ex;
                     Activity.Current?.AddEvent(new ActivityEvent("statement.dispose.error",
                         tags: new ActivityTagsCollection
                         {
@@ -953,6 +972,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 finally
                 {
+                    closeStopwatch.Stop();
+                    closeRpcElapsedMs = closeStopwatch.ElapsedMilliseconds;
                     _currentStatementId = null;
                 }
             }
@@ -981,6 +1002,28 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (_executeStarted)
             {
                 _observer.OnFinalized();
+            }
+
+            // Emit a CLOSE_STATEMENT operation telemetry event once per statement disposal,
+            // independently of the EXECUTE_STATEMENT_ASYNC log produced by the observer's
+            // OnFinalized above. operation_latency_ms reflects the wall-clock duration of
+            // the CloseStatementAsync RPC just issued; if no close RPC was attempted (the
+            // statement was disposed without ever running an execute, so _currentStatementId
+            // was null), elapsedMs is 0 and the event acts purely as a lifecycle marker —
+            // matching the Thrift driver's behavior in DatabricksStatement.Dispose. The
+            // _closeStatementTelemetryEmitted gate makes the emission idempotent across
+            // repeated Dispose() calls. EmitStatementOperationTelemetry on the connection
+            // swallows any exception from the underlying telemetry implementation so a
+            // telemetry failure cannot surface from Dispose.
+            if (!_closeStatementTelemetryEmitted)
+            {
+                _closeStatementTelemetryEmitted = true;
+                _connection.EmitStatementOperationTelemetry(
+                    OperationType.CloseStatement,
+                    StatementType.Unspecified,
+                    statementId: closedStatementId,
+                    elapsedMs: closeRpcAttempted ? closeRpcElapsedMs : 0,
+                    error: closeRpcError);
             }
         }
 
