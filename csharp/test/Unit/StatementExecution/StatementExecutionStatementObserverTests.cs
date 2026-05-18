@@ -297,6 +297,70 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
+        public async Task ExecuteQuery_OnExecuteStarted_WithPendingMetadataOperation_EmitsMetadataPair()
+        {
+            // PECO-3022 gap B8: when a sub-statement is created internally by the connection's
+            // metadata helpers (ExecuteMetadataSqlAsync / ExecuteShowColumnsAsync), it is
+            // stamped with a pending metadata OperationType. The next OnExecuteStarted hook
+            // must emit (StatementType.Metadata, ListXxx) rather than the default
+            // (StatementType.Query, ExecuteStatementAsync) — mirroring the Thrift parity model
+            // in DatabricksStatement.BeginExecuteTelemetry.
+            var observer = new RecordingObserver();
+
+            var mockClient = new Mock<IStatementExecutionClient>();
+            mockClient
+                .Setup(c => c.ExecuteStatementAsync(
+                    It.IsAny<ExecuteStatementRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = BuildManifestWithSingleColumn(),
+                    Result = new ResultData { Attachment = null },
+                });
+
+            using var stmt = CreateStatement(mockClient.Object, observer);
+            stmt.SqlQuery = "SHOW CATALOGS";
+            stmt.SetPendingMetadataOperation(OperationType.ListCatalogs);
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Equal(StatementType.Metadata, observer.ExecuteStartedStmtType);
+            Assert.Equal(OperationType.ListCatalogs, observer.ExecuteStartedOpType);
+        }
+
+        [Theory]
+        [InlineData("getcatalogs", OperationType.ListCatalogs)]
+        [InlineData("getschemas", OperationType.ListSchemas)]
+        [InlineData("gettables", OperationType.ListTables)]
+        [InlineData("getcolumns", OperationType.ListColumns)]
+        [InlineData("getcolumnsextended", OperationType.ListColumns)]
+        [InlineData("gettabletypes", OperationType.ListTableTypes)]
+        [InlineData("getprimarykeys", OperationType.ListPrimaryKeys)]
+        [InlineData("getcrossreference", OperationType.ListCrossReferences)]
+        [InlineData("GETCATALOGS", OperationType.ListCatalogs)] // case-insensitive
+        public void SeaMetadataOperationMapper_Map_KnownCommands_ReturnsExpectedOperationType(
+            string sqlQuery, OperationType expected)
+        {
+            // PECO-3022 gap B8: mapper mirrors DatabricksStatement.GetMetadataOperationType.
+            // Used by ExecuteMetadataCommandAsync to thread the right OperationType through
+            // the sub-statement so telemetry emits the correct (Metadata, ListXxx) pair.
+            Assert.Equal(expected, SeaMetadataOperationMapper.Map(sqlQuery));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("SELECT 1")]
+        [InlineData("unknown-command")]
+        public void SeaMetadataOperationMapper_Map_UnknownInput_ReturnsNull(string? sqlQuery)
+        {
+            // Falls back to null so callers know to use the regular query OperationType.
+            Assert.Null(SeaMetadataOperationMapper.Map(sqlQuery));
+        }
+
+        [Fact]
         public async Task ExecuteQuery_OnExecuteStarted_PassesIsCompressedFromCompressionRequest()
         {
             // Sanity: a statement built with resultCompression=LZ4_FRAME forwards isCompressed=true

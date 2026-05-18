@@ -153,6 +153,39 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _queryTags;
 
         /// <summary>
+        /// When non-null, indicates this statement is acting as the internal sub-statement
+        /// for a metadata operation (e.g. <c>GetObjects</c> / <c>GetCatalogs</c> /
+        /// <c>SqlQuery="getschemas"</c>). The next <c>OnExecuteStarted</c> hook will emit
+        /// <see cref="StatementType.Metadata"/> + this <see cref="OperationType"/> pair
+        /// instead of the regular <c>(Query, ExecuteStatementAsync)</c> pair.
+        ///
+        /// <para>
+        /// Set via <see cref="SetPendingMetadataOperation"/> by the connection-level helpers
+        /// before <c>ExecuteQueryAsync</c> runs. Mirrors the Thrift parity model where
+        /// <c>DatabricksStatement.BeginExecuteTelemetry</c> picks the
+        /// <c>(StatementType, OperationType)</c> pair based on
+        /// <c>GetMetadataOperationType(SqlQuery)</c>; see PECO-3022 gap B8.
+        /// </para>
+        /// </summary>
+        private OperationType? _pendingMetadataOperation;
+
+        /// <summary>
+        /// Marks this statement as the internal sub-statement for a metadata operation so
+        /// the next <c>OnExecuteStarted</c> hook reports
+        /// <see cref="StatementType.Metadata"/> + <paramref name="operationType"/> rather
+        /// than the regular <c>(Query, ExecuteStatementAsync)</c> pair.
+        ///
+        /// <para>
+        /// Used by <see cref="StatementExecutionConnection.ExecuteMetadataSqlAsync(string, OperationType, CancellationToken)"/>
+        /// before invoking <see cref="ExecuteQueryAsync"/> on the sub-statement.
+        /// </para>
+        /// </summary>
+        internal void SetPendingMetadataOperation(OperationType operationType)
+        {
+            _pendingMetadataOperation = operationType;
+        }
+
+        /// <summary>
         /// Parses "key1:val1,key2:val2" into a list of QueryTag objects.
         /// Keys cannot contain : or , so first : is always the key-value separator.
         /// Values may contain escaped commas (\,) which are preserved.
@@ -395,15 +428,34 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
         {
             // Telemetry: signal OnExecuteStarted before submitting the statement. ExecuteQueryInternalAsync
-            // only runs for the non-metadata path (metadata commands short-circuit to
-            // ExecuteMetadataCommandAsync above), so stmtType is always Query and opType is
-            // ExecuteStatementAsync — SEA is always async on the wire (the client submits a
-            // statement and polls for completion), so the operation_type recorded in telemetry must
-            // be EXECUTE_STATEMENT_ASYNC rather than the synchronous EXECUTE_STATEMENT used on the
-            // Thrift path. isCompressed reflects the requested result compression — the manifest
-            // may override later but the observer's first signal records what we asked for.
+            // runs for both regular queries and the sub-statements created by the connection's
+            // metadata helpers (ExecuteMetadataSqlAsync / ExecuteShowColumnsAsync). For regular
+            // queries the pair is (Query, ExecuteStatementAsync) — SEA is always async on the wire
+            // (the client submits a statement and polls for completion), so the operation_type
+            // recorded in telemetry must be EXECUTE_STATEMENT_ASYNC rather than the synchronous
+            // EXECUTE_STATEMENT used on the Thrift path. For metadata sub-statements,
+            // SetPendingMetadataOperation stamps _pendingMetadataOperation with the appropriate
+            // OperationType.List* before ExecuteQueryAsync runs, and we emit
+            // (Metadata, _pendingMetadataOperation) instead — mirroring the Thrift parity
+            // model in DatabricksStatement.BeginExecuteTelemetry (PECO-3022 gap B8).
+            // isCompressed reflects the requested result compression — the manifest may override
+            // later but the observer's first signal records what we asked for.
             bool isCompressed = !string.IsNullOrEmpty(_resultCompression)
                 && string.Equals(_resultCompression, "LZ4_FRAME", StringComparison.OrdinalIgnoreCase);
+
+            StatementType stmtType;
+            OperationType opType;
+            if (_pendingMetadataOperation.HasValue)
+            {
+                stmtType = StatementType.Metadata;
+                opType = _pendingMetadataOperation.Value;
+            }
+            else
+            {
+                stmtType = StatementType.Query;
+                opType = OperationType.ExecuteStatementAsync;
+            }
+
             // _executeStarted is set in lockstep with OnExecuteStarted so the dispose-path
             // finalize call only fires when execute actually began. Setting before the observer
             // call is safe: the observer contract guarantees OnExecuteStarted does not throw,
@@ -413,7 +465,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Start the stopwatch alongside OnExecuteStarted so OnFirstBatchReady can report
             // elapsed-since-execute-start as its latencyMs argument (gap G3 / design §6 row 4).
             _executeStopwatch.Start();
-            _observer.OnExecuteStarted(StatementType.Query, OperationType.ExecuteStatementAsync, isCompressed);
+            _observer.OnExecuteStarted(stmtType, opType, isCompressed);
 
             try
             {
@@ -1476,7 +1528,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // matching Thrift behavior (Thrift RPC has no catalog filter for GetCatalogs).
                 string sql = new ShowCatalogsCommand(null).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                var batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListCatalogs, cancellationToken).ConfigureAwait(false);
 
                 var tableCatBuilder = new StringArray.Builder();
                 int count = 0;
@@ -1522,7 +1574,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 List<RecordBatch> batches;
                 try
                 {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListSchemas, cancellationToken).ConfigureAwait(false);
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
@@ -1599,7 +1651,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 List<RecordBatch> batches;
                 try
                 {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListTables, cancellationToken).ConfigureAwait(false);
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
@@ -1794,7 +1846,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             List<RecordBatch> batches;
             try
             {
-                batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
+                batches = await _connection.ExecuteMetadataSqlAsync(query, OperationType.ListColumns, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -1918,7 +1970,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 List<RecordBatch> batches;
                 try
                 {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListPrimaryKeys, cancellationToken).ConfigureAwait(false);
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
@@ -1994,7 +2046,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             List<RecordBatch> batches;
             try
             {
-                batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListCrossReferences, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {

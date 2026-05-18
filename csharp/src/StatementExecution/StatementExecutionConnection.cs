@@ -34,6 +34,7 @@ using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using static Apache.Arrow.Adbc.AdbcConnection;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -771,11 +772,27 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return this.TraceActivity(activity =>
             {
+                var sw = Stopwatch.StartNew();
                 var builder = new StringArray.Builder();
                 builder.Append("TABLE");
                 builder.Append("VIEW");
                 var schema = new Schema(new[] { new Field("table_type", StringType.Default, false) }, null);
-                return new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() });
+                var stream = new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() });
+                sw.Stop();
+
+                // GetTableTypes is purely local — it never executes SQL, so the per-statement
+                // observer pipeline that drives the other LIST_* events does not fire here.
+                // Emit a one-shot connection-level telemetry record so SEA matches the Thrift
+                // path's "every metadata operation produces a categorized record" guarantee.
+                // See PECO-3022 gap B8 finisher.
+                EmitStatementOperationTelemetry(
+                    OperationType.ListTableTypes,
+                    Telemetry.Proto.Statement.Types.Type.Metadata,
+                    statementId: null,
+                    elapsedMs: sw.ElapsedMilliseconds,
+                    error: null);
+
+                return stream;
             }, nameof(GetTableTypes));
         }
 
@@ -829,7 +846,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         async Task<IReadOnlyList<string>> IGetObjectsDataProvider.GetCatalogsAsync(string? catalogPattern, CancellationToken cancellationToken)
         {
             string sql = new ShowCatalogsCommand(catalogPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            var batches = await ExecuteMetadataSqlAsync(sql, OperationType.ListCatalogs, cancellationToken).ConfigureAwait(false);
             var result = new List<string>();
             foreach (var batch in batches)
             {
@@ -855,7 +872,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             List<RecordBatch> batches;
             try
             {
-                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                batches = await ExecuteMetadataSqlAsync(sql, OperationType.ListSchemas, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -903,7 +920,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             List<RecordBatch> batches;
             try
             {
-                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                batches = await ExecuteMetadataSqlAsync(sql, OperationType.ListTables, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -1016,9 +1033,42 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         internal async Task<List<RecordBatch>> ExecuteMetadataSqlAsync(string sql, CancellationToken cancellationToken = default)
         {
+            // Back-compat overload (no operationType): used by callers that don't have a
+            // mapped telemetry OperationType handy. The sub-statement falls back to
+            // (StatementType.Query, OperationType.ExecuteStatementAsync) which matches
+            // pre-PECO-3022-B8 behavior.
+            return await ExecuteMetadataSqlAsyncCore(sql, operationType: null, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Overload that tags the sub-statement with a metadata
+        /// <see cref="OperationType"/> so its telemetry emits
+        /// <c>(StatementType.Metadata, operationType)</c> rather than the regular
+        /// query pair. Mirrors the Thrift parity model — see PECO-3022 gap B8.
+        /// </summary>
+        internal async Task<List<RecordBatch>> ExecuteMetadataSqlAsync(
+            string sql,
+            OperationType operationType,
+            CancellationToken cancellationToken = default)
+        {
+            return await ExecuteMetadataSqlAsyncCore(sql, operationType, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<List<RecordBatch>> ExecuteMetadataSqlAsyncCore(
+            string sql,
+            OperationType? operationType,
+            CancellationToken cancellationToken)
+        {
             var batches = new List<RecordBatch>();
             using var stmt = (StatementExecutionStatement)CreateStatement();
             stmt.SqlQuery = sql;
+            if (operationType.HasValue)
+            {
+                // Stamp the metadata operation type before ExecuteQueryAsync so the sub-
+                // statement's OnExecuteStarted emits (Metadata, operationType) instead of
+                // (Query, ExecuteStatementAsync). See SeaMetadataOperationMapper.
+                stmt.SetPendingMetadataOperation(operationType.Value);
+            }
             var result = await stmt.ExecuteQueryAsync(cancellationToken, isMetadataExecution: true).ConfigureAwait(false);
             using var stream = result.Stream;
             if (stream == null) return batches;
@@ -1040,6 +1090,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// Executes a SHOW COLUMNS command. When catalog is null, iterates over all catalogs
         /// since SHOW COLUMNS IN ALL CATALOGS is not yet supported by the backend.
+        /// Telemetry: every sub-statement emits <c>(StatementType.Metadata,
+        /// OperationType.ListColumns)</c> — including the helper <c>SHOW CATALOGS</c> issued
+        /// during the iterate-all-catalogs fallback, since the caller's semantic operation
+        /// is still ListColumns (PECO-3022 gap B8).
         /// </summary>
         internal async Task<List<RecordBatch>> ExecuteShowColumnsAsync(
             string? catalog, string? schemaPattern, string? tablePattern, string? columnPattern,
@@ -1048,14 +1102,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (catalog != null)
             {
                 string sql = new ShowColumnsCommand(catalog, schemaPattern, tablePattern, columnPattern).Build();
-                return await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                return await ExecuteMetadataSqlAsync(sql, OperationType.ListColumns, cancellationToken).ConfigureAwait(false);
             }
 
             // SHOW COLUMNS IN ALL CATALOGS is not supported — iterate over each catalog.
             // TODO: Remove this fallback when the backend supports SHOW COLUMNS IN ALL CATALOGS.
             var allBatches = new List<RecordBatch>();
             string catalogsSql = new ShowCatalogsCommand(null).Build();
-            var catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, cancellationToken).ConfigureAwait(false);
+            var catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, OperationType.ListColumns, cancellationToken).ConfigureAwait(false);
 
             foreach (var batch in catalogBatches)
             {
@@ -1068,7 +1122,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     string sql = new ShowColumnsCommand(cat, schemaPattern, tablePattern, columnPattern).Build();
                     try
                     {
-                        var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                        var batches = await ExecuteMetadataSqlAsync(sql, OperationType.ListColumns, cancellationToken).ConfigureAwait(false);
                         allBatches.AddRange(batches);
                     }
                     catch
