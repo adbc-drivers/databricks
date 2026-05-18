@@ -844,56 +844,108 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private async Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
         {
-            // Build the execute statement request
-            // Note: catalog/schema cannot be set when session_id is provided (session has context)
-            var request = new ExecuteStatementRequest
-            {
-                Statement = _sqlQuery,
-                WarehouseId = _warehouseId,
-                SessionId = _sessionId,
-                Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
-                Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
-                Disposition = _resultDisposition,
-                Format = _resultFormat,
-                ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
-                OnWaitTimeout = "CONTINUE",
-                IsMetadata = false,
-                QueryTags = ParseQueryTags(_queryTags)
-            };
+            // Telemetry: signal OnExecuteStarted before submitting the statement. UPDATE
+            // statements (DML and DDL) share the same operation_type as queries on SEA —
+            // EXECUTE_STATEMENT_ASYNC, because SEA is always async on the wire (the client
+            // submits a statement and polls for completion regardless of whether the SQL is
+            // INSERT/UPDATE/DELETE or CREATE/DROP/CTAS). Only the StatementType differs:
+            // Update here vs Query in ExecuteQueryInternalAsync. Mirroring the Query path
+            // ensures B9 — UPDATE statements emit telemetry on SEA — closes: without these
+            // hookpoints, ExecuteUpdate would never fire OnExecuteStarted, _executeStarted
+            // would stay false, and Dispose's gated OnFinalized would skip the log entirely,
+            // producing the zero-telemetry shape observed in the lumberjack comparator.
+            // isCompressed reflects the requested result compression — for UPDATE the response
+            // typically has no result data, but recording what we asked for matches the
+            // QUERY-path contract and the Thrift driver's BeginExecuteTelemetry behavior.
+            bool isCompressed = !string.IsNullOrEmpty(_resultCompression)
+                && string.Equals(_resultCompression, "LZ4_FRAME", StringComparison.OrdinalIgnoreCase);
+            // _executeStarted is set in lockstep with OnExecuteStarted so the dispose-path
+            // OnFinalized fires for UPDATE statements just as it does for queries. Setting
+            // before the observer call is safe: the observer contract guarantees
+            // OnExecuteStarted does not throw, and even if it did, treating a partially
+            // observed execute as "started" matches the Thrift path's ordering.
+            _executeStarted = true;
+            // Start the stopwatch alongside OnExecuteStarted so the operation_latency_ms
+            // recorded at OnFinalized covers the full execute window for UPDATE statements
+            // just as it does for queries.
+            _executeStopwatch.Start();
+            _observer.OnExecuteStarted(StatementType.Update, OperationType.ExecuteStatementAsync, isCompressed);
 
-            // Execute the statement
-            var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
-            _currentStatementId = response.StatementId;
+            try
+            {
+                // Build the execute statement request
+                // Note: catalog/schema cannot be set when session_id is provided (session has context)
+                var request = new ExecuteStatementRequest
+                {
+                    Statement = _sqlQuery,
+                    WarehouseId = _warehouseId,
+                    SessionId = _sessionId,
+                    Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
+                    Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
+                    Disposition = _resultDisposition,
+                    Format = _resultFormat,
+                    ResultCompression = _resultCompression,
+                    WaitTimeout = $"{_waitTimeoutSeconds}s",
+                    OnWaitTimeout = "CONTINUE",
+                    IsMetadata = false,
+                    QueryTags = ParseQueryTags(_queryTags)
+                };
 
-            // Handle query status - poll until complete
-            var state = response.Status?.State;
-            if (state == "PENDING" || state == "RUNNING")
-            {
-                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
-                state = response.Status?.State;
-            }
+                // Execute the statement
+                var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
+                _currentStatementId = response.StatementId;
 
-            // Check for terminal error states
-            if (state == "FAILED")
-            {
-                var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
-            }
-            if (state == "CANCELED")
-            {
-                throw new AdbcException("Statement execution was canceled");
-            }
-            if (state == "CLOSED")
-            {
-                throw new AdbcException("Statement was closed before results could be retrieved");
-            }
+                // Telemetry: signal OnExecuteSucceeded as soon as the server has accepted the
+                // statement and a statement id is known — mirrors the Query path. The result
+                // format derived by SeaResultFormatMapper may resolve to Unspecified for UPDATE
+                // (DDL has no manifest, and DML's num_affected_rows attachment is materialized
+                // post-poll), but the cell still records the requested (disposition, format)
+                // pair which is the contract the observer expects.
+                _observer.OnExecuteSucceeded(
+                    response.StatementId ?? string.Empty,
+                    SeaResultFormatMapper.Map(_resultDisposition, _resultFormat, response));
 
-            // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
-            // column is num_affected_rows. DDL (CREATE TABLE, DROP TABLE, CTAS, etc.)
-            // returns no result data. Return -1 for DDL per the ADBC convention for
-            // "unknown or not applicable", matching what the Thrift path does.
-            return new UpdateResult(ReadNumAffectedRows(response.Manifest, response.Result));
+                // Handle query status - poll until complete
+                var state = response.Status?.State;
+                if (state == "PENDING" || state == "RUNNING")
+                {
+                    response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                    state = response.Status?.State;
+                }
+
+                // Check for terminal error states
+                if (state == "FAILED")
+                {
+                    var error = response.Status?.Error;
+                    throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                }
+                if (state == "CANCELED")
+                {
+                    throw new AdbcException("Statement execution was canceled");
+                }
+                if (state == "CLOSED")
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
+
+                // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
+                // column is num_affected_rows. DDL (CREATE TABLE, DROP TABLE, CTAS, etc.)
+                // returns no result data. Return -1 for DDL per the ADBC convention for
+                // "unknown or not applicable", matching what the Thrift path does.
+                return new UpdateResult(ReadNumAffectedRows(response.Manifest, response.Result));
+            }
+            catch (Exception ex)
+            {
+                // Telemetry: signal OnError on any failure path (server error, terminal
+                // FAILED/CANCELED/CLOSED state, polling cancellation, num_affected_rows
+                // parse failures). Mirrors the Query-path catch. The observer contract
+                // guarantees the call swallows exceptions, so no try/catch is wrapped
+                // around the observer call itself. OnFinalized still fires once via the
+                // gated path in Dispose (Interlocked CAS makes the observer's OnFinalized
+                // idempotent — exactly-once on the Update error+Dispose sequence).
+                _observer.OnError(ex);
+                throw;
+            }
         }
 
         private static long ReadNumAffectedRows(ResultManifest? manifest, ResultData? result)
