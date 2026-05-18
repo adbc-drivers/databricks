@@ -111,6 +111,9 @@ namespace AdbcDrivers.Databricks
         // Shared OAuth token provider for connection-wide token caching
         private OAuthClientCredentialsProvider? _oauthTokenProvider;
 
+        // Shared HttpClient for CloudFetch downloads (created once, reused across queries)
+        private HttpClient? _cloudFetchHttpClient;
+
         // Telemetry
         private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
         // Stopwatch covering the connection lifetime; started at construction and used to
@@ -513,7 +516,8 @@ namespace AdbcDrivers.Databricks
                 databricksStatement.StatementId = new Guid(response.OperationHandle.OperationId.Guid).ToString();
             }
 
-            HttpClient httpClient = HttpClientFactory.CreateCloudFetchHttpClient(Properties);
+            // Reuse the shared CloudFetch HttpClient (created once per connection, disposed with connection)
+            _cloudFetchHttpClient ??= HttpClientFactory.CreateCloudFetchHttpClient(Properties);
             // Forward the in-flight per-statement telemetry context so the operation status poller
             // can populate n_operation_status_calls and operation_status_latency_millis (PECO-2992).
             return new DatabricksCompositeReader(
@@ -521,7 +525,7 @@ namespace AdbcDrivers.Databricks
                 schema,
                 response,
                 isLz4Compressed,
-                httpClient,
+                _cloudFetchHttpClient,
                 telemetryContext: databricksStatement.PendingTelemetryContext);
         }
 
@@ -1063,6 +1067,11 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
+                // Dispose the shared CloudFetch HttpClient before closing the session so any
+                // in-flight CloudFetch HTTP work is torn down first (PR #385: concurrent Dispose deadlock fix).
+                _cloudFetchHttpClient?.Dispose();
+                _cloudFetchHttpClient = null;
+
                 // Order matters here:
                 // 1. base.Dispose runs the TCloseSessionReq RPC (in HiveServer2Connection.DisposeClient);
                 //    time it so DELETE_SESSION can report real operation_latency_ms.
