@@ -352,6 +352,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
             int rateLimitRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.RateLimitRetryTimeout, DatabricksConstants.DefaultRateLimitRetryTimeout);
             int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
 
+            // Resolve the effective HttpClient.Timeout. Prefer the user-supplied
+            // SparkParameters.ConnectTimeoutMilliseconds (matching the Thrift path, which
+            // wires that property into its transport-level connect timeout) so that the
+            // socket_timeout telemetry field — which downstream gap fixes source from
+            // _httpClient.Timeout — reflects the user's intent. Fall back to
+            // CloudFetchTimeoutMinutes-based timeout when the property is not set, to
+            // preserve the historical default behavior for callers that never tuned this.
+            TimeSpan effectiveTimeout = properties.ContainsKey(SparkParameters.ConnectTimeoutMilliseconds)
+                ? TimeSpan.FromMilliseconds(_connectTimeoutMilliseconds)
+                : TimeSpan.FromMinutes(timeoutMinutes);
+
             var config = new HttpHandlerFactory.HandlerConfig
             {
                 BaseHandler = HttpClientFactory.CreateHandler(properties),
@@ -379,7 +390,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             var httpClient = new HttpClient(result.Handler)
             {
-                Timeout = TimeSpan.FromMinutes(timeoutMinutes)
+                Timeout = effectiveTimeout
             };
 
             // Set user agent
