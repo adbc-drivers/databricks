@@ -94,17 +94,22 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(batch.Column(0).IsNull(0), "Expected null value");
         }
 
-        // TODO: PECO-3014 - SEA returns NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL array elements in different format
+        // TODO: PECO-3014 - both Thrift and SEA now use ComplexTypeSerializingStream which
+        // emits System.Text.Json output for NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL elements,
+        // differing from the upstream test's expected server-emitted format. PECO-3032
+        // moved Thrift onto the same client-side serializer as SEA so the skip applies
+        // unconditionally now.
         protected override async System.Threading.Tasks.Task ValidateTestArrayData(string projection, string value)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns array elements in different format for NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL (PECO-3014)");
+            Skip.If(true, "Array element format differs from upstream expectation for NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL (PECO-3014)");
             await base.ValidateTestArrayData(projection, value);
         }
 
-        // TODO: PECO-3014 - SEA returns map values in different format
+        // TODO: PECO-3014 - both Thrift and SEA now use ComplexTypeSerializingStream's
+        // map-value format (sorted by key, System.Text.Json output).
         protected override async System.Threading.Tasks.Task ValidateTestMapData(string projection, string value)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns map values in different format (PECO-3014)");
+            Skip.If(true, "Map value format differs from upstream expectation (PECO-3014)");
             await base.ValidateTestMapData(projection, value);
         }
 

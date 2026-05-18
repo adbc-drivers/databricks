@@ -216,13 +216,13 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return base.ExecuteQuery();
+            if (ctx == null) return MaybeWrapComplexTypes(base.ExecuteQuery());
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
             try
             {
-                QueryResult result = base.ExecuteQuery();
+                QueryResult result = MaybeWrapComplexTypes(base.ExecuteQuery());
                 _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
                 return result;
@@ -242,13 +242,13 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return await base.ExecuteQueryAsync();
+            if (ctx == null) return MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
             try
             {
-                QueryResult result = await base.ExecuteQueryAsync();
+                QueryResult result = MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
                 _lastQueryResult = result; // Store for telemetry
                 RecordSuccess(ctx);
                 return result;
@@ -261,6 +261,21 @@ namespace AdbcDrivers.Databricks
                 PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
+        }
+
+        /// <summary>
+        /// When <see cref="enableComplexDatatypeSupport"/> is <c>false</c>, wraps the
+        /// result stream with <see cref="ComplexTypeSerializingStream"/> so native ARRAY /
+        /// MAP / STRUCT arrays returned by the server (we always request
+        /// <c>ComplexTypesAsArrow=true</c>) are serialized to JSON strings client-side via
+        /// System.Text.Json. This guarantees valid JSON escaping — fixing the server-side
+        /// malformed-JSON bug for MAP values containing double quotes (PECO-3032 / D3).
+        /// When the flag is true the native stream is returned unchanged.
+        /// </summary>
+        private QueryResult MaybeWrapComplexTypes(QueryResult result)
+        {
+            if (enableComplexDatatypeSupport || result.Stream == null) return result;
+            return new QueryResult(result.RowCount, new ComplexTypeSerializingStream(result.Stream));
         }
 
         public override UpdateResult ExecuteUpdate()
@@ -433,11 +448,15 @@ namespace AdbcDrivers.Databricks
             {
                 TimestampAsArrow = true,
                 DecimalAsArrow = true,
-                // When false (default), complex types (ARRAY, MAP, STRUCT) are returned as JSON-encoded
-                // strings by the Thrift server. When true, the server returns native Arrow types.
-                // Note: Thrift ARRAY_TYPE responses do not embed element type info, so callers cannot
-                // reliably determine element types; returning strings is the safe default.
-                ComplexTypesAsArrow = enableComplexDatatypeSupport,
+                // Always request native complex types from the server. The user-facing
+                // EnableComplexDatatypeSupport flag is then honored on the client side:
+                //   flag=true  → pass native arrays through.
+                //   flag=false → wrap with ComplexTypeSerializingStream to emit JSON
+                //                strings via System.Text.Json (correct escaping).
+                // This mirrors the JDBC driver (DatabricksThriftServiceClient.java) and
+                // fixes the server-side malformed-JSON bug for MAP values containing
+                // double-quote characters (PECO-3032 / D3).
+                ComplexTypesAsArrow = true,
                 IntervalTypesAsArrow = false,
             };
 

@@ -65,8 +65,27 @@ namespace AdbcDrivers.Databricks
         public ComplexTypeSerializingStream(IArrowArrayStream inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            _schema = inner.Schema;
-            _complexColumnIndices = DetectComplexColumns(_schema);
+            _complexColumnIndices = DetectComplexColumns(inner.Schema);
+            // Flatten complex columns to StringType so the exposed schema matches the
+            // string-serialized batches this stream produces. For SEA the inner schema
+            // already has StringType for complex columns (manifest-driven), so this is a
+            // no-op. For Thrift with ComplexTypesAsArrow=true, the inner IPC schema has
+            // native ListType/MapType/StructType — we must report StringType to keep
+            // schema and batch types consistent.
+            _schema = FlattenComplexColumns(inner.Schema, _complexColumnIndices);
+        }
+
+        private static Schema FlattenComplexColumns(Schema schema, HashSet<int> complexIndices)
+        {
+            if (complexIndices.Count == 0) return schema;
+            List<Field> fields = new List<Field>(schema.FieldsList.Count);
+            for (int i = 0; i < schema.FieldsList.Count; i++)
+            {
+                Field f = schema.FieldsList[i];
+                IArrowType arrowType = complexIndices.Contains(i) ? StringType.Default : f.DataType;
+                fields.Add(new Field(f.Name, arrowType, f.IsNullable, f.Metadata));
+            }
+            return new Schema(fields, schema.Metadata);
         }
 
         public Schema Schema => _schema;
