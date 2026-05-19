@@ -734,11 +734,48 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     int sep = p.IndexOf(':');
                     if (sep < 0) sep = p.IndexOf(' ');
                     if (sep < 0) throw new FormatException();
-                    fields.Add(new Field(p.Substring(0, sep).Trim(), ParseSqlType(p.Substring(sep + 1)), nullable: true));
+                    string name = p.Substring(0, sep).Trim();
+                    string typeStr = StripFieldModifiers(p.Substring(sep + 1));
+                    fields.Add(new Field(name, ParseSqlType(typeStr), nullable: true));
                 }
                 return new StructType(fields);
             }
             return StringType.Default;
+        }
+
+        /// <summary>
+        /// Strips trailing <c>NOT NULL</c> and <c>COMMENT '...'</c> modifiers from a struct
+        /// field's type portion. Per the Databricks STRUCT grammar:
+        /// <c>fieldName [:] fieldType [NOT NULL] [COMMENT str]</c>.
+        /// Modifiers appear at bracket depth 0 (outside any nested <c>&lt;&gt;</c> / <c>()</c>).
+        /// </summary>
+        private static string StripFieldModifiers(string s)
+        {
+            int depth = 0;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c == '<' || c == '(') depth++;
+                else if (c == '>' || c == ')') depth--;
+                else if (depth == 0 && c == ' ')
+                {
+                    int j = i + 1;
+                    while (j < s.Length && s[j] == ' ') j++;
+                    if (StartsWithKeyword(s, j, "NOT") || StartsWithKeyword(s, j, "COMMENT"))
+                    {
+                        return s.Substring(0, i);
+                    }
+                }
+            }
+            return s;
+        }
+
+        private static bool StartsWithKeyword(string s, int pos, string keyword)
+        {
+            if (pos + keyword.Length > s.Length) return false;
+            if (string.Compare(s, pos, keyword, 0, keyword.Length, StringComparison.OrdinalIgnoreCase) != 0) return false;
+            int end = pos + keyword.Length;
+            return end == s.Length || char.IsWhiteSpace(s[end]);
         }
 
         /// <summary>Splits <paramref name="s"/> at occurrences of <paramref name="sep"/> that are at bracket depth 0.</summary>

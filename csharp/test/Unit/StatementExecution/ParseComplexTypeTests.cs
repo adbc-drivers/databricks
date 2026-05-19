@@ -84,5 +84,50 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         {
             Assert.IsType<StringType>(StatementExecutionStatement.ParseComplexType(input));
         }
+
+        [Fact]
+        public void Struct_FieldsWithNotNullModifier_ParsedCorrectly()
+        {
+            // Some warehouses emit field nullability info in the type_text.
+            var t = StatementExecutionStatement.ParseComplexType("STRUCT<id:INT NOT NULL,name:STRING NOT NULL>");
+            var s = Assert.IsType<StructType>(t);
+            Assert.Equal(2, s.Fields.Count);
+            Assert.Equal("id", s.Fields[0].Name);
+            Assert.IsType<Int32Type>(s.Fields[0].DataType);
+            Assert.Equal("name", s.Fields[1].Name);
+            Assert.IsType<StringType>(s.Fields[1].DataType);
+        }
+
+        [Fact]
+        public void Struct_FieldWithCommentModifier_ParsedCorrectly()
+        {
+            var t = StatementExecutionStatement.ParseComplexType("STRUCT<id:INT COMMENT 'pk',name:STRING>");
+            var s = Assert.IsType<StructType>(t);
+            Assert.IsType<Int32Type>(s.Fields[0].DataType);
+            Assert.IsType<StringType>(s.Fields[1].DataType);
+        }
+
+        [Fact]
+        public void Nested_StructInArray_WithNotNullModifier()
+        {
+            // Reproduces the CI failure for Nested_ArrayOfStruct(enableComplexDatatypeSupport: True).
+            var t = StatementExecutionStatement.ParseComplexType(
+                "ARRAY<STRUCT<id:INT NOT NULL,tags:ARRAY<STRING> NOT NULL>>");
+            var list = Assert.IsType<ListType>(t);
+            var st = Assert.IsType<StructType>(list.ValueDataType);
+            Assert.IsType<Int32Type>(st.Fields[0].DataType);
+            var inner = Assert.IsType<ListType>(st.Fields[1].DataType);
+            Assert.IsType<StringType>(inner.ValueDataType);
+        }
+
+        [Fact]
+        public void Struct_NestedDecimalWithModifier_PreservesParens()
+        {
+            // DECIMAL(p,s) inside a struct field, followed by NOT NULL — modifier stripping
+            // must not eat the parens.
+            var t = StatementExecutionStatement.ParseComplexType("STRUCT<amt:DECIMAL(10,2) NOT NULL>");
+            var s = Assert.IsType<StructType>(t);
+            Assert.IsType<Decimal128Type>(s.Fields[0].DataType);
+        }
     }
 }
