@@ -48,9 +48,15 @@ namespace AdbcDrivers.Databricks.Tests.E2E
         private async Task<(AdbcConnection conn, IArrowArrayStream stream)> ExecuteAsync(string sql, bool enableComplexDatatypeSupport)
         {
             var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            // Some configs have both 'uri' and 'hostName'/'path' — the driver rejects this
-            // combination. hostName/path take precedence in test runs, so drop the uri.
-            properties.Remove(Apache.Arrow.Adbc.AdbcOptions.Uri);
+            // Some local configs carry BOTH 'uri' and 'hostName'/'path'; the driver rejects
+            // this combination with "Conflicting server arguments". Resolve the conflict only
+            // when both keys are present — CI configs typically have only one of them and
+            // removing the wrong key would leave no host source.
+            if (properties.ContainsKey(AdbcOptions.Uri) &&
+                properties.ContainsKey(AdbcDrivers.HiveServer2.Spark.SparkParameters.HostName))
+            {
+                properties.Remove(AdbcOptions.Uri);
+            }
             properties[DatabricksParameters.EnableComplexDatatypeSupport] = enableComplexDatatypeSupport ? "true" : "false";
 
             AdbcDriver driver = new DatabricksDriver();
