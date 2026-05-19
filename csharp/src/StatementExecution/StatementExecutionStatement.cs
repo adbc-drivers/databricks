@@ -615,7 +615,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             foreach (var column in manifest.Schema.Columns)
             {
                 var typeText = column.TypeText ?? string.Empty;
-                var arrowType = MapDatabricksTypeToArrowType(typeText);
+                var arrowType = ArrowTypeParser.MapToArrowType(typeText, _enableComplexDatatypeSupport);
                 var metadata = new Dictionary<string, string>
                 {
                     [ColumnMetadataHelper.ArrowMetadataKey] = typeText
@@ -624,26 +624,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             return new Schema(fields, null);
-        }
-
-        /// <summary>
-        /// Maps a Databricks SQL type name from the manifest to its Arrow output type.
-        /// ARRAY/MAP/STRUCT default to <see cref="StringType"/> because the stream
-        /// wrappers convert their native arrays to strings to match legacy Thrift behavior.
-        /// When <see cref="_enableComplexDatatypeSupport"/> is true, ARRAY/MAP/STRUCT are
-        /// parsed into native nested Arrow types via <see cref="ArrowTypeParser.ParseComplexType"/>
-        /// so the (unwrapped) batches and the declared schema agree.
-        /// </summary>
-        private IArrowType MapDatabricksTypeToArrowType(string typeName)
-        {
-            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
-            if (baseType is "ARRAY" or "MAP" or "STRUCT")
-            {
-                return _enableComplexDatatypeSupport
-                    ? ArrowTypeParser.ParseComplexType(typeName)
-                    : StringType.Default;
-            }
-            return ArrowTypeParser.MapPrimitiveType(typeName);
         }
 
         /// <summary>

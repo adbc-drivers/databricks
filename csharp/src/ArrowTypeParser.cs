@@ -47,9 +47,35 @@ namespace AdbcDrivers.Databricks
     internal static class ArrowTypeParser
     {
         /// <summary>
+        /// Maps a Databricks SQL type name from the SEA manifest to its Arrow output
+        /// type. The behavior for ARRAY / MAP / STRUCT depends on
+        /// <paramref name="enableComplexDatatypeSupport"/>:
+        /// <list type="bullet">
+        ///   <item><description><c>false</c>: <see cref="StringType"/> (paired with
+        ///   <see cref="ComplexTypeSerializingStream"/> that serializes the native
+        ///   arrays to JSON strings).</description></item>
+        ///   <item><description><c>true</c>: native nested Arrow types parsed from
+        ///   the manifest's <c>type_text</c> (see <see cref="ParseComplexType"/>).</description></item>
+        /// </list>
+        /// Primitives (including INTERVAL, which is always string-typed) ignore the flag.
+        /// </summary>
+        internal static IArrowType MapToArrowType(string typeName, bool enableComplexDatatypeSupport)
+        {
+            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
+            if (baseType is "ARRAY" or "MAP" or "STRUCT")
+            {
+                return enableComplexDatatypeSupport
+                    ? ParseComplexType(typeName)
+                    : StringType.Default;
+            }
+            return MapPrimitiveType(typeName);
+        }
+
+        /// <summary>
         /// Parses <paramref name="typeName"/> into a native Arrow type. Returns
         /// <see cref="StringType"/> on any parse failure — callers can rely on this,
-        /// the method never throws.
+        /// the method never throws. Exposed for tests; production callers should use
+        /// <see cref="MapToArrowType"/> which handles the user flag.
         /// </summary>
         internal static IArrowType ParseComplexType(string typeName)
         {
@@ -60,10 +86,10 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Maps a primitive (non-complex) Databricks SQL type name to its Arrow type.
-        /// Used by the SEA manifest mapper for top-level columns and by
+        /// Used by <see cref="MapToArrowType"/> for top-level columns and by
         /// <see cref="ParseComplexType"/> for primitive leaves inside ARRAY/MAP/STRUCT.
         /// </summary>
-        internal static IArrowType MapPrimitiveType(string typeName)
+        private static IArrowType MapPrimitiveType(string typeName)
         {
             var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
             return baseType switch
