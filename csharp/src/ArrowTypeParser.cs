@@ -59,28 +59,28 @@ namespace AdbcDrivers.Databricks
         /// </list>
         /// Primitives (including INTERVAL, which is always string-typed) ignore the flag.
         /// </summary>
-        internal static IArrowType MapToArrowType(string typeName, bool enableComplexDatatypeSupport)
+        internal static IArrowType MapToArrowType(string typeText, bool enableComplexDatatypeSupport)
         {
-            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
+            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeText).ToUpperInvariant();
             if (baseType is "ARRAY" or "MAP" or "STRUCT")
             {
                 return enableComplexDatatypeSupport
-                    ? ParseComplexType(typeName)
+                    ? ParseComplexType(typeText)
                     : StringType.Default;
             }
-            return MapPrimitiveType(typeName);
+            return MapPrimitiveType(typeText);
         }
 
         /// <summary>
-        /// Parses <paramref name="typeName"/> into a native Arrow type. Returns
+        /// Parses <paramref name="typeText"/> into a native Arrow type. Returns
         /// <see cref="StringType"/> on any parse failure — callers can rely on this,
         /// the method never throws. Exposed for tests; production callers should use
         /// <see cref="MapToArrowType"/> which handles the user flag.
         /// </summary>
-        internal static IArrowType ParseComplexType(string typeName)
+        internal static IArrowType ParseComplexType(string typeText)
         {
-            if (string.IsNullOrWhiteSpace(typeName)) return StringType.Default;
-            try { return ParseSqlType(typeName.Trim()); }
+            if (string.IsNullOrWhiteSpace(typeText)) return StringType.Default;
+            try { return ParseSqlType(typeText.Trim()); }
             catch (FormatException) { return StringType.Default; }
         }
 
@@ -89,9 +89,9 @@ namespace AdbcDrivers.Databricks
         /// Used by <see cref="MapToArrowType"/> for top-level columns and by
         /// <see cref="ParseComplexType"/> for primitive leaves inside ARRAY/MAP/STRUCT.
         /// </summary>
-        private static IArrowType MapPrimitiveType(string typeName)
+        private static IArrowType MapPrimitiveType(string typeText)
         {
-            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
+            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeText).ToUpperInvariant();
             return baseType switch
             {
                 "BOOLEAN" => BooleanType.Default,
@@ -101,7 +101,7 @@ namespace AdbcDrivers.Databricks
                 "LONG" or "BIGINT" => Int64Type.Default,
                 "FLOAT" or "REAL" => FloatType.Default,
                 "DOUBLE" => DoubleType.Default,
-                "DECIMAL" or "NUMERIC" => ParseDecimalType(typeName),
+                "DECIMAL" or "NUMERIC" => ParseDecimalType(typeText),
                 "STRING" or "VARCHAR" or "CHAR" => StringType.Default,
                 "BINARY" or "VARBINARY" => BinaryType.Default,
                 "DATE" => Date32Type.Default,
@@ -113,13 +113,13 @@ namespace AdbcDrivers.Databricks
             };
         }
 
-        private static IArrowType ParseDecimalType(string typeName)
+        private static IArrowType ParseDecimalType(string typeText)
         {
             int precision = 38;
             int scale = 18;
 
             var match = System.Text.RegularExpressions.Regex.Match(
-                typeName,
+                typeText,
                 @"DECIMAL\((\d+),\s*(\d+)\)",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (match.Success)
