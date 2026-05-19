@@ -47,15 +47,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E
         private async Task<(AdbcConnection conn, IArrowArrayStream stream)> ExecuteAsync(string sql, string protocol)
         {
             var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
-            // Some local configs carry BOTH 'uri' and 'hostName'/'path'; the driver rejects
-            // this combination with "Conflicting server arguments". Resolve the conflict only
-            // when both keys are present — CI configs typically have only one of them and
-            // removing the wrong key would leave no host source.
-            if (properties.ContainsKey(AdbcOptions.Uri) &&
-                properties.ContainsKey(AdbcDrivers.HiveServer2.Spark.SparkParameters.HostName))
-            {
-                properties.Remove(AdbcOptions.Uri);
-            }
             properties[DatabricksParameters.Protocol] = protocol;
 
             AdbcDriver driver = new DatabricksDriver();
