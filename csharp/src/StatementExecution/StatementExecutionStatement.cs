@@ -631,7 +631,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// ARRAY/MAP/STRUCT default to <see cref="StringType"/> because the stream
         /// wrappers convert their native arrays to strings to match legacy Thrift behavior.
         /// When <see cref="_enableComplexDatatypeSupport"/> is true, ARRAY/MAP/STRUCT are
-        /// parsed into native nested Arrow types via <see cref="ComplexTypeParser.ParseComplexType"/>
+        /// parsed into native nested Arrow types via <see cref="ArrowTypeParser.ParseComplexType"/>
         /// so the (unwrapped) batches and the declared schema agree.
         /// </summary>
         private IArrowType MapDatabricksTypeToArrowType(string typeName)
@@ -640,10 +640,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (baseType is "ARRAY" or "MAP" or "STRUCT")
             {
                 return _enableComplexDatatypeSupport
-                    ? ComplexTypeParser.ParseComplexType(typeName)
+                    ? ArrowTypeParser.ParseComplexType(typeName)
                     : StringType.Default;
             }
-            return ComplexTypeParser.MapPrimitiveType(typeName);
+            return ArrowTypeParser.MapPrimitiveType(typeName);
         }
 
         /// <summary>

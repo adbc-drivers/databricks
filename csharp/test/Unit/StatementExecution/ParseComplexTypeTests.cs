@@ -21,7 +21,7 @@ using Xunit;
 namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
     /// <summary>
-    /// Unit tests for <see cref="ComplexTypeParser.ParseComplexType"/>.
+    /// Unit tests for <see cref="ArrowTypeParser.ParseComplexType"/>.
     /// Used by the SEA manifest-schema mapper when EnableComplexDatatypeSupport=true
     /// to convert Databricks SQL type strings to native Arrow nested types.
     /// </summary>
@@ -30,14 +30,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public void Array_OfPrimitive_ReturnsListType()
         {
-            var t = ComplexTypeParser.ParseComplexType("ARRAY<INT>");
+            var t = ArrowTypeParser.ParseComplexType("ARRAY<INT>");
             Assert.IsType<Int32Type>(Assert.IsType<ListType>(t).ValueDataType);
         }
 
         [Fact]
         public void Map_ReturnsMapType_WithCorrectKeyAndValue()
         {
-            var t = ComplexTypeParser.ParseComplexType("MAP<STRING,DOUBLE>");
+            var t = ArrowTypeParser.ParseComplexType("MAP<STRING,DOUBLE>");
             var m = Assert.IsType<MapType>(t);
             Assert.IsType<StringType>(m.KeyField.DataType);
             Assert.IsType<DoubleType>(m.ValueField.DataType);
@@ -46,7 +46,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public void Struct_ReturnsStructType_WithFieldsInOrder()
         {
-            var t = ComplexTypeParser.ParseComplexType("STRUCT<a:INT,b:STRING>");
+            var t = ArrowTypeParser.ParseComplexType("STRUCT<a:INT,b:STRING>");
             var s = Assert.IsType<StructType>(t);
             Assert.Equal(2, s.Fields.Count);
             Assert.Equal("a", s.Fields[0].Name);
@@ -59,7 +59,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public void Nested_DeeplyNested_Resolves()
         {
             // ARRAY<STRUCT<id:INT, attrs:MAP<STRING,DOUBLE>>>
-            var t = ComplexTypeParser.ParseComplexType("ARRAY<STRUCT<id:INT,attrs:MAP<STRING,DOUBLE>>>");
+            var t = ArrowTypeParser.ParseComplexType("ARRAY<STRUCT<id:INT,attrs:MAP<STRING,DOUBLE>>>");
             var list = Assert.IsType<ListType>(t);
             var st = Assert.IsType<StructType>(list.ValueDataType);
             Assert.IsType<Int32Type>(st.Fields[0].DataType);
@@ -69,7 +69,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public void Whitespace_IsTolerated()
         {
-            var t = ComplexTypeParser.ParseComplexType("MAP< STRING , BIGINT >");
+            var t = ArrowTypeParser.ParseComplexType("MAP< STRING , BIGINT >");
             var m = Assert.IsType<MapType>(t);
             Assert.IsType<StringType>(m.KeyField.DataType);
             Assert.IsType<Int64Type>(m.ValueField.DataType);
@@ -82,14 +82,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [InlineData("garbage")]
         public void ParseFailure_FallsBackToString(string input)
         {
-            Assert.IsType<StringType>(ComplexTypeParser.ParseComplexType(input));
+            Assert.IsType<StringType>(ArrowTypeParser.ParseComplexType(input));
         }
 
         [Fact]
         public void Struct_FieldsWithNotNullModifier_ParsedCorrectly()
         {
             // Some warehouses emit field nullability info in the type_text.
-            var t = ComplexTypeParser.ParseComplexType("STRUCT<id:INT NOT NULL,name:STRING NOT NULL>");
+            var t = ArrowTypeParser.ParseComplexType("STRUCT<id:INT NOT NULL,name:STRING NOT NULL>");
             var s = Assert.IsType<StructType>(t);
             Assert.Equal(2, s.Fields.Count);
             Assert.Equal("id", s.Fields[0].Name);
@@ -101,7 +101,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public void Struct_FieldWithCommentModifier_ParsedCorrectly()
         {
-            var t = ComplexTypeParser.ParseComplexType("STRUCT<id:INT COMMENT 'pk',name:STRING>");
+            var t = ArrowTypeParser.ParseComplexType("STRUCT<id:INT COMMENT 'pk',name:STRING>");
             var s = Assert.IsType<StructType>(t);
             Assert.IsType<Int32Type>(s.Fields[0].DataType);
             Assert.IsType<StringType>(s.Fields[1].DataType);
@@ -111,7 +111,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public void Nested_StructInArray_WithNotNullModifier()
         {
             // Reproduces the CI failure for Nested_ArrayOfStruct(enableComplexDatatypeSupport: True).
-            var t = ComplexTypeParser.ParseComplexType(
+            var t = ArrowTypeParser.ParseComplexType(
                 "ARRAY<STRUCT<id:INT NOT NULL,tags:ARRAY<STRING> NOT NULL>>");
             var list = Assert.IsType<ListType>(t);
             var st = Assert.IsType<StructType>(list.ValueDataType);
@@ -125,7 +125,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         {
             // DECIMAL(p,s) inside a struct field, followed by NOT NULL — modifier stripping
             // must not eat the parens.
-            var t = ComplexTypeParser.ParseComplexType("STRUCT<amt:DECIMAL(10,2) NOT NULL>");
+            var t = ArrowTypeParser.ParseComplexType("STRUCT<amt:DECIMAL(10,2) NOT NULL>");
             var s = Assert.IsType<StructType>(t);
             Assert.IsType<Decimal128Type>(s.Fields[0].DataType);
         }
@@ -134,7 +134,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public void Struct_FieldWithCollateModifier_ParsedCorrectly()
         {
             // Per Databricks STRUCT grammar: fieldType [NOT NULL] [COLLATE collationName] [COMMENT str]
-            var t = ComplexTypeParser.ParseComplexType("STRUCT<name:STRING COLLATE utf8_binary>");
+            var t = ArrowTypeParser.ParseComplexType("STRUCT<name:STRING COLLATE utf8_binary>");
             var s = Assert.IsType<StructType>(t);
             Assert.Equal("name", s.Fields[0].Name);
             Assert.IsType<StringType>(s.Fields[0].DataType);
@@ -144,7 +144,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public void Struct_FieldWithAllModifiers_ParsedCorrectly()
         {
             // NOT NULL, COLLATE, and COMMENT in order — all three must strip.
-            var t = ComplexTypeParser.ParseComplexType(
+            var t = ArrowTypeParser.ParseComplexType(
                 "STRUCT<name:STRING NOT NULL COLLATE utf8_binary COMMENT 'user name'>");
             var s = Assert.IsType<StructType>(t);
             Assert.IsType<StringType>(s.Fields[0].DataType);
