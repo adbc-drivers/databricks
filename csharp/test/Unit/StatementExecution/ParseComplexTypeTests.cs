@@ -129,5 +129,25 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var s = Assert.IsType<StructType>(t);
             Assert.IsType<Decimal128Type>(s.Fields[0].DataType);
         }
+
+        [Fact]
+        public void Struct_FieldWithCollateModifier_ParsedCorrectly()
+        {
+            // Per Databricks STRUCT grammar: fieldType [NOT NULL] [COLLATE collationName] [COMMENT str]
+            var t = StatementExecutionStatement.ParseComplexType("STRUCT<name:STRING COLLATE utf8_binary>");
+            var s = Assert.IsType<StructType>(t);
+            Assert.Equal("name", s.Fields[0].Name);
+            Assert.IsType<StringType>(s.Fields[0].DataType);
+        }
+
+        [Fact]
+        public void Struct_FieldWithAllModifiers_ParsedCorrectly()
+        {
+            // NOT NULL, COLLATE, and COMMENT in order — all three must strip.
+            var t = StatementExecutionStatement.ParseComplexType(
+                "STRUCT<name:STRING NOT NULL COLLATE utf8_binary COMMENT 'user name'>");
+            var s = Assert.IsType<StructType>(t);
+            Assert.IsType<StringType>(s.Fields[0].DataType);
+        }
     }
 }

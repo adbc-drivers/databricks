@@ -744,9 +744,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Strips trailing <c>NOT NULL</c> and <c>COMMENT '...'</c> modifiers from a struct
-        /// field's type portion. Per the Databricks STRUCT grammar:
-        /// <c>fieldName [:] fieldType [NOT NULL] [COMMENT str]</c>.
+        /// Strips trailing modifiers from a struct field's type portion. Per the
+        /// Databricks STRUCT grammar:
+        /// <c>fieldName [:] fieldType [NOT NULL] [COLLATE collationName] [COMMENT str]</c>.
         /// Modifiers appear at bracket depth 0 (outside any nested <c>&lt;&gt;</c> / <c>()</c>).
         /// </summary>
         private static string StripFieldModifiers(string s)
@@ -761,7 +761,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     int j = i + 1;
                     while (j < s.Length && s[j] == ' ') j++;
-                    if (StartsWithKeyword(s, j, "NOT") || StartsWithKeyword(s, j, "COMMENT"))
+                    if (StartsWithKeyword(s, j, "NOT") ||
+                        StartsWithKeyword(s, j, "COLLATE") ||
+                        StartsWithKeyword(s, j, "COMMENT"))
                     {
                         return s.Substring(0, i);
                     }
