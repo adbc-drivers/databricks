@@ -64,6 +64,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly bool _enableMultipleCatalogSupport;
         private readonly bool _useDescTableExtended;
 
+        // Connection bring-up timeout (PECO-3059). Mirrors the Thrift path's
+        // ConnectTimeoutMilliseconds — used as a CancellationToken bound on
+        // CreateSession to honor adbc.spark.connect_timeout_ms on the SEA path.
+        // Default matches HiveServer2Connection.ConnectTimeoutMillisecondsDefault (30 s).
+        private const int ConnectTimeoutMillisecondsDefault = 30000;
+        private readonly int _connectTimeoutMilliseconds;
+
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
         private readonly System.Buffers.ArrayPool<byte> _lz4BufferPool;
@@ -231,6 +238,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
 
+            // PECO-3059: honor adbc.spark.connect_timeout_ms on the SEA path. The Thrift
+            // path uses this value as a CancellationToken bound on OpenSession; mirror
+            // that here for CreateSession. 0 means infinite. Negative values are invalid
+            // (matches Thrift's SparkHttpConnection.ValidateOptions).
+            _connectTimeoutMilliseconds = ParseConnectTimeoutMilliseconds(properties);
+
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             _lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
@@ -325,6 +338,50 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
+        /// Parses adbc.spark.connect_timeout_ms with Thrift-compatible validation and applies
+        /// the same TemporarilyUnavailableRetry adjustment as DatabricksConnection
+        /// (ValidateOptions, lines 967-972): when temporarily-unavailable retry is enabled,
+        /// the connect timeout must be at least as large as the retry budget — otherwise the
+        /// connect-timeout token would cancel mid-retry-loop before the server warms up.
+        /// </summary>
+        private static int ParseConnectTimeoutMilliseconds(IReadOnlyDictionary<string, string> properties)
+        {
+            int connectTimeoutMs = ConnectTimeoutMillisecondsDefault;
+            if (properties.TryGetValue(SparkParameters.ConnectTimeoutMilliseconds, out string? connectTimeoutStr))
+            {
+                if (!int.TryParse(connectTimeoutStr, System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out int parsed) ||
+                    parsed < 0)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        SparkParameters.ConnectTimeoutMilliseconds,
+                        connectTimeoutStr,
+                        $"must be a value of 0 (infinite) or between 1 .. {int.MaxValue}. default is {ConnectTimeoutMillisecondsDefault} milliseconds.");
+                }
+                connectTimeoutMs = parsed;
+            }
+
+            // Mirror DatabricksConnection.ValidateOptions: when temporarily-unavailable
+            // retry is on, the retry budget must fit inside the connect-timeout token.
+            bool temporarilyUnavailableRetry = PropertyHelper.GetBooleanPropertyWithValidation(
+                properties, DatabricksParameters.TemporarilyUnavailableRetry, true);
+            int temporarilyUnavailableRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(
+                properties,
+                DatabricksParameters.TemporarilyUnavailableRetryTimeout,
+                DatabricksConstants.DefaultTemporarilyUnavailableRetryTimeout);
+            if (temporarilyUnavailableRetry &&
+                temporarilyUnavailableRetryTimeout * 1000L > connectTimeoutMs &&
+                connectTimeoutMs != 0) // 0 == infinite — don't shrink it
+            {
+                // Use checked arithmetic implicitly: clamp to int.MaxValue.
+                long bumped = temporarilyUnavailableRetryTimeout * 1000L;
+                connectTimeoutMs = bumped > int.MaxValue ? int.MaxValue : (int)bumped;
+            }
+
+            return connectTimeoutMs;
+        }
+
+        /// <summary>
         /// Gets the host from the connection properties.
         /// </summary>
         /// <param name="properties">Connection properties.</param>
@@ -374,50 +431,88 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             if (_sessionId == null)
             {
-                await _sessionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                // PECO-3059: bound the session bring-up with adbc.spark.connect_timeout_ms.
+                // The Thrift path applies this same timeout to OpenSession via a
+                // CancellationToken; we mirror that here. 0 means infinite — skip the
+                // timer entirely so we don't fight an external caller-supplied token.
+                using var connectTimeoutCts = _connectTimeoutMilliseconds > 0
+                    ? new CancellationTokenSource(TimeSpan.FromMilliseconds(_connectTimeoutMilliseconds))
+                    : null;
+                using var linkedCts = connectTimeoutCts != null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connectTimeoutCts.Token)
+                    : null;
+                CancellationToken openToken = linkedCts?.Token ?? cancellationToken;
+
                 try
                 {
-                    // Double-check after acquiring lock
-                    if (_sessionId == null)
+                    await _sessionLock.WaitAsync(openToken).ConfigureAwait(false);
+                    try
                     {
-                        var sessionConfigs = ExtractServerSideProperties(_properties);
-                        var request = new CreateSessionRequest
+                        // Double-check after acquiring lock
+                        if (_sessionId == null)
                         {
-                            WarehouseId = _warehouseId,
-                            Catalog = _catalog,
-                            Schema = _schema,
-                            SessionConfigs = sessionConfigs.Count > 0 ? sessionConfigs : null
-                        };
+                            var sessionConfigs = ExtractServerSideProperties(_properties);
+                            var request = new CreateSessionRequest
+                            {
+                                WarehouseId = _warehouseId,
+                                Catalog = _catalog,
+                                Schema = _schema,
+                                SessionConfigs = sessionConfigs.Count > 0 ? sessionConfigs : null
+                            };
 
-                        try
-                        {
-                            var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
-                            _sessionId = response.SessionId;
-                        }
-                        catch (DatabricksException)
-                        {
-                            throw;
-                        }
-                        catch (Exception ex)
-                        {
-                            throw new DatabricksException(
-                                $"Failed to connect to Databricks: {ex.GetBaseException().Message}",
-                                AdbcStatusCode.IOError,
-                                ex);
-                        }
+                            try
+                            {
+                                var response = await _client.CreateSessionAsync(request, openToken).ConfigureAwait(false);
+                                _sessionId = response.SessionId;
+                            }
+                            catch (DatabricksException)
+                            {
+                                throw;
+                            }
+                            catch (Exception ex) when (
+                                connectTimeoutCts != null &&
+                                connectTimeoutCts.IsCancellationRequested &&
+                                !cancellationToken.IsCancellationRequested)
+                            {
+                                // PECO-3059: the connect-timeout fired before the caller's
+                                // token. Surface as TimeoutException for parity with
+                                // HiveServer2Connection.OpenAsync — same message phrasing.
+                                throw new TimeoutException(
+                                    "The operation timed out while attempting to open a session. Please try increasing connect timeout.",
+                                    ex);
+                            }
+                            catch (Exception ex)
+                            {
+                                throw new DatabricksException(
+                                    $"Failed to connect to Databricks: {ex.GetBaseException().Message}",
+                                    AdbcStatusCode.IOError,
+                                    ex);
+                            }
 
-                        // If user didn't specify a catalog, discover the server's default.
-                        // In Thrift, the server returns this in OpenSessionResp.InitialNamespace.
-                        // SEA's CreateSession response doesn't include it, so we query explicitly.
-                        if (_catalog == null && _enableMultipleCatalogSupport)
-                        {
-                            _catalog = GetCurrentCatalog();
+                            // If user didn't specify a catalog, discover the server's default.
+                            // In Thrift, the server returns this in OpenSessionResp.InitialNamespace.
+                            // SEA's CreateSession response doesn't include it, so we query explicitly.
+                            if (_catalog == null && _enableMultipleCatalogSupport)
+                            {
+                                _catalog = GetCurrentCatalog();
+                            }
                         }
                     }
+                    finally
+                    {
+                        _sessionLock.Release();
+                    }
                 }
-                finally
+                catch (OperationCanceledException ex) when (
+                    connectTimeoutCts != null &&
+                    connectTimeoutCts.IsCancellationRequested &&
+                    !cancellationToken.IsCancellationRequested)
                 {
-                    _sessionLock.Release();
+                    // Covers the case where the semaphore wait itself was cancelled by the
+                    // connect-timeout token (rare but possible under contention).
+                    throw new TimeoutException(
+                        "The operation timed out while attempting to open a session. Please try increasing connect timeout.",
+                        ex);
                 }
             }
         }
