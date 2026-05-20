@@ -54,34 +54,34 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _sessionId;
         private readonly SemaphoreSlim _sessionLock = new SemaphoreSlim(1, 1);
 
-        // Configuration for statement creation — assigned by ValidateOptions().
-        private string _resultDisposition = "INLINE_OR_EXTERNAL_LINKS";
-        private string _resultFormat = "ARROW_STREAM";
+        // Configuration for statement creation — assigned by ValidateProperties().
+        private string _resultDisposition = null!;
+        private string _resultFormat = null!;
         private string? _resultCompression;
-        private int _waitTimeoutSeconds = 10;
-        private int _pollingIntervalMs = 1000;
-        private bool _enablePKFK = true;
-        private bool _enableMultipleCatalogSupport = true;
-        private bool _useDescTableExtended = true;
+        private int _waitTimeoutSeconds;
+        private int _pollingIntervalMs;
+        private bool _enablePKFK;
+        private bool _enableMultipleCatalogSupport;
+        private bool _useDescTableExtended;
 
         // Connection bring-up timeout (PECO-3059). Mirrors the Thrift path's
         // ConnectTimeoutMilliseconds — used as a CancellationToken bound on
         // CreateSession to honor adbc.spark.connect_timeout_ms on the SEA path.
         // Default matches HiveServer2Connection.ConnectTimeoutMillisecondsDefault (30 s).
         private const int ConnectTimeoutMillisecondsDefault = 30000;
-        private int _connectTimeoutMilliseconds = ConnectTimeoutMillisecondsDefault;
+        private int _connectTimeoutMilliseconds;
 
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
         private readonly System.Buffers.ArrayPool<byte> _lz4BufferPool;
 
-        // Tracing propagation configuration — assigned by ValidateOptions().
-        private bool _tracePropagationEnabled = true;
-        private string _traceParentHeaderName = "traceparent";
+        // Tracing propagation configuration — assigned by ValidateProperties().
+        private bool _tracePropagationEnabled;
+        private string _traceParentHeaderName = null!;
         private bool _traceStateEnabled;
         private bool _enableComplexDatatypeSupport;
 
-        // Authentication support — assigned by ValidateOptions().
+        // Authentication support — assigned by ValidateProperties().
         private string? _identityFederationClientId;
 
         /// <summary>
@@ -207,10 +207,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             string baseUrl = $"https://{hostName}";
 
-            // Centralized option parsing / validation. Mirrors DatabricksConnection.ValidateOptions:
-            // every property-driven field is parsed and validated in one place so the constructor
-            // body stays focused on wiring.
-            ValidateOptions();
+            // Centralized property parsing / validation. Every property-driven field is parsed
+            // and validated in one place so the constructor body stays focused on wiring.
+            ValidateProperties();
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
@@ -293,11 +292,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Parses and validates every property-driven option for this connection in one place.
-        /// Mirrors <see cref="DatabricksConnection.ValidateOptions"/> on the Thrift path so all
-        /// option-handling logic lives next to itself rather than scattered through the constructor.
+        /// Parses and validates every property-driven option for this connection in one place,
+        /// keeping option-handling logic centralized rather than scattered through the constructor.
         /// </summary>
-        private void ValidateOptions()
+        private void ValidateProperties()
         {
             var properties = _properties;
 
@@ -346,7 +344,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             // PECO-3059: honor adbc.spark.connect_timeout_ms on the SEA path. The Thrift path uses
             // this value as a CancellationToken bound on OpenSession; mirror that here for CreateSession.
-            // 0 means infinite. Negative values are invalid (matches Thrift's SparkHttpConnection.ValidateOptions).
+            // 0 means infinite. Negative values are invalid (matches Thrift's SparkHttpConnection validation).
             int connectTimeoutMs = ConnectTimeoutMillisecondsDefault;
             if (properties.TryGetValue(SparkParameters.ConnectTimeoutMilliseconds, out string? connectTimeoutStr))
             {
@@ -362,7 +360,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 connectTimeoutMs = parsed;
             }
 
-            // Mirror DatabricksConnection.ValidateOptions: when temporarily-unavailable retry is on,
+            // Mirror DatabricksConnection.ValidateOptions parity-bump: when temporarily-unavailable retry is on,
             // the retry budget must fit inside the connect-timeout token — otherwise the connect-timeout
             // would cancel mid-retry-loop before the server warms up.
             bool temporarilyUnavailableRetry = PropertyHelper.GetBooleanPropertyWithValidation(

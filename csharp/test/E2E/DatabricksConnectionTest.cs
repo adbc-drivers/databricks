@@ -224,14 +224,14 @@ namespace AdbcDrivers.Databricks.Tests
 
             OutputHelper?.WriteLine($"[PECO-3059] Elapsed: {stopwatch.ElapsedMilliseconds} ms. Exception: {caught?.GetType().FullName ?? "<none>"}");
 
-            // The connect timeout MUST fire long before the HttpClient overall timeout
-            // (which defaults to minutes on the SEA path). Allow a generous 10 s budget
-            // for TLS abort + handler unwind on a slow machine; the actual signal we
-            // care about is "fails fast", not "takes the full HTTP timeout".
+            // With adbc.spark.connect_timeout_ms=1 the timer must fire essentially immediately;
+            // green runs complete in ~25-50 ms. A 1 s budget leaves ample slack for TLS abort
+            // and handler unwind on a slow CI box without being so loose that a regression
+            // (e.g. falling back to the HttpClient.Timeout of minutes) would still pass.
             Assert.NotNull(caught);
             Assert.True(
-                stopwatch.ElapsedMilliseconds < 10_000,
-                $"Expected the SEA connect-timeout to fire within ~10s when adbc.spark.connect_timeout_ms=1; " +
+                stopwatch.ElapsedMilliseconds < 1_000,
+                $"Expected the SEA connect-timeout to fire within ~1s when adbc.spark.connect_timeout_ms=1; " +
                 $"actual elapsed was {stopwatch.ElapsedMilliseconds} ms (exception: {caught?.GetType().FullName}). " +
                 $"This indicates adbc.spark.connect_timeout_ms is not wired through to the SEA HttpClient call.");
 
