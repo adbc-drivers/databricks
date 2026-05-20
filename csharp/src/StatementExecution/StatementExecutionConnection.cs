@@ -594,53 +594,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         async Task<IReadOnlyList<(string catalog, string schema)>> IGetObjectsDataProvider.GetSchemasAsync(string? catalogPattern, string? schemaPattern, CancellationToken cancellationToken)
         {
-            // Note: catalogPattern comes from GetObjectsResultBuilder which resolves individual
-            // catalog names before calling this method. Despite the "pattern" name (from the
-            // IGetObjectsDataProvider interface), the value passed to ShowSchemasCommand is used
-            // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
-            string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
-
-            List<RecordBatch> batches;
-            try
-            {
-                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-            }
-            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-            {
-                return System.Array.Empty<(string, string)>();
-            }
-
-            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
-            // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
-            bool showSchemasInAllCatalogs = catalogPattern == null;
-
-            var result = new List<(string, string)>();
-            foreach (var batch in batches)
-            {
-                StringArray? catalogArray = null;
-                StringArray? schemaArray = null;
-
-                if (showSchemasInAllCatalogs)
-                {
-                    schemaArray = batch.Column(0) as StringArray;
-                    catalogArray = batch.Column(1) as StringArray;
-                }
-                else
-                {
-                    schemaArray = batch.Column(0) as StringArray;
-                }
-
-                if (schemaArray == null) continue;
-                for (int i = 0; i < batch.Length; i++)
-                {
-                    if (schemaArray.IsNull(i)) continue;
-                    string catalog = catalogArray != null && !catalogArray.IsNull(i)
-                        ? catalogArray.GetString(i)
-                        : catalogPattern ?? "";
-                    result.Add((catalog, schemaArray.GetString(i)));
-                }
-            }
-            return result;
+            // PECO-3035: catalogPattern follows JDBC LIKE semantics (% / _ / \_ ). The SEA
+            // backend treats SHOW SCHEMAS IN `<catalog>` as a literal lookup, so we resolve
+            // wildcards client-side here (see ListSchemasAsync for details).
+            return await ListSchemasAsync(catalogPattern, schemaPattern, cancellationToken).ConfigureAwait(false);
         }
 
         async Task<IReadOnlyList<(string catalog, string schema, string table, string tableType)>> IGetObjectsDataProvider.GetTablesAsync(
@@ -783,6 +740,124 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal List<RecordBatch> ExecuteMetadataSql(string sql, CancellationToken cancellationToken = default)
         {
             return ExecuteMetadataSqlAsync(sql, cancellationToken).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Executes SHOW SCHEMAS with JDBC-style catalog pattern semantics. The SEA
+        /// backend treats <c>SHOW SCHEMAS IN `<catalog>`</c> as a literal identifier
+        /// lookup — it does not expand <c>%</c> / <c>_</c> wildcards. To match Thrift
+        /// behaviour (PECO-3035), this helper resolves wildcards client-side:
+        /// <list type="bullet">
+        ///   <item><description><c>null</c> or "%"/"*" → <c>SHOW SCHEMAS IN ALL CATALOGS</c>.</description></item>
+        ///   <item><description>A pattern containing unescaped <c>%</c> or <c>_</c> → <c>SHOW CATALOGS LIKE '&lt;pat&gt;'</c> to enumerate matching catalogs, then per-catalog <c>SHOW SCHEMAS IN `&lt;cat&gt;`</c> calls aggregated together.</description></item>
+        ///   <item><description>A literal name → single <c>SHOW SCHEMAS IN `&lt;catalog&gt;`</c> call.</description></item>
+        /// </list>
+        /// Returns a list of <c>(catalog, schema)</c> pairs in deterministic order.
+        /// </summary>
+        internal async Task<List<(string catalog, string schema)>> ListSchemasAsync(
+            string? catalogPattern, string? schemaPattern, CancellationToken cancellationToken)
+        {
+            // Fast path: null or pure "match anything" → SHOW SCHEMAS IN ALL CATALOGS.
+            if (catalogPattern == null || MetadataCommands.MetadataCommandBase.IsMatchAnything(catalogPattern))
+            {
+                return await ExecuteShowSchemasAsync(null, schemaPattern, cancellationToken).ConfigureAwait(false);
+            }
+
+            // Non-trivial wildcard: enumerate matching catalogs and iterate per-catalog.
+            if (MetadataCommands.MetadataCommandBase.ContainsUnescapedWildcard(catalogPattern))
+            {
+                string catalogsSql = new ShowCatalogsCommand(catalogPattern).Build();
+                List<RecordBatch> catalogBatches;
+                try
+                {
+                    catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    return new List<(string, string)>();
+                }
+
+                var matchedCatalogs = new List<string>();
+                foreach (var batch in catalogBatches)
+                {
+                    var catalogArray = batch.Column(0) as StringArray;
+                    if (catalogArray == null) continue;
+                    for (int i = 0; i < catalogArray.Length; i++)
+                    {
+                        if (!catalogArray.IsNull(i))
+                            matchedCatalogs.Add(catalogArray.GetString(i));
+                    }
+                }
+
+                var aggregated = new List<(string, string)>();
+                foreach (string cat in matchedCatalogs)
+                {
+                    try
+                    {
+                        var perCatalog = await ExecuteShowSchemasAsync(cat, schemaPattern, cancellationToken).ConfigureAwait(false);
+                        aggregated.AddRange(perCatalog);
+                    }
+                    catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                    {
+                        // Catalog exists per SHOW CATALOGS but has no schemas / disappeared mid-query — skip.
+                    }
+                }
+                return aggregated;
+            }
+
+            // Literal catalog name.
+            return await ExecuteShowSchemasAsync(catalogPattern, schemaPattern, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Issues a single SHOW SCHEMAS command (with the given literal catalog or
+        /// <c>IN ALL CATALOGS</c>) and decodes the result. Caller is responsible for
+        /// resolving wildcard patterns before calling this method.
+        /// </summary>
+        private async Task<List<(string catalog, string schema)>> ExecuteShowSchemasAsync(
+            string? catalog, string? schemaPattern, CancellationToken cancellationToken)
+        {
+            string sql = new ShowSchemasCommand(catalog, schemaPattern).Build();
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return new List<(string, string)>();
+            }
+
+            // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
+            // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
+            bool showSchemasInAllCatalogs = catalog == null;
+            var result = new List<(string, string)>();
+            foreach (var batch in batches)
+            {
+                StringArray? catalogArray = null;
+                StringArray? schemaArray;
+
+                if (showSchemasInAllCatalogs)
+                {
+                    schemaArray = batch.Column(0) as StringArray;
+                    catalogArray = batch.Column(1) as StringArray;
+                }
+                else
+                {
+                    schemaArray = batch.Column(0) as StringArray;
+                }
+
+                if (schemaArray == null) continue;
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (schemaArray.IsNull(i)) continue;
+                    string cat = catalogArray != null && !catalogArray.IsNull(i)
+                        ? catalogArray.GetString(i)
+                        : catalog ?? "";
+                    result.Add((cat, schemaArray.GetString(i)));
+                }
+            }
+            return result;
         }
 
         /// <summary>

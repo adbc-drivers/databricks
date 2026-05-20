@@ -99,5 +99,52 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
             else
                 sql.Append(string.Format(InCatalogFormat, QuoteIdentifier(catalog)));
         }
+
+        /// <summary>
+        /// Returns true when <paramref name="pattern"/> contains a SQL LIKE wildcard
+        /// (% or _) that is NOT escaped by a preceding backslash. JDBC metadata APIs
+        /// treat catalog/schema/table arguments as LIKE patterns, but SEA SHOW commands
+        /// take literal identifiers, so callers must expand wildcards client-side.
+        /// </summary>
+        internal static bool ContainsUnescapedWildcard(string? pattern)
+        {
+            if (string.IsNullOrEmpty(pattern))
+                return false;
+
+            bool escapeNext = false;
+            for (int i = 0; i < pattern!.Length; i++)
+            {
+                char c = pattern[i];
+                if (c == '\\')
+                {
+                    // Two backslashes in a row are an escaped backslash literal, not an escape.
+                    if (i + 1 < pattern.Length && pattern[i + 1] == '\\')
+                    {
+                        i++;
+                        continue;
+                    }
+                    escapeNext = !escapeNext;
+                }
+                else if (escapeNext)
+                {
+                    escapeNext = false;
+                }
+                else if (c == '%' || c == '_')
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Returns true when <paramref name="pattern"/> is a pure "match anything"
+        /// pattern: a single unescaped % (or *). These can be optimised to
+        /// SHOW SCHEMAS IN ALL CATALOGS without enumerating catalogs.
+        /// </summary>
+        internal static bool IsMatchAnything(string? pattern)
+        {
+            return pattern == "%" || pattern == "*";
+        }
     }
 }

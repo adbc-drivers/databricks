@@ -20,6 +20,7 @@ using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
+using Apache.Arrow.Ipc;
 using AdbcDrivers.HiveServer2;
 using Xunit;
 using Xunit.Abstractions;
@@ -367,6 +368,75 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 Assert.Equal(thriftSchema.FieldsList[i].Name, seaSchema.FieldsList[i].Name);
                 Assert.Equal(thriftSchema.FieldsList[i].DataType.TypeId, seaSchema.FieldsList[i].DataType.TypeId);
             }
+        }
+
+        // --- GetObjects: catalog wildcard pattern (PECO-3035) ---
+
+        /// <summary>
+        /// Returns the total number of (catalog, schema) pairs in a
+        /// GetObjects(depth=DbSchemas) result stream. The result schema is
+        /// [catalog_name (string), catalog_db_schemas (list&lt;struct{db_schema_name,...}&gt;)].
+        /// </summary>
+        private static async Task<int> CountSchemasInGetObjects(IArrowArrayStream stream)
+        {
+            int total = 0;
+            while (true)
+            {
+                using var batch = await stream.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                // Column 1 is the list<struct> of per-catalog schemas. Each list entry
+                // is a struct array; its Length tells us how many schemas the catalog has.
+                if (batch.Column(1) is not ListArray schemasList) continue;
+                var schemasStruct = schemasList.Values as StructArray;
+                if (schemasStruct == null) continue;
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (schemasList.IsNull(i)) continue;
+                    int start = schemasList.ValueOffsets[i];
+                    int end = schemasList.ValueOffsets[i + 1];
+                    total += end - start;
+                }
+            }
+            return total;
+        }
+
+        [SkippableFact]
+        public async Task SEA_GetObjects_CatalogPercentWildcard_ReturnsSchemasFromAllCatalogs()
+        {
+            // PECO-3035: SEA must treat "%" in the catalog argument as a wildcard,
+            // matching Thrift / JDBC behavior. Before the fix, SEA wraps "%" in
+            // backticks and looks for a catalog literally named "%", finding no
+            // schemas → schema count = 0. With the fix, "%" expands to all catalogs
+            // and we get the full set of schemas (matching catalogPattern=null).
+            //
+            // Note: counting schemas (column 1, the list<struct>) rather than just
+            // catalogs (column 0) is what surfaces the bug — GetObjects always
+            // populates catalogs via GetCatalogsAsync (which handles "%" via
+            // SHOW CATALOGS LIKE), but GetSchemasAsync was passing "%" literally.
+            SkipIfNotConfigured();
+            using var conn = CreateSeaConnection();
+
+            using var baselineStream = conn.GetObjects(
+                depth: AdbcConnection.GetObjectsDepth.DbSchemas,
+                catalogPattern: null,
+                dbSchemaPattern: null,
+                tableNamePattern: null,
+                tableTypes: null,
+                columnNamePattern: null);
+            int baselineSchemaCount = await CountSchemasInGetObjects(baselineStream);
+
+            using var wildcardStream = conn.GetObjects(
+                depth: AdbcConnection.GetObjectsDepth.DbSchemas,
+                catalogPattern: "%",
+                dbSchemaPattern: null,
+                tableNamePattern: null,
+                tableTypes: null,
+                columnNamePattern: null);
+            int wildcardSchemaCount = await CountSchemasInGetObjects(wildcardStream);
+
+            Assert.True(baselineSchemaCount > 0,
+                "Baseline (catalogPattern=null) must return at least one schema");
+            Assert.Equal(baselineSchemaCount, wildcardSchemaCount);
         }
 
         // --- GetTableTypes ---
