@@ -197,7 +197,7 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.spark.path` | URI path on server | (required) | (required) |
 | `adbc.spark.token` | Token for token-based authentication | (none) | Not Supported (use `adbc.spark.auth_type=oauth` + `adbc.spark.access_token`) |
 | `adbc.spark.connect_timeout_ms` | Session establishment timeout (ms) | `30000` | Not Supported |
-| `adbc.apache.statement.query_timeout_s` | Query execution timeout (s) | `60` | Not Supported |
+| `adbc.apache.statement.query_timeout_s` | Query execution timeout (s); `0` means no timeout | `60` | `0` |
 | `adbc.apache.statement.polltime_ms` | Query status polling interval (ms) | `100` (Apache base: `500`) | `1000` |
 | `adbc.apache.statement.batch_size` | Max rows per batch request | `2000000` (Apache base: `50000`) | Not Supported |
 | `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` | Not Supported (SEA already returns native Arrow types) |
