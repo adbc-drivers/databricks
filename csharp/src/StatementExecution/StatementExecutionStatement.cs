@@ -69,6 +69,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Complex type configuration
         private readonly bool _enableComplexDatatypeSupport;
 
+        // Scalar data-type conversion mode (PECO-3060) — mirrors the connection setting.
+        private readonly DataTypeConversion _dataTypeConversion;
+
         // Connection reference for metadata queries
         private readonly StatementExecutionConnection _connection;
 
@@ -186,6 +189,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+            _dataTypeConversion = connection.DataTypeConversion;
 
             // Match Thrift: statement starts with connection's default catalog.
             // When enableMultipleCatalogSupport=true, this is the catalog from config (e.g. "main").
@@ -402,6 +406,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 reader = new ComplexTypeSerializingStream(reader);
             }
 
+            // PECO-3060: when data_type_conv=none, surface DATE/DECIMAL/TIMESTAMP as strings
+            // and widen FLOAT to DOUBLE so SEA matches Thrift's HiveServer2SchemaParser semantics.
+            // Bypass when scalar (default) — the native types declared in the manifest schema
+            // are already the desired output.
+            if (!_dataTypeConversion.HasFlag(DataTypeConversion.Scalar))
+            {
+                reader = new ScalarConversionStream(reader);
+            }
+
             // Get schema from reader
             var schema = reader.Schema;
 
@@ -615,7 +628,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             foreach (var column in manifest.Schema.Columns)
             {
                 var typeText = column.TypeText ?? string.Empty;
-                var arrowType = ArrowTypeParser.MapToArrowType(typeText, _enableComplexDatatypeSupport);
+                var arrowType = ArrowTypeParser.MapToArrowType(typeText, _enableComplexDatatypeSupport, _dataTypeConversion);
                 var metadata = new Dictionary<string, string>
                 {
                     [ColumnMetadataHelper.ArrowMetadataKey] = typeText

@@ -16,8 +16,11 @@
 
 using System;
 using System.Collections.Generic;
+using Apache.Arrow;
 using Apache.Arrow.Adbc;
+using Apache.Arrow.Types;
 using AdbcDrivers.HiveServer2.Spark;
+using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;
@@ -43,12 +46,19 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             // and OAuth M2M (client_credentials) flow (implemented in PECO-2857).
         }
 
-        private AdbcConnection CreateRestConnection()
+        private AdbcConnection CreateRestConnection(IReadOnlyDictionary<string, string>? extraProperties = null)
         {
             var properties = new Dictionary<string, string>
             {
                 [DatabricksParameters.Protocol] = "rest",
             };
+            if (extraProperties != null)
+            {
+                foreach (var kv in extraProperties)
+                {
+                    properties[kv.Key] = kv.Value;
+                }
+            }
 
             // Use URI if available (connection will parse host and warehouse ID from it)
             if (!string.IsNullOrEmpty(TestConfiguration.Uri))
@@ -431,6 +441,91 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.Equal(1, batch.Length);
+        }
+
+        /// <summary>
+        /// PECO-3060: Verifies that the SEA path honors adbc.spark.data_type_conv=none
+        /// (the M3 parameter gap). When set, DATE / DECIMAL / TIMESTAMP columns must surface
+        /// as StringType — matching the Thrift behaviour driven by
+        /// HiveServer2SchemaParser.GetArrowType (none → StringType for those types).
+        /// </summary>
+        [SkippableFact]
+        public void ExecuteQuery_DataTypeConv_None_SerializesScalarTypesToStrings()
+        {
+            SkipIfNotConfigured();
+
+            var extra = new Dictionary<string, string>
+            {
+                [SparkParameters.DataTypeConv] = DataTypeConversionOptions.None,
+            };
+            using var connection = CreateRestConnection(extra);
+            using var statement = connection.CreateStatement();
+
+            // Single-row SELECT covering each conversion-sensitive scalar type.
+            // Cheap query — no warehouse scan, INLINE result.
+            statement.SqlQuery =
+                "SELECT " +
+                "CAST('2024-01-15' AS DATE) AS date_col, " +
+                "CAST('2024-01-15 10:20:30.123' AS TIMESTAMP) AS ts_col, " +
+                "CAST(123.456 AS DECIMAL(10,3)) AS dec_col";
+
+            var result = statement.ExecuteQuery();
+            Assert.NotNull(result);
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            var schema = reader.Schema;
+            Assert.NotNull(schema);
+            Assert.Equal(3, schema.FieldsList.Count);
+
+            // Honest signal: with data_type_conv=none, all three conversion-sensitive
+            // columns must be exposed as StringType — same as Thrift's HiveServer2SchemaParser
+            // does for none mode.
+            Assert.Equal(ArrowTypeId.String, schema.GetFieldByName("date_col").DataType.TypeId);
+            Assert.Equal(ArrowTypeId.String, schema.GetFieldByName("ts_col").DataType.TypeId);
+            Assert.Equal(ArrowTypeId.String, schema.GetFieldByName("dec_col").DataType.TypeId);
+
+            // The data arrays must agree with the declared schema (Arrow contract).
+            var batch = reader.ReadNextRecordBatchAsync().Result;
+            Assert.NotNull(batch);
+            Assert.Equal(1, batch!.Length);
+            Assert.IsType<StringArray>(batch.Column("date_col"));
+            Assert.IsType<StringArray>(batch.Column("ts_col"));
+            Assert.IsType<StringArray>(batch.Column("dec_col"));
+        }
+
+        /// <summary>
+        /// PECO-3060: Sanity check the default (scalar) mode on SEA — DATE / DECIMAL /
+        /// TIMESTAMP columns must continue to surface as their native Arrow types so
+        /// existing callers are unaffected.
+        /// </summary>
+        [SkippableFact]
+        public void ExecuteQuery_DataTypeConv_Scalar_KeepsNativeTypes()
+        {
+            SkipIfNotConfigured();
+
+            var extra = new Dictionary<string, string>
+            {
+                [SparkParameters.DataTypeConv] = DataTypeConversionOptions.Scalar,
+            };
+            using var connection = CreateRestConnection(extra);
+            using var statement = connection.CreateStatement();
+
+            statement.SqlQuery =
+                "SELECT " +
+                "CAST('2024-01-15' AS DATE) AS date_col, " +
+                "CAST('2024-01-15 10:20:30.123' AS TIMESTAMP) AS ts_col, " +
+                "CAST(123.456 AS DECIMAL(10,3)) AS dec_col";
+
+            var result = statement.ExecuteQuery();
+            Assert.NotNull(result);
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            var schema = reader.Schema;
+            Assert.Equal(ArrowTypeId.Date32, schema.GetFieldByName("date_col").DataType.TypeId);
+            Assert.Equal(ArrowTypeId.Timestamp, schema.GetFieldByName("ts_col").DataType.TypeId);
+            Assert.Equal(ArrowTypeId.Decimal128, schema.GetFieldByName("dec_col").DataType.TypeId);
         }
     }
 }
