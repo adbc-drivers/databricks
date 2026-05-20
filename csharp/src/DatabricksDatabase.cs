@@ -103,6 +103,10 @@ namespace AdbcDrivers.Databricks
                     // Open the connection to create session if needed
                     var statementConnection = (StatementExecutionConnection)connection;
                     statementConnection.OpenAsync().Wait();
+                    // Mirrors Thrift wiring below: when apply_ssp_with_queries=true,
+                    // run post-open SET statements for each adbc.databricks.ssp_*.
+                    // No-op when the flag is false (SSPs already in CreateSession.session_confs).
+                    statementConnection.ApplyServerSidePropertiesAsync().Wait();
                 }
                 else if (protocol == "thrift")
                 {

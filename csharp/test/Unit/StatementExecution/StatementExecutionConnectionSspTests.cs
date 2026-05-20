@@ -178,5 +178,55 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // CreateSession should only be called once
             Assert.Single(bodies);
         }
+
+        /// <summary>
+        /// PECO-3062: when <c>adbc.databricks.apply_ssp_with_queries=true</c>, SSPs must
+        /// NOT be sent in <c>CreateSession.session_confs</c>. Instead, they are applied
+        /// via post-open <c>SET key=value</c> statements (mirrors the Thrift path).
+        ///
+        /// This is a deterministic wire-proof: the assertion fails on the broken code
+        /// (which always packs SSPs into session_confs regardless of the flag) and
+        /// passes once <c>StatementExecutionConnection</c> honors the flag.
+        /// </summary>
+        [Fact]
+        public async Task OpenAsync_WithApplySSPWithQueries_OmitsSessionConfs()
+        {
+            var (httpClient, _, bodies) = CreateCapturingHttpClient();
+            var properties = BaseProperties();
+            properties["adbc.databricks.ssp_ansi_mode"] = "true";
+            properties["adbc.databricks.ssp_timezone"] = "UTC";
+            properties[DatabricksParameters.ApplySSPWithQueries] = "true";
+
+            using var conn = new StatementExecutionConnection(properties, httpClient);
+            await conn.OpenAsync(CancellationToken.None);
+
+            Assert.Single(bodies);
+            // The CreateSession body must not contain session_confs nor the SSP values —
+            // they are deferred to post-open SET statements.
+            Assert.DoesNotContain("session_confs", bodies[0]);
+            Assert.DoesNotContain("ansi_mode", bodies[0]);
+            Assert.DoesNotContain("UTC", bodies[0]);
+        }
+
+        /// <summary>
+        /// PECO-3062: when <c>apply_ssp_with_queries=false</c> (the default), SSPs
+        /// continue to ride in <c>CreateSession.session_confs</c> as before. Locks
+        /// the existing behavior so the new flag handling doesn't regress callers.
+        /// </summary>
+        [Fact]
+        public async Task OpenAsync_WithApplySSPWithQueriesFalse_KeepsSessionConfs()
+        {
+            var (httpClient, _, bodies) = CreateCapturingHttpClient();
+            var properties = BaseProperties();
+            properties["adbc.databricks.ssp_ansi_mode"] = "true";
+            properties[DatabricksParameters.ApplySSPWithQueries] = "false";
+
+            using var conn = new StatementExecutionConnection(properties, httpClient);
+            await conn.OpenAsync(CancellationToken.None);
+
+            Assert.Single(bodies);
+            Assert.Contains("\"session_confs\"", bodies[0]);
+            Assert.Contains("ansi_mode", bodies[0]);
+        }
     }
 }
