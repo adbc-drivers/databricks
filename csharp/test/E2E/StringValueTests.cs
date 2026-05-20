@@ -72,7 +72,7 @@ namespace AdbcDrivers.Databricks.Tests
         public async Task TestVarcharExceptionDataDatabricks(string value, string[] expectedTexts, string? expectedSqlState)
         {
             // TODO: PECO-3014 - SEA throws DatabricksException not HiveServer2Exception; Assert.Throws<HiveServer2Exception>() fails
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA throws DatabricksException not HiveServer2Exception");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA throws DatabricksException not HiveServer2Exception");
             await base.TestVarcharExceptionData(value, expectedTexts, expectedSqlState);
         }
     }

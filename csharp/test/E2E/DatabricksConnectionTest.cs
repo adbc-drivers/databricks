@@ -410,7 +410,7 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         internal void DefaultNamespaceStoredInConnection()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA uses StatementExecutionConnection, not DatabricksConnection (PECO-3009)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA uses StatementExecutionConnection, not DatabricksConnection (PECO-3009)");
             // Skip if default catalog or schema is not configured
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Catalog), "Default catalog not configured");
             Skip.If(string.IsNullOrEmpty(TestConfiguration.DbSchema), "Default schema not configured");
@@ -519,7 +519,7 @@ namespace AdbcDrivers.Databricks.Tests
         // TODO: PECO-3009 - Assert.IsType<DatabricksConnection> fails for SEA's StatementExecutionConnection
         public void TracePropagationConfigurationTest(string tracePropagationEnabled, string traceParentHeaderName, string traceStateEnabled)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA uses StatementExecutionConnection, not DatabricksConnection (PECO-3009)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA uses StatementExecutionConnection, not DatabricksConnection (PECO-3009)");
             // Arrange
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             testConfig.TracePropagationEnabled = tracePropagationEnabled;
@@ -546,7 +546,7 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public void TrySetGetDirectResults_UsesDatabricksDefaultGetDirectResults()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "DirectResults is Thrift-only");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "DirectResults is Thrift-only");
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             using var connection = NewConnection(testConfig);
             // Create a mock request object

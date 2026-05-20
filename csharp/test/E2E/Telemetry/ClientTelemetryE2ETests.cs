@@ -41,7 +41,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public ClientTelemetryE2ETests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "Telemetry not wired for SEA protocol (PECO-3010)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "Telemetry not wired for SEA protocol (PECO-3010)");
         }
 
         /// <summary>

@@ -61,14 +61,14 @@ namespace AdbcDrivers.Databricks.Tests
         // TODO: PECO-3009 - SEA ADO.NET schema collection calls fail for StatementExecutionConnection
         public override void VerifySchemaTablesWithNoConstraints()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA ADO.NET schema collection not yet supported (PECO-3009)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA ADO.NET schema collection not yet supported (PECO-3009)");
             base.VerifySchemaTablesWithNoConstraints();
         }
 
         // TODO: PECO-3009 - SEA ADO.NET schema collection calls fail for StatementExecutionConnection
         public override void VerifySchemaTables()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA ADO.NET schema collection not yet supported (PECO-3009)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA ADO.NET schema collection not yet supported (PECO-3009)");
             base.VerifySchemaTables();
         }
 

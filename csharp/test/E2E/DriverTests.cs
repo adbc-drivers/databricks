@@ -100,7 +100,7 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact, Order(6)]
         public override void CanGetObjectsAll()
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns different XdbcColumnSize metadata values (PECO-3005)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA returns different XdbcColumnSize metadata values (PECO-3005)");
             base.CanGetObjectsAll();
         }
 
