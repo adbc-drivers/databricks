@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using Apache.Arrow;
 using Apache.Arrow.Types;
 using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.HiveServer2.Hive2;
 
 namespace AdbcDrivers.Databricks
 {
@@ -57,9 +58,21 @@ namespace AdbcDrivers.Databricks
         ///   <item><description><c>true</c>: native nested Arrow types parsed from
         ///   the manifest's <c>type_text</c> (see <see cref="ParseComplexType"/>).</description></item>
         /// </list>
-        /// Primitives (including INTERVAL, which is always string-typed) ignore the flag.
+        /// <para>
+        /// <paramref name="dataTypeConversion"/> controls how the conversion-sensitive
+        /// scalar types — DATE / DECIMAL / TIMESTAMP / FLOAT — are surfaced, mirroring
+        /// <see cref="HiveServer2SchemaParser.GetArrowType"/>:
+        /// <list type="bullet">
+        ///   <item><description><c>scalar</c> (default): DATE→Date32, DECIMAL→Decimal128,
+        ///   TIMESTAMP→Timestamp, FLOAT→Float (native Arrow types).</description></item>
+        ///   <item><description><c>none</c>: DATE/DECIMAL/TIMESTAMP→String,
+        ///   FLOAT→Double (widening). Paired with <see cref="ScalarConversionStream"/>
+        ///   which converts the native arrays to match.</description></item>
+        /// </list>
+        /// Other primitives (BOOLEAN/INT/BIGINT/STRING/BINARY/INTERVAL/NULL) ignore the flag.
+        /// </para>
         /// </summary>
-        internal static IArrowType MapToArrowType(string typeText, bool enableComplexDatatypeSupport)
+        internal static IArrowType MapToArrowType(string typeText, bool enableComplexDatatypeSupport, DataTypeConversion dataTypeConversion)
         {
             var baseType = ColumnMetadataHelper.GetBaseTypeName(typeText).ToUpperInvariant();
             if (baseType is "ARRAY" or "MAP" or "STRUCT")
@@ -68,8 +81,15 @@ namespace AdbcDrivers.Databricks
                     ? ParseComplexType(typeText)
                     : StringType.Default;
             }
-            return MapPrimitiveType(typeText);
+            return MapPrimitiveType(typeText, dataTypeConversion);
         }
+
+        /// <summary>
+        /// Backward-compatible overload that defaults to <see cref="DataTypeConversion.Scalar"/>.
+        /// Existing callers (e.g. unit tests that pre-date PECO-3060) keep their current behaviour.
+        /// </summary>
+        internal static IArrowType MapToArrowType(string typeText, bool enableComplexDatatypeSupport)
+            => MapToArrowType(typeText, enableComplexDatatypeSupport, DataTypeConversion.Scalar);
 
         /// <summary>
         /// Parses <paramref name="typeText"/> into a native Arrow type. Returns
@@ -89,8 +109,11 @@ namespace AdbcDrivers.Databricks
         /// Used by <see cref="MapToArrowType"/> for top-level columns and by
         /// <see cref="ParseComplexType"/> for primitive leaves inside ARRAY/MAP/STRUCT.
         /// </summary>
-        private static IArrowType MapPrimitiveType(string typeText)
+        /// <param name="typeText">The manifest type text (may include parameters like <c>DECIMAL(10,2)</c>).</param>
+        /// <param name="dataTypeConversion">Controls DATE/DECIMAL/TIMESTAMP/FLOAT handling — see <see cref="MapToArrowType(string, bool, DataTypeConversion)"/>.</param>
+        private static IArrowType MapPrimitiveType(string typeText, DataTypeConversion dataTypeConversion)
         {
+            bool convertScalar = dataTypeConversion.HasFlag(DataTypeConversion.Scalar);
             var baseType = ColumnMetadataHelper.GetBaseTypeName(typeText).ToUpperInvariant();
             return baseType switch
             {
@@ -99,19 +122,32 @@ namespace AdbcDrivers.Databricks
                 "SHORT" or "SMALLINT" => Int16Type.Default,
                 "INT" or "INTEGER" => Int32Type.Default,
                 "LONG" or "BIGINT" => Int64Type.Default,
-                "FLOAT" or "REAL" => FloatType.Default,
+                // FLOAT: scalar→Float (native), none→Double (widening), matching HiveServer2SchemaParser.
+                "FLOAT" or "REAL" => convertScalar ? FloatType.Default : DoubleType.Default,
                 "DOUBLE" => DoubleType.Default,
-                "DECIMAL" or "NUMERIC" => ParseDecimalType(typeText),
+                // DECIMAL: scalar→Decimal128, none→String, matching HiveServer2SchemaParser.
+                "DECIMAL" or "NUMERIC" => convertScalar ? ParseDecimalType(typeText) : StringType.Default,
                 "STRING" or "VARCHAR" or "CHAR" => StringType.Default,
                 "BINARY" or "VARBINARY" => BinaryType.Default,
-                "DATE" => Date32Type.Default,
-                "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
+                // DATE: scalar→Date32, none→String, matching HiveServer2SchemaParser.
+                "DATE" => convertScalar ? Date32Type.Default : StringType.Default,
+                // TIMESTAMP: scalar→Timestamp, none→String, matching HiveServer2SchemaParser.
+                "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => convertScalar ? TimestampType.Default : StringType.Default,
                 // INTERVAL is converted to string by IntervalSerializingStream; StringType is the output contract.
                 "INTERVAL" => StringType.Default,
                 "NULL" or "VOID" => NullType.Default,
                 _ => StringType.Default,
             };
         }
+
+        /// <summary>
+        /// Backward-compatible overload defaulting to <see cref="DataTypeConversion.Scalar"/>
+        /// for the recursive complex-type parser, which always uses native scalar mapping
+        /// for leaves regardless of the user's flag (Thrift behaves the same — the flag
+        /// only governs the schema's top-level type for the affected scalars).
+        /// </summary>
+        private static IArrowType MapPrimitiveType(string typeText)
+            => MapPrimitiveType(typeText, DataTypeConversion.Scalar);
 
         private static IArrowType ParseDecimalType(string typeText)
         {

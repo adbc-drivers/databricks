@@ -73,6 +73,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string _traceParentHeaderName;
         private readonly bool _traceStateEnabled;
         private readonly bool _enableComplexDatatypeSupport;
+        private readonly DataTypeConversion _dataTypeConversion;
 
         // Authentication support
         private readonly string? _identityFederationClientId;
@@ -241,6 +242,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
             _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
             _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableComplexDatatypeSupport, false);
+
+            // PECO-3060: Mirror the Thrift path's handling of adbc.spark.data_type_conv
+            // (see SparkHttpConnection.ValidateOptions). scalar (default) keeps native
+            // Arrow types for DATE/DECIMAL/TIMESTAMP/FLOAT; none surfaces them as strings
+            // (and widens FLOAT to DOUBLE), matching HiveServer2SchemaParser.GetArrowType.
+            properties.TryGetValue(SparkParameters.DataTypeConv, out string? dataTypeConv);
+            _dataTypeConversion = DataTypeConversionParser.Parse(dataTypeConv);
 
             // Authentication configuration
             if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
@@ -935,6 +943,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // TracingConnection provides IActivityTracer implementation
         internal bool EnableComplexDatatypeSupport => _enableComplexDatatypeSupport;
+
+        /// <summary>
+        /// The parsed scalar data-type conversion mode. Mirrors HiveServer2Connection.DataTypeConversion —
+        /// scalar (default) keeps native types, none surfaces DATE/DECIMAL/TIMESTAMP as strings (and
+        /// widens FLOAT to DOUBLE) so SEA matches Thrift's behaviour. See PECO-3060.
+        /// </summary>
+        internal DataTypeConversion DataTypeConversion => _dataTypeConversion;
 
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
         public override string AssemblyName => "AdbcDrivers.Databricks";
