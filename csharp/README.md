@@ -184,7 +184,7 @@ var config = new Dictionary<string, string>
 
 ### Connection Properties
 
-The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) and **SEA** (Statement Execution REST API, opt-in via `adbc.databricks.protocol=rest`). The tables below show per-protocol defaults; an em-dash (`—`) means the property is not honored on that protocol.
+The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) and **SEA** (Statement Execution REST API, opt-in via `adbc.databricks.protocol=rest`). The tables below show per-protocol defaults; `Not Supported` means the property is not honored on that protocol.
 
 #### Core Spark Properties (Inherited)
 
@@ -196,12 +196,12 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.spark.port` | Connection port | `443` | `443` |
 | `adbc.spark.path` | URI path on server | (required) | (required) |
 | `adbc.spark.token` | Token for token-based authentication | (none) | (none) |
-| `username` | Username for basic authentication | — | — |
-| `password` | Password for basic authentication | — | — |
-| `adbc.spark.connect_timeout_ms` | Session establishment timeout (ms) | `30000` | — |
-| `adbc.apache.statement.query_timeout_s` | Query execution timeout (s) | `60` | — |
+| `username` | Username for basic authentication | Not Supported | Not Supported |
+| `password` | Password for basic authentication | Not Supported | Not Supported |
+| `adbc.spark.connect_timeout_ms` | Session establishment timeout (ms) | `30000` | Not Supported |
+| `adbc.apache.statement.query_timeout_s` | Query execution timeout (s) | `60` | Not Supported |
 | `adbc.apache.statement.polltime_ms` | Query status polling interval (ms) | `100` (Apache base: `500`) | `1000` |
-| `adbc.apache.statement.batch_size` | Max rows per batch request | `2000000` (Apache base: `50000`) | — |
+| `adbc.apache.statement.batch_size` | Max rows per batch request | `2000000` (Apache base: `50000`) | Not Supported |
 | `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` | `scalar` |
 | `adbc.spark.user_agent_entry` | Additional user agent string appended to driver user agent | (none) | (none) |
 
@@ -217,24 +217,24 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.connection.catalog` | Default catalog for session | (server default) | (server default) |
 | `adbc.connection.db_schema` | Default schema for session | (server default) | (server default) |
 | `adbc.databricks.enable_direct_results` | Use direct results when executing | `true` | `true` |
-| `adbc.databricks.max_bytes_per_fetch_request` | Max bytes per fetch request (supports B, KB, MB, GB) | `400MB` | — |
-| `adbc.databricks.apply_ssp_with_queries` | Apply server-side properties with queries | `false` | — |
+| `adbc.databricks.max_bytes_per_fetch_request` | Max bytes per fetch request (supports B, KB, MB, GB) | `400MB` | Not Supported |
+| `adbc.databricks.apply_ssp_with_queries` | Apply server-side properties with queries | `false` | Not Supported |
 | `adbc.databricks.enable_multiple_catalog_support` | Support multiple catalogs | `true` | `true` |
 | `adbc.databricks.enable_pk_fk` | Enable primary/foreign key metadata | `true` | `true` |
 | `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` | `true` |
-| `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` | — (Thrift-only concept) |
+| `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` | Not Supported (Thrift-only concept) |
 | `adbc.databricks.enable_complex_datatype_support` | Return native Arrow types for ARRAY/MAP/STRUCT | `false` | `false` |
-| `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (s) | `60` | — (no fetch-handle to keep warm) |
-| `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (s) | `30` | — |
+| `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (s) | `60` | Not Supported (no fetch-handle to keep warm) |
+| `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (s) | `30` | Not Supported |
 | `adbc.spark.temporarily_unavailable_retry` | Retry on 408/502/503/504 responses | `true` | `true` |
 | `adbc.spark.temporarily_unavailable_retry_timeout` | Max retry time for 4xx/5xx errors (s) | `900` | `900` |
 | `adbc.databricks.rate_limit_retry` | Retry on HTTP 429 (rate limit) responses | `true` | `true` |
 | `adbc.databricks.rate_limit_retry_timeout` | Max retry time for rate limits (s) | `120` | `120` |
 | `adbc.databricks.query_tags` | Key-value tags attached to queries (e.g. `key1=val1,key2=val2`) | (none) | (none) |
 | `adbc.databricks.identity_federation_client_id` | Service principal client ID for workload identity | (none) | (none) |
-| `adbc.databricks.feature_flag_cache_enabled` | Fetch and apply server-side feature flags | `true` | — |
-| `adbc.databricks.feature_flag_timeout_seconds` | Timeout for feature flag fetch requests | `10` | — |
-| `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` | — |
+| `adbc.databricks.feature_flag_cache_enabled` | Fetch and apply server-side feature flags | `true` | Not Supported |
+| `adbc.databricks.feature_flag_timeout_seconds` | Timeout for feature flag fetch requests | `10` | Not Supported |
+| `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` | Not Supported |
 | `adbc.databricks.ssp_<name>` | Pass session configuration (e.g., `ssp_use_cached_result=true`) | (none) | (none) |
 
 **Performance Notes:**
@@ -251,18 +251,18 @@ On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databric
 
 | Property | Description | Thrift Default | SEA Default |
 |----------|-------------|----------------|-------------|
-| `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` | — |
-| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | — |
-| `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` | — |
-| `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` | — |
-| `adbc.databricks.cloudfetch.prefetch_count` | Files to prefetch ahead | `2` | — |
-| `adbc.databricks.cloudfetch.memory_buffer_size_mb` | Max memory buffer in MB | `200` | — |
-| `adbc.databricks.cloudfetch.prefetch_enabled` | Enable prefetch | `true` | — |
-| `adbc.databricks.cloudfetch.max_retries` | Max retry attempts | `3` | — |
-| `adbc.databricks.cloudfetch.retry_delay_ms` | Delay between retries (ms) | `500` | — |
+| `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` | Not Supported |
+| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | Not Supported |
+| `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` | Not Supported |
+| `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` | Not Supported |
+| `adbc.databricks.cloudfetch.prefetch_count` | Files to prefetch ahead | `2` | Not Supported |
+| `adbc.databricks.cloudfetch.memory_buffer_size_mb` | Max memory buffer in MB | `200` | Not Supported |
+| `adbc.databricks.cloudfetch.prefetch_enabled` | Enable prefetch | `true` | Not Supported |
+| `adbc.databricks.cloudfetch.max_retries` | Max retry attempts | `3` | Not Supported |
+| `adbc.databricks.cloudfetch.retry_delay_ms` | Delay between retries (ms) | `500` | Not Supported |
 | `adbc.databricks.cloudfetch.timeout_minutes` | HTTP operation timeout (min) | `5` | `5` (via shared HttpClient timeout) |
-| `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | URL refresh buffer (s) | `60` | — |
-| `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Max URL refresh attempts | `3` | — |
+| `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | URL refresh buffer (s) | `60` | Not Supported |
+| `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Max URL refresh attempts | `3` | Not Supported |
 
 **Example Configuration:**
 ```csharp
