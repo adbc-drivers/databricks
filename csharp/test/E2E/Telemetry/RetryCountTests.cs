@@ -40,7 +40,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         public RetryCountTests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "Retry count telemetry tests are Thrift-only");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "Retry count telemetry tests are Thrift-only");
         }
 
         /// <summary>

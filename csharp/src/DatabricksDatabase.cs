@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -79,12 +80,10 @@ namespace AdbcDrivers.Databricks
                 // Merge with environment config (DATABRICKS_CONFIG_FILE) and feature flags from server
                 mergedProperties = MergeWithEnvironmentConfigAndFeatureFlags(mergedProperties);
 
-                // Check protocol selection
-                string protocol = "thrift"; // default
-                if (mergedProperties.TryGetValue(DatabricksParameters.Protocol, out var protocolValue))
-                {
-                    protocol = protocolValue.ToLowerInvariant();
-                }
+                // Resolve protocol via explicit override -> httpPath auto-detection -> legacy default.
+                // PECO-3055: matches JDBC's compute-resource-based protocol selection
+                // (DatabricksConnectionContext.getClientTypeFromContext).
+                string protocol = ResolveProtocol(mergedProperties);
 
                 AdbcConnection connection;
 
@@ -95,26 +94,38 @@ namespace AdbcDrivers.Databricks
                     // including TracingDelegatingHandler, RetryHttpHandler, and OAuth authentication
                     // handlers (OAuthDelegatingHandler, TokenRefreshDelegatingHandler,
                     // MandatoryTokenExchangeDelegatingHandler) when OAuth auth is configured
-                    connection = new StatementExecutionConnection(
-                        mergedProperties,
-                        this.RecyclableMemoryStreamManager,
-                        this.Lz4BufferPool);
+                    bool fallbackToThrift = false;
+                    try
+                    {
+                        connection = new StatementExecutionConnection(
+                            mergedProperties,
+                            this.RecyclableMemoryStreamManager,
+                            this.Lz4BufferPool);
 
-                    // Open the connection to create session if needed
-                    var statementConnection = (StatementExecutionConnection)connection;
-                    statementConnection.OpenAsync().Wait();
+                        // Open the connection to create session if needed
+                        var statementConnection = (StatementExecutionConnection)connection;
+                        statementConnection.OpenAsync().Wait();
+                    }
+                    catch (Exception ex) when (!IsExplicitProtocolOverride(mergedProperties) && IsTemporaryRedirectError(ex))
+                    {
+                        // PECO-3055: SEA -> Thrift fallback on HTTP 307 from createSession.
+                        // The redirect signals the workspace routes SEA traffic back to Thrift
+                        // (e.g., region-locked SEA disable). Mirrors JDBC's
+                        // DatabricksSession.open() handling of DatabricksTemporaryRedirectException.
+                        // Only fall back when protocol was auto-detected — explicit "rest"
+                        // selection from the user must surface the error.
+                        fallbackToThrift = true;
+                        connection = null!;
+                    }
+
+                    if (fallbackToThrift)
+                    {
+                        connection = OpenThriftConnection(mergedProperties);
+                    }
                 }
                 else if (protocol == "thrift")
                 {
-                    // Use traditional Thrift/HiveServer2 protocol
-                    connection = new DatabricksConnection(
-                        mergedProperties,
-                        this.RecyclableMemoryStreamManager,
-                        this.Lz4BufferPool);
-
-                    var databricksConnection = (DatabricksConnection)connection;
-                    databricksConnection.OpenAsync().Wait();
-                    databricksConnection.ApplyServerSidePropertiesAsync().Wait();
+                    connection = OpenThriftConnection(mergedProperties);
                 }
                 else
                 {
@@ -247,6 +258,154 @@ namespace AdbcDrivers.Databricks
             }
 
             return merged;
+        }
+
+        // PECO-3055: regexes mirror the JDBC driver's path patterns
+        // (DatabricksJdbcConstants.HTTP_WAREHOUSE_PATH_PATTERN / HTTP_ENDPOINT_PATH_PATTERN /
+        // HTTP_CLUSTER_PATH_PATTERN). Kept here so the protocol decision logic is co-located
+        // with the only consumer; the SEA-side warehouse-ID extraction in
+        // StatementExecutionConnection uses its own stricter regex for /sql/1.0/(...)/{id}.
+        private static readonly Regex s_warehousePathPattern =
+            new Regex(@".*/warehouses/.+", RegexOptions.Compiled);
+        private static readonly Regex s_endpointPathPattern =
+            new Regex(@".*/endpoints/.+", RegexOptions.Compiled);
+        private static readonly Regex s_clusterPathPattern =
+            new Regex(@".*/o/.+/.+", RegexOptions.Compiled);
+
+        /// <summary>
+        /// PECO-3055: Resolves the protocol ("rest" for SEA, "thrift" for HiveServer2) using the same
+        /// priority order as JDBC's <c>DatabricksConnectionContext.getClientTypeFromContext</c>:
+        /// <list type="number">
+        ///   <item>If <see cref="DatabricksParameters.Protocol"/> is set explicitly, honor it.</item>
+        ///   <item>Otherwise inspect the httpPath:
+        ///     <list type="bullet">
+        ///       <item>Matches <c>.../o/.+/.+</c> (general-purpose cluster) → force <c>thrift</c>.</item>
+        ///       <item>Matches <c>.../warehouses/.+</c> or <c>.../endpoints/.+</c> → default to <c>rest</c>.</item>
+        ///     </list>
+        ///   </item>
+        ///   <item>Otherwise fall back to <c>thrift</c> (preserves pre-3055 behavior for
+        ///     unparseable paths and unit-test fixtures that omit httpPath).</item>
+        /// </list>
+        /// </summary>
+        internal static string ResolveProtocol(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(DatabricksParameters.Protocol, out var explicitProtocol)
+                && !string.IsNullOrWhiteSpace(explicitProtocol))
+            {
+                return explicitProtocol.ToLowerInvariant();
+            }
+
+            string? httpPath = GetHttpPath(properties);
+            if (!string.IsNullOrEmpty(httpPath))
+            {
+                // Strip query string before matching so /sql/1.0/warehouses/abc?o=123 still
+                // resolves as a warehouse path.
+                string pathOnly = httpPath!;
+                int q = pathOnly.IndexOf('?');
+                if (q >= 0) pathOnly = pathOnly.Substring(0, q);
+
+                // GP cluster wins over warehouse/endpoint when both could match
+                // (cluster paths never contain "/warehouses/" in practice, but JDBC checks
+                // warehouse first then cluster; we keep the cluster check first to make the
+                // forced-Thrift rule explicit per the PECO-3055 ticket description).
+                if (s_clusterPathPattern.IsMatch(pathOnly))
+                {
+                    return "thrift";
+                }
+                if (s_warehousePathPattern.IsMatch(pathOnly) || s_endpointPathPattern.IsMatch(pathOnly))
+                {
+                    return "rest";
+                }
+            }
+
+            // Fallback: legacy default. Preserves backwards compatibility for callers that
+            // construct the driver without an httpPath (some integration test harnesses do this).
+            return "thrift";
+        }
+
+        /// <summary>
+        /// Returns true iff the caller passed <see cref="DatabricksParameters.Protocol"/> explicitly.
+        /// Used to gate the SEA→Thrift 307 fallback: explicit "rest" must surface 307 errors so
+        /// callers see a clear signal that SEA isn't available for their workspace.
+        /// </summary>
+        private static bool IsExplicitProtocolOverride(IReadOnlyDictionary<string, string> properties) =>
+            properties.TryGetValue(DatabricksParameters.Protocol, out var v) && !string.IsNullOrWhiteSpace(v);
+
+        /// <summary>
+        /// Pulls the httpPath property in the same order the rest of the driver does
+        /// (<see cref="SparkParameters.Path"/> first, falling back to <see cref="AdbcOptions.Uri"/>'s
+        /// AbsolutePath). Mirrors <c>StatementExecutionConnection</c>'s ctor logic so protocol
+        /// detection and SEA's warehouse-ID parsing always see the same path.
+        /// </summary>
+        private static string? GetHttpPath(IReadOnlyDictionary<string, string> properties)
+        {
+            if (properties.TryGetValue(SparkParameters.Path, out var path) && !string.IsNullOrEmpty(path))
+            {
+                return path;
+            }
+            if (properties.TryGetValue(AdbcOptions.Uri, out var uri) && !string.IsNullOrEmpty(uri)
+                && Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri))
+            {
+                return parsedUri.AbsolutePath;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Detects whether an exception chain originates from an HTTP 307 (TemporaryRedirect)
+        /// response — the trigger for SEA → Thrift fallback per PECO-3055.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// SEA's <c>StatementExecutionClient.EnsureSuccessStatusCodeAsync</c> currently throws
+        /// <see cref="DatabricksException"/> with a message containing the literal HTTP status
+        /// code, so we match on <c>"status code 307"</c>. We also recognize the raw
+        /// <see cref="System.Net.Http.HttpRequestException"/> with HTTP 307 in its message for
+        /// the case where the redirect is surfaced before the SEA client wraps it.
+        /// </para>
+        /// <para>
+        /// JDBC uses a dedicated <c>DatabricksTemporaryRedirectException</c> subclass for this;
+        /// the C# driver doesn't carry HTTP status on its exception type yet, so we use
+        /// message inspection here. A follow-up could promote this to a typed exception once
+        /// SEA error mapping is refactored — kept out of scope for PECO-3055.
+        /// </para>
+        /// </remarks>
+        private static bool IsTemporaryRedirectError(Exception ex)
+        {
+            for (Exception? current = ex; current != null; current = current.InnerException)
+            {
+                if (current.Message.IndexOf("status code 307", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+                if (current is System.Net.Http.HttpRequestException hre)
+                {
+#if NET5_0_OR_GREATER
+                    if (hre.StatusCode == System.Net.HttpStatusCode.TemporaryRedirect)
+                    {
+                        return true;
+                    }
+#endif
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Constructs and opens a Thrift/HiveServer2 <see cref="DatabricksConnection"/>.
+        /// Extracted so both the primary protocol="thrift" branch and the SEA→Thrift 307
+        /// fallback path can share the same open sequence (open + ApplyServerSidePropertiesAsync).
+        /// </summary>
+        private DatabricksConnection OpenThriftConnection(IReadOnlyDictionary<string, string> mergedProperties)
+        {
+            var connection = new DatabricksConnection(
+                mergedProperties,
+                this.RecyclableMemoryStreamManager,
+                this.Lz4BufferPool);
+
+            connection.OpenAsync().Wait();
+            connection.ApplyServerSidePropertiesAsync().Wait();
+            return connection;
         }
     }
 }

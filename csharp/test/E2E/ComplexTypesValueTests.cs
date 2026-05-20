@@ -97,14 +97,14 @@ namespace AdbcDrivers.Databricks.Tests
         // TODO: PECO-3014 - SEA returns NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL array elements in different format
         protected override async System.Threading.Tasks.Task ValidateTestArrayData(string projection, string value)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns array elements in different format for NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL (PECO-3014)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA returns array elements in different format for NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL (PECO-3014)");
             await base.ValidateTestArrayData(projection, value);
         }
 
         // TODO: PECO-3014 - SEA returns map values in different format
         protected override async System.Threading.Tasks.Task ValidateTestMapData(string projection, string value)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns map values in different format (PECO-3014)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA returns map values in different format (PECO-3014)");
             await base.ValidateTestMapData(projection, value);
         }
 

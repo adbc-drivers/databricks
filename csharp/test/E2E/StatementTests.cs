@@ -48,21 +48,21 @@ namespace AdbcDrivers.Databricks.Tests
         // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate poll time option
         protected override void ValidateCanSetOptionPollTime(string value, bool throws = false)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce poll time validation");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA does not enforce poll time validation");
             base.ValidateCanSetOptionPollTime(value, throws);
         }
 
         // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate query timeout option
         protected override void ValidateCanSetOptionQueryTimeout(string value, bool throws = false)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce query timeout validation");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA does not enforce query timeout validation");
             base.ValidateCanSetOptionQueryTimeout(value, throws);
         }
 
         // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate batch size option
         protected override void ValidateCanSetOptionBatchSize(string value, bool throws = false)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce batch size validation");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA does not enforce batch size validation");
             base.ValidateCanSetOptionBatchSize(value, throws);
         }
 
@@ -124,7 +124,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData(LongRunningStatementTimeoutTestData.LongRunningQuery, "true", "false")]
         internal async Task DatabricksCanCancelStatementTest(string query, string enableRunAsyncInThriftOp, string enableDirectResults)
         {
-            if (TestConfiguration.Protocol == "rest")
+            if (DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration))
             {
                 // SEA: Thrift flags don't apply; run basic cancel test directly
                 await base.CanCancelStatementTest(query);
@@ -485,7 +485,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false, new[] { "PK_IS_NULLABLE:YES" })]
         public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended, string[]? extraPlaceholdsInResult = null)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanGetColumnsExtended returns different BUFFER_LENGTH values (PECO-3008)");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA CanGetColumnsExtended returns different BUFFER_LENGTH values (PECO-3008)");
             var connectionParams = new Dictionary<string, string> { ["adbc.databricks.use_desc_table_extended"] = $"{useDescTableExtended}" };
 
             using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
@@ -1196,7 +1196,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData(true, "main", false)]
         public void ShouldReturnEmptyPkFkResult_WorksAsExpected(bool enablePKFK, string? catalogName, bool expected)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA: hard cast to DatabricksStatement fails for StatementExecutionStatement");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA: hard cast to DatabricksStatement fails for StatementExecutionStatement");
             // Arrange: create test configuration and connection
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             var connectionParams = new Dictionary<string, string>

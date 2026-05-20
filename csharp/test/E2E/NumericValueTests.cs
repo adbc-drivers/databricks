@@ -66,7 +66,7 @@ namespace AdbcDrivers.Databricks.Tests
         public override async Task TestFloatValuesInsertSelectDelete(float value)
         {
             // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
+            Skip.If(DatabricksTestEnvironment.IsResolvedProtocolRest(TestConfiguration), "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
             await base.TestFloatValuesInsertSelectDelete(value);
         }
 

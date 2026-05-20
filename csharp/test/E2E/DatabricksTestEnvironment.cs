@@ -59,6 +59,25 @@ namespace AdbcDrivers.Databricks.Tests
 
         public override string SqlDataResourceLocation => "Resources/Databricks.sql";
 
+        // PECO-3055: protocol now auto-detects from httpPath when not set explicitly.
+        // Existing tests that assert Thrift-specific behavior key off this helper instead
+        // of comparing TestConfiguration.Protocol to the literal "rest", which only catches
+        // the explicit-set case and misses the new "empty Protocol + warehouse path -> SEA"
+        // default.
+        public static bool IsResolvedProtocolRest(DatabricksTestConfiguration testConfiguration)
+        {
+            // Build the same parameter shape DatabricksTestEnvironment.GetDriverParameters does,
+            // but only for the fields ResolveProtocol cares about (Protocol, Path, Uri).
+            var props = new Dictionary<string, string>();
+            if (!string.IsNullOrEmpty(testConfiguration.Protocol))
+                props[DatabricksParameters.Protocol] = testConfiguration.Protocol!;
+            if (!string.IsNullOrEmpty(testConfiguration.Path))
+                props[SparkParameters.Path] = testConfiguration.Path!;
+            if (!string.IsNullOrEmpty(testConfiguration.Uri))
+                props[AdbcOptions.Uri] = testConfiguration.Uri!;
+            return DatabricksDatabase.ResolveProtocol(props) == "rest";
+        }
+
         public override int ExpectedColumnCount => 19;
 
         public override AdbcDriver CreateNewDriver() => new DatabricksDriver();
