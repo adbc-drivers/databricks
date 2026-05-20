@@ -191,23 +191,21 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | Property | Description | Thrift Default | SEA Default |
 |----------|-------------|----------------|-------------|
 | `uri` | Full connection URI (alternative to host/port/path) | (required if no host/path) | (required if no host/path) |
-| `adbc.spark.type` | Server type: `http` | `http` | `http` |
+| `adbc.spark.type` | Server type: `http` | `http` | Not Supported (SEA is always HTTPS) |
 | `adbc.spark.host` | Hostname without scheme/port | (required) | (required) |
-| `adbc.spark.port` | Connection port | `443` | `443` |
+| `adbc.spark.port` | Connection port | `443` | Not Supported (HTTPS port from URI) |
 | `adbc.spark.path` | URI path on server | (required) | (required) |
-| `adbc.spark.token` | Token for token-based authentication | (none) | (none) |
-| `username` | Username for basic authentication | Not Supported | Not Supported |
-| `password` | Password for basic authentication | Not Supported | Not Supported |
+| `adbc.spark.token` | Token for token-based authentication | (none) | Not Supported (use `adbc.spark.auth_type=oauth` + `adbc.spark.access_token`) |
 | `adbc.spark.connect_timeout_ms` | Session establishment timeout (ms) | `30000` | Not Supported |
 | `adbc.apache.statement.query_timeout_s` | Query execution timeout (s) | `60` | Not Supported |
 | `adbc.apache.statement.polltime_ms` | Query status polling interval (ms) | `100` (Apache base: `500`) | `1000` |
 | `adbc.apache.statement.batch_size` | Max rows per batch request | `2000000` (Apache base: `50000`) | Not Supported |
-| `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` | `scalar` |
+| `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` | Not Supported (SEA already returns native Arrow types) |
 | `adbc.spark.user_agent_entry` | Additional user agent string appended to driver user agent | (none) | (none) |
 
 **Notes:**
 - Either `uri` or the combination of `adbc.spark.host` + `adbc.spark.path` is required.
-- Basic auth (`username` / `password`) is not supported on either protocol; use `adbc.spark.auth_type=oauth`.
+- Basic auth (`username` / `password`) is not supported against Databricks workspaces; use `adbc.spark.auth_type=oauth`. The Thrift base layer accepts the parameters and emits a Basic auth header, but the Databricks gateway rejects it; the SEA path doesn't wire the parameters through at all.
 - `polltime_ms` has divergent defaults: Thrift polls cheap RPCs at 100 ms; SEA polls HTTP/JSON at 1000 ms.
 
 #### Databricks-Specific Properties
