@@ -146,10 +146,21 @@ namespace AdbcDrivers.Databricks.Tests
         /// Integration test for running queries against a real Databricks cluster with different CloudFetch settings.
         /// Tests both Thrift and Statement Execution REST API protocols.
         /// </summary>
-        [Theory]
+        [SkippableTheory]
         [MemberData(nameof(TestCases))]
         public async Task TestCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults, string protocol)
         {
+            // PECO-3056: cloudfetch.enabled=false on the SEA path requires
+            // result_format=JSON_ARRAY (pure INLINE disposition), which the C#
+            // driver does not yet read. The connection now throws at construction
+            // time when this combination is requested; skip the case here until
+            // a JSON_ARRAY reader is added. Prior to PECO-3056 this combination
+            // was silently ignored (the param had no effect on the wire), so
+            // these test cases were accidentally validating "useCloudFetch=true"
+            // behavior under a "useCloudFetch=false" label.
+            Skip.If(protocol == "rest" && !useCloudFetch,
+                "PECO-3056: useCloudFetch=false on SEA throws by design; pending JSON_ARRAY reader.");
+
             var parameters = new Dictionary<string, string>
             {
                 [DatabricksParameters.Protocol] = protocol,

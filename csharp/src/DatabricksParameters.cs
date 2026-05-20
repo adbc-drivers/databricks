@@ -34,12 +34,32 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Whether to use CloudFetch for retrieving results.
         /// Default value is true if not specified.
+        ///
+        /// Honored by both protocols:
+        ///   - Thrift: controls the canUseCloudFetch flag on TFetchResultsReq.
+        ///   - SEA (REST): JDBC pairs <c>cloudfetch.enabled=false</c> with
+        ///     <c>disposition=INLINE</c> + <c>format=JSON_ARRAY</c>, because the
+        ///     SEA server rejects <c>ARROW_STREAM</c> with pure <c>INLINE</c>.
+        ///     The C# SEA driver does not yet ship a <c>JSON_ARRAY</c> reader,
+        ///     so requesting <c>cloudfetch.enabled=false</c> on the SEA path
+        ///     surfaces a clear <c>AdbcStatusCode.NotImplemented</c> error at
+        ///     connect time rather than silently ignoring the param. Once a
+        ///     JSON_ARRAY reader lands, this will flip to the JDBC behavior.
+        ///
+        /// Note: Reyden does not generate external links and will coerce results
+        /// to INLINE on the server side regardless of what the driver requests.
         /// </summary>
         public const string UseCloudFetch = "adbc.databricks.cloudfetch.enabled";
 
         /// <summary>
         /// Whether the client can decompress LZ4 compressed results.
         /// Default value is true if not specified.
+        ///
+        /// Honored by both protocols:
+        ///   - Thrift: controls canDecompressLZ4Result on TFetchResultsReq.
+        ///   - SEA (REST): when false, clears <c>result_compression</c> on the
+        ///     ExecuteStatement request (overriding any <see cref="ResultCompression"/>
+        ///     value). Mirrors JDBC's <c>CompressionCodec.NONE</c> branch.
         /// </summary>
         public const string CanDecompressLz4 = "adbc.databricks.cloudfetch.lz4.enabled";
 

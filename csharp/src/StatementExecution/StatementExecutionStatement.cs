@@ -76,6 +76,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _currentStatementId;
         private string? _sqlQuery;
 
+        // Last ExecuteStatement request sent on the wire. Exposed as an internal
+        // test seam (PECO-3056) so that E2E tests can assert what disposition /
+        // compression the driver actually emitted, without intercepting HTTP.
+        // Not used by production code paths.
+        private ExecuteStatementRequest? _lastExecuteRequest;
+
+        /// <summary>
+        /// The most recent <see cref="ExecuteStatementRequest"/> built by this
+        /// statement and handed to the SEA client. Test-only observability seam;
+        /// null until the statement has executed at least once.
+        /// </summary>
+        internal ExecuteStatementRequest? LastExecuteRequest => _lastExecuteRequest;
+
         // Cancel support
         private readonly object _cancelLock = new();
         private CancellationTokenSource? _executeCts;
@@ -340,6 +353,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 IsMetadata = isMetadataExecution,
                 QueryTags = ParseQueryTags(_queryTags)
             };
+            _lastExecuteRequest = request;
 
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
@@ -680,6 +694,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 IsMetadata = false,
                 QueryTags = ParseQueryTags(_queryTags)
             };
+            _lastExecuteRequest = request;
 
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
