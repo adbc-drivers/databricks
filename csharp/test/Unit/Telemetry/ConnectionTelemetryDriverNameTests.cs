@@ -70,25 +70,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void SafeBuildSystemConfiguration_ReturnsCanonicalDriverName_HappyPath()
+        public void SafeBuildSystemConfiguration_ReturnsCanonicalDriverName()
         {
-            // Happy path: SafeBuildSystemConfiguration delegates to BuildSystemConfiguration
-            // and must return the same canonical literal.
+            // SafeBuildSystemConfiguration delegates to BuildSystemConfiguration on the
+            // happy path and must return the same canonical literal. The catch-block
+            // fallback in SafeBuildSystemConfiguration is not exercised here because
+            // there is no in-process fault-injection seam for the static helper; the
+            // literal-pin in CanonicalConstant_HasExpectedLiteralValue covers that path
+            // by construction (both branches reference the same constant).
             var config = ConnectionTelemetry.SafeBuildSystemConfiguration("1.2.3", activity: null);
-
-            Assert.NotNull(config);
-            Assert.Equal(CanonicalDriverName, config.DriverName);
-        }
-
-        [Fact]
-        public void SafeBuildSystemConfiguration_ReturnsCanonicalDriverName_FallbackPath()
-        {
-            // Fallback path: even if BuildSystemConfiguration throws and the safe wrapper
-            // returns a best-effort proto, the driver_name field must still pin to the
-            // canonical literal so SEA/Thrift parity holds on partial-init failures.
-            // We exercise the wrapper directly with a degenerate assembly version — any
-            // throw inside the wrapper falls back to the literal-populated proto.
-            var config = ConnectionTelemetry.SafeBuildSystemConfiguration(string.Empty, activity: null);
 
             Assert.NotNull(config);
             Assert.Equal(CanonicalDriverName, config.DriverName);

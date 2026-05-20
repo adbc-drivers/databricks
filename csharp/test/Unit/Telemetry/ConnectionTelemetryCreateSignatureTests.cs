@@ -83,6 +83,41 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
+        public async Task Create_EmptySessionId_MapsToNullInContext()
+        {
+            // ConnectionTelemetry.Create maps `string.Empty` -> `SessionId = null` in the
+            // resulting TelemetrySessionContext. This matters because Create is called
+            // from InitializeTelemetry before OpenSession returns a real handle on some
+            // code paths, and the DatabricksConnection caller passes string.Empty rather
+            // than null in that window. Pin the mapping so a future refactor that drops
+            // the `!string.IsNullOrEmpty` guard at ConnectionTelemetry.cs would surface
+            // here, rather than silently emitting empty-string SessionId to lumberjack.
+            const string Host = "create-empty-sid.databricks.com";
+
+            IConnectionTelemetry telemetry = ConnectionTelemetry.Create(
+                properties: TelemetryEnabledProperties(),
+                host: Host,
+                assemblyVersion: AssemblyVersion,
+                oauthTokenProvider: null,
+                sessionId: string.Empty,
+                mode: DriverModeType.Thrift,
+                enableDirectResults: true,
+                useDescTableExtended: false,
+                connectTimeoutMilliseconds: DefaultTimeoutMs,
+                activity: null);
+
+            try
+            {
+                Assert.NotNull(telemetry.Session);
+                Assert.Null(telemetry.Session!.SessionId);
+            }
+            finally
+            {
+                await telemetry.DisposeAsync();
+            }
+        }
+
+        [Fact]
         public async Task Create_ThriftMode_SetsDriverModeThrift()
         {
             // Regression for the literal that used to live at ConnectionTelemetry.cs:642
@@ -145,7 +180,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void Create_ThrowingHttpClient_ReturnsNullConnectionTelemetry()
+        public void Create_ThrowingHttpClient_ReturnsNoOpConnectionTelemetry()
         {
             // Create() is declared `Never throws`: any initialization failure — HttpClient
             // construction, exporter wire-up, etc. — must surface as NoOpConnectionTelemetry
@@ -154,6 +189,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // HttpClientFactory.CreateTelemetryHttpClient) and/or
             // TelemetryClientManager.GetOrCreateClient's argument-check throw, both of
             // which land in Create's outer catch.
+            //
+            // ASSUMPTION: this test depends on either HttpClientFactory.CreateTelemetryHttpClient
+            // or TelemetryClientManager.GetOrCreateClient throwing when host is empty. If a
+            // future change adds defensive handling of empty host upstream of Create's catch,
+            // this test would silently pass for the wrong reason (Create would return
+            // NoOpConnectionTelemetry via the disabled/feature-flag path instead of the
+            // outer catch). When that happens, swap to a real fault-injection seam (e.g.,
+            // an internal overload that accepts a pre-built HttpClient).
             IConnectionTelemetry telemetry = ConnectionTelemetry.Create(
                 properties: TelemetryEnabledProperties(),
                 host: string.Empty,

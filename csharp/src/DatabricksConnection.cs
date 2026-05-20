@@ -730,9 +730,25 @@ namespace AdbcDrivers.Databricks
             // Convert TSessionHandle -> string at the transport boundary so
             // ConnectionTelemetry.Create stays transport-agnostic. SEA will pass its
             // server-assigned session id string directly.
-            string sessionId = SessionHandle?.SessionId?.Guid != null
-                ? new Guid(SessionHandle.SessionId.Guid).ToString()
-                : string.Empty;
+            //
+            // Wrap the byte[] -> Guid conversion locally: `new Guid(byte[])` throws
+            // ArgumentException on a wrong-length array, and that would propagate to
+            // connection-open. Pre-refactor the same conversion was inside
+            // ConnectionTelemetry.Create's outer try/catch, so a malformed session GUID
+            // degraded to NoOp telemetry — preserve that fail-open contract.
+            string sessionId = string.Empty;
+            try
+            {
+                if (SessionHandle?.SessionId?.Guid != null)
+                {
+                    sessionId = new Guid(SessionHandle.SessionId.Guid).ToString();
+                }
+            }
+            catch
+            {
+                // Intentionally swallowed: malformed session GUID disables telemetry,
+                // not the connection.
+            }
 
             _telemetry = Telemetry.ConnectionTelemetry.Create(
                 properties: Properties,
