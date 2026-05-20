@@ -1492,8 +1492,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 var keys = new List<(string, string, string, string, int, string)>();
                 int seq = 0;
+                // PECO-3045: prefer canonical identifiers from the SHOW KEYS server response over the
+                // (possibly non-canonical) user input. JDBC spec calls for canonical names in the
+                // result columns; Thrift returns them natively, so SEA must match.
+                string fallbackCatalog = _metadataCatalogName!.ToLowerInvariant();
+                string fallbackSchema = _metadataSchemaName!.ToLowerInvariant();
+                string fallbackTable = _metadataTableName!.ToLowerInvariant();
                 foreach (var batch in batches)
                 {
+                    var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                    var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                    var tableNameArray = TryGetColumn<StringArray>(batch, "tableName");
                     var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
                     var keyNameArray = TryGetColumn<StringArray>(batch, "constraintName");
                     var keySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
@@ -1503,7 +1512,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         if (colNameArray.IsNull(i)) continue;
                         int keySeq = keySeqArray != null && !keySeqArray.IsNull(i) ? keySeqArray.GetValue(i)!.Value : ++seq;
                         string pkName = keyNameArray != null && !keyNameArray.IsNull(i) ? keyNameArray.GetString(i) : "";
-                        keys.Add((_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!,
+                        string catalog = catalogArray != null && !catalogArray.IsNull(i) ? catalogArray.GetString(i) : fallbackCatalog;
+                        string schemaName = schemaArray != null && !schemaArray.IsNull(i) ? schemaArray.GetString(i) : fallbackSchema;
+                        string tableName = tableNameArray != null && !tableNameArray.IsNull(i) ? tableNameArray.GetString(i) : fallbackTable;
+                        keys.Add((catalog, schemaName, tableName,
                             colNameArray.GetString(i), keySeq, pkName));
                     }
                 }
