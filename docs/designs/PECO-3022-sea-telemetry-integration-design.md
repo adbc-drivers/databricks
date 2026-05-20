@@ -71,8 +71,8 @@ classDiagram
     class IStatementOperationObserver {
         <<interface>>
         +OnExecuteStarted(stmtType, opType, isCompressed)
-        +OnExecuteSucceeded(statementId, resultFormat)
-        +OnPollCompleted(count, latencyMs)
+        +OnStatementSubmitted(statementId)
+        +OnPollCompleted(count, latencyMs, resultFormat)
         +OnFirstBatchReady(latencyMs)
         +OnConsumed(latencyMs)
         +OnChunksDownloaded(ChunkMetrics)
@@ -154,6 +154,49 @@ These components already exist for the Thrift path and are protocol-agnostic. Th
 - **`StatementExecutionStatement`** — adds `_observer: IStatementOperationObserver` field, calls observer methods at lifecycle hookpoints.
 - **`DatabricksStatement`** — private telemetry hooks replaced with `_observer` field calls. Behaviorally identical; this is mechanical refactor.
 
+### 4.5 Reader-observer wiring (decorator)
+
+`CloudFetchReader` and `InlineArrowStreamReader` are **shared between Thrift and SEA** today. To keep the shared readers protocol-agnostic, the observer is **not** injected into reader constructors. Instead `StatementExecutionStatement` wraps the underlying reader in a thin `ObservingArrowReader` decorator that it owns:
+
+```csharp
+internal sealed class ObservingArrowReader : IArrowArrayStream
+{
+    private readonly IArrowArrayStream _inner;
+    private readonly IStatementOperationObserver _observer;
+    private long _readerCreatedTicks;
+    private bool _firstBatchEmitted;
+
+    public ObservingArrowReader(IArrowArrayStream inner, IStatementOperationObserver observer)
+    {
+        _inner = inner;
+        _observer = observer;
+        _readerCreatedTicks = Stopwatch.GetTimestamp();
+    }
+
+    public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken ct = default)
+    {
+        var task = _inner.ReadNextRecordBatchAsync(ct);
+        if (!_firstBatchEmitted)
+        {
+            _firstBatchEmitted = true;
+            _observer.OnFirstBatchReady(ElapsedMs(_readerCreatedTicks));
+        }
+        return task;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _observer.OnConsumed(ElapsedMs(_readerCreatedTicks));
+        if (_inner is CloudFetchReader cfr) _observer.OnChunksDownloaded(cfr.GetChunkMetrics());
+        return _inner.DisposeAsync();
+    }
+}
+```
+
+- **Zero changes to shared reader classes.** `CloudFetchReader` / `InlineArrowStreamReader` remain unaware of observers.
+- **Lifetime matches the result stream.** The decorator is constructed in `StatementExecutionStatement.ExecuteQueryInternalAsync` once the underlying reader is ready, and disposed when the caller disposes the returned `QueryResult.Stream`.
+- **Thrift path uses the same decorator** if/when `DatabricksStatement` wants to emit `OnConsumed` / `OnChunksDownloaded` via the observer interface — keeps both transports symmetric without polluting shared readers.
+
 ---
 
 ## 5. Public Interfaces
@@ -164,12 +207,17 @@ These components already exist for the Thrift path and are protocol-agnostic. Th
 internal interface IStatementOperationObserver
 {
     // Contract: implementations MUST NOT throw. All methods are fail-open.
-    // Contract: methods may be called from any thread; implementations must be thread-safe.
-    // Contract: OnFinalized() is the terminal call; subsequent calls are no-ops.
+    // Contract: callers MUST serialize calls per-statement — a single statement is
+    //           driven by one ExecuteQueryAsync caller plus its reader's Dispose, and
+    //           statements are not shared across threads. Implementations are NOT
+    //           required to be thread-safe for the lifecycle methods.
+    // Contract: OnFinalized() is the terminal call. It is the ONE method that may
+    //           race (error-path and dispose-path can both reach it), so it MUST be
+    //           idempotent — typically via Interlocked.Exchange on an `emitted` flag.
 
     void OnExecuteStarted(Statement.Types.Type stmtType, Operation.Types.Type opType, bool isCompressed);
-    void OnExecuteSucceeded(string statementId, ExecutionResult.Types.Format resultFormat);
-    void OnPollCompleted(int count, long latencyMs);
+    void OnStatementSubmitted(string statementId);
+    void OnPollCompleted(int count, long latencyMs, ExecutionResult.Types.Format resultFormat);
     void OnFirstBatchReady(long latencyMs);
     void OnConsumed(long latencyMs);
     void OnChunksDownloaded(ChunkMetrics metrics);
@@ -177,6 +225,10 @@ internal interface IStatementOperationObserver
     void OnFinalized();
 }
 ```
+
+**Naming rationale (`OnStatementSubmitted`):** SEA's `ExecuteStatementAsync` returns immediately with a `statementId` and status commonly `PENDING`/`RUNNING` — the statement has been *accepted by the server*, not *succeeded*. `OnStatementSubmitted` names the actual event. Terminal success (or failure) is observable from `OnPollCompleted` / `OnError`.
+
+**Result format at terminal poll, not submit:** The SEA manifest that carries result-format information is only fully populated when polling reaches `SUCCEEDED`. At the initial submit response it can be null. Result format is therefore resolved at the terminal poll and folded into `OnPollCompleted`'s args, rather than being passed at submit time.
 
 **Why these methods (and not others):** they mirror the existing Thrift integration points enumerated in `csharp/doc/telemetry-design.md` §5.2, restated in the caller's language rather than the proto's.
 
@@ -210,10 +262,10 @@ The interface itself is unchanged; only the static factory above is modified. Th
 |---|---|---|
 | Statement created | `StatementExecutionConnection.CreateStatement` | constructor injects `_observer` from session |
 | Execute issued | `StatementExecutionStatement.ExecuteQueryInternalAsync` (line 323) — before `_client.ExecuteStatementAsync` (line 345) | `OnExecuteStarted(stmtType, opType, compressed)` |
-| Execute returned | `StatementExecutionStatement.ExecuteQueryInternalAsync` — after response received | `OnExecuteSucceeded(statementId, resultFormat)` |
-| Each poll iteration | `StatementExecutionStatement.PollUntilCompleteAsync` (line 453) — after each `_client.GetStatementAsync` | accumulate count/ms; emit `OnPollCompleted` once on terminal state |
-| First batch ready | `StatementExecutionStatement.CreateCloudFetchReader` (line 542) for cloud-fetch path; `InlineArrowStreamReader` ctor for inline | `OnFirstBatchReady(latencyMs)` |
-| Results consumed | reader Dispose (cloud-fetch reader or inline) | `OnConsumed(latencyMs)`; `OnChunksDownloaded(metrics)` for cloud-fetch |
+| Execute accepted | `StatementExecutionStatement.ExecuteQueryInternalAsync` — after response received (status typically `PENDING`/`RUNNING`) | `OnStatementSubmitted(statementId)` |
+| Terminal poll | `StatementExecutionStatement.PollUntilCompleteAsync` (line 453) — after final `_client.GetStatementAsync` (status=`SUCCEEDED`) | accumulate count/ms across all polls; on terminal state run `SeaResultFormatMapper.Map` against the now-populated manifest and emit `OnPollCompleted(count, latencyMs, resultFormat)` |
+| First batch ready | reader-observer decorator (see §4.4) wraps `CreateCloudFetchReader` (line 542) or `InlineArrowStreamReader`; fires on first `ReadNextRecordBatchAsync` | `OnFirstBatchReady(latencyMs)` |
+| Results consumed | reader-observer decorator's `DisposeAsync` — wraps the underlying reader's Dispose | `OnConsumed(latencyMs)`; `OnChunksDownloaded(metrics)` for cloud-fetch (metrics pulled from underlying `CloudFetchReader.GetChunkMetrics()`) |
 | Error in any of the above | `StatementExecutionStatement.ExecuteQueryInternalAsync` catch block | `OnError(ex)` |
 | Statement dispose | `StatementExecutionStatement.Dispose` (line 817) | `OnFinalized()` |
 | Session open | `StatementExecutionConnection.OpenAsync` (line 373) — after `CreateSessionAsync` succeeds | `_telemetry.EmitCreateSessionTelemetry(activity)` |
@@ -234,25 +286,28 @@ sequenceDiagram
     Caller->>+Stmt: ExecuteQueryAsync(ct)
     Stmt->>Obs: OnExecuteStarted(stmt, op, compressed)
     Stmt->>+Client: ExecuteStatementAsync(request)
-    Client-->>-Stmt: ExecuteStatementResponse(statementId, status)
-    Stmt->>Obs: OnExecuteSucceeded(statementId, resultFormat)
+    Client-->>-Stmt: ExecuteStatementResponse(statementId, status=PENDING/RUNNING)
+    Stmt->>Obs: OnStatementSubmitted(statementId)
 
     loop until terminal state
         Stmt->>+Client: GetStatementAsync(statementId)
-        Client-->>-Stmt: GetStatementResponse(status)
+        Client-->>-Stmt: GetStatementResponse(status, manifest)
     end
-    Stmt->>Obs: OnPollCompleted(count, totalMs)
+    Note over Stmt: terminal poll: manifest now populated;<br/>SeaResultFormatMapper.Map(disposition, manifest, response)
+    Stmt->>Obs: OnPollCompleted(count, totalMs, resultFormat)
 
-    Stmt->>+Reader: construct (inline or cloud-fetch)
+    Stmt->>+Reader: construct underlying reader (inline or cloud-fetch)
     Reader-->>-Stmt: IArrowArrayStream
-    Stmt->>Obs: OnFirstBatchReady(ms)
-    Stmt-->>-Caller: QueryResult
+    Note over Stmt: wrap in ObservingArrowReader(reader, observer)
+    Stmt-->>-Caller: QueryResult(ObservingArrowReader)
 
     Note over Caller,Reader: consumer reads batches...
+    Caller->>Reader: ReadNextRecordBatchAsync (first call)
+    Reader->>Obs: OnFirstBatchReady(ms)
 
-    Caller->>+Reader: Dispose
+    Caller->>+Reader: DisposeAsync
     Reader->>Obs: OnConsumed(ms)
-    Reader->>Obs: OnChunksDownloaded(metrics)
+    Reader->>Obs: OnChunksDownloaded(metrics) [cloud-fetch only]
     Reader-->>-Caller: done
 
     Caller->>+Stmt: Dispose
@@ -275,7 +330,7 @@ SEA does not expose a typed `ResultFormat` field on the statement — it uses a 
 | `INLINE_OR_EXTERNAL_LINKS` (default) | `ARROW_STREAM` | manifest indicates external_links | `EXTERNAL_LINKS` |
 | `INLINE_OR_EXTERNAL_LINKS` (default) | `ARROW_STREAM` | inline attachment | `INLINE_ARROW` |
 
-Implemented as a static helper `SeaResultFormatMapper.Map(disposition, manifest, response)` called once at `OnExecuteSucceeded` time. No need to peek inside the reader.
+Implemented as a static helper `SeaResultFormatMapper.Map(disposition, manifest, response)` called once at **terminal poll** time (status=`SUCCEEDED`) — the manifest is only fully populated then. The resolved format is then passed to `OnPollCompleted(count, latencyMs, resultFormat)`. No need to peek inside the reader.
 
 ---
 
@@ -301,9 +356,10 @@ Change: thread a `DriverMode.Types.Type mode` parameter through these two method
 
 ### Observer contract
 
-- **Methods are thread-safe.** `TelemetryObserver` internally uses interlocked operations on the `emitted` flag and lock-free writes to scalar context fields. The underlying `StatementTelemetryContext` is single-statement scope and reads happen only at `OnFinalized` time on the calling thread.
+- **Lifecycle methods are NOT required to be thread-safe.** A statement is driven by a single `ExecuteQueryAsync` caller (and its reader Dispose, which happens after the result stream is consumed) — statements are not shared across threads. `StatementTelemetryContext` mutations therefore use plain scalar writes; no `Interlocked`/`volatile`/`lock`. This matches the actual usage pattern and avoids gratuitous synchronization cost.
+- **`OnFinalized` is the one exception — it MUST be idempotent.** It is the only method that can race: the error-path and the dispose-path can both reach it on a failed statement, potentially on different threads. `TelemetryObserver` enforces "exactly once" via `Interlocked.Exchange` on a single `_emitted` flag; subsequent calls become no-ops.
 - **All methods are non-blocking.** `OnFinalized` enqueues to a `BlockingCollection<TelemetryFrontendLog>` (existing `TelemetryClient`); the actual HTTP export runs on a background timer thread owned by `TelemetryClient`.
-- **`OnFinalized` is idempotent.** Multiple calls (e.g. error + dispose paths both calling it) result in exactly one enqueue.
+- **Happens-before for the final read.** `OnFinalized` reads all context fields and builds the log on the calling thread. Because lifecycle calls preceding `OnFinalized` are serialized by the caller (single-threaded statement execution), the writes from `OnExecuteStarted` / `OnStatementSubmitted` / `OnPollCompleted` / etc. are visible to the read with no memory-barrier work needed. Only the `_emitted` flag itself needs an interlocked op to handle the error-vs-dispose race.
 
 ### Async patterns
 
@@ -353,10 +409,11 @@ public void OnExecuteStarted(Statement.Types.Type stmt, Operation.Types.Type op,
         _ctx.IsCompressed   = compressed;
     });
 
-public void OnPollCompleted(int count, long latencyMs) =>
+public void OnPollCompleted(int count, long latencyMs, ExecutionResult.Types.Format resultFormat) =>
     Safe(() => {
         _ctx.PollCount     = count;
         _ctx.PollLatencyMs = latencyMs;
+        _ctx.ResultFormat  = resultFormat;
     });
 ```
 
@@ -429,12 +486,17 @@ No new configuration parameters. All existing knobs apply unchanged:
 - `SafeObserver_PropagatesNormalCallsToInner`
 - `SafeObserver_SwallowsExceptionsFromInner_LogsAtTrace`
 - `TelemetryObserver_OnExecuteStarted_PopulatesContext`
-- `TelemetryObserver_OnExecuteSucceeded_RecordsStatementId`
+- `TelemetryObserver_OnStatementSubmitted_RecordsStatementId`
+- `TelemetryObserver_OnPollCompleted_RecordsCountLatencyAndResultFormat`
 - `TelemetryObserver_OnFinalized_EnqueuesExactlyOnce`
-- `TelemetryObserver_OnFinalized_CalledTwice_EnqueuesOnce`
+- `TelemetryObserver_OnFinalized_CalledFromErrorAndDispose_EnqueuesOnce` (covers the documented race in §11)
 - `TelemetryObserver_OnError_RecordsErrorAndFinalizes`
 - `TelemetryObserver_AllMethods_NeverThrow_WhenContextCorrupted`
 - `TelemetryObserver_OnChunksDownloaded_MergesIntoChunkDetails`
+- `ObservingArrowReader_FirstReadNextRecordBatch_EmitsOnFirstBatchReady`
+- `ObservingArrowReader_DisposeAsync_EmitsOnConsumed`
+- `ObservingArrowReader_DisposeAsync_WithCloudFetchInner_EmitsOnChunksDownloaded`
+- `ObservingArrowReader_DisposeAsync_WithInlineInner_DoesNotEmitOnChunksDownloaded`
 
 **`ConnectionTelemetry.Create` refactor:**
 - `Create_AcceptsStringSessionId`
