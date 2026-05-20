@@ -615,7 +615,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             foreach (var column in manifest.Schema.Columns)
             {
                 var typeText = column.TypeText ?? string.Empty;
-                var arrowType = MapDatabricksTypeToArrowType(typeText);
+                var arrowType = ArrowTypeParser.MapToArrowType(typeText, _enableComplexDatatypeSupport);
                 var metadata = new Dictionary<string, string>
                 {
                     [ColumnMetadataHelper.ArrowMetadataKey] = typeText
@@ -624,64 +624,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             return new Schema(fields, null);
-        }
-
-        /// <summary>
-        /// Maps a Databricks SQL type name from the manifest to its Arrow output type.
-        ///
-        /// <para>
-        /// INTERVAL, ARRAY, MAP, and STRUCT are mapped to <see cref="StringType"/> because
-        /// <see cref="IntervalSerializingStream"/> and <see cref="ComplexTypeSerializingStream"/>
-        /// convert the native Arrow arrays (e.g. <c>YearMonthIntervalArray</c>, <c>ListArray</c>)
-        /// to <see cref="StringArray"/> at read time. The manifest schema is the output contract
-        /// exposed to callers, so the declared type must match the converted data type.
-        /// </para>
-        /// </summary>
-        private IArrowType MapDatabricksTypeToArrowType(string typeName)
-        {
-            var baseType = ColumnMetadataHelper.GetBaseTypeName(typeName).ToUpperInvariant();
-
-            return baseType switch
-            {
-                "BOOLEAN" => BooleanType.Default,
-                "BYTE" or "TINYINT" => Int8Type.Default,
-                "SHORT" or "SMALLINT" => Int16Type.Default,
-                "INT" or "INTEGER" => Int32Type.Default,
-                "LONG" or "BIGINT" => Int64Type.Default,
-                "FLOAT" or "REAL" => FloatType.Default,
-                "DOUBLE" => DoubleType.Default,
-                "DECIMAL" or "NUMERIC" => ParseDecimalType(typeName),
-                "STRING" or "VARCHAR" or "CHAR" => StringType.Default,
-                "BINARY" or "VARBINARY" => BinaryType.Default,
-                "DATE" => Date32Type.Default,
-                "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
-                // Converted to string by IntervalSerializingStream; StringType is the output contract.
-                "INTERVAL" => StringType.Default,
-                // Converted to JSON string by ComplexTypeSerializingStream; StringType is the output contract.
-                "ARRAY" or "MAP" or "STRUCT" => StringType.Default,
-                "NULL" or "VOID" => NullType.Default,
-                _ => StringType.Default
-            };
-        }
-
-        /// <summary>
-        /// Parses a DECIMAL type to determine precision and scale.
-        /// </summary>
-        private IArrowType ParseDecimalType(string typeName)
-        {
-            // Default precision and scale
-            int precision = 38;
-            int scale = 18;
-
-            // Try to parse DECIMAL(precision, scale)
-            var match = System.Text.RegularExpressions.Regex.Match(typeName, @"DECIMAL\((\d+),\s*(\d+)\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            if (match.Success)
-            {
-                precision = int.Parse(match.Groups[1].Value);
-                scale = int.Parse(match.Groups[2].Value);
-            }
-
-            return new Decimal128Type(precision, scale);
         }
 
         /// <summary>
