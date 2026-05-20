@@ -230,16 +230,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 _waitTimeoutSeconds = 0;
             }
-            // PECO-3064: Honor the legacy adbc.apache.statement.polltime_ms key as a fallback
-            // for the SEA-native adbc.databricks.rest.polling_interval_ms. The canonical SEA
-            // key takes precedence when both are set; when only polltime_ms is set, it drives
-            // SEA's polling cadence so users don't silently fall back to the 1000ms default.
-            // (JDBC consolidates these under a single asyncexecpollinterval; we keep both keys
-            // for backward compatibility and document the precedence.)
-            int legacyPollTimeMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
-                properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
+            // PECO-3064: adbc.apache.statement.polltime_ms is the single key for SEA polling cadence
+            // (consolidated with the Thrift path). SEA defaults to 1000 ms — HTTP/JSON polls are
+            // heavier than Thrift's 100 ms default — but both protocols share the same property.
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
-                properties, DatabricksParameters.PollingInterval, defaultValue: legacyPollTimeMs);
+                properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();

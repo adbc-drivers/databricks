@@ -167,7 +167,7 @@ var config = new Dictionary<string, string>
 
 **Note:** OAuth U2M (User-to-Machine) authentication support is planned for a future release.
 
-**Authentication Properties:**
+**Authentication Properties** (apply to both Thrift and SEA):
 
 | Property | Description | Default |
 |----------|-------------|---------|
@@ -184,54 +184,62 @@ var config = new Dictionary<string, string>
 
 ### Connection Properties
 
+The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) and **SEA** (Statement Execution REST API, opt-in via `adbc.databricks.protocol=rest`). The tables below show per-protocol defaults; an em-dash (`—`) means the property is not honored on that protocol.
+
 #### Core Spark Properties (Inherited)
 
-| Property | Description | Default |
-|----------|-------------|---------|
-| `uri` | Full connection URI (alternative to host/port/path) | |
-| `adbc.spark.type` | Server type: `http` | `http` |
-| `adbc.spark.host` | Hostname without scheme/port | |
-| `adbc.spark.port` | Connection port | `443` |
-| `adbc.spark.path` | URI path on server | |
-| `adbc.spark.token` | Token for token-based authentication | |
-| `username` | Username for basic authentication | |
-| `password` | Password for basic authentication | |
-| `adbc.spark.connect_timeout_ms` | Session establishment timeout | `30000` |
-| `adbc.apache.statement.query_timeout_s` | Query execution timeout | `60` |
-| `adbc.apache.statement.polltime_ms` | Query status polling interval | `500` (Databricks: `100`) |
-| `adbc.apache.statement.batch_size` | Max rows per batch request | `50000` (Databricks: `2000000`) |
-| `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` |
-| `adbc.spark.user_agent_entry` | Additional user agent string appended to driver user agent | |
+| Property | Description | Thrift Default | SEA Default |
+|----------|-------------|----------------|-------------|
+| `uri` | Full connection URI (alternative to host/port/path) | (required if no host/path) | (required if no host/path) |
+| `adbc.spark.type` | Server type: `http` | `http` | `http` |
+| `adbc.spark.host` | Hostname without scheme/port | (required) | (required) |
+| `adbc.spark.port` | Connection port | `443` | `443` |
+| `adbc.spark.path` | URI path on server | (required) | (required) |
+| `adbc.spark.token` | Token for token-based authentication | (none) | (none) |
+| `username` | Username for basic authentication | — | — |
+| `password` | Password for basic authentication | — | — |
+| `adbc.spark.connect_timeout_ms` | Session establishment timeout (ms) | `30000` | — |
+| `adbc.apache.statement.query_timeout_s` | Query execution timeout (s) | `60` | — |
+| `adbc.apache.statement.polltime_ms` | Query status polling interval (ms) | `100` (Apache base: `500`) | `1000` |
+| `adbc.apache.statement.batch_size` | Max rows per batch request | `2000000` (Apache base: `50000`) | — |
+| `adbc.spark.data_type_conv` | Data type conversion: `none` or `scalar` | `scalar` | `scalar` |
+| `adbc.spark.user_agent_entry` | Additional user agent string appended to driver user agent | (none) | (none) |
 
-**Note:** Either `uri` or the combination of `adbc.spark.host` + `adbc.spark.path` is required.
+**Notes:**
+- Either `uri` or the combination of `adbc.spark.host` + `adbc.spark.path` is required.
+- Basic auth (`username` / `password`) is not supported on either protocol; use `adbc.spark.auth_type=oauth`.
+- `polltime_ms` has divergent defaults: Thrift polls cheap RPCs at 100 ms; SEA polls HTTP/JSON at 1000 ms.
 
 #### Databricks-Specific Properties
 
-| Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.connection.catalog` | Default catalog for session | |
-| `adbc.connection.db_schema` | Default schema for session | |
-| `adbc.databricks.enable_direct_results` | Use direct results when executing | `true` |
-| `adbc.databricks.max_bytes_per_fetch_request` | Max bytes per fetch request (supports B, KB, MB, GB) | `400MB` |
-| `adbc.databricks.apply_ssp_with_queries` | Apply server-side properties with queries | `false` |
-| `adbc.databricks.enable_multiple_catalog_support` | Support multiple catalogs | `true` |
-| `adbc.databricks.enable_pk_fk` | Enable primary/foreign key metadata | `true` |
-| `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` |
-| `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` |
-| `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (seconds) | `60` |
-| `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (seconds) | `30` |
-| `adbc.spark.temporarily_unavailable_retry` | Retry on 408/502/503/504 responses | `true` |
-| `adbc.spark.temporarily_unavailable_retry_timeout` | Max retry time for 4xx/5xx errors (seconds) | `900` |
-| `adbc.databricks.rate_limit_retry` | Retry on HTTP 429 (rate limit) responses | `true` |
-| `adbc.databricks.rate_limit_retry_timeout` | Max retry time for rate limits (seconds) | `120` |
-| `adbc.databricks.query_tags` | Key-value tags attached to queries (e.g. `key1=val1,key2=val2`) | |
-| `adbc.databricks.feature_flag_cache_enabled` | Fetch and apply server-side feature flags | `true` |
-| `adbc.databricks.feature_flag_timeout_seconds` | Timeout for feature flag fetch requests | `10` |
-| `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` |
+| Property | Description | Thrift Default | SEA Default |
+|----------|-------------|----------------|-------------|
+| `adbc.connection.catalog` | Default catalog for session | (server default) | (server default) |
+| `adbc.connection.db_schema` | Default schema for session | (server default) | (server default) |
+| `adbc.databricks.enable_direct_results` | Use direct results when executing | `true` | `true` |
+| `adbc.databricks.max_bytes_per_fetch_request` | Max bytes per fetch request (supports B, KB, MB, GB) | `400MB` | — |
+| `adbc.databricks.apply_ssp_with_queries` | Apply server-side properties with queries | `false` | — |
+| `adbc.databricks.enable_multiple_catalog_support` | Support multiple catalogs | `true` | `true` |
+| `adbc.databricks.enable_pk_fk` | Enable primary/foreign key metadata | `true` | `true` |
+| `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` | `true` |
+| `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` | — (Thrift-only concept) |
+| `adbc.databricks.enable_complex_datatype_support` | Return native Arrow types for ARRAY/MAP/STRUCT | `false` | `false` |
+| `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (s) | `60` | — (no fetch-handle to keep warm) |
+| `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (s) | `30` | — |
+| `adbc.spark.temporarily_unavailable_retry` | Retry on 408/502/503/504 responses | `true` | `true` |
+| `adbc.spark.temporarily_unavailable_retry_timeout` | Max retry time for 4xx/5xx errors (s) | `900` | `900` |
+| `adbc.databricks.rate_limit_retry` | Retry on HTTP 429 (rate limit) responses | `true` | `true` |
+| `adbc.databricks.rate_limit_retry_timeout` | Max retry time for rate limits (s) | `120` | `120` |
+| `adbc.databricks.query_tags` | Key-value tags attached to queries (e.g. `key1=val1,key2=val2`) | (none) | (none) |
+| `adbc.databricks.identity_federation_client_id` | Service principal client ID for workload identity | (none) | (none) |
+| `adbc.databricks.feature_flag_cache_enabled` | Fetch and apply server-side feature flags | `true` | — |
+| `adbc.databricks.feature_flag_timeout_seconds` | Timeout for feature flag fetch requests | `10` | — |
+| `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` | — |
+| `adbc.databricks.ssp_<name>` | Pass session configuration (e.g., `ssp_use_cached_result=true`) | (none) | (none) |
 
 **Performance Notes:**
-- Databricks default `batch_size` is `2000000` (vs Spark's `50000`) - optimized for CloudFetch's 1024MB limit
-- Databricks default `polltime_ms` is `100` (vs Spark's `500`) - faster query status feedback
+- Databricks Thrift default `batch_size` is `2000000` (vs Apache Spark's `50000`) — optimized for CloudFetch's 1024MB limit.
+- `polltime_ms` defaults differ by protocol (see Core Spark Properties table); SEA's 1000 ms reflects heavier HTTP/JSON polling cost.
 
 ### CloudFetch Configuration
 
@@ -239,20 +247,22 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 
 **CloudFetch Properties:**
 
-| Property | Description | Default |
-|----------|-------------|---------|
-| `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` |
-| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` |
-| `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` |
-| `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` |
-| `adbc.databricks.cloudfetch.prefetch_count` | Files to prefetch ahead | `2` |
-| `adbc.databricks.cloudfetch.memory_buffer_size_mb` | Max memory buffer in MB | `200` |
-| `adbc.databricks.cloudfetch.prefetch_enabled` | Enable prefetch | `true` |
-| `adbc.databricks.cloudfetch.max_retries` | Max retry attempts | `3` |
-| `adbc.databricks.cloudfetch.retry_delay_ms` | Delay between retries | `500` |
-| `adbc.databricks.cloudfetch.timeout_minutes` | HTTP operation timeout | `5` |
-| `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | URL refresh buffer | `60` |
-| `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Max URL refresh attempts | `3` |
+On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only.
+
+| Property | Description | Thrift Default | SEA Default |
+|----------|-------------|----------------|-------------|
+| `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` | — |
+| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | — |
+| `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` | — |
+| `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` | — |
+| `adbc.databricks.cloudfetch.prefetch_count` | Files to prefetch ahead | `2` | — |
+| `adbc.databricks.cloudfetch.memory_buffer_size_mb` | Max memory buffer in MB | `200` | — |
+| `adbc.databricks.cloudfetch.prefetch_enabled` | Enable prefetch | `true` | — |
+| `adbc.databricks.cloudfetch.max_retries` | Max retry attempts | `3` | — |
+| `adbc.databricks.cloudfetch.retry_delay_ms` | Delay between retries (ms) | `500` | — |
+| `adbc.databricks.cloudfetch.timeout_minutes` | HTTP operation timeout (min) | `5` | `5` (via shared HttpClient timeout) |
+| `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | URL refresh buffer (s) | `60` | — |
+| `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Max URL refresh attempts | `3` | — |
 
 **Example Configuration:**
 ```csharp
@@ -276,15 +286,16 @@ The driver supports both Thrift/HiveServer2 protocol (default) and Statement Exe
 | `adbc.databricks.protocol` | Protocol: `thrift` or `rest` | `thrift` |
 | `adbc.databricks.warehouse_id` | Warehouse ID for query execution | (required for REST) |
 
-**REST API Configuration:**
+**REST API Configuration (SEA-only):**
 
-| Property | Description | Default |
-|----------|-------------|---------|
+These properties apply only when `adbc.databricks.protocol=rest`. The cross-protocol polling interval is controlled by `adbc.apache.statement.polltime_ms` (see *Core Spark Properties* — SEA default `1000` ms).
+
+| Property | Description | SEA Default |
+|----------|-------------|-------------|
 | `adbc.databricks.rest.result_disposition` | Result mode: `inline`, `external_links`, or `inline_or_external_links` | `inline_or_external_links` |
 | `adbc.databricks.rest.result_format` | Format: `arrow_stream`, `json_array`, or `csv` | `arrow_stream` |
 | `adbc.databricks.rest.result_compression` | Compression: `lz4`, `gzip`, or `none` | (auto) |
 | `adbc.databricks.rest.wait_timeout` | Wait timeout in seconds (0=async, 5-50=sync) | `10` |
-| `adbc.databricks.rest.polling_interval_ms` | Polling interval for async execution (ms) | `1000` |
 | `adbc.databricks.rest.enable_session_management` | Enable session management | `true` |
 
 **Example - Using REST Protocol:**
@@ -302,6 +313,8 @@ var config = new Dictionary<string, string>
 ```
 
 ### TLS/SSL Configuration
+
+Applies to both Thrift and SEA.
 
 | Property | Description | Default |
 |----------|-------------|---------|
@@ -339,7 +352,7 @@ var config = new Dictionary<string, string>
 
 ### Proxy Configuration
 
-The driver supports HTTP proxy configuration for enterprise network environments.
+The driver supports HTTP proxy configuration for enterprise network environments. Applies to both Thrift and SEA.
 
 | Property | Description | Default |
 |----------|-------------|---------|
@@ -421,7 +434,7 @@ var config = new Dictionary<string, string>
 
 The driver includes built-in tracing support via OpenTelemetry.
 
-**Tracing Properties:**
+**Tracing Properties** (apply to both Thrift and SEA):
 
 | Property | Description | Default |
 |----------|-------------|---------|
