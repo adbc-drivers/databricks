@@ -286,7 +286,7 @@ The driver supports both Thrift/HiveServer2 protocol (default) and Statement Exe
 
 **REST API Configuration (SEA-only):**
 
-These properties apply only when `adbc.databricks.protocol=rest`. The cross-protocol polling interval is controlled by `adbc.apache.statement.polltime_ms` (see *Core Spark Properties* — SEA default `1000` ms).
+These properties apply only when `adbc.databricks.protocol=rest`.
 
 | Property | Description | SEA Default |
 |----------|-------------|-------------|
