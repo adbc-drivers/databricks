@@ -21,6 +21,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.HiveServer2.Spark;
@@ -236,7 +237,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 _waitTimeoutSeconds = 0;
             }
-            _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
+            // PECO-3064: adbc.apache.statement.polltime_ms is the single key for SEA polling cadence
+            // (consolidated with the Thrift path). SEA defaults to 1000 ms — HTTP/JSON polls are
+            // heavier than Thrift's 100 ms default — but both protocols share the same property.
+            _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
+                properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();

@@ -613,11 +613,9 @@ public const string WaitTimeout = "adbc.databricks.rest.wait_timeout";
 /// </summary>
 public const string EnableDirectResults = "adbc.databricks.enable_direct_results";
 
-/// <summary>
-/// Statement polling interval in milliseconds for async execution.
-/// Default: 1000ms (1 second)
-/// </summary>
-public const string PollingInterval = "adbc.databricks.rest.polling_interval_ms";
+// Statement polling interval is shared with the Thrift path via
+// ApacheParameters.PollTimeMilliseconds (adbc.apache.statement.polltime_ms).
+// SEA default: 1000 ms (Thrift default: 100 ms).
 
 /// <summary>
 /// Enable session management for Statement Execution API.
@@ -1106,11 +1104,11 @@ internal class StatementExecutionStatement : AdbcStatement
             // First poll happens immediately (no delay)
             if (pollCount > 0)
             {
-                await Task.Delay(_connection.PollingInterval, cancellationToken);
+                await Task.Delay(_connection.PollingIntervalMs, cancellationToken);
             }
 
             // Check timeout
-            if (QueryTimeout > 0 && pollCount * _connection.PollingInterval > QueryTimeout * 1000)
+            if (QueryTimeout > 0 && pollCount * _connection.PollingIntervalMs > QueryTimeout * 1000)
             {
                 await _client.CancelStatementAsync(_statementId, cancellationToken);
                 throw new DatabricksTimeoutException(
@@ -2393,7 +2391,7 @@ internal class StatementExecutionResultFetcher : BaseResultFetcher
   "adbc.databricks.enable_session_management": "true",
   "adbc.databricks.enable_direct_results": "false",
   "adbc.databricks.rest.wait_timeout": "10",
-  "adbc.databricks.rest.polling_interval_ms": "1000",
+  "adbc.apache.statement.polltime_ms": "1000",
   "adbc.connection.catalog": "main",
   "adbc.connection.db_schema": "default",
   "adbc.spark.auth_type": "oauth",
@@ -2430,7 +2428,7 @@ internal class StatementExecutionResultFetcher : BaseResultFetcher
   "adbc.databricks.rest.wait_timeout": "10",
 
   // Polling interval for async queries
-  "adbc.databricks.rest.polling_interval_ms": "1000",
+  "adbc.apache.statement.polltime_ms": "1000",
 
   // CloudFetch configuration
   "adbc.databricks.cloudfetch.parallel_downloads": "3",
@@ -2585,7 +2583,6 @@ internal class StatementExecutionResultFetcher : BaseResultFetcher
    - [ ] Add `EnableDirectResults` parameter
    - [ ] Add `EnableSessionManagement` parameter
    - [ ] Add `WaitTimeout` parameter
-   - [ ] Add `PollingInterval` parameter
    - [ ] Add `WarehouseId` parameter
 
 6. **`DatabricksConnection.cs`**
