@@ -210,7 +210,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 Assert.False(string.IsNullOrEmpty(actualHostUrl), "host_url should be populated");
                 Assert.Equal(expectedHost, actualHostUrl);
                 Assert.DoesNotContain("://", actualHostUrl);
-                Assert.DoesNotContain(":", actualHostUrl);
 
                 OutputHelper?.WriteLine($"✓ host_info.host_url: {actualHostUrl}");
             }

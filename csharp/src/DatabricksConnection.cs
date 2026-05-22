@@ -379,8 +379,6 @@ namespace AdbcDrivers.Databricks
         private static readonly System.Text.RegularExpressions.Regex s_warehousePathPattern =
             new System.Text.RegularExpressions.Regex(@"^/sql/1\.0/(warehouses|endpoints)/[^/]+/?$");
 
-        private bool? _isWarehousePathCached;
-
         /// <summary>
         /// True when the configured connection path targets a DBSQL warehouse
         /// (/sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}). False for general
@@ -390,15 +388,13 @@ namespace AdbcDrivers.Databricks
         {
             get
             {
-                if (_isWarehousePathCached.HasValue)
-                {
-                    return _isWarehousePathCached.Value;
-                }
-
                 string? path = null;
                 if (Properties.TryGetValue(SparkParameters.Path, out string? rawPath) && !string.IsNullOrEmpty(rawPath))
                 {
                     path = rawPath;
+                    // Only the raw-Path branch can carry a query string; Uri.AbsolutePath strips it.
+                    int q = path!.IndexOf('?');
+                    if (q >= 0) path = path.Substring(0, q);
                 }
                 else if (Properties.TryGetValue(AdbcOptions.Uri, out string? uri)
                     && !string.IsNullOrEmpty(uri)
@@ -407,14 +403,7 @@ namespace AdbcDrivers.Databricks
                     path = parsedUri.AbsolutePath;
                 }
 
-                if (!string.IsNullOrEmpty(path))
-                {
-                    int q = path!.IndexOf('?');
-                    if (q >= 0) path = path.Substring(0, q);
-                }
-
-                _isWarehousePathCached = !string.IsNullOrEmpty(path) && s_warehousePathPattern.IsMatch(path!);
-                return _isWarehousePathCached.Value;
+                return !string.IsNullOrEmpty(path) && s_warehousePathPattern.IsMatch(path!);
             }
         }
 

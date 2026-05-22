@@ -984,7 +984,8 @@ namespace AdbcDrivers.Databricks
             {
                 activity?.AddEvent("statement.get_columns_extended.start");
                 string? fullTableName = BuildTableName();
-                var canUseDescTableExtended = ((DatabricksConnection)Connection).CanUseDescTableExtended;
+                var connection = (DatabricksConnection)Connection;
+                var canUseDescTableExtended = connection.CanUseDescTableExtended;
 
                 activity?.SetTag("statement.catalog_name", CatalogName ?? "(none)");
                 activity?.SetTag("statement.schema_name", SchemaName ?? "(none)");
@@ -1005,11 +1006,9 @@ namespace AdbcDrivers.Databricks
                     return baseResult;
                 }
 
-                // Fast metadata: STATIC ONLY (runtime PR #198486) skips Delta log / Mesa RPCs,
-                // and RunAsync=false routes the request off the WLM path. Both signals are required —
-                // STATIC ONLY without RunAsync=false still goes through WLM; RunAsync=false without
-                // STATIC ONLY still does the full metadata scan.
-                bool useFastMetadataQuery = ((DatabricksConnection)Connection).UseFastMetadataQuery;
+                // Fast metadata: STATIC ONLY (runtime PR #198486) bypasses the server's WLM
+                // path. Both the SQL keyword and RunAsync=false are required to take effect.
+                bool useFastMetadataQuery = connection.UseFastMetadataQuery;
                 string query = useFastMetadataQuery
                     ? $"DESC TABLE EXTENDED {fullTableName} STATIC ONLY AS JSON"
                     : $"DESC TABLE EXTENDED {fullTableName} AS JSON";
@@ -1018,12 +1017,12 @@ namespace AdbcDrivers.Databricks
                     new("fast_metadata_query", useFastMetadataQuery)
                 ]);
 
-                using var descStmt = Connection.CreateStatement();
+                using var descStmt = (DatabricksStatement)connection.CreateStatement();
                 descStmt.SqlQuery = query;
 
-                if (useFastMetadataQuery && descStmt is DatabricksStatement databricksDescStmt)
+                if (useFastMetadataQuery)
                 {
-                    databricksDescStmt.RunAsyncOverride = false;
+                    descStmt.RunAsyncOverride = false;
                 }
                 QueryResult descResult;
 
