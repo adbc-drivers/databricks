@@ -31,10 +31,9 @@ using AdbcDrivers.Databricks.Reader;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.Result;
 using AdbcDrivers.Databricks.Telemetry;
-using AdbcDrivers.Databricks.Telemetry.Models;
-using AdbcDrivers.Databricks.Telemetry.Proto;
 using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
 using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
+using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -71,18 +70,47 @@ namespace AdbcDrivers.Databricks
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
 
         /// <summary>
-        /// Telemetry context for the current statement execution, pending emission on Dispose.
-        /// Set before calling base.ExecuteQueryAsync()/ExecuteQuery() so that
-        /// <see cref="DatabricksConnection.NewReader{T}"/> can forward it to the
-        /// composite reader and operation status poller. The poller increments
-        /// <see cref="StatementTelemetryContext.PollCount"/> and accumulates
-        /// <see cref="StatementTelemetryContext.PollLatencyMs"/> on each
-        /// GetOperationStatus call so the emitted telemetry log carries the
-        /// <c>n_operation_status_calls</c> and <c>operation_status_latency_millis</c>
-        /// fields (PECO-2992). After a successful execute the same instance remains
-        /// here until <see cref="EmitTelemetry"/> is invoked from Dispose.
+        /// Observer for this statement's operational lifecycle. Injected at construction
+        /// from <see cref="DatabricksConnection.CreateStatement"/> — a
+        /// <see cref="TelemetryObserver"/> bound to the connection's
+        /// <see cref="TelemetrySessionContext"/> when telemetry is enabled, otherwise
+        /// <see cref="NullObserver.Instance"/>. All hookpoints in this class flow through
+        /// the observer interface so the SEA path can reuse the exact same statement code
+        /// with a different observer implementation.
         /// </summary>
-        internal StatementTelemetryContext? PendingTelemetryContext { get; private set; }
+        private readonly IStatementOperationObserver _observer;
+
+        /// <summary>
+        /// Tracks whether <see cref="BeginExecuteTelemetry"/> has fired. Gates the
+        /// terminal <see cref="IStatementOperationObserver.OnFinalized"/> call in
+        /// <see cref="Dispose(bool)"/>: when a statement is disposed without ever being
+        /// executed, the observer must not enqueue an empty execute-statement log.
+        /// This preserves byte-identical behavior with the pre-refactor implementation,
+        /// which only emitted execute telemetry when <c>CreateTelemetryContext</c> had
+        /// produced a non-null <c>PendingTelemetryContext</c> at execute time.
+        /// </summary>
+        private bool _executeStarted;
+
+        /// <summary>
+        /// Tracks whether the execute path has already finalized telemetry for this
+        /// statement (true after the error path drained it). Lets <see cref="Dispose"/>
+        /// avoid re-invoking the success-path inspection logic in that case.
+        /// <see cref="IStatementOperationObserver.OnFinalized"/> is itself idempotent, so
+        /// this flag is only an optimization for the chunk-metrics / reader-inspection
+        /// path; it is not required for correctness.
+        /// </summary>
+        private bool _executeFinalized;
+
+        /// <summary>
+        /// Telemetry context for the current statement execution. Exposes the observer's
+        /// underlying <see cref="StatementTelemetryContext"/> when one exists so the
+        /// reader and operation status poller can mutate poll-count and poll-latency
+        /// fields directly (PECO-2992). Returns null when telemetry is disabled
+        /// (<see cref="NullObserver"/>) so the reader code can skip its telemetry
+        /// branches without a separate feature flag check.
+        /// </summary>
+        internal StatementTelemetryContext? PendingTelemetryContext =>
+            (_observer as TelemetryObserver)?.Context;
 
         // Stopwatch covering the lifetime of this statement, started at construction.
         // Used to scope CANCEL_STATEMENT timing within the statement's lifetime.
@@ -98,8 +126,14 @@ namespace AdbcDrivers.Databricks
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
         public DatabricksStatement(DatabricksConnection connection)
+            : this(connection, ResolveDefaultObserver(connection))
+        {
+        }
+
+        internal DatabricksStatement(DatabricksConnection connection, IStatementOperationObserver observer)
             : base(connection)
         {
+            _observer = observer ?? NullObserver.Instance;
             // set the catalog name for legacy compatibility
             // TODO: use catalog and schema fields in hiveserver2 connection instead of DefaultNamespace so we don't need to cast
             var defaultNamespace = ((DatabricksConnection)Connection).DefaultNamespace;
@@ -129,21 +163,23 @@ namespace AdbcDrivers.Databricks
             }
         }
 
-        private StatementTelemetryContext? CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type statementType)
+        /// <summary>
+        /// Resolves the default <see cref="IStatementOperationObserver"/> for a statement
+        /// constructed without an explicit observer (e.g. the connection-side
+        /// <see cref="DatabricksConnection.SetSchema"/> / <c>ApplyServerSidePropertiesAsync</c>
+        /// helpers that use <c>new DatabricksStatement(this)</c> directly). Returns a
+        /// <see cref="TelemetryObserver"/> bound to the connection's session when telemetry
+        /// is enabled and the session has a live telemetry client, otherwise
+        /// <see cref="NullObserver.Instance"/>. This is the same decision
+        /// <see cref="DatabricksConnection.CreateStatement"/> makes when it injects an
+        /// observer explicitly, so direct-construction callers get identical behavior.
+        /// </summary>
+        private static IStatementOperationObserver ResolveDefaultObserver(DatabricksConnection connection)
         {
-            var session = ((DatabricksConnection)Connection).TelemetrySession;
-            if (session?.TelemetryClient == null) return null;
-
-            var ctx = new StatementTelemetryContext(session);
-            ctx.OperationType = OperationType.ExecuteStatement;
-            ctx.StatementType = statementType;
-            // IsCompressed and ResultFormat are populated from the actual result stream in
-            // EmitTelemetry, not the connection-level capability flags. Defaults here cover error
-            // and unconsumed paths (PECO-2988, PECO-2978).
-            ctx.IsCompressed = false;
-            ctx.ResultFormat = ExecutionResultFormat.InlineArrow;
-            ctx.IsInternalCall = IsInternalCall;
-            return ctx;
+            TelemetrySessionContext? session = connection.TelemetrySession;
+            return session?.TelemetryClient != null
+                ? (IStatementOperationObserver)new TelemetryObserver(session)
+                : NullObserver.Instance;
         }
 
         /// <summary>
@@ -165,37 +201,70 @@ namespace AdbcDrivers.Databricks
             };
         }
 
-        private StatementTelemetryContext? CreateMetadataTelemetryContext()
+        /// <summary>
+        /// Begins an execute-time observer hook. Replaces the old
+        /// <c>CreateTelemetryContext</c> / <c>CreateMetadataTelemetryContext</c> helpers:
+        /// signals the observer with <see cref="IStatementOperationObserver.OnExecuteStarted"/>
+        /// and stamps the per-statement <see cref="StatementTelemetryContext"/> with the
+        /// defaults the legacy helpers used (InlineArrow result format, IsInternalCall).
+        /// The reader inspection at <see cref="FinalizeExecuteTelemetry"/> still overrides
+        /// IsCompressed and ResultFormat based on the active reader (PECO-2988, PECO-2978).
+        /// </summary>
+        private void BeginExecuteTelemetry(StatementType statementType, OperationType operationType)
         {
-            var session = ((DatabricksConnection)Connection).TelemetrySession;
-            if (session?.TelemetryClient == null) return null;
-
-            var operationType = GetMetadataOperationType(SqlQuery) ?? OperationType.Unspecified;
-
-            var ctx = new StatementTelemetryContext(session);
-            ctx.OperationType = operationType;
-            ctx.StatementType = Telemetry.Proto.Statement.Types.Type.Metadata;
-            ctx.ResultFormat = ExecutionResultFormat.InlineArrow;
-            ctx.IsCompressed = false;
-            ctx.IsInternalCall = IsInternalCall;
-            return ctx;
+            _executeStarted = true;
+            // Placeholder isCompressed=false matches the old CreateTelemetryContext default;
+            // the actual value is sourced from the reader at finalize time.
+            _observer.OnExecuteStarted(statementType, operationType, isCompressed: false);
+            StatementTelemetryContext? ctx = PendingTelemetryContext;
+            if (ctx != null)
+            {
+                ctx.ResultFormat = ExecutionResultFormat.InlineArrow;
+                ctx.IsInternalCall = IsInternalCall;
+            }
         }
 
-        private void RecordSuccess(StatementTelemetryContext ctx)
+        /// <summary>
+        /// Records a successful execute on the observer. Replaces the legacy
+        /// <c>RecordSuccess</c> helper. Marks first-batch-ready, captures HTTP retry count
+        /// from <see cref="Activity.Current"/>, then signals the observer with
+        /// <see cref="IStatementOperationObserver.OnExecuteSucceeded"/>. ResultFormat is
+        /// passed as InlineArrow here and overridden at finalize time based on the active
+        /// reader (PECO-2978) so this hook does not mislabel inline results when CloudFetch
+        /// is enabled on the connection.
+        /// </summary>
+        private void RecordExecuteSuccess()
         {
-            ctx.RecordFirstBatchReady();
-            // ResultFormat is populated from the actual active reader in EmitTelemetry (PECO-2978);
-            // setting it here from the connection-level useCloudFetch flag mislabels inline results
-            // as EXTERNAL_LINKS whenever CloudFetch is enabled on the connection.
-            ctx.StatementId = StatementId;
-            CaptureRetryCount(ctx);
+            StatementTelemetryContext? ctx = PendingTelemetryContext;
+            if (ctx != null)
+            {
+                _observer.OnFirstBatchReady(ctx.ExecuteStopwatch.ElapsedMilliseconds);
+                CaptureRetryCount(ctx);
+            }
+            _observer.OnExecuteSucceeded(StatementId ?? string.Empty, ExecutionResultFormat.InlineArrow);
         }
 
-        private void CaptureRetryCount(StatementTelemetryContext ctx)
+        /// <summary>
+        /// Records a failed execute on the observer. Replaces the legacy
+        /// <c>RecordError</c> helper. Captures HTTP retry count before signalling
+        /// <see cref="IStatementOperationObserver.OnError"/>; ordering matches the
+        /// previous helper.
+        /// </summary>
+        private void RecordExecuteError(Exception ex)
+        {
+            StatementTelemetryContext? ctx = PendingTelemetryContext;
+            if (ctx != null)
+            {
+                CaptureRetryCount(ctx);
+            }
+            _observer.OnError(ex);
+        }
+
+        private static void CaptureRetryCount(StatementTelemetryContext ctx)
         {
             if (Activity.Current != null)
             {
-                var retryCountTag = Activity.Current.GetTagItem("http.retry.total_attempts");
+                object? retryCountTag = Activity.Current.GetTagItem("http.retry.total_attempts");
                 if (retryCountTag is int retryCount)
                 {
                     ctx.RetryCount = retryCount;
@@ -203,190 +272,174 @@ namespace AdbcDrivers.Databricks
             }
         }
 
-        private void RecordError(StatementTelemetryContext ctx, Exception ex)
-        {
-            ctx.HasError = true;
-            ctx.ErrorName = ex.GetType().Name;
-            ctx.ErrorMessage = ex.Message;
-            CaptureRetryCount(ctx);
-        }
-
         public override QueryResult ExecuteQuery()
         {
-            var ctx = IsMetadataCommand
-                ? CreateMetadataTelemetryContext()
-                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return base.ExecuteQuery();
+            if (IsMetadataCommand)
+            {
+                BeginExecuteTelemetry(
+                    StatementType.Metadata,
+                    GetMetadataOperationType(SqlQuery) ?? OperationType.Unspecified);
+            }
+            else
+            {
+                BeginExecuteTelemetry(StatementType.Query, OperationType.ExecuteStatement);
+            }
 
-            // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
-            PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = base.ExecuteQuery();
                 _lastQueryResult = result; // Store for telemetry
-                RecordSuccess(ctx);
+                RecordExecuteSuccess();
                 return result;
             }
             catch (Exception ex)
             {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
+                RecordExecuteError(ex);
+                // Finalize telemetry immediately on error (won't reach Dispose's success-path emission).
+                FinalizeExecuteTelemetry();
                 throw;
             }
         }
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
-            var ctx = IsMetadataCommand
-                ? CreateMetadataTelemetryContext()
-                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return await base.ExecuteQueryAsync();
+            if (IsMetadataCommand)
+            {
+                BeginExecuteTelemetry(
+                    StatementType.Metadata,
+                    GetMetadataOperationType(SqlQuery) ?? OperationType.Unspecified);
+            }
+            else
+            {
+                BeginExecuteTelemetry(StatementType.Query, OperationType.ExecuteStatement);
+            }
 
-            // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
-            PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
                 _lastQueryResult = result; // Store for telemetry
-                RecordSuccess(ctx);
+                RecordExecuteSuccess();
                 return result;
             }
             catch (Exception ex)
             {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
+                RecordExecuteError(ex);
+                FinalizeExecuteTelemetry();
                 throw;
             }
         }
 
         public override UpdateResult ExecuteUpdate()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
-            if (ctx == null) return base.ExecuteUpdate();
+            BeginExecuteTelemetry(StatementType.Update, OperationType.ExecuteStatement);
 
-            PendingTelemetryContext = ctx;
             try
             {
                 UpdateResult result = base.ExecuteUpdate();
-                RecordSuccess(ctx);
+                RecordExecuteSuccess();
                 return result;
             }
             catch (Exception ex)
             {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
+                RecordExecuteError(ex);
+                FinalizeExecuteTelemetry();
                 throw;
             }
         }
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
-            if (ctx == null) return await base.ExecuteUpdateAsync();
+            BeginExecuteTelemetry(StatementType.Update, OperationType.ExecuteStatement);
 
-            PendingTelemetryContext = ctx;
             try
             {
                 UpdateResult result = await base.ExecuteUpdateAsync();
-                RecordSuccess(ctx);
+                RecordExecuteSuccess();
                 return result;
             }
             catch (Exception ex)
             {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
+                RecordExecuteError(ex);
+                FinalizeExecuteTelemetry();
                 throw;
             }
         }
 
-        private void EmitTelemetry(StatementTelemetryContext ctx)
+        /// <summary>
+        /// Replaces the legacy <c>EmitTelemetry</c> helper. Inspects the active reader for
+        /// chunk metrics, IsCompressed, and ResultFormat (preserving the PECO-2988 / PECO-2978
+        /// behavior of sourcing these from the actual reader rather than connection-level
+        /// capability flags), then signals the observer with
+        /// <see cref="IStatementOperationObserver.OnChunksDownloaded"/>,
+        /// <see cref="IStatementOperationObserver.OnConsumed"/>, and finally
+        /// <see cref="IStatementOperationObserver.OnFinalized"/>. <c>OnFinalized</c> is the
+        /// terminal call — both <see cref="TelemetryObserver"/> and <see cref="NullObserver"/>
+        /// guarantee idempotency, so this method may be invoked from both the error path
+        /// (in Execute*) and the success path (in <see cref="Dispose(bool)"/>).
+        /// </summary>
+        private void FinalizeExecuteTelemetry()
         {
-            try
+            if (_executeFinalized)
             {
-                ctx.RecordResultsConsumed();
+                return;
+            }
+            _executeFinalized = true;
 
-                // Extract chunk metrics if this was a CloudFetch query.
-                // Check for both CloudFetchReader (direct) and DatabricksCompositeReader (wrapped).
-                ChunkMetrics? metrics = null;
-                if (_lastQueryResult?.Stream is CloudFetchReader cfReader)
-                {
-                    try
-                    {
-                        metrics = cfReader.GetChunkMetrics();
-                    }
-                    catch
-                    {
-                        // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
-                    }
-                }
-                else if (_lastQueryResult?.Stream is DatabricksCompositeReader compositeReader)
-                {
-                    try
-                    {
-                        metrics = compositeReader.GetChunkMetrics();
-                    }
-                    catch
-                    {
-                        // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations
-                    }
-                }
+            StatementTelemetryContext? ctx = PendingTelemetryContext;
 
-                // Source IsCompressed and ResultFormat from the active reader, not connection-level
-                // capability flags. The composite reader holds the server-reported truth for both:
-                // IsLz4Compressed mirrors TGetResultSetMetadataResp.Lz4Compressed (drives both inline
-                // and CloudFetch decompression), and IsCloudFetchActive reflects whether the server
-                // returned result links for this statement (PECO-2988, PECO-2978).
-                if (_lastQueryResult?.Stream is DatabricksCompositeReader composite)
+            // Extract chunk metrics if this was a CloudFetch query. Check for both
+            // CloudFetchReader (direct) and DatabricksCompositeReader (wrapped). In the error
+            // path _lastQueryResult is null and this whole block is a no-op.
+            ChunkMetrics? metrics = null;
+            if (_lastQueryResult?.Stream is CloudFetchReader cfReader)
+            {
+                try
                 {
-                    ctx.IsCompressed = composite.IsLz4Compressed;
-                    ctx.ResultFormat = composite.IsCloudFetchActive
+                    metrics = cfReader.GetChunkMetrics();
+                }
+                catch
+                {
+                    // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations.
+                }
+            }
+            else if (_lastQueryResult?.Stream is DatabricksCompositeReader compositeReader)
+            {
+                try
+                {
+                    metrics = compositeReader.GetChunkMetrics();
+                }
+                catch
+                {
+                    // Ignore errors retrieving chunk metrics - telemetry must not fail driver operations.
+                }
+            }
+
+            // Source IsCompressed and ResultFormat from the active reader, not connection-level
+            // capability flags. The composite reader holds the server-reported truth for both:
+            // IsLz4Compressed mirrors TGetResultSetMetadataResp.Lz4Compressed (drives both inline
+            // and CloudFetch decompression), and IsCloudFetchActive reflects whether the server
+            // returned result links for this statement (PECO-2988, PECO-2978). The observer's
+            // OnReaderInspected hook overwrites the same fields the legacy EmitTelemetry helper
+            // mutated immediately before BuildTelemetryLog, preserving byte-identical output
+            // without leaking the observer's internal StatementTelemetryContext to the statement.
+            if (_lastQueryResult?.Stream is DatabricksCompositeReader composite)
+            {
+                _observer.OnReaderInspected(
+                    resultFormat: composite.IsCloudFetchActive
                         ? ExecutionResultFormat.ExternalLinks
-                        : ExecutionResultFormat.InlineArrow;
-                }
-
-                // Set chunk details if we have metrics and at least one chunk was iterated
-                // (avoids leaking the -1 sentinel from InitialChunkLatencyMs when no chunks were downloaded)
-                if (metrics != null && metrics.TotalChunksIterated > 0)
-                {
-                    ctx.SetChunkDetails(
-                        metrics.TotalChunksPresent,
-                        metrics.TotalChunksIterated,
-                        metrics.InitialChunkLatencyMs,
-                        metrics.SlowestChunkLatencyMs,
-                        metrics.SumChunksDownloadTimeMs);
-                }
-
-                OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
-
-                var frontendLog = new TelemetryFrontendLog
-                {
-                    WorkspaceId = ctx.WorkspaceId,
-                    FrontendLogEventId = Guid.NewGuid().ToString(),
-                    Context = new FrontendLogContext
-                    {
-                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    },
-                    Entry = new FrontendLogEntry
-                    {
-                        SqlDriverLog = telemetryLog
-                    }
-                };
-
-                var session = ((DatabricksConnection)Connection).TelemetrySession;
-                session?.TelemetryClient?.Enqueue(frontendLog);
+                        : ExecutionResultFormat.InlineArrow,
+                    isCompressed: composite.IsLz4Compressed);
             }
-            catch
+
+            // Only emit chunk metrics if at least one chunk was iterated; avoids leaking the
+            // -1 sentinel from InitialChunkLatencyMs when no chunks were downloaded.
+            if (metrics != null && metrics.TotalChunksIterated > 0)
             {
-                // Telemetry must never impact driver operations
+                _observer.OnChunksDownloaded(metrics);
             }
+
+            _observer.OnConsumed(ctx?.ExecuteStopwatch.ElapsedMilliseconds ?? 0);
+            _observer.OnFinalized();
         }
 
         /// <summary>
@@ -1300,11 +1353,15 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
-                if (PendingTelemetryContext != null)
+                // Finalize the execute observer now that results have been consumed. This
+                // replaces the legacy EmitTelemetry call. Gated on _executeStarted so a
+                // statement disposed without execute does not enqueue a stray empty log
+                // through the observer (preserves byte-identical behavior with the prior
+                // PendingTelemetryContext!=null gate). FinalizeExecuteTelemetry itself is
+                // idempotent — the error path inside Execute* may have already finalized.
+                if (_executeStarted)
                 {
-                    // Emit telemetry now that results have been consumed
-                    EmitTelemetry(PendingTelemetryContext);
-                    PendingTelemetryContext = null;
+                    FinalizeExecuteTelemetry();
                 }
 
                 // Emit a CLOSE_STATEMENT telemetry event once per statement disposal,
@@ -1316,22 +1373,21 @@ namespace AdbcDrivers.Databricks
                 // or the operation was already closed by direct-results), elapsedMs is 0
                 // and the event acts purely as a lifecycle marker.
                 // _closeStatementTelemetryEmitted makes the emission idempotent across
-                // repeated Dispose() calls (PECO-2991).
+                // repeated Dispose() calls (PECO-2991). The connection-side telemetry
+                // implementation (NoOpConnectionTelemetry when disabled) makes the
+                // EmitStatementOperationTelemetry call itself a no-op, so no explicit
+                // TelemetrySession null-check is needed here.
                 try
                 {
                     if (!_closeStatementTelemetryEmitted)
                     {
-                        var session = ((DatabricksConnection)Connection).TelemetrySession;
-                        if (session?.TelemetryClient != null)
-                        {
-                            _closeStatementTelemetryEmitted = true;
-                            ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
-                                OperationType.CloseStatement,
-                                Telemetry.Proto.Statement.Types.Type.Unspecified,
-                                StatementId,
-                                elapsedMs: CloseStatementRpcLatencyMs ?? 0,
-                                error: CloseStatementRpcError);
-                        }
+                        _closeStatementTelemetryEmitted = true;
+                        ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                            OperationType.CloseStatement,
+                            StatementType.Unspecified,
+                            StatementId,
+                            elapsedMs: CloseStatementRpcLatencyMs ?? 0,
+                            error: CloseStatementRpcError);
                     }
                 }
                 catch (Exception ex)
@@ -1357,6 +1413,10 @@ namespace AdbcDrivers.Databricks
             // signals the cancellation token source and is idempotent across repeats
             // (PECO-2991). Each invocation emits its own event so analysts can see
             // duplicate user-initiated cancels.
+            //
+            // The connection-side telemetry implementation (NoOpConnectionTelemetry when
+            // disabled) makes the EmitStatementOperationTelemetry call itself a no-op,
+            // so no explicit TelemetrySession null-check is needed here.
             Exception? error = null;
             long startMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
             try
@@ -1372,17 +1432,13 @@ namespace AdbcDrivers.Databricks
             {
                 try
                 {
-                    var session = ((DatabricksConnection)Connection).TelemetrySession;
-                    if (session?.TelemetryClient != null)
-                    {
-                        long elapsedMs = _statementLifetimeStopwatch.ElapsedMilliseconds - startMs;
-                        ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
-                            OperationType.CancelStatement,
-                            Telemetry.Proto.Statement.Types.Type.Unspecified,
-                            StatementId,
-                            elapsedMs,
-                            error);
-                    }
+                    long elapsedMs = _statementLifetimeStopwatch.ElapsedMilliseconds - startMs;
+                    ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                        OperationType.CancelStatement,
+                        StatementType.Unspecified,
+                        StatementId,
+                        elapsedMs,
+                        error);
                 }
                 catch (Exception ex)
                 {

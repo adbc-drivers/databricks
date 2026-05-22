@@ -25,6 +25,7 @@ using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.Databricks.Result;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
@@ -32,6 +33,8 @@ using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
+using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -72,6 +75,62 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Connection reference for metadata queries
         private readonly StatementExecutionConnection _connection;
 
+        /// <summary>
+        /// Observer for this statement's operational lifecycle. Injected at construction by
+        /// <see cref="StatementExecutionConnection.CreateStatement"/> — a
+        /// <see cref="TelemetryObserver"/> bound to the connection's
+        /// <see cref="TelemetrySessionContext"/> when telemetry is enabled, otherwise
+        /// <see cref="NullObserver.Instance"/>. Subsequent hookpoint commits will route the
+        /// statement's lifecycle calls (execute, poll, first-batch, consumed, error, finalized)
+        /// through this field. <b>Never null</b> — callsites do not need to null-check.
+        /// </summary>
+        private readonly IStatementOperationObserver _observer;
+
+        /// <summary>
+        /// Tracks whether <see cref="IStatementOperationObserver.OnExecuteStarted"/> has been
+        /// fired for this statement. Gates the terminal
+        /// <see cref="IStatementOperationObserver.OnFinalized"/> call in <see cref="Dispose"/>:
+        /// when a statement is disposed without ever being executed, the observer must not
+        /// enqueue an empty execute-statement log. Mirrors the gate used in the Thrift
+        /// <c>DatabricksStatement</c> path so SEA and Thrift produce byte-identical telemetry
+        /// for the never-executed-then-disposed shape.
+        /// </summary>
+        private bool _executeStarted;
+
+        /// <summary>
+        /// Wall-clock stopwatch started in lockstep with
+        /// <see cref="IStatementOperationObserver.OnExecuteStarted"/> and read at reader-
+        /// construction time to supply the <c>latencyMs</c> argument for
+        /// <see cref="IStatementOperationObserver.OnFirstBatchReady"/>. Mirrors the Thrift
+        /// path's <c>StatementTelemetryContext.ExecuteStopwatch</c> so SEA reports the same
+        /// <c>result_set_ready_latency_millis</c> semantic — elapsed time from execute start
+        /// to the moment first-batch data is available to the reader.
+        /// </summary>
+        private readonly Stopwatch _executeStopwatch = new Stopwatch();
+
+        /// <summary>
+        /// Reference to the outermost <see cref="ConsumptionObservingStream"/> wrapping the
+        /// reader returned by a successful execute. Tracked so <see cref="Dispose"/> can
+        /// invoke <see cref="ConsumptionObservingStream.EnsureObserverSignaled"/> when the
+        /// consumer abandons the reader without disposing it — guaranteeing
+        /// <see cref="IStatementOperationObserver.OnConsumed"/> (and, on the CloudFetch
+        /// path, <see cref="IStatementOperationObserver.OnChunksDownloaded"/>) fire on
+        /// every successful EXECUTE record before <see cref="IStatementOperationObserver.OnFinalized"/>
+        /// emits the log. Null on the error path (no reader was constructed) and on the
+        /// never-executed path. Mirrors the Thrift driver's <c>EmitTelemetry</c> contract,
+        /// which always calls <c>RecordResultsConsumed</c> regardless of reader iteration.
+        /// </summary>
+        private ConsumptionObservingStream? _consumptionStream;
+
+        /// <summary>
+        /// Idempotency gate for the CLOSE_STATEMENT operation telemetry emitted at
+        /// <see cref="Dispose"/>. Mirrors the Thrift driver's
+        /// <c>_closeStatementTelemetryEmitted</c> field — repeated <c>Dispose()</c> calls
+        /// (common in <c>using</c> + manual dispose patterns) must not produce duplicate
+        /// CLOSE_STATEMENT records.
+        /// </summary>
+        private bool _closeStatementTelemetryEmitted;
+
         // Statement state
         private string? _currentStatementId;
         private string? _sqlQuery;
@@ -92,6 +151,39 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _metadataForeignSchemaName;
         private string? _metadataForeignTableName;
         private string? _queryTags;
+
+        /// <summary>
+        /// When non-null, indicates this statement is acting as the internal sub-statement
+        /// for a metadata operation (e.g. <c>GetObjects</c> / <c>GetCatalogs</c> /
+        /// <c>SqlQuery="getschemas"</c>). The next <c>OnExecuteStarted</c> hook will emit
+        /// <see cref="StatementType.Metadata"/> + this <see cref="OperationType"/> pair
+        /// instead of the regular <c>(Query, ExecuteStatementAsync)</c> pair.
+        ///
+        /// <para>
+        /// Set via <see cref="SetPendingMetadataOperation"/> by the connection-level helpers
+        /// before <c>ExecuteQueryAsync</c> runs. Mirrors the Thrift parity model where
+        /// <c>DatabricksStatement.BeginExecuteTelemetry</c> picks the
+        /// <c>(StatementType, OperationType)</c> pair based on
+        /// <c>GetMetadataOperationType(SqlQuery)</c>; see PECO-3022 gap B8.
+        /// </para>
+        /// </summary>
+        private OperationType? _pendingMetadataOperation;
+
+        /// <summary>
+        /// Marks this statement as the internal sub-statement for a metadata operation so
+        /// the next <c>OnExecuteStarted</c> hook reports
+        /// <see cref="StatementType.Metadata"/> + <paramref name="operationType"/> rather
+        /// than the regular <c>(Query, ExecuteStatementAsync)</c> pair.
+        ///
+        /// <para>
+        /// Used by <see cref="StatementExecutionConnection.ExecuteMetadataSqlAsync(string, OperationType, CancellationToken)"/>
+        /// before invoking <see cref="ExecuteQueryAsync"/> on the sub-statement.
+        /// </para>
+        /// </summary>
+        internal void SetPendingMetadataOperation(OperationType operationType)
+        {
+            _pendingMetadataOperation = operationType;
+        }
 
         /// <summary>
         /// Parses "key1:val1,key2:val2" into a list of QueryTag objects.
@@ -165,7 +257,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Microsoft.IO.RecyclableMemoryStreamManager recyclableMemoryStreamManager,
             System.Buffers.ArrayPool<byte> lz4BufferPool,
             HttpClient httpClient,
-            StatementExecutionConnection connection)
+            StatementExecutionConnection connection,
+            IStatementOperationObserver? observer = null)
             : base(connection)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
@@ -186,12 +279,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+            // Defaulting to NullObserver — never null — lets every hookpoint callsite skip
+            // null-checks (design §12). Callers that want telemetry pass a TelemetryObserver
+            // bound to the connection's TelemetrySessionContext.
+            _observer = observer ?? NullObserver.Instance;
 
             // Match Thrift: statement starts with connection's default catalog.
             // When enableMultipleCatalogSupport=true, this is the catalog from config (e.g. "main").
             // When false, _catalog is null (not set from config), matching Thrift behavior.
             _metadataCatalogName = catalog;
         }
+
+        /// <summary>
+        /// Internal accessor for the injected observer. Exposed so unit tests can verify
+        /// that <see cref="StatementExecutionConnection.CreateStatement"/> wired the correct
+        /// observer type (TelemetryObserver when telemetry is enabled, NullObserver otherwise).
+        /// Production code uses the <c>_observer</c> field directly.
+        /// </summary>
+        internal IStatementOperationObserver Observer => _observer;
 
         /// <summary>
         /// Gets or sets the SQL query to execute.
@@ -322,92 +427,198 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
         {
-            // Build the execute statement request
-            // Note: warehouse_id is always required by the Databricks Statement Execution API
-            // Note: catalog/schema cannot be set when session_id is provided (session has context)
-            var request = new ExecuteStatementRequest
-            {
-                Statement = _sqlQuery,
-                WarehouseId = _warehouseId,
-                SessionId = _sessionId,
-                Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
-                Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
-                Disposition = _resultDisposition,
-                Format = _resultFormat,
-                ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
-                OnWaitTimeout = "CONTINUE",
-                IsMetadata = isMetadataExecution,
-                QueryTags = ParseQueryTags(_queryTags)
-            };
+            // Telemetry: signal OnExecuteStarted before submitting the statement. ExecuteQueryInternalAsync
+            // runs for both regular queries and the sub-statements created by the connection's
+            // metadata helpers (ExecuteMetadataSqlAsync / ExecuteShowColumnsAsync). For regular
+            // queries the pair is (Query, ExecuteStatementAsync) — SEA is always async on the wire
+            // (the client submits a statement and polls for completion), so the operation_type
+            // recorded in telemetry must be EXECUTE_STATEMENT_ASYNC rather than the synchronous
+            // EXECUTE_STATEMENT used on the Thrift path. For metadata sub-statements,
+            // SetPendingMetadataOperation stamps _pendingMetadataOperation with the appropriate
+            // OperationType.List* before ExecuteQueryAsync runs, and we emit
+            // (Metadata, _pendingMetadataOperation) instead — mirroring the Thrift parity
+            // model in DatabricksStatement.BeginExecuteTelemetry (PECO-3022 gap B8).
+            // isCompressed reflects the requested result compression — the manifest may override
+            // later but the observer's first signal records what we asked for.
+            bool isCompressed = !string.IsNullOrEmpty(_resultCompression)
+                && string.Equals(_resultCompression, "LZ4_FRAME", StringComparison.OrdinalIgnoreCase);
 
-            // Execute the statement
-            var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
-            _currentStatementId = response.StatementId;
-
-            // Handle query status according to Databricks API documentation:
-            // PENDING: waiting for warehouse - continue polling
-            // RUNNING: running - continue polling
-            // SUCCEEDED: execution was successful, result data available for fetch
-            // FAILED: execution failed; reason for failure described in accompanying error message
-            // CANCELED: user canceled; can come from explicit cancel call, or timeout with on_wait_timeout=CANCEL
-            // CLOSED: execution successful, and statement closed; result no longer available for fetch
-            var state = response.Status?.State;
-            if (state == "PENDING" || state == "RUNNING")
+            StatementType stmtType;
+            OperationType opType;
+            if (_pendingMetadataOperation.HasValue)
             {
-                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
-                state = response.Status?.State;
+                stmtType = StatementType.Metadata;
+                opType = _pendingMetadataOperation.Value;
+            }
+            else
+            {
+                stmtType = StatementType.Query;
+                opType = OperationType.ExecuteStatementAsync;
             }
 
-            // Check for terminal error states
-            if (state == "FAILED")
+            // _executeStarted is set in lockstep with OnExecuteStarted so the dispose-path
+            // finalize call only fires when execute actually began. Setting before the observer
+            // call is safe: the observer contract guarantees OnExecuteStarted does not throw,
+            // and even if it did, treating a partially-observed execute as "started" matches
+            // the Thrift path's BeginExecuteTelemetry ordering.
+            _executeStarted = true;
+            // Start the stopwatch alongside OnExecuteStarted so OnFirstBatchReady can report
+            // elapsed-since-execute-start as its latencyMs argument (gap G3 / design §6 row 4).
+            _executeStopwatch.Start();
+            _observer.OnExecuteStarted(stmtType, opType, isCompressed);
+
+            try
             {
-                var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                // Build the execute statement request
+                // Note: warehouse_id is always required by the Databricks Statement Execution API
+                // Note: catalog/schema cannot be set when session_id is provided (session has context)
+                var request = new ExecuteStatementRequest
+                {
+                    Statement = _sqlQuery,
+                    WarehouseId = _warehouseId,
+                    SessionId = _sessionId,
+                    Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
+                    Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
+                    Disposition = _resultDisposition,
+                    Format = _resultFormat,
+                    ResultCompression = _resultCompression,
+                    WaitTimeout = $"{_waitTimeoutSeconds}s",
+                    OnWaitTimeout = "CONTINUE",
+                    IsMetadata = isMetadataExecution,
+                    QueryTags = ParseQueryTags(_queryTags)
+                };
+
+                // Execute the statement
+                var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
+                _currentStatementId = response.StatementId;
+
+                // Telemetry: signal OnExecuteSucceeded as soon as the server has accepted the statement
+                // and a statement id is known. SeaResultFormatMapper.Map derives the typed proto enum
+                // from the (disposition, format) request pair plus the observed response shape; for
+                // PENDING responses with no manifest yet, the auto-disposition cells fall back to
+                // Unspecified, which is acceptable because phase 5 fires this hookpoint before
+                // polling.
+                _observer.OnExecuteSucceeded(
+                    response.StatementId ?? string.Empty,
+                    SeaResultFormatMapper.Map(_resultDisposition, _resultFormat, response));
+
+                // Handle query status according to Databricks API documentation:
+                // PENDING: waiting for warehouse - continue polling
+                // RUNNING: running - continue polling
+                // SUCCEEDED: execution was successful, result data available for fetch
+                // FAILED: execution failed; reason for failure described in accompanying error message
+                // CANCELED: user canceled; can come from explicit cancel call, or timeout with on_wait_timeout=CANCEL
+                // CLOSED: execution successful, and statement closed; result no longer available for fetch
+                var state = response.Status?.State;
+                if (state == "PENDING" || state == "RUNNING")
+                {
+                    response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                    state = response.Status?.State;
+                }
+
+                // Check for terminal error states
+                if (state == "FAILED")
+                {
+                    var error = response.Status?.Error;
+                    throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                }
+                if (state == "CANCELED")
+                {
+                    throw new AdbcException("Statement execution was canceled");
+                }
+                if (state == "CLOSED")
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
+
+                // Check for truncated results warning
+                if (response.Manifest?.Truncated == true)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("statement.results_truncated",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "total_row_count", response.Manifest.TotalRowCount },
+                            { "total_byte_count", response.Manifest.TotalByteCount }
+                        }));
+                }
+
+                // Telemetry: signal OnFirstBatchReady once the polling loop has confirmed SUCCEEDED
+                // state (gap B4 / "reader latencies on 100% of successful EXECUTE records"). Firing
+                // here rather than inside CreateReader / CreateCloudFetchReader covers ALL successful
+                // paths uniformly — inline-arrow with attachment bytes, CloudFetch with external
+                // links, AND the two empty-result paths (null manifest, manifest-without-data) that
+                // produce an EmptyArrowArrayStream. Without this earlier firepoint, empty-result
+                // executions would report only OnConsumed and no OnFirstBatchReady — populating
+                // result_set_consumption_latency_millis but leaving result_set_ready_latency_millis
+                // unset, which the lumberjack analysis surfaced as the 22% missing-latency tail.
+                // The TelemetryObserver's "first wins" guard makes any downstream redundant fires a
+                // no-op; this is the single canonical fire-point for SEA.
+                _observer.OnFirstBatchReady(_executeStopwatch.ElapsedMilliseconds);
+
+                // Create appropriate reader based on result disposition.
+                // All paths (inline, CloudFetch, empty) expose the manifest schema so that
+                // IntervalSerializingStream and ComplexTypeSerializingStream can detect columns
+                // uniformly via Spark:DataType:SqlName metadata rather than Arrow IPC types.
+                IArrowArrayStream reader = CreateReader(response, cancellationToken);
+
+                // Capture the underlying CloudFetchReader (if any) before any wrapping layers.
+                // ConsumptionObservingStream uses this at Dispose to snapshot chunk metrics and
+                // fire OnChunksDownloaded — gating on a non-null reference is what makes the
+                // inline path skip OnChunksDownloaded entirely (gap G3 / design §6 row 5).
+                // CreateReader returns one of CloudFetchReader, InlineArrowStreamReader, or
+                // EmptyArrowArrayStream, so the `as` cast cleanly partitions the two SEA paths
+                // without needing an out-parameter on CreateReader.
+                CloudFetchReader? cloudFetchReader = reader as CloudFetchReader;
+
+                // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
+                // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
+                reader = new IntervalSerializingStream(reader);
+
+                // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
+                // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
+                if (!_enableComplexDatatypeSupport)
+                {
+                    reader = new ComplexTypeSerializingStream(reader);
+                }
+
+                // Telemetry: wrap the final reader so OnConsumed (and OnChunksDownloaded on the
+                // CloudFetch path) fire at consumer Dispose (gap G3 / design §6 row 5). Wrapping
+                // at the outermost layer covers both the inline and CloudFetch paths uniformly —
+                // every inner transform (IntervalSerializingStream, ComplexTypeSerializingStream,
+                // the underlying InlineArrowStreamReader / CloudFetchReader) already propagates
+                // Dispose to its inner stream, so the consumer's Dispose reaches this wrapper
+                // first and ElapsedMilliseconds captures the full consume-window before teardown
+                // costs are incurred. The wrapper is idempotent — both observer signals fire at
+                // most once even if Dispose is invoked multiple times. Passing a non-null
+                // cloudFetchReader is the CloudFetch-path opt-in for OnChunksDownloaded; the
+                // inline path passes null and OnChunksDownloaded is intentionally never fired.
+                //
+                // Tracking the wrapper in _consumptionStream lets Statement.Dispose call
+                // EnsureObserverSignaled() before OnFinalized, guaranteeing OnConsumed fires on
+                // EVERY successful EXECUTE record even when the consumer abandons the reader
+                // without disposing it (gap B4). EnsureObserverSignaled() is idempotent with the
+                // wrapper's own Dispose, so whichever path runs first wins and the other is a
+                // no-op — matching the Thrift driver's RecordResultsConsumed-on-statement-dispose
+                // behavior.
+                var consumptionStream = new ConsumptionObservingStream(reader, _observer, _executeStopwatch, cloudFetchReader);
+                _consumptionStream = consumptionStream;
+                reader = consumptionStream;
+
+                // Get schema from reader
+                var schema = reader.Schema;
+
+                // Return query result - use 0 if row count is not available
+                long rowCount = response.Manifest?.TotalRowCount ?? 0;
+                return new QueryResult(rowCount, reader);
             }
-            if (state == "CANCELED")
+            catch (Exception ex)
             {
-                throw new AdbcException("Statement execution was canceled");
+                // Telemetry: signal OnError on any failure path (server error, terminal FAILED/CANCELED/CLOSED
+                // state, polling cancellation, reader construction). The observer contract guarantees the call
+                // swallows exceptions, so no try/catch is wrapped around the observer call itself.
+                _observer.OnError(ex);
+                throw;
             }
-            if (state == "CLOSED")
-            {
-                throw new AdbcException("Statement was closed before results could be retrieved");
-            }
-
-            // Check for truncated results warning
-            if (response.Manifest?.Truncated == true)
-            {
-                Activity.Current?.AddEvent(new ActivityEvent("statement.results_truncated",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "total_row_count", response.Manifest.TotalRowCount },
-                        { "total_byte_count", response.Manifest.TotalByteCount }
-                    }));
-            }
-
-            // Create appropriate reader based on result disposition.
-            // All paths (inline, CloudFetch, empty) expose the manifest schema so that
-            // IntervalSerializingStream and ComplexTypeSerializingStream can detect columns
-            // uniformly via Spark:DataType:SqlName metadata rather than Arrow IPC types.
-            IArrowArrayStream reader = CreateReader(response, cancellationToken);
-
-            // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
-            // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
-            reader = new IntervalSerializingStream(reader);
-
-            // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
-            // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
-            if (!_enableComplexDatatypeSupport)
-            {
-                reader = new ComplexTypeSerializingStream(reader);
-            }
-
-            // Get schema from reader
-            var schema = reader.Schema;
-
-            // Return query result - use 0 if row count is not available
-            long rowCount = response.Manifest?.TotalRowCount ?? 0;
-            return new QueryResult(rowCount, reader);
         }
 
         /// <summary>
@@ -452,6 +663,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private async Task<ExecuteStatementResponse> PollUntilCompleteAsync(string statementId, CancellationToken cancellationToken)
         {
+            // Telemetry: accumulate the count and wall-clock latency of GetStatementAsync calls so we can
+            // emit a single OnPollCompleted on terminal state. Per IStatementOperationObserver, latencyMs is
+            // "sum of wall-clock time spent in poll calls" — i.e. the GetStatementAsync calls themselves,
+            // not the inter-poll Task.Delay backoff. OnPollCompleted is intentionally NOT called on
+            // cancellation/exception paths: those flow through ExecuteQueryInternalAsync's catch and trigger
+            // OnError; emitting a partial poll record there would muddle the telemetry contract.
+            int pollCount = 0;
+            long totalPollLatencyMs = 0;
+            var pollStopwatch = new Stopwatch();
+
             while (true)
             {
                 // Check for cancellation before each polling iteration
@@ -463,8 +684,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Check for cancellation after delay
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Get statement status
+                // Get statement status (timed for poll telemetry)
+                pollCount++;
+                pollStopwatch.Restart();
                 var response = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
+                pollStopwatch.Stop();
+                totalPollLatencyMs += pollStopwatch.ElapsedMilliseconds;
 
                 // Convert GetStatementResponse to ExecuteStatementResponse
                 var executeResponse = new ExecuteStatementResponse
@@ -482,6 +707,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     state == "CANCELED" ||
                     state == "CLOSED")
                 {
+                    // Telemetry: emit exactly once on terminal state with accumulated count/latency.
+                    _observer.OnPollCompleted(pollCount, totalPollLatencyMs);
                     return executeResponse;
                 }
 
@@ -523,6 +750,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Inline results - may be split across multiple chunks.
                 // Pass the manifest schema so the reader reports it instead of the IPC-embedded schema,
                 // keeping inline consistent with CloudFetch (which also uses the manifest schema).
+                // OnFirstBatchReady is fired by ExecuteQueryInternalAsync before this method is called,
+                // covering all reader paths (inline, CloudFetch, empty) from a single fire-point so
+                // result_set_ready_latency_millis populates on 100% of successful EXECUTE records.
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
                     isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest));
@@ -541,6 +771,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private IArrowArrayStream CreateCloudFetchReader(ExecuteStatementResponse response, Schema manifestSchema)
         {
+            // OnFirstBatchReady is fired by ExecuteQueryInternalAsync before CreateReader dispatches
+            // here, covering inline, CloudFetch, and empty paths from a single fire-point. This keeps
+            // result_set_ready_latency_millis populated on 100% of successful EXECUTE records (gap B4).
             var manifest = response.Manifest!;
             var schema = manifestSchema;
 
@@ -663,56 +896,108 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private async Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
         {
-            // Build the execute statement request
-            // Note: catalog/schema cannot be set when session_id is provided (session has context)
-            var request = new ExecuteStatementRequest
-            {
-                Statement = _sqlQuery,
-                WarehouseId = _warehouseId,
-                SessionId = _sessionId,
-                Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
-                Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
-                Disposition = _resultDisposition,
-                Format = _resultFormat,
-                ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
-                OnWaitTimeout = "CONTINUE",
-                IsMetadata = false,
-                QueryTags = ParseQueryTags(_queryTags)
-            };
+            // Telemetry: signal OnExecuteStarted before submitting the statement. UPDATE
+            // statements (DML and DDL) share the same operation_type as queries on SEA —
+            // EXECUTE_STATEMENT_ASYNC, because SEA is always async on the wire (the client
+            // submits a statement and polls for completion regardless of whether the SQL is
+            // INSERT/UPDATE/DELETE or CREATE/DROP/CTAS). Only the StatementType differs:
+            // Update here vs Query in ExecuteQueryInternalAsync. Mirroring the Query path
+            // ensures B9 — UPDATE statements emit telemetry on SEA — closes: without these
+            // hookpoints, ExecuteUpdate would never fire OnExecuteStarted, _executeStarted
+            // would stay false, and Dispose's gated OnFinalized would skip the log entirely,
+            // producing the zero-telemetry shape observed in the lumberjack comparator.
+            // isCompressed reflects the requested result compression — for UPDATE the response
+            // typically has no result data, but recording what we asked for matches the
+            // QUERY-path contract and the Thrift driver's BeginExecuteTelemetry behavior.
+            bool isCompressed = !string.IsNullOrEmpty(_resultCompression)
+                && string.Equals(_resultCompression, "LZ4_FRAME", StringComparison.OrdinalIgnoreCase);
+            // _executeStarted is set in lockstep with OnExecuteStarted so the dispose-path
+            // OnFinalized fires for UPDATE statements just as it does for queries. Setting
+            // before the observer call is safe: the observer contract guarantees
+            // OnExecuteStarted does not throw, and even if it did, treating a partially
+            // observed execute as "started" matches the Thrift path's ordering.
+            _executeStarted = true;
+            // Start the stopwatch alongside OnExecuteStarted so the operation_latency_ms
+            // recorded at OnFinalized covers the full execute window for UPDATE statements
+            // just as it does for queries.
+            _executeStopwatch.Start();
+            _observer.OnExecuteStarted(StatementType.Update, OperationType.ExecuteStatementAsync, isCompressed);
 
-            // Execute the statement
-            var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
-            _currentStatementId = response.StatementId;
+            try
+            {
+                // Build the execute statement request
+                // Note: catalog/schema cannot be set when session_id is provided (session has context)
+                var request = new ExecuteStatementRequest
+                {
+                    Statement = _sqlQuery,
+                    WarehouseId = _warehouseId,
+                    SessionId = _sessionId,
+                    Catalog = string.IsNullOrEmpty(_sessionId) ? _catalog : null,
+                    Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
+                    Disposition = _resultDisposition,
+                    Format = _resultFormat,
+                    ResultCompression = _resultCompression,
+                    WaitTimeout = $"{_waitTimeoutSeconds}s",
+                    OnWaitTimeout = "CONTINUE",
+                    IsMetadata = false,
+                    QueryTags = ParseQueryTags(_queryTags)
+                };
 
-            // Handle query status - poll until complete
-            var state = response.Status?.State;
-            if (state == "PENDING" || state == "RUNNING")
-            {
-                response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
-                state = response.Status?.State;
-            }
+                // Execute the statement
+                var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
+                _currentStatementId = response.StatementId;
 
-            // Check for terminal error states
-            if (state == "FAILED")
-            {
-                var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
-            }
-            if (state == "CANCELED")
-            {
-                throw new AdbcException("Statement execution was canceled");
-            }
-            if (state == "CLOSED")
-            {
-                throw new AdbcException("Statement was closed before results could be retrieved");
-            }
+                // Telemetry: signal OnExecuteSucceeded as soon as the server has accepted the
+                // statement and a statement id is known — mirrors the Query path. The result
+                // format derived by SeaResultFormatMapper may resolve to Unspecified for UPDATE
+                // (DDL has no manifest, and DML's num_affected_rows attachment is materialized
+                // post-poll), but the cell still records the requested (disposition, format)
+                // pair which is the contract the observer expects.
+                _observer.OnExecuteSucceeded(
+                    response.StatementId ?? string.Empty,
+                    SeaResultFormatMapper.Map(_resultDisposition, _resultFormat, response));
 
-            // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
-            // column is num_affected_rows. DDL (CREATE TABLE, DROP TABLE, CTAS, etc.)
-            // returns no result data. Return -1 for DDL per the ADBC convention for
-            // "unknown or not applicable", matching what the Thrift path does.
-            return new UpdateResult(ReadNumAffectedRows(response.Manifest, response.Result));
+                // Handle query status - poll until complete
+                var state = response.Status?.State;
+                if (state == "PENDING" || state == "RUNNING")
+                {
+                    response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
+                    state = response.Status?.State;
+                }
+
+                // Check for terminal error states
+                if (state == "FAILED")
+                {
+                    var error = response.Status?.Error;
+                    throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                }
+                if (state == "CANCELED")
+                {
+                    throw new AdbcException("Statement execution was canceled");
+                }
+                if (state == "CLOSED")
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
+
+                // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
+                // column is num_affected_rows. DDL (CREATE TABLE, DROP TABLE, CTAS, etc.)
+                // returns no result data. Return -1 for DDL per the ADBC convention for
+                // "unknown or not applicable", matching what the Thrift path does.
+                return new UpdateResult(ReadNumAffectedRows(response.Manifest, response.Result));
+            }
+            catch (Exception ex)
+            {
+                // Telemetry: signal OnError on any failure path (server error, terminal
+                // FAILED/CANCELED/CLOSED state, polling cancellation, num_affected_rows
+                // parse failures). Mirrors the Query-path catch. The observer contract
+                // guarantees the call swallows exceptions, so no try/catch is wrapped
+                // around the observer call itself. OnFinalized still fires once via the
+                // gated path in Dispose (Interlocked CAS makes the observer's OnFinalized
+                // idempotent — exactly-once on the Update error+Dispose sequence).
+                _observer.OnError(ex);
+                throw;
+            }
         }
 
         private static long ReadNumAffectedRows(ResultManifest? manifest, ResultData? result)
@@ -758,8 +1043,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public override void Dispose()
         {
+            // Capture the statement id and close-RPC outcome locally so we can populate the
+            // CLOSE_STATEMENT telemetry event below even after _currentStatementId is cleared.
+            string? closedStatementId = _currentStatementId;
+            long closeRpcElapsedMs = 0;
+            Exception? closeRpcError = null;
+            bool closeRpcAttempted = false;
+
             if (_currentStatementId != null)
             {
+                var closeStopwatch = Stopwatch.StartNew();
                 try
                 {
                     // Close statement synchronously during dispose
@@ -768,11 +1061,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         {
                             { "statement_id", _currentStatementId }
                         }));
+                    closeRpcAttempted = true;
                     _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
                     // Best effort - ignore errors during dispose
+                    closeRpcError = ex;
                     Activity.Current?.AddEvent(new ActivityEvent("statement.dispose.error",
                         tags: new ActivityTagsCollection
                         {
@@ -781,8 +1076,58 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 finally
                 {
+                    closeStopwatch.Stop();
+                    closeRpcElapsedMs = closeStopwatch.ElapsedMilliseconds;
                     _currentStatementId = null;
                 }
+            }
+
+            // Safety net for reader latency telemetry (gap B4): if a successful execute
+            // constructed a result reader but the consumer abandoned it without calling
+            // Dispose, OnConsumed (and OnChunksDownloaded on the CloudFetch path) would
+            // never fire — leaving result_set_consumption_latency_millis unset on every
+            // such record. The lumberjack analysis of 22% missing-latency records traced
+            // back to exactly this pattern. EnsureObserverSignaled fires the missing
+            // observer signals NOW (using the same execute-time Stopwatch the reader's
+            // own Dispose would have used) without disposing the inner stream, so a
+            // later consumer Dispose still releases inner resources and the second
+            // signal attempt is a no-op via the wrapper's idempotency gate. Matches the
+            // Thrift driver's EmitTelemetry, which always calls RecordResultsConsumed
+            // on statement Dispose regardless of whether the consumer iterated the reader.
+            _consumptionStream?.EnsureObserverSignaled();
+
+            // Terminal observer signal: build the OssSqlDriverTelemetryLog and enqueue it for
+            // background export. Gated on _executeStarted so a never-executed statement does
+            // not produce a stray empty log (mirrors the Thrift path's _executeStarted gate).
+            // The observer's own OnFinalized is idempotent via Interlocked CAS, so subsequent
+            // Dispose() calls or an error path that also finalizes are no-ops downstream — this
+            // call is the only place SEA telemetry reaches eng_lumberjack today, so it must
+            // fire for every executed statement regardless of CloseStatementAsync's outcome.
+            if (_executeStarted)
+            {
+                _observer.OnFinalized();
+            }
+
+            // Emit a CLOSE_STATEMENT operation telemetry event once per statement disposal,
+            // independently of the EXECUTE_STATEMENT_ASYNC log produced by the observer's
+            // OnFinalized above. operation_latency_ms reflects the wall-clock duration of
+            // the CloseStatementAsync RPC just issued; if no close RPC was attempted (the
+            // statement was disposed without ever running an execute, so _currentStatementId
+            // was null), elapsedMs is 0 and the event acts purely as a lifecycle marker —
+            // matching the Thrift driver's behavior in DatabricksStatement.Dispose. The
+            // _closeStatementTelemetryEmitted gate makes the emission idempotent across
+            // repeated Dispose() calls. EmitStatementOperationTelemetry on the connection
+            // swallows any exception from the underlying telemetry implementation so a
+            // telemetry failure cannot surface from Dispose.
+            if (!_closeStatementTelemetryEmitted)
+            {
+                _closeStatementTelemetryEmitted = true;
+                _connection.EmitStatementOperationTelemetry(
+                    OperationType.CloseStatement,
+                    StatementType.Unspecified,
+                    statementId: closedStatementId,
+                    elapsedMs: closeRpcAttempted ? closeRpcElapsedMs : 0,
+                    error: closeRpcError);
             }
         }
 
@@ -823,6 +1168,151 @@ namespace AdbcDrivers.Databricks.StatementExecution
             public void Dispose()
             {
                 // Nothing to dispose
+            }
+        }
+
+        /// <summary>
+        /// Decorator that wraps the final result reader and signals
+        /// <see cref="IStatementOperationObserver.OnConsumed"/> (and
+        /// <see cref="IStatementOperationObserver.OnChunksDownloaded"/> on the CloudFetch
+        /// path) exactly once at consumer Dispose (gap G3 / design §6 rows 5–6). The
+        /// <c>latencyMs</c> argument is elapsed-since-execute-start so the telemetry field
+        /// <c>result_latency.result_set_consumption_latency_millis</c> represents the
+        /// total wall-clock from execute → reader consumption end, matching the Thrift
+        /// path's <c>StatementTelemetryContext.ExecuteStopwatch</c> semantic.
+        ///
+        /// <para><strong>Placement:</strong> wrapping at the outermost transform layer
+        /// (after <see cref="IntervalSerializingStream"/> and
+        /// <see cref="ComplexTypeSerializingStream"/>) is intentional. Each inner
+        /// transform already forwards <see cref="Dispose"/> to its inner stream, so the
+        /// consumer's Dispose reaches this wrapper first and the stopwatch read captures
+        /// the full consume window before teardown costs are incurred. Firing inside the
+        /// nested <see cref="InlineArrowStreamReader"/> would miss the CloudFetch path;
+        /// firing inside the shared <c>CloudFetchReader</c> would also re-emit on Thrift
+        /// queries that share the same reader class.</para>
+        ///
+        /// <para><strong>CloudFetch chunk metrics:</strong> when constructed with a
+        /// non-null <c>cloudFetchReader</c>, Dispose snapshots <c>GetChunkMetrics()</c>
+        /// before disposing the inner chain — the inner Dispose tears down the download
+        /// manager, so we must query the aggregator while it is still live. If the
+        /// aggregator throws or returns null we fall back to a fresh empty
+        /// <see cref="ChunkMetrics"/> (the design's documented dependency on the gap-fix
+        /// plumbing: proto fields are nullable on the wire, and an empty metrics object
+        /// is preferable to dropping the signal entirely). The inline path passes
+        /// <c>null</c> here and <see cref="IStatementOperationObserver.OnChunksDownloaded"/>
+        /// is never fired — matching the Thrift path, which gates emission on the result
+        /// stream actually being a <c>CloudFetchReader</c>.</para>
+        ///
+        /// <para><strong>Idempotency:</strong> only the first Dispose signals
+        /// <c>OnConsumed</c> / <c>OnChunksDownloaded</c>; subsequent calls are no-ops.
+        /// The observer contract is fail-open (SafeObserver swallows exceptions), but the
+        /// try/finally guarantees inner cleanup even if a hand-rolled observer bypasses
+        /// that contract.</para>
+        /// </summary>
+        private sealed class ConsumptionObservingStream : IArrowArrayStream
+        {
+            private readonly IArrowArrayStream _inner;
+            private readonly IStatementOperationObserver _observer;
+            private readonly Stopwatch _executeStopwatch;
+            private readonly CloudFetchReader? _cloudFetchReader;
+
+            // Separate gates so consumer Dispose and statement-Dispose safety-net can be
+            // ordered independently. _observerSignaled is the once-only guard for the
+            // observer signals (OnChunksDownloaded + OnConsumed); _disposed is the once-
+            // only guard for inner-stream teardown. Both use Interlocked CAS so concurrent
+            // invocation from the reader's disposal thread and the statement's dispose
+            // thread is safe (per IStatementOperationObserver thread-safety contract).
+            private int _observerSignaled;
+            private int _disposed;
+
+            public ConsumptionObservingStream(
+                IArrowArrayStream inner,
+                IStatementOperationObserver observer,
+                Stopwatch executeStopwatch,
+                CloudFetchReader? cloudFetchReader = null)
+            {
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+                _observer = observer ?? throw new ArgumentNullException(nameof(observer));
+                _executeStopwatch = executeStopwatch ?? throw new ArgumentNullException(nameof(executeStopwatch));
+                // Nullable on purpose — non-null only on the CloudFetch path. The inline
+                // and empty paths intentionally do not signal OnChunksDownloaded.
+                _cloudFetchReader = cloudFetchReader;
+            }
+
+            public Schema Schema => _inner.Schema;
+
+            public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+                => _inner.ReadNextRecordBatchAsync(cancellationToken);
+
+            /// <summary>
+            /// Fires <see cref="IStatementOperationObserver.OnChunksDownloaded"/> (CloudFetch
+            /// path only) and <see cref="IStatementOperationObserver.OnConsumed"/> exactly
+            /// once, in that order, then returns without touching the inner stream. Safe to
+            /// call multiple times and from multiple threads — subsequent calls are no-ops
+            /// via the <c>_observerSignaled</c> Interlocked CAS gate. Invoked from
+            /// <see cref="StatementExecutionStatement.Dispose"/> as a safety net so reader
+            /// latency telemetry fires on EVERY successful EXECUTE record, even when the
+            /// consumer abandons the result reader without disposing it (gap B4). Also
+            /// invoked from <see cref="Dispose"/> itself so the consumer's normal flow still
+            /// produces these signals before inner teardown.
+            /// </summary>
+            public void EnsureObserverSignaled()
+            {
+                if (System.Threading.Interlocked.CompareExchange(ref _observerSignaled, 1, 0) != 0)
+                {
+                    return;
+                }
+
+                // Read the stopwatch and snapshot chunk metrics BEFORE the inner stream is
+                // disposed (the consumer may not have called Dispose yet, but if they have,
+                // we're racing with their Dispose). The chunk metrics aggregator is held by
+                // the inner CloudFetchReader's download manager; querying it before any
+                // inner teardown lets us capture state even when statement-Dispose runs
+                // first. Fall back to an empty ChunkMetrics if the aggregator throws or
+                // returns null — telemetry must never fail driver operations, and the
+                // proto fields are nullable so an empty metrics object is a valid payload.
+                if (_cloudFetchReader != null)
+                {
+                    ChunkMetrics metrics;
+                    try
+                    {
+                        metrics = _cloudFetchReader.GetChunkMetrics() ?? new ChunkMetrics();
+                    }
+                    catch
+                    {
+                        metrics = new ChunkMetrics();
+                    }
+
+                    // Emit before OnConsumed to match the Thrift path's emission order in
+                    // DatabricksStatement.FinalizeExecuteTelemetry — chunk_details and
+                    // result_latency end up on the same OssSqlDriverTelemetryLog regardless
+                    // of order, but keeping a single canonical sequence simplifies any
+                    // future record-assembly reasoning.
+                    _observer.OnChunksDownloaded(metrics);
+                }
+
+                _observer.OnConsumed(_executeStopwatch.ElapsedMilliseconds);
+            }
+
+            public void Dispose()
+            {
+                if (System.Threading.Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                {
+                    return;
+                }
+
+                // Fire observer signals first (if not already signaled by the statement's
+                // safety net) so the stopwatch read captures "time until the consumer let
+                // go" rather than "time until inner teardown completes". try/finally
+                // guarantees inner cleanup even on observer fault.
+                try
+                {
+                    EnsureObserverSignaled();
+                }
+                finally
+                {
+                    _inner.Dispose();
+                }
             }
         }
 
@@ -1038,7 +1528,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // matching Thrift behavior (Thrift RPC has no catalog filter for GetCatalogs).
                 string sql = new ShowCatalogsCommand(null).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                var batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListCatalogs, cancellationToken).ConfigureAwait(false);
 
                 var tableCatBuilder = new StringArray.Builder();
                 int count = 0;
@@ -1084,7 +1574,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 List<RecordBatch> batches;
                 try
                 {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListSchemas, cancellationToken).ConfigureAwait(false);
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
@@ -1161,7 +1651,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 List<RecordBatch> batches;
                 try
                 {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListTables, cancellationToken).ConfigureAwait(false);
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
@@ -1356,7 +1846,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             List<RecordBatch> batches;
             try
             {
-                batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
+                batches = await _connection.ExecuteMetadataSqlAsync(query, OperationType.ListColumns, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -1480,7 +1970,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 List<RecordBatch> batches;
                 try
                 {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListPrimaryKeys, cancellationToken).ConfigureAwait(false);
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
@@ -1556,7 +2046,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             List<RecordBatch> batches;
             try
             {
-                batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                batches = await _connection.ExecuteMetadataSqlAsync(sql, OperationType.ListCrossReferences, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {

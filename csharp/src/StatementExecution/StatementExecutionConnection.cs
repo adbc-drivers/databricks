@@ -16,11 +16,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
@@ -31,6 +34,7 @@ using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using static Apache.Arrow.Adbc.AdbcConnection;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
@@ -55,6 +59,37 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _sessionId;
         private readonly SemaphoreSlim _sessionLock = new SemaphoreSlim(1, 1);
 
+        // Shared OAuth token provider for connection-wide token caching (used by telemetry HTTP client)
+        private OAuthClientCredentialsProvider? _oauthTokenProvider;
+
+        // Telemetry — mirrors the DatabricksConnection (Thrift) wiring. Defaults to NoOp so
+        // callsites never need null checks; replaced by ConnectionTelemetry.Create after
+        // session open succeeds. Tests can substitute via TelemetryForTesting.
+        private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
+
+        // Stopwatch covering the connection lifetime; used to measure session-open latency for
+        // the CREATE_SESSION telemetry event. Matches the Thrift path's _connectionLifetimeStopwatch.
+        private readonly Stopwatch _connectionLifetimeStopwatch = Stopwatch.StartNew();
+        private bool _sessionOpenTelemetryEmitted;
+        private bool _sessionDeleteTelemetryEmitted;
+
+        /// <summary>
+        /// The session context consumed by SEA statements (next phase) to create
+        /// per-statement observer contexts. Returns null when telemetry is disabled.
+        /// </summary>
+        internal TelemetrySessionContext? TelemetrySession => _telemetry.Session;
+
+        /// <summary>
+        /// Test seam allowing unit tests to substitute a fake <see cref="IConnectionTelemetry"/>
+        /// so they can verify the production code calls <c>EmitOperationTelemetry</c> at the
+        /// right lifecycle hooks. Production code never sets this property.
+        /// </summary>
+        internal IConnectionTelemetry TelemetryForTesting
+        {
+            get => _telemetry;
+            set => _telemetry = value;
+        }
+
         // Configuration for statement creation
         private readonly string _resultDisposition;
         private readonly string _resultFormat;
@@ -65,6 +100,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly bool _enableMultipleCatalogSupport;
         private readonly bool _useDescTableExtended;
         private readonly bool _applySSPWithQueries;
+
+        // Direct-results capability flag — read from the same connection-string property the
+        // Thrift path uses (DatabricksParameters.EnableDirectResults). Mirrored into the
+        // telemetry payload's enable_direct_results field so dashboards reflect the user's
+        // actual configuration rather than a hardcoded literal. Defaults to true, matching
+        // DatabricksConnection (Thrift) defaults.
+        private readonly bool _enableDirectResults;
+
+        // Default connect-timeout value used when the connection string omits one.
+        // Mirrors the Thrift path's HiveServer2Connection.ConnectTimeoutMillisecondsDefault
+        // so dashboards filtering on socket_timeout see consistent values across both transports.
+        private const int ConnectTimeoutMillisecondsDefault = 30000;
+
+        // Connect timeout in milliseconds, read from the same connection-string property the
+        // Thrift path uses (SparkParameters.ConnectTimeoutMilliseconds). Used only to stamp the
+        // telemetry payload's socket_timeout field — distinct from _waitTimeoutSeconds, which is
+        // the SEA query-wait (CONTINUE) timeout and unrelated to the connection-establishment
+        // timeout the telemetry field represents.
+        private readonly int _connectTimeoutMilliseconds;
 
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
@@ -212,6 +266,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // the server validates differently in CreateSession vs SET) get the same semantics
             // on SEA. JDBC has no equivalent flag — this is parity with the Thrift driver only.
             _applySSPWithQueries = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.ApplySSPWithQueries, false);
+            _enableDirectResults = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableDirectResults, true);
 
             // Session configuration
             // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
@@ -242,6 +297,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // heavier than Thrift's 100 ms default — but both protocols share the same property.
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
                 properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
+
+            // Connect timeout — used only for telemetry-init stamping (socket_timeout field).
+            // Read from the same connection-string property the Thrift path uses so SEA and
+            // Thrift records agree on the same source. NOT derived from _waitTimeoutSeconds:
+            // that field is the SEA CONTINUE/query-wait timeout, a semantically different concept.
+            _connectTimeoutMilliseconds = PropertyHelper.GetIntPropertyWithValidation(
+                properties, SparkParameters.ConnectTimeoutMilliseconds, ConnectTimeoutMillisecondsDefault);
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
@@ -299,6 +361,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
             int rateLimitRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.RateLimitRetryTimeout, DatabricksConstants.DefaultRateLimitRetryTimeout);
             int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
 
+            // Resolve the effective HttpClient.Timeout. Prefer the user-supplied
+            // SparkParameters.ConnectTimeoutMilliseconds (matching the Thrift path, which
+            // wires that property into its transport-level connect timeout) so that the
+            // socket_timeout telemetry field — which downstream gap fixes source from
+            // _httpClient.Timeout — reflects the user's intent. Fall back to
+            // CloudFetchTimeoutMinutes-based timeout when the property is not set, to
+            // preserve the historical default behavior for callers that never tuned this.
+            TimeSpan effectiveTimeout = properties.ContainsKey(SparkParameters.ConnectTimeoutMilliseconds)
+                ? TimeSpan.FromMilliseconds(_connectTimeoutMilliseconds)
+                : TimeSpan.FromMinutes(timeoutMinutes);
+
             var config = new HttpHandlerFactory.HandlerConfig
             {
                 BaseHandler = HttpClientFactory.CreateHandler(properties),
@@ -319,11 +392,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 AddThriftErrorHandler = false
             };
 
-            var result = HttpHandlerFactory.CreateHandlers(config);
+            // Use CreateHandlersWithTokenProvider so we can capture the OAuth token provider
+            // and reuse it for the telemetry HTTP client (avoids duplicate token fetches).
+            var result = HttpHandlerFactory.CreateHandlersWithTokenProvider(config);
+            _oauthTokenProvider = result.TokenProvider;
 
-            var httpClient = new HttpClient(result)
+            var httpClient = new HttpClient(result.Handler)
             {
-                Timeout = TimeSpan.FromMinutes(timeoutMinutes)
+                Timeout = effectiveTimeout
             };
 
             // Set user agent
@@ -430,6 +506,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         {
                             _catalog = GetCurrentCatalog();
                         }
+
+                        // Initialize telemetry after a successful CreateSession. Telemetry is fail-open:
+                        // any failure here is swallowed and falls back to NoOpConnectionTelemetry so the
+                        // user-visible connection open still succeeds.
+                        InitializeTelemetry(Activity.Current);
+
+                        EmitCreateSessionTelemetry(Activity.Current);
                     }
                 }
                 finally
@@ -440,10 +523,162 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
+        /// Initializes telemetry via the ConnectionTelemetry factory. Mirrors the Thrift
+        /// path's <c>DatabricksConnection.InitializeTelemetry</c>. Falls back to
+        /// <see cref="NoOpConnectionTelemetry"/> on any failure so connection open
+        /// always succeeds even if the telemetry pipeline is misconfigured.
+        /// </summary>
+        private void InitializeTelemetry(Activity? activity)
+        {
+            try
+            {
+                // SEA hands its server-assigned session id string directly — no transport handle
+                // to unwrap, unlike the Thrift caller which converts TSessionHandle->string.
+                _telemetry = Telemetry.ConnectionTelemetry.Create(
+                    properties: _properties,
+                    host: GetHost(_properties),
+                    assemblyVersion: AssemblyVersion,
+                    oauthTokenProvider: _oauthTokenProvider,
+                    sessionId: _sessionId ?? string.Empty,
+                    mode: Telemetry.Proto.DriverMode.Types.Type.Sea,
+                    enableDirectResults: _enableDirectResults,
+                    useDescTableExtended: _useDescTableExtended,
+                    connectTimeoutMilliseconds: _connectTimeoutMilliseconds,
+                    activity: activity);
+            }
+            catch (Exception ex)
+            {
+                // Defensive: ConnectionTelemetry.Create already swallows internally, but per the
+                // design contract telemetry init must never escape into the caller's open path.
+                activity?.AddEvent(new ActivityEvent("telemetry.initialization.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message }
+                    }));
+                _telemetry = NoOpConnectionTelemetry.Instance;
+            }
+        }
+
+        /// <summary>
+        /// Emits the CREATE_SESSION telemetry event after a successful CreateSession RPC.
+        /// Internal so unit tests can call this directly after injecting a fake
+        /// <see cref="IConnectionTelemetry"/> via <see cref="TelemetryForTesting"/>.
+        /// </summary>
+        internal void EmitCreateSessionTelemetry(Activity? activity = null)
+        {
+            try
+            {
+                long elapsedMs = _connectionLifetimeStopwatch.ElapsedMilliseconds;
+                _telemetry.EmitOperationTelemetry(
+                    Telemetry.Proto.Operation.Types.Type.CreateSession,
+                    Telemetry.Proto.Statement.Types.Type.Unspecified,
+                    statementId: null,
+                    elapsedMs: elapsedMs,
+                    error: null);
+                _sessionOpenTelemetryEmitted = true;
+            }
+            catch (Exception ex)
+            {
+                activity?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", "CREATE_SESSION" }
+                    }));
+            }
+        }
+
+        /// <summary>
+        /// Emits the DELETE_SESSION telemetry event when a session was previously opened.
+        /// Idempotent across repeated <see cref="Dispose"/> calls. Internal for test access.
+        /// </summary>
+        internal void EmitDeleteSessionTelemetry(long elapsedMs = 0, Exception? error = null)
+        {
+            try
+            {
+                if (_sessionOpenTelemetryEmitted && !_sessionDeleteTelemetryEmitted)
+                {
+                    _sessionDeleteTelemetryEmitted = true;
+                    _telemetry.EmitOperationTelemetry(
+                        Telemetry.Proto.Operation.Types.Type.DeleteSession,
+                        Telemetry.Proto.Statement.Types.Type.Unspecified,
+                        statementId: null,
+                        elapsedMs: elapsedMs,
+                        error: error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", "DELETE_SESSION" }
+                    }));
+            }
+        }
+
+        /// <summary>
+        /// Statement-facing entry point for emitting telemetry for discrete statement
+        /// operations (CLOSE_STATEMENT, CANCEL_STATEMENT) that don't have their own
+        /// execute path. Delegates to the connection's telemetry implementation and
+        /// swallows any exception thrown by the emit call so statement Dispose never
+        /// surfaces a telemetry failure to the consumer. Mirrors the Thrift-side
+        /// <see cref="DatabricksConnection.EmitStatementOperationTelemetry"/> entry
+        /// point used by <c>DatabricksStatement.Dispose</c>.
+        /// </summary>
+        internal void EmitStatementOperationTelemetry(
+            Telemetry.Proto.Operation.Types.Type operationType,
+            Telemetry.Proto.Statement.Types.Type statementType,
+            string? statementId,
+            long elapsedMs,
+            Exception? error)
+        {
+            try
+            {
+                _telemetry.EmitOperationTelemetry(
+                    operationType,
+                    statementType,
+                    statementId,
+                    elapsedMs,
+                    error);
+            }
+            catch (Exception ex)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "error.type", ex.GetType().Name },
+                        { "error.message", ex.Message },
+                        { "operation_type", operationType.ToString() }
+                    }));
+            }
+        }
+
+        /// <summary>
         /// Creates a new statement for query execution.
+        /// Constructs a per-statement <see cref="IStatementOperationObserver"/> bound to
+        /// this connection's telemetry session — a <see cref="TelemetryObserver"/> when
+        /// telemetry is enabled and the session has a live client, otherwise
+        /// <see cref="NullObserver.Instance"/>. This mirrors the Thrift-side
+        /// <see cref="DatabricksConnection.CreateStatement"/> wiring and gives all
+        /// subsequent hookpoint commits a non-null target in the statement.
         /// </summary>
         public override AdbcStatement CreateStatement()
         {
+            // Inject the observer at construction so StatementExecutionStatement is not
+            // coupled to TelemetrySession at runtime. When telemetry is disabled (NoOp
+            // connection telemetry → Session is null) or the session has no live client
+            // (configuration/circuit breaker), we hand the statement a NullObserver so
+            // every hookpoint call is a fail-open no-op without callsite null-checks.
+            TelemetrySessionContext? session = TelemetrySession;
+            IStatementOperationObserver observer = session?.TelemetryClient != null
+                ? (IStatementOperationObserver)new TelemetryObserver(session)
+                : NullObserver.Instance;
+
             return new StatementExecutionStatement(
                 _client,
                 _sessionId,
@@ -459,7 +694,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _recyclableMemoryStreamManager,
                 _lz4BufferPool,
                 _cloudFetchHttpClient,
-                this); // Pass connection as TracingConnection for tracing support
+                this, // Pass connection as TracingConnection for tracing support
+                observer);
         }
 
         public override void SetOption(string key, string? value)
@@ -536,11 +772,27 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return this.TraceActivity(activity =>
             {
+                var sw = Stopwatch.StartNew();
                 var builder = new StringArray.Builder();
                 builder.Append("TABLE");
                 builder.Append("VIEW");
                 var schema = new Schema(new[] { new Field("table_type", StringType.Default, false) }, null);
-                return new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() });
+                var stream = new HiveInfoArrowStream(schema, new IArrowArray[] { builder.Build() });
+                sw.Stop();
+
+                // GetTableTypes is purely local — it never executes SQL, so the per-statement
+                // observer pipeline that drives the other LIST_* events does not fire here.
+                // Emit a one-shot connection-level telemetry record so SEA matches the Thrift
+                // path's "every metadata operation produces a categorized record" guarantee.
+                // See PECO-3022 gap B8 finisher.
+                EmitStatementOperationTelemetry(
+                    OperationType.ListTableTypes,
+                    Telemetry.Proto.Statement.Types.Type.Metadata,
+                    statementId: null,
+                    elapsedMs: sw.ElapsedMilliseconds,
+                    error: null);
+
+                return stream;
             }, nameof(GetTableTypes));
         }
 
@@ -594,7 +846,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         async Task<IReadOnlyList<string>> IGetObjectsDataProvider.GetCatalogsAsync(string? catalogPattern, CancellationToken cancellationToken)
         {
             string sql = new ShowCatalogsCommand(catalogPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            var batches = await ExecuteMetadataSqlAsync(sql, OperationType.ListCatalogs, cancellationToken).ConfigureAwait(false);
             var result = new List<string>();
             foreach (var batch in batches)
             {
@@ -620,7 +872,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             List<RecordBatch> batches;
             try
             {
-                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                batches = await ExecuteMetadataSqlAsync(sql, OperationType.ListSchemas, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -668,7 +920,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             List<RecordBatch> batches;
             try
             {
-                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                batches = await ExecuteMetadataSqlAsync(sql, OperationType.ListTables, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -781,9 +1033,42 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         internal async Task<List<RecordBatch>> ExecuteMetadataSqlAsync(string sql, CancellationToken cancellationToken = default)
         {
+            // Back-compat overload (no operationType): used by callers that don't have a
+            // mapped telemetry OperationType handy. The sub-statement falls back to
+            // (StatementType.Query, OperationType.ExecuteStatementAsync) which matches
+            // pre-PECO-3022-B8 behavior.
+            return await ExecuteMetadataSqlAsyncCore(sql, operationType: null, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Overload that tags the sub-statement with a metadata
+        /// <see cref="OperationType"/> so its telemetry emits
+        /// <c>(StatementType.Metadata, operationType)</c> rather than the regular
+        /// query pair. Mirrors the Thrift parity model — see PECO-3022 gap B8.
+        /// </summary>
+        internal async Task<List<RecordBatch>> ExecuteMetadataSqlAsync(
+            string sql,
+            OperationType operationType,
+            CancellationToken cancellationToken = default)
+        {
+            return await ExecuteMetadataSqlAsyncCore(sql, operationType, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<List<RecordBatch>> ExecuteMetadataSqlAsyncCore(
+            string sql,
+            OperationType? operationType,
+            CancellationToken cancellationToken)
+        {
             var batches = new List<RecordBatch>();
             using var stmt = (StatementExecutionStatement)CreateStatement();
             stmt.SqlQuery = sql;
+            if (operationType.HasValue)
+            {
+                // Stamp the metadata operation type before ExecuteQueryAsync so the sub-
+                // statement's OnExecuteStarted emits (Metadata, operationType) instead of
+                // (Query, ExecuteStatementAsync). See SeaMetadataOperationMapper.
+                stmt.SetPendingMetadataOperation(operationType.Value);
+            }
             var result = await stmt.ExecuteQueryAsync(cancellationToken, isMetadataExecution: true).ConfigureAwait(false);
             using var stream = result.Stream;
             if (stream == null) return batches;
@@ -805,6 +1090,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// Executes a SHOW COLUMNS command. When catalog is null, iterates over all catalogs
         /// since SHOW COLUMNS IN ALL CATALOGS is not yet supported by the backend.
+        /// Telemetry: every sub-statement emits <c>(StatementType.Metadata,
+        /// OperationType.ListColumns)</c> — including the helper <c>SHOW CATALOGS</c> issued
+        /// during the iterate-all-catalogs fallback, since the caller's semantic operation
+        /// is still ListColumns (PECO-3022 gap B8).
         /// </summary>
         internal async Task<List<RecordBatch>> ExecuteShowColumnsAsync(
             string? catalog, string? schemaPattern, string? tablePattern, string? columnPattern,
@@ -813,14 +1102,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (catalog != null)
             {
                 string sql = new ShowColumnsCommand(catalog, schemaPattern, tablePattern, columnPattern).Build();
-                return await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                return await ExecuteMetadataSqlAsync(sql, OperationType.ListColumns, cancellationToken).ConfigureAwait(false);
             }
 
             // SHOW COLUMNS IN ALL CATALOGS is not supported — iterate over each catalog.
             // TODO: Remove this fallback when the backend supports SHOW COLUMNS IN ALL CATALOGS.
             var allBatches = new List<RecordBatch>();
             string catalogsSql = new ShowCatalogsCommand(null).Build();
-            var catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, cancellationToken).ConfigureAwait(false);
+            var catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, OperationType.ListColumns, cancellationToken).ConfigureAwait(false);
 
             foreach (var batch in catalogBatches)
             {
@@ -833,7 +1122,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     string sql = new ShowColumnsCommand(cat, schemaPattern, tablePattern, columnPattern).Build();
                     try
                     {
-                        var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                        var batches = await ExecuteMetadataSqlAsync(sql, OperationType.ListColumns, cancellationToken).ConfigureAwait(false);
                         allBatches.AddRange(batches);
                     }
                     catch
@@ -950,6 +1239,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Disposes the connection and deletes the session if it exists.
+        /// Emits DELETE_SESSION telemetry with the measured DeleteSession RPC latency
+        /// (or zero if no session was ever opened), then flushes the telemetry pipeline
+        /// with a 5-second hard timeout so a wedged exporter cannot hang Dispose.
         /// </summary>
         public override void Dispose()
         {
@@ -958,25 +1250,55 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("session_id", _sessionId);
                 activity?.SetTag("warehouse_id", _warehouseId);
 
+                long deleteSessionElapsedMs = 0;
+                Exception? deleteSessionError = null;
+
                 if (_sessionId != null)
                 {
+                    var deleteStopwatch = Stopwatch.StartNew();
                     try
                     {
-                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.start"));
+                        activity?.AddEvent(new ActivityEvent("session.delete.start"));
                         // Delete session synchronously during dispose
                         _client.DeleteSessionAsync(_sessionId, _warehouseId, CancellationToken.None).GetAwaiter().GetResult();
-                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.success"));
+                        activity?.AddEvent(new ActivityEvent("session.delete.success"));
                     }
                     catch (Exception ex)
                     {
+                        deleteSessionError = ex;
                         // Best effort - ignore errors during dispose but trace them
-                        activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.error",
-                            tags: new System.Diagnostics.ActivityTagsCollection { { "error", ex.Message } }));
+                        activity?.AddEvent(new ActivityEvent("session.delete.error",
+                            tags: new ActivityTagsCollection { { "error", ex.Message } }));
                     }
                     finally
                     {
+                        deleteStopwatch.Stop();
+                        deleteSessionElapsedMs = deleteStopwatch.ElapsedMilliseconds;
                         _sessionId = null;
                     }
+                }
+
+                // Emit DELETE_SESSION after the RPC completes (success or failure) and before we
+                // tear down the telemetry client. Idempotent — repeated Dispose calls fire once.
+                EmitDeleteSessionTelemetry(deleteSessionElapsedMs, deleteSessionError);
+
+                // Flush + release the telemetry client. Bounded at 5 seconds so a stuck exporter
+                // cannot hang connection close. Per design §11: this matches the Thrift path's
+                // DisposeTelemetryAsync().GetAwaiter().GetResult() pattern, but with a hard
+                // timeout because SEA Dispose is not wrapped in a try/finally that flushes.
+                // IConnectionTelemetry.DisposeAsync already returns Task, so we call .Wait directly.
+                try
+                {
+                    _telemetry.DisposeAsync().Wait(TimeSpan.FromSeconds(5));
+                }
+                catch (Exception ex)
+                {
+                    activity?.AddEvent(new ActivityEvent("telemetry.dispose.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
                 }
 
                 // Dispose the HTTP client if we own it

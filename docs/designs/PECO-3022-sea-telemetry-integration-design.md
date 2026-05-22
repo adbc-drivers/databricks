@@ -255,7 +255,7 @@ public static IConnectionTelemetry Create(
     IReadOnlyDictionary<string, string> properties,
     string host,
     string assemblyVersion,
-    IOAuthTokenProvider? oauthTokenProvider,
+    OAuthClientCredentialsProvider? oauthTokenProvider,
     string sessionId,                          // CHANGED: was TSessionHandle? sessionHandle
     DriverMode.Types.Type mode,                // NEW: Thrift or Sea
     bool enableDirectResults,
@@ -264,7 +264,9 @@ public static IConnectionTelemetry Create(
     Activity? activity);
 ```
 
-Thrift caller converts at the boundary: `sessionHandle.SessionId.Guid.ToString()`. SEA caller passes its `_sessionId` directly.
+Thrift caller converts at the boundary: `sessionHandle.SessionId.Guid.ToString()` (with a null-check; an empty string is mapped to `null` `SessionId` inside `Create` to match the prior behavior). SEA caller passes its `_sessionId` directly.
+
+The `mode` parameter is also threaded through `BuildDriverConnectionParams` and `SafeBuildDriverConnectionParams` — both methods previously hardcoded `Mode = DriverMode.Types.Type.Thrift`. The literal is gone from `ConnectionTelemetry.cs`; only the `DatabricksConnection` (Thrift) call site supplies it.
 
 ### 5.3 `IConnectionTelemetry` — no surface change
 
@@ -400,7 +402,9 @@ sequenceDiagram
 
 ### Connection-level concurrency
 
-`IConnectionTelemetry.DisposeAsync` is called from `StatementExecutionConnection.Dispose` synchronously (consistent with existing Thrift pattern): `_telemetry.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5))`. This flushes any pending events with a hard timeout so connection-close cannot hang on a stuck exporter.
+`IConnectionTelemetry.DisposeAsync` is called from `StatementExecutionConnection.Dispose` synchronously (consistent with existing Thrift pattern): `_telemetry.DisposeAsync().Wait(TimeSpan.FromSeconds(5))`. This flushes any pending events with a hard timeout so connection-close cannot hang on a stuck exporter.
+
+> **Implementation note (T5):** `IConnectionTelemetry.DisposeAsync` returns `Task` (not `ValueTask`), so the call is `_telemetry.DisposeAsync().Wait(TimeSpan.FromSeconds(5))` rather than `.AsTask().Wait(...)`. The result is the same: a hard-bounded synchronous flush.
 
 ---
 
@@ -454,7 +458,9 @@ The existing `CircuitBreakerTelemetryExporter` is reused unchanged. Behavior in 
 
 ### Connection telemetry initialization failure
 
-If `ConnectionTelemetry.Create` throws during `OpenAsync` (e.g. feature-flag fetch fails), the exception is caught locally in `StatementExecutionConnection`, logged at `TRACE`, and `_telemetry` is set to a `NullConnectionTelemetry` singleton (already exists for Thrift). The connection open succeeds; only telemetry is disabled for the connection.
+If `ConnectionTelemetry.Create` throws during `OpenAsync` (e.g. feature-flag fetch fails), the exception is caught locally in `StatementExecutionConnection`, logged at `TRACE`, and `_telemetry` is set to a `NoOpConnectionTelemetry` singleton (already exists for Thrift; the name in the codebase is `NoOpConnectionTelemetry`). The connection open succeeds; only telemetry is disabled for the connection.
+
+> **Implementation note (T5):** `ConnectionTelemetry.Create` already swallows internally and returns `NoOpConnectionTelemetry.Instance` on any failure, so the outer try/catch in `StatementExecutionConnection.InitializeTelemetry` is belt-and-suspenders — it only runs if `Create` is later modified to throw in a refactor. Keeping it makes the fail-open contract explicit at the call site.
 
 ---
 
