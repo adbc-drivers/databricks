@@ -533,8 +533,16 @@ namespace AdbcDrivers.Databricks
 
         public override AdbcStatement CreateStatement()
         {
-            DatabricksStatement statement = new DatabricksStatement(this);
-            return statement;
+            // Inject the per-statement observer at construction so DatabricksStatement is
+            // not coupled to ((DatabricksConnection)Connection).TelemetrySession at runtime.
+            // When telemetry is disabled (or the session has no live client), we hand the
+            // statement a NullObserver so every observer hook call is a no-op without
+            // requiring null-checks at the callsite.
+            TelemetrySessionContext? session = TelemetrySession;
+            IStatementOperationObserver observer = session?.TelemetryClient != null
+                ? (IStatementOperationObserver)new TelemetryObserver(session)
+                : NullObserver.Instance;
+            return new DatabricksStatement(this, observer);
         }
 
         protected override TOpenSessionReq CreateSessionRequest()
@@ -727,12 +735,36 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private void InitializeTelemetry(Activity? activity = null)
         {
+            // Convert TSessionHandle -> string at the transport boundary so
+            // ConnectionTelemetry.Create stays transport-agnostic. SEA will pass its
+            // server-assigned session id string directly.
+            //
+            // Wrap the byte[] -> Guid conversion locally: `new Guid(byte[])` throws
+            // ArgumentException on a wrong-length array, and that would propagate to
+            // connection-open. Pre-refactor the same conversion was inside
+            // ConnectionTelemetry.Create's outer try/catch, so a malformed session GUID
+            // degraded to NoOp telemetry — preserve that fail-open contract.
+            string sessionId = string.Empty;
+            try
+            {
+                if (SessionHandle?.SessionId?.Guid != null)
+                {
+                    sessionId = new Guid(SessionHandle.SessionId.Guid).ToString();
+                }
+            }
+            catch
+            {
+                // Intentionally swallowed: malformed session GUID disables telemetry,
+                // not the connection.
+            }
+
             _telemetry = Telemetry.ConnectionTelemetry.Create(
                 properties: Properties,
                 host: GetHost(),
                 assemblyVersion: s_assemblyVersion,
                 oauthTokenProvider: _oauthTokenProvider,
-                sessionHandle: SessionHandle,
+                sessionId: sessionId,
+                mode: Telemetry.Proto.DriverMode.Types.Type.Thrift,
                 enableDirectResults: _enableDirectResults,
                 useDescTableExtended: _useDescTableExtended,
                 connectTimeoutMilliseconds: ConnectTimeoutMilliseconds,
