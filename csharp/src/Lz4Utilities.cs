@@ -47,50 +47,52 @@ namespace AdbcDrivers.Databricks
         /// Decompresses LZ4 compressed data into memory.
         /// </summary>
         /// <param name="compressedData">The compressed data bytes.</param>
+        /// <param name="memoryStreamManager">The RecyclableMemoryStreamManager used for the (pooled) decompression buffer.</param>
         /// <param name="bufferPool">The ArrayPool to use for buffer allocation (from DatabricksDatabase).</param>
         /// <returns>A ReadOnlyMemory containing the decompressed data.</returns>
         /// <exception cref="AdbcException">Thrown when decompression fails.</exception>
-        public static ReadOnlyMemory<byte> DecompressLz4(byte[] compressedData, ArrayPool<byte> bufferPool)
+        public static ReadOnlyMemory<byte> DecompressLz4(byte[] compressedData, RecyclableMemoryStreamManager memoryStreamManager, ArrayPool<byte> bufferPool)
         {
-            return DecompressLz4(compressedData, DefaultBufferSize, bufferPool);
+            return DecompressLz4(compressedData, DefaultBufferSize, memoryStreamManager, bufferPool);
         }
 
         /// <summary>
         /// Decompresses LZ4 compressed data into memory with a specified buffer size.
-        /// NOTE: This method uses regular MemoryStream (not RecyclableMemoryStream) because the buffer
-        /// must remain valid after the method returns for the caller to use.
-        /// Uses CustomLZ4DecoderStream with custom ArrayPool to efficiently pool 4MB+ buffers.
         /// </summary>
+        /// <remarks>
+        /// Decompresses into a pooled <see cref="RecyclableMemoryStream"/> rather than a plain
+        /// <see cref="MemoryStream"/>. A plain MemoryStream starts empty and doubles its backing array
+        /// as it grows, repeatedly reallocating and copying — landing on the Large Object Heap for the
+        /// multi-MB Arrow batches Databricks returns — and then leaves an over-sized buffer. The
+        /// recyclable stream instead writes into reused fixed-size blocks (no per-call LOH churn).
+        /// <see cref="RecyclableMemoryStream.ToArray"/> then produces a single exact-size, GC-owned
+        /// array, which is safe for the caller to retain after the pooled blocks are returned — the
+        /// Arrow <c>RecordBatch</c> built from it references this memory beyond this method's scope.
+        /// </remarks>
         /// <param name="compressedData">The compressed data bytes.</param>
         /// <param name="bufferSize">The buffer size to use for decompression operations.</param>
+        /// <param name="memoryStreamManager">The RecyclableMemoryStreamManager used for the (pooled) decompression buffer.</param>
         /// <param name="bufferPool">The ArrayPool to use for buffer allocation (from DatabricksDatabase).</param>
         /// <returns>A ReadOnlyMemory containing the decompressed data.</returns>
         /// <exception cref="AdbcException">Thrown when decompression fails.</exception>
-        public static ReadOnlyMemory<byte> DecompressLz4(byte[] compressedData, int bufferSize, ArrayPool<byte> bufferPool)
+        public static ReadOnlyMemory<byte> DecompressLz4(byte[] compressedData, int bufferSize, RecyclableMemoryStreamManager memoryStreamManager, ArrayPool<byte> bufferPool)
         {
             try
             {
-                // Use regular MemoryStream here because we return the buffer after disposal
-                // RecyclableMemoryStream would return the buffer to the pool, making it unsafe
-                using (var outputStream = new MemoryStream())
+                using (var outputStream = memoryStreamManager.GetStream())
+                using (var inputStream = new MemoryStream(compressedData))
+                using (var decompressor = new CustomLZ4DecoderStream(
+                    inputStream,
+                    descriptor => descriptor.CreateDecoder(),
+                    bufferPool,
+                    leaveOpen: false,
+                    interactive: false))
                 {
-                    using (var inputStream = new MemoryStream(compressedData))
-                    using (var decompressor = new CustomLZ4DecoderStream(
-                        inputStream,
-                        descriptor => descriptor.CreateDecoder(),
-                        bufferPool,
-                        leaveOpen: false,
-                        interactive: false))
-                    {
-                        decompressor.CopyTo(outputStream, bufferSize);
-                    }
+                    decompressor.CopyTo(outputStream, bufferSize);
 
-                    // Get the underlying buffer and its valid length without copying
-                    // The buffer remains valid after MemoryStream disposal since we hold a reference to it
-                    byte[] buffer = outputStream.GetBuffer();
-                    int length = (int)outputStream.Length;
-
-                    return new ReadOnlyMemory<byte>(buffer, 0, length);
+                    // Copy to an exact-size, GC-owned array before the pooled stream/blocks are
+                    // returned on dispose. The caller retains this beyond the stream's lifetime.
+                    return outputStream.ToArray();
                 }
             }
             catch (Exception ex)

@@ -678,15 +678,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
                             using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                             {
-                                // Pre-allocate with Content-Length when available (CloudFetch always provides it).
-                                int capacity = contentLength.HasValue && contentLength.Value > 0
-                                    ? (int)contentLength.Value
-                                    : 0;
-                                using (var memoryStream = new MemoryStream(capacity))
-                                {
-                                    await contentStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
-                                    fileData = memoryStream.ToArray();
-                                }
+                                // Read the body into a single right-sized buffer. When Content-Length is
+                                // known (CloudFetch presigned-URL responses always provide it) this avoids the
+                                // previous MemoryStream-grow + ToArray approach, which allocated and copied the
+                                // whole payload twice.
+                                fileData = await ReadResponseBodyAsync(contentStream, contentLength, bodyTimeoutCts.Token).ConfigureAwait(false);
                             }
                         }
                         break; // Success, exit retry loop
@@ -878,6 +874,73 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 downloadResult.SetCompleted(dataStream, size);
                 _stragglerDetector?.MarkCompleted(fileOffset, activity);
             }, activityName: "DownloadFile");
+        }
+
+        /// <summary>
+        /// Reads an HTTP response body into a byte array.
+        /// <para>
+        /// When the body length is known up front (CloudFetch presigned-URL responses always
+        /// include <c>Content-Length</c>), the body is read into a single exactly-sized buffer.
+        /// This avoids the previous <see cref="MemoryStream"/>-plus-<see cref="MemoryStream.ToArray"/>
+        /// pattern, which allocated and copied the entire payload twice — once into the stream's
+        /// internal (possibly over-sized) buffer and again into the array returned by <c>ToArray()</c>.
+        /// </para>
+        /// <para>
+        /// Falls back to a growable <see cref="MemoryStream"/> when the length is unknown, and also
+        /// handles the abnormal cases where the server sends fewer or more bytes than declared, so the
+        /// returned array always contains exactly the bytes received (matching the prior behavior).
+        /// </para>
+        /// </summary>
+        internal static async Task<byte[]> ReadResponseBodyAsync(
+            Stream contentStream,
+            long? contentLength,
+            CancellationToken cancellationToken)
+        {
+            const int CopyBufferSize = 81920;
+
+            if (contentLength.HasValue && contentLength.Value > 0 && contentLength.Value <= int.MaxValue)
+            {
+                int length = (int)contentLength.Value;
+                byte[] buffer = new byte[length];
+                int offset = 0;
+                int read;
+                while (offset < length &&
+                       (read = await contentStream.ReadAsync(buffer, offset, length - offset, cancellationToken).ConfigureAwait(false)) > 0)
+                {
+                    offset += read;
+                }
+
+                // Probe for any bytes beyond the declared Content-Length. For a well-formed response
+                // of exactly Content-Length bytes this returns 0 (EOF) and we take the fast path.
+                byte[] probe = new byte[1];
+                int extra = await contentStream.ReadAsync(probe, 0, 1, cancellationToken).ConfigureAwait(false);
+
+                if (offset == length && extra == 0)
+                {
+                    // Common case: body matched Content-Length exactly. Single allocation, no extra copy.
+                    return buffer;
+                }
+
+                // Abnormal: short read (truncated body) or more data than declared. Reconstruct exactly
+                // the bytes received, preserving the original CopyToAsync semantics.
+                using (var ms = new MemoryStream(length + 1))
+                {
+                    ms.Write(buffer, 0, offset);
+                    if (extra > 0)
+                    {
+                        ms.Write(probe, 0, extra);
+                        await contentStream.CopyToAsync(ms, CopyBufferSize, cancellationToken).ConfigureAwait(false);
+                    }
+                    return ms.ToArray();
+                }
+            }
+
+            // Unknown length: grow as needed (original behavior).
+            using (var memoryStream = new MemoryStream())
+            {
+                await contentStream.CopyToAsync(memoryStream, CopyBufferSize, cancellationToken).ConfigureAwait(false);
+                return memoryStream.ToArray();
+            }
         }
 
         private void SetError(Exception ex, Activity? activity = null)
