@@ -921,9 +921,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     return buffer;
                 }
 
-                // Abnormal: short read (truncated body) or more data than declared. Reconstruct exactly
-                // the bytes received, preserving the original CopyToAsync semantics.
-                using (var ms = new MemoryStream(length + 1))
+                // Abnormal: short read (truncated body) or more data than declared. Size the stream to
+                // what was actually read so far (offset + extra) rather than the declared Content-Length,
+                // so a truncated body doesn't over-allocate; it grows only if the drain below adds more.
+                // For the over-read case offset == length and extra == 1, so this equals length + 1.
+                using (var ms = new MemoryStream(offset + extra))
                 {
                     ms.Write(buffer, 0, offset);
                     if (extra > 0)

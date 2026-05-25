@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2025 ADBC Drivers Contributors
+* Copyright (c) 2026 ADBC Drivers Contributors
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
+
+#if NET6_0_OR_GREATER
 
 using System;
 using System.Buffers;
@@ -113,7 +115,6 @@ namespace AdbcDrivers.Databricks.Tests
             double newMb = newBytes / (double)iters / 1024.0 / 1024.0;
             string line = $"LZ4 decompress {size / 1024 / 1024} MB (decompressed): OLD {oldMb:F2} MB/op  NEW {newMb:F2} MB/op  ratio NEW/OLD {newMb / oldMb:F2}";
             _out.WriteLine(line);
-            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "lz4_decompress_perf.txt"), line + "\n"); } catch { }
 
             Assert.True(newBytes < oldBytes,
                 $"Expected new allocations ({newMb:F2} MB/op) < old ({oldMb:F2} MB/op)");
@@ -134,3 +135,5 @@ namespace AdbcDrivers.Databricks.Tests
         }
     }
 }
+
+#endif

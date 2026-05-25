@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2025 ADBC Drivers Contributors
+* Copyright (c) 2026 ADBC Drivers Contributors
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,9 +16,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow;
@@ -158,6 +156,7 @@ namespace AdbcDrivers.Databricks.Tests.StatementExecution
             Assert.Equal(5, stream.Position);
         }
 
+#if NET6_0_OR_GREATER
         [Fact]
         public void ConcatenatedStream_AvoidsWholeResultAllocation()
         {
@@ -184,7 +183,6 @@ namespace AdbcDrivers.Databricks.Tests.StatementExecution
             double newKb = newBytes / (double)iters / 1024.0;
             string line = $"concat {size / 1024 / 1024} MB across {parts} segments: OLD {oldMb:F2} MB/op  NEW {newKb:F3} KB/op";
             _out.WriteLine(line);
-            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "concat_perf.txt"), line + "\n"); } catch { }
 
             // The new path should allocate essentially nothing per op (no whole-result copy).
             Assert.True(newBytes * 100 < oldBytes,
@@ -204,5 +202,6 @@ namespace AdbcDrivers.Databricks.Tests.StatementExecution
             }
             return GC.GetAllocatedBytesForCurrentThread() - before;
         }
+#endif
     }
 }

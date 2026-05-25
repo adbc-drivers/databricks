@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2025 ADBC Drivers Contributors
+* Copyright (c) 2026 ADBC Drivers Contributors
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,10 +14,11 @@
 * limitations under the License.
 */
 
+#if NET6_0_OR_GREATER
+
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -100,13 +101,6 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
             string l3 = $"  NEW (ReadResponseBodyAsync)  : {newMb,6:F2} MB/op   {neo.ms / iters,7:F3} ms/op";
             string l4 = $"  alloc ratio NEW/OLD = {(double)neo.bytes / old.bytes:F2}   time ratio NEW/OLD = {neo.ms / old.ms:F2}";
             _out.WriteLine(l1); _out.WriteLine(l2); _out.WriteLine(l3); _out.WriteLine(l4);
-            // Also persist to a file so results are captured regardless of test-logger verbosity.
-            try
-            {
-                string path = Path.Combine(Path.GetTempPath(), "bodyread_perf.txt");
-                File.AppendAllText(path, l1 + "\n" + l2 + "\n" + l3 + "\n" + l4 + "\n\n");
-            }
-            catch { /* best effort */ }
 
             // The fix should not allocate more than the old pattern; in practice it roughly halves it.
             Assert.True(neo.bytes <= old.bytes,
@@ -131,3 +125,5 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
         }
     }
 }
+
+#endif

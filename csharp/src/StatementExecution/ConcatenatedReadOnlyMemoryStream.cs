@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2025 ADBC Drivers Contributors
+* Copyright (c) 2026 ADBC Drivers Contributors
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -71,8 +71,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         public override int Read(byte[] buffer, int offset, int count)
         {
             if (buffer == null) throw new ArgumentNullException(nameof(buffer));
-            if (offset < 0 || count < 0 || offset + count > buffer.Length)
-                throw new ArgumentOutOfRangeException(nameof(count));
+            if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
+            if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
+            if (buffer.Length - offset < count)
+                throw new ArgumentException("Offset and count must refer to a location within the buffer.", nameof(count));
             return ReadCore(buffer.AsSpan(offset, count));
         }
 
