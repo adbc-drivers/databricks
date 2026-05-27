@@ -219,27 +219,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             properties.TryGetValue(AdbcOptions.Connection.CurrentDbSchema, out _schema);
 
             // Result configuration.
-            //
-            // Two layered sets of parameters control how SEA returns results:
-            //   1. JDBC-compatible aliases: cloudfetch.enabled / cloudfetch.lz4.enabled
-            //      (these are also used by the Thrift path; we honor them here so
-            //       users carry a single set of params across protocols — PECO-3056).
-            //   2. SEA-specific: rest.result_disposition / rest.result_compression
-            //      (allow operators to explicitly select INLINE vs EXTERNAL_LINKS vs
-            //       the hybrid INLINE_OR_EXTERNAL_LINKS, and pick a compression).
-            //
-            // cloudfetch.enabled is not yet honored on SEA: JDBC pairs it with
-            // disposition=INLINE + format=JSON_ARRAY, but the C# driver has no
-            // JSON_ARRAY reader. The param is accepted and ignored for now.
-            //
-            // cloudfetch.lz4.enabled=false clears result_compression on the wire,
-            // overriding any explicit result_compression value. Mirrors JDBC's
-            // CompressionCodec.NONE branch.
+            // The driver only implements LZ4_FRAME decompression; gzip is not supported.
+            // cloudfetch.lz4.enabled=true (default) → request LZ4_FRAME compression.
+            // cloudfetch.lz4.enabled=false → null (no compression).
             _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
-            properties.TryGetValue(DatabricksParameters.ResultCompression, out string? userCompression);
             bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
-            _resultCompression = canDecompressLz4 ? userCompression : null;
+            _resultCompression = canDecompressLz4 ? "LZ4_FRAME" : null;
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&

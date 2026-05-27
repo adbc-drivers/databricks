@@ -38,10 +38,9 @@ namespace AdbcDrivers.Databricks
         /// Honored by both protocols:
         ///   - Thrift: controls the canUseCloudFetch flag on TFetchResultsReq.
         ///   - SEA (REST): not yet honored; the param is accepted but ignored.
-        ///     JDBC pairs <c>cloudfetch.enabled=false</c> with
-        ///     <c>disposition=INLINE</c> + <c>format=JSON_ARRAY</c>, but the
-        ///     C# SEA driver does not yet ship a JSON_ARRAY reader. Support
-        ///     is deferred until a JSON_ARRAY reader lands.
+        ///     Disabling CloudFetch on SEA requires the server to support
+        ///     <c>ARROW_STREAM</c> results with <c>INLINE</c> disposition.
+        ///     Support is deferred until that server-side capability lands.
         ///
         /// Note: Reyden does not generate external links and will coerce results
         /// to INLINE on the server side regardless of what the driver requests.

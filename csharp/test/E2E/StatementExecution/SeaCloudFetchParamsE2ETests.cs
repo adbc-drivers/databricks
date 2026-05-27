@@ -141,22 +141,16 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         }
 
         /// <summary>
-        /// With <c>cloudfetch.lz4.enabled=true</c> (default) and an explicit
-        /// <c>result_compression</c>, the SEA driver must pass that compression
-        /// through to the wire unchanged. Locks in the no-regression contract
-        /// for the explicit compression path.
+        /// With <c>cloudfetch.lz4.enabled=true</c> (default) the SEA driver must
+        /// request <c>LZ4_FRAME</c> compression on the wire. The driver only
+        /// implements LZ4 decompression, so this is the only valid non-null value.
         /// </summary>
         [SkippableFact]
-        public void Lz4EnabledTrue_PassesThroughExplicitResultCompression()
+        public void Lz4EnabledTrue_UsesLz4Compression()
         {
             SkipIfNotConfigured();
 
-            var extras = new Dictionary<string, string>
-            {
-                [DatabricksParameters.ResultCompression] = "LZ4_FRAME",
-            };
-
-            using var connection = CreateRestConnection(extras);
+            using var connection = CreateRestConnection(new Dictionary<string, string>());
             using var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1 AS value";
             var result = statement.ExecuteQuery();
