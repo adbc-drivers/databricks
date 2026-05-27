@@ -88,5 +88,62 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(returnedProperties.ContainsKey("statement_timeout"));
             Assert.Equal("12345", returnedProperties["statement_timeout"]);
         }
+
+        /// <summary>
+        /// PECO-3062: on the SEA path (protocol=rest), the
+        /// <c>adbc.databricks.apply_ssp_with_queries</c> flag must be honored end-to-end.
+        /// Whether the SSPs ride in <c>CreateSession.session_confs</c> (flag=false) or
+        /// are pushed via post-open <c>SET key=value</c> statements (flag=true), the
+        /// final observable state must be the same — both <c>use_cached_result</c> and
+        /// <c>statement_timeout</c> visible via <c>SET</c>.
+        ///
+        /// Before this fix, the SEA path ignored the flag and always used session_confs.
+        /// With the flag plumbed through, the post-open SET path runs and reaches the
+        /// same end state. This test exercises the live SEA endpoint to confirm parity.
+        /// </summary>
+        [SkippableTheory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task TestServerSidePropertyOnSeaPath(bool applyWithQueries)
+        {
+            var additionalConnectionParams = new Dictionary<string, string>()
+            {
+                // Force the SEA path regardless of the test config's default protocol.
+                [DatabricksParameters.Protocol] = "rest",
+                [DatabricksParameters.ServerSidePropertyPrefix + "use_cached_result"] = "false",
+                [DatabricksParameters.ServerSidePropertyPrefix + "statement_timeout"] = "12345",
+                [DatabricksParameters.ApplySSPWithQueries] = applyWithQueries.ToString().ToLower()
+            };
+            using var connection = NewConnection(TestConfiguration, additionalConnectionParams);
+
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = "SET";
+
+            var result = await statement.ExecuteQueryAsync();
+            Assert.NotNull(result.Stream);
+
+            var batch = await result.Stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            Assert.True(batch.Length > 0);
+            Assert.Equal(2, batch.ColumnCount);
+
+            var returnedProperties = new Dictionary<string, string>();
+            var keys = (StringArray)batch.Column(0);
+            var values = (StringArray)batch.Column(1);
+            for (int i = 0; i < batch.Length; i++)
+            {
+                returnedProperties[keys.GetString(i)] = values.GetString(i);
+            }
+
+            Assert.True(
+                returnedProperties.ContainsKey("use_cached_result"),
+                $"SEA path (apply_ssp_with_queries={applyWithQueries}) failed to set use_cached_result");
+            Assert.Equal("false", returnedProperties["use_cached_result"]);
+
+            Assert.True(
+                returnedProperties.ContainsKey("statement_timeout"),
+                $"SEA path (apply_ssp_with_queries={applyWithQueries}) failed to set statement_timeout");
+            Assert.Equal("12345", returnedProperties["statement_timeout"]);
+        }
     }
 }

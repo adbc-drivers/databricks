@@ -21,6 +21,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.HiveServer2.Spark;
@@ -63,6 +64,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private bool _enablePKFK;
         private bool _enableMultipleCatalogSupport;
         private bool _useDescTableExtended;
+        private bool _applySSPWithQueries;
 
         // Connection bring-up timeout (PECO-3059). Mirrors the Thrift path's
         // ConnectTimeoutMilliseconds — used as a CancellationToken bound on
@@ -303,6 +305,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
+            // When true, SSPs (adbc.databricks.ssp_*) are applied via post-open SET statements
+            // rather than CreateSession.session_confs — mirrors Thrift's behavior so callers
+            // who depend on the SET-statement path (e.g., for audit visibility or for SSPs
+            // the server validates differently in CreateSession vs SET) get the same semantics
+            // on SEA. JDBC has no equivalent flag — this is parity with the Thrift driver only.
+            _applySSPWithQueries = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.ApplySSPWithQueries, false);
 
             // Session configuration.
             // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
@@ -328,7 +336,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 _waitTimeoutSeconds = 0;
             }
-            _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
+            // PECO-3064: adbc.apache.statement.polltime_ms is the single key for SEA polling cadence
+            // (consolidated with the Thrift path). SEA defaults to 1000 ms — HTTP/JSON polls are
+            // heavier than Thrift's 100 ms default — but both protocols share the same property.
+            _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
+                properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
 
             // Tracing propagation configuration. Base class (TracingConnection) already handles ActivityTrace init.
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
@@ -452,7 +464,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     // Double-check after acquiring lock
                     if (_sessionId == null)
                     {
-                        var sessionConfigs = ExtractServerSideProperties(_properties);
+                        // When apply_ssp_with_queries=true, SSPs are deferred to post-open SET
+                        // statements (see ApplyServerSidePropertiesAsync), so omit them here to
+                        // avoid double-setting and to match Thrift parity.
+                        var sessionConfigs = _applySSPWithQueries
+                            ? new Dictionary<string, string>()
+                            : ExtractServerSideProperties(_properties);
                         var request = new CreateSessionRequest
                         {
                             WarehouseId = _warehouseId,
@@ -985,6 +1002,48 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// Applies server-side properties (adbc.databricks.ssp_*) by executing
+        /// <c>SET key=value</c> statements after the session is open. No-op when
+        /// <c>apply_ssp_with_queries=false</c> — in that case the values are
+        /// already in <see cref="CreateSessionRequest.SessionConfigs"/> from
+        /// <see cref="OpenAsync"/>. Mirrors <c>DatabricksConnection.ApplyServerSidePropertiesAsync</c>
+        /// on the Thrift path so both protocols honor the same flag.
+        /// </summary>
+        public async Task ApplyServerSidePropertiesAsync(CancellationToken cancellationToken = default)
+        {
+            if (!_applySSPWithQueries)
+            {
+                return;
+            }
+
+            var serverSideProperties = ExtractServerSideProperties(_properties);
+            if (serverSideProperties.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var property in serverSideProperties)
+            {
+                // Backtick-escaped to match the Thrift path's SET escaping (DatabricksConnection.EscapeSqlString)
+                // — preserves values containing reserved characters while keeping a SET-compatible literal.
+                string escapedValue = "`" + property.Value.Replace("`", "``") + "`";
+                string query = $"SET {property.Key}={escapedValue}";
+
+                try
+                {
+                    using var stmt = (StatementExecutionStatement)CreateStatement();
+                    stmt.SqlQuery = query;
+                    await stmt.ExecuteUpdateAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // Best-effort, matching Thrift behavior — a single bad SSP value should not
+                    // tear down the whole session. The error is surfaced in tracing only.
+                }
+            }
         }
 
         /// <summary>
