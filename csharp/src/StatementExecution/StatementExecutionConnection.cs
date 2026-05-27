@@ -483,21 +483,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             var response = await _client.CreateSessionAsync(request, openToken).ConfigureAwait(false);
                             _sessionId = response.SessionId;
                         }
-                        catch (DatabricksException)
-                        {
-                            throw;
-                        }
+                        // PECO-3059: when the connect-timeout fired before the caller's token,
+                        // translate any exception (including DatabricksException-wrapped OAuth
+                        // cancellations) into TimeoutException for parity with HiveServer2Connection.
+                        // This filter must run BEFORE the unconditional DatabricksException
+                        // rethrow because OAuthClientCredentialsProvider wraps cancelled HTTP
+                        // calls as DatabricksException("Failed to acquire OAuth access token: …").
                         catch (Exception ex) when (
                             connectTimeoutCts != null &&
                             connectTimeoutCts.IsCancellationRequested &&
                             !cancellationToken.IsCancellationRequested)
                         {
-                            // PECO-3059: the connect-timeout fired before the caller's
-                            // token. Surface as TimeoutException for parity with
-                            // HiveServer2Connection.OpenAsync — same message phrasing.
                             throw new TimeoutException(
                                 "The operation timed out while attempting to open a session. Please try increasing connect timeout.",
                                 ex);
+                        }
+                        catch (DatabricksException)
+                        {
+                            throw;
                         }
                         catch (Exception ex)
                         {
