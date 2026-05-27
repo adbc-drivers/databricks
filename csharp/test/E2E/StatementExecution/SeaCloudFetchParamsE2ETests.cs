@@ -14,7 +14,6 @@
 * limitations under the License.
 */
 
-using System;
 using System.Collections.Generic;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2.Spark;
@@ -26,27 +25,18 @@ using Xunit.Abstractions;
 namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 {
     /// <summary>
-    /// E2E tests proving that <c>adbc.databricks.cloudfetch.enabled</c> and
-    /// <c>adbc.databricks.cloudfetch.lz4.enabled</c> are honored on the SEA path
-    /// (PECO-3056). These are connection-level params on JDBC; the SEA driver
-    /// previously ignored them, so the disposition / compression flowing into
-    /// <see cref="ExecuteStatementRequest"/> matched only the explicit SEA-only
-    /// params (<c>result_disposition</c> / <c>result_compression</c>).
+    /// E2E tests proving that <c>adbc.databricks.cloudfetch.lz4.enabled</c> is
+    /// honored on the SEA path (PECO-3056). This is a connection-level param on
+    /// JDBC; the SEA driver previously ignored it.
     ///
-    /// The "happy-path" tests assert on the request that the driver actually
-    /// built — exposed via the internal
-    /// <see cref="StatementExecutionStatement.LastExecuteRequest"/> test seam —
-    /// rather than on observable server-side behavior. This lets the test verify
-    /// wire-level intent cheaply (one SELECT 1 round-trip) without depending on
-    /// data-volume heuristics inside the warehouse.
+    /// Tests assert on the request the driver actually built — exposed via the
+    /// internal <see cref="StatementExecutionStatement.LastExecuteRequest"/> test
+    /// seam — rather than on observable server-side behavior, so wire-level intent
+    /// is verified cheaply with a single SELECT 1 round-trip.
     ///
-    /// One test covers the <c>cloudfetch.enabled=false</c> case where the C#
-    /// SEA driver cannot yet honor the param (the SEA server requires
-    /// <c>format=JSON_ARRAY</c> for pure <c>INLINE</c> disposition, and the C#
-    /// driver only ships an ARROW reader). The driver surfaces this as a clear
-    /// <see cref="AdbcException"/> at connect time rather than silently ignoring
-    /// the param (the pre-PECO-3056 behavior) or letting the server reject the
-    /// first execute with an opaque 400.
+    /// Note: <c>cloudfetch.enabled=false</c> is not yet honored on SEA (requires
+    /// a JSON_ARRAY reader that is not yet implemented) and is intentionally left
+    /// as a silent no-op. It will be wired up in a follow-on ticket.
     /// </summary>
     public class SeaCloudFetchParamsE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
