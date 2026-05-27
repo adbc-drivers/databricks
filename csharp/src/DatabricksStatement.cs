@@ -440,23 +440,23 @@ namespace AdbcDrivers.Databricks
             base.SetStatementProperties(statement);
 
             // Set Databricks-specific statement properties
-            // TODO: Ensure this is set dynamically depending on server capabilities.
             statement.EnforceResultPersistenceMode = false;
             statement.CanReadArrowResult = true;
+
+            // Gate advanced Arrow native types on protocol V5+, matching JDBC behavior.
+            // TimestampAsArrow is always set; the rest require V5+.
+            // If the server protocol version is unknown (null), default to enabling them.
+            var serverProtocolVersion = ((DatabricksConnection)Connection).ServerProtocolVersion;
+            bool advancedArrowTypes = serverProtocolVersion == null
+                || FeatureVersionNegotiator.SupportsAdvancedArrowTypes(serverProtocolVersion.Value);
 
             statement.UseArrowNativeTypes = new TSparkArrowTypes
             {
                 TimestampAsArrow = true,
-                DecimalAsArrow = true,
-                // Always request native complex types from the server. The user-facing
-                // EnableComplexDatatypeSupport flag is then honored on the client side:
-                //   flag=true  → pass native arrays through.
-                //   flag=false → wrap with ComplexTypeSerializingStream to emit JSON
-                //                strings via System.Text.Json (correct escaping).
-                // This mirrors the JDBC driver (DatabricksThriftServiceClient.java) and
-                // fixes the server-side malformed-JSON bug for MAP values containing
-                // double-quote characters (PECO-3032 / D3).
-                ComplexTypesAsArrow = true,
+                DecimalAsArrow = advancedArrowTypes,
+                // Request native complex types when V5+ so ComplexTypeSerializingStream can
+                // re-serialize them client-side with correct JSON escaping (PECO-3032).
+                ComplexTypesAsArrow = advancedArrowTypes,
                 IntervalTypesAsArrow = false,
             };
 
