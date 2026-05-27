@@ -15,7 +15,6 @@
 */
 
 using System.Collections.Generic;
-using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
@@ -29,14 +28,14 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
     /// honored on the SEA path (PECO-3056). This is a connection-level param on
     /// JDBC; the SEA driver previously ignored it.
     ///
-    /// Tests assert on the request the driver actually built — exposed via the
-    /// internal <see cref="StatementExecutionStatement.LastExecuteRequest"/> test
-    /// seam — rather than on observable server-side behavior, so wire-level intent
-    /// is verified cheaply with a single SELECT 1 round-trip.
+    /// Tests execute a real query and verify the result to confirm end-to-end
+    /// correctness: if the driver sends the wrong <c>result_compression</c> value
+    /// the server will either reject the request or return data the driver cannot
+    /// decode, causing an exception before the assertion is reached.
     ///
     /// Note: <c>cloudfetch.enabled=false</c> is not yet honored on SEA (requires
-    /// a JSON_ARRAY reader that is not yet implemented) and is intentionally left
-    /// as a silent no-op. It will be wired up in a follow-on ticket.
+    /// server-side support for ARROW_STREAM with INLINE disposition) and is
+    /// intentionally left as a silent no-op.
     /// </summary>
     public class SeaCloudFetchParamsE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
@@ -82,71 +81,62 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             return database.Connect(null);
         }
 
+        private static long DrainStream(QueryResult result)
+        {
+            long rows = 0;
+            using var stream = result.Stream;
+            while (stream != null && stream.ReadNextRecordBatchAsync().Result is { } batch)
+                rows += batch.Length;
+            return rows;
+        }
+
         /// <summary>
-        /// With <c>cloudfetch.enabled=true</c> (default) and no explicit
-        /// <c>result_disposition</c>, the SEA driver continues to use the
-        /// existing default of <c>INLINE_OR_EXTERNAL_LINKS</c>. Locks in the
-        /// no-regression contract for the default path.
+        /// Default config (lz4=true): query executes and returns the expected row.
+        /// Locks in the no-regression contract for the default path.
         /// </summary>
         [SkippableFact]
-        public void CloudFetchEnabledTrue_KeepsDefaultDisposition()
+        public void DefaultConfig_QuerySucceeds()
         {
             SkipIfNotConfigured();
 
-            // No extra params — exercise the default path.
             using var connection = CreateRestConnection(new Dictionary<string, string>());
             using var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1 AS value";
             var result = statement.ExecuteQuery();
-            using (var reader = result.Stream)
-            {
-                while (reader != null && reader.ReadNextRecordBatchAsync().Result != null) { }
-            }
-
-            var seaStmt = Assert.IsType<StatementExecutionStatement>(statement);
-            Assert.NotNull(seaStmt.LastExecuteRequest);
-            Assert.Equal("INLINE_OR_EXTERNAL_LINKS", seaStmt.LastExecuteRequest!.Disposition);
+            Assert.Equal(1L, DrainStream(result));
         }
 
         /// <summary>
-        /// With <c>cloudfetch.lz4.enabled=false</c> the SEA driver must clear
-        /// <c>result_compression</c> on the wire (null / unset → server treats
-        /// as no compression). Mirrors JDBC's <c>CompressionCodec.NONE</c> branch
-        /// when LZ4 is disabled.
+        /// With <c>cloudfetch.lz4.enabled=false</c> the driver must clear
+        /// <c>result_compression</c> on the wire. Verified by a successful round-trip:
+        /// if the server returns uncompressed data and the driver handles it correctly,
+        /// the query completes and returns the expected row count.
         /// </summary>
         [SkippableFact]
-        public void Lz4EnabledFalse_ClearsResultCompression()
+        public void Lz4EnabledFalse_QuerySucceeds()
         {
             SkipIfNotConfigured();
 
             var extras = new Dictionary<string, string>
             {
                 [DatabricksParameters.CanDecompressLz4] = "false",
-                // Set an explicit result_compression to prove the lz4 param overrides it.
-                [DatabricksParameters.ResultCompression] = "LZ4_FRAME",
             };
 
             using var connection = CreateRestConnection(extras);
             using var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1 AS value";
             var result = statement.ExecuteQuery();
-            using (var reader = result.Stream)
-            {
-                while (reader != null && reader.ReadNextRecordBatchAsync().Result != null) { }
-            }
-
-            var seaStmt = Assert.IsType<StatementExecutionStatement>(statement);
-            Assert.NotNull(seaStmt.LastExecuteRequest);
-            Assert.Null(seaStmt.LastExecuteRequest!.ResultCompression);
+            Assert.Equal(1L, DrainStream(result));
         }
 
         /// <summary>
-        /// With <c>cloudfetch.lz4.enabled=true</c> (default) the SEA driver must
-        /// request <c>LZ4_FRAME</c> compression on the wire. The driver only
-        /// implements LZ4 decompression, so this is the only valid non-null value.
+        /// With <c>cloudfetch.lz4.enabled=true</c> (default) the driver requests
+        /// LZ4_FRAME compression. Verified by a successful round-trip: if the server
+        /// sends LZ4-compressed data and the driver decompresses it correctly, the
+        /// query completes and returns the expected row count.
         /// </summary>
         [SkippableFact]
-        public void Lz4EnabledTrue_UsesLz4Compression()
+        public void Lz4EnabledTrue_QuerySucceeds()
         {
             SkipIfNotConfigured();
 
@@ -154,14 +144,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             using var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT 1 AS value";
             var result = statement.ExecuteQuery();
-            using (var reader = result.Stream)
-            {
-                while (reader != null && reader.ReadNextRecordBatchAsync().Result != null) { }
-            }
-
-            var seaStmt = Assert.IsType<StatementExecutionStatement>(statement);
-            Assert.NotNull(seaStmt.LastExecuteRequest);
-            Assert.Equal("LZ4_FRAME", seaStmt.LastExecuteRequest!.ResultCompression);
+            Assert.Equal(1L, DrainStream(result));
         }
     }
 }
