@@ -228,48 +228,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
             //      (allow operators to explicitly select INLINE vs EXTERNAL_LINKS vs
             //       the hybrid INLINE_OR_EXTERNAL_LINKS, and pick a compression).
             //
-            // Semantics (mirroring JDBC where the C# reader supports it):
-            //   - cloudfetch.enabled=false: JDBC switches to disposition=INLINE +
-            //     format=JSON_ARRAY (the SEA server requires JSON_ARRAY for pure
-            //     INLINE — ARROW_STREAM is rejected by server-side validation).
-            //     The C# SEA driver does not yet implement a JSON_ARRAY reader,
-            //     so we surface this as a clear configuration error at connection
-            //     time rather than silently ignoring the param (the previous gap)
-            //     or letting the server reject the first request with an opaque
-            //     400. JSON_ARRAY support is tracked separately; see PECO-3056
-            //     for the rationale.
-            //   - cloudfetch.lz4.enabled=false: clears result_compression on the
-            //     wire (overrides any explicit result_compression value). Mirrors
-            //     JDBC's CompressionCodec.NONE branch.
+            // cloudfetch.enabled is not yet honored on SEA: JDBC pairs it with
+            // disposition=INLINE + format=JSON_ARRAY, but the C# driver has no
+            // JSON_ARRAY reader. The param is accepted and ignored for now.
             //
-            // Reyden caveat: Reyden does not currently generate external links
-            // and will coerce any disposition to INLINE on the server side. The
-            // driver-side request still carries whatever the user asked for —
-            // the overrides here govern only what the driver puts on the wire.
+            // cloudfetch.lz4.enabled=false clears result_compression on the wire,
+            // overriding any explicit result_compression value. Mirrors JDBC's
+            // CompressionCodec.NONE branch.
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
-            string userDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
+            _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
             properties.TryGetValue(DatabricksParameters.ResultCompression, out string? userCompression);
-            bool useCloudFetch = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseCloudFetch, true);
             bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
-
-            if (!useCloudFetch)
-            {
-                // Throw an honest error rather than ignore the param. See comment
-                // above for why pure INLINE isn't yet wired up on SEA in C#.
-                throw new DatabricksException(
-                    $"'{DatabricksParameters.UseCloudFetch}=false' is not yet supported on the SEA " +
-                    "(adbc.databricks.protocol=rest) path. The SEA server requires " +
-                    "result_format=JSON_ARRAY for INLINE disposition, and the C# driver does not " +
-                    "yet ship a JSON_ARRAY reader. Workarounds: (1) remove the param and use the " +
-                    "default INLINE_OR_EXTERNAL_LINKS disposition so the server inlines small " +
-                    $"results automatically, or (2) set '{DatabricksParameters.Protocol}=thrift'.",
-                    AdbcStatusCode.NotImplemented);
-            }
-
-            _resultDisposition = userDisposition;
-            // cloudfetch.lz4.enabled=false clears compression on the wire — mirrors
-            // JDBC's CompressionCodec.NONE branch. Explicit result_compression is
-            // ignored in that case (the JDBC alias wins).
             _resultCompression = canDecompressLz4 ? userCompression : null;
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);

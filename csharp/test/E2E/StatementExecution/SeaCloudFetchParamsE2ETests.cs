@@ -93,37 +93,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         }
 
         /// <summary>
-        /// With <c>cloudfetch.enabled=false</c> the SEA driver should NOT
-        /// silently fall back to <c>INLINE_OR_EXTERNAL_LINKS</c> (the pre-fix
-        /// behavior); instead it must surface a clear configuration error
-        /// because pure <c>INLINE</c> on SEA requires <c>format=JSON_ARRAY</c>
-        /// which the C# driver does not yet read.
-        ///
-        /// This is the honest-signal contract for PECO-3056: the param is
-        /// recognized, not ignored, and the user gets actionable feedback.
-        ///
-        /// Reyden caveat: Reyden does not currently generate external links,
-        /// so a future implementation could safely send <c>disposition=INLINE</c>
-        /// against Reyden — but that's a property of the backend, not the param
-        /// semantic. The driver behavior here is correct against any SEA backend.
-        /// </summary>
-        [SkippableFact]
-        public void CloudFetchEnabledFalse_ThrowsNotImplementedOnSea()
-        {
-            SkipIfNotConfigured();
-
-            var extras = new Dictionary<string, string>
-            {
-                [DatabricksParameters.UseCloudFetch] = "false",
-            };
-
-            var ex = Assert.Throws<DatabricksException>(() => CreateRestConnection(extras));
-            Assert.Equal(AdbcStatusCode.NotImplemented, ex.Status);
-            Assert.Contains(DatabricksParameters.UseCloudFetch, ex.Message);
-            Assert.Contains("JSON_ARRAY", ex.Message);
-        }
-
-        /// <summary>
         /// With <c>cloudfetch.enabled=true</c> (default) and no explicit
         /// <c>result_disposition</c>, the SEA driver continues to use the
         /// existing default of <c>INLINE_OR_EXTERNAL_LINKS</c>. Locks in the
