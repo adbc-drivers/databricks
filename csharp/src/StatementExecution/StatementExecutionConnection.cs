@@ -235,8 +235,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // cloudfetch.lz4.enabled=false clears result_compression on the wire,
             // overriding any explicit result_compression value. Mirrors JDBC's
             // CompressionCodec.NONE branch.
-            _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
             _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
+            _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
             properties.TryGetValue(DatabricksParameters.ResultCompression, out string? userCompression);
             bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
             _resultCompression = canDecompressLz4 ? userCompression : null;
