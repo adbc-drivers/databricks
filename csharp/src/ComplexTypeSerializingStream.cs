@@ -32,17 +32,28 @@ namespace AdbcDrivers.Databricks
     /// into STRING columns containing their JSON representation.
     ///
     /// <para>
-    /// Applied when <c>EnableComplexDatatypeSupport=false</c> (the default) so that SEA
-    /// results match the legacy Thrift behavior of returning JSON strings for complex types.
+    /// Applied when <c>EnableComplexDatatypeSupport=false</c> (the default) on both the Thrift
+    /// and SEA paths so that both return consistent, correctly-escaped JSON strings for complex
+    /// types regardless of what the server emits.
     /// </para>
     ///
     /// <para><strong>Why both schema and data must be converted:</strong>
     /// Arrow streaming is strongly typed: the <see cref="Schema"/> and the arrays inside each
-    /// <see cref="RecordBatch"/> must agree on the column type. The manifest schema (built by
-    /// <c>TryGetSchemaFromManifest</c>) already declares complex columns as
-    /// <see cref="StringType"/>, so this stream only needs to convert the native Arrow arrays
-    /// (<c>ListArray</c>, <c>StructArray</c>, etc.) to <see cref="StringArray"/> at read time.
-    /// The schema it exposes to callers is the inner stream's schema unchanged.
+    /// <see cref="RecordBatch"/> must agree on the column type.
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <strong>SEA path:</strong> the manifest schema already declares complex columns as
+    ///     <see cref="StringType"/>, so only the batch data (native <c>ListArray</c> /
+    ///     <c>StructArray</c> / etc.) needs converting; the schema is passed through unchanged.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <strong>Thrift path:</strong> the driver requests <c>ComplexTypesAsArrow=true</c>
+    ///     from the server, so the inner IPC schema carries native
+    ///     <c>ListType</c> / <c>MapType</c> / <c>StructType</c>. Both the schema and the batch
+    ///     data must be flattened to <see cref="StringType"/> / <see cref="StringArray"/> to
+    ///     keep them in agreement. <see cref="FlattenComplexColumns"/> handles the schema side.
+    ///   </description></item>
+    /// </list>
     /// </para>
     ///
     /// <para><strong>Column detection:</strong>

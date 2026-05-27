@@ -40,7 +40,7 @@ namespace AdbcDrivers.Databricks.Tests
     ///
     /// Default behavior (EnableComplexDatatypeSupport=false):
     ///   Both Thrift and SEA return complex types as JSON strings (StringType).
-    ///   Thrift: ComplexTypesAsArrow=false (server returns strings natively).
+    ///   Thrift: ComplexTypesAsArrow=true (client-side serialization via ComplexTypeSerializingStream).
     ///   SEA:    Native Arrow types are serialized to JSON strings by ComplexTypeSerializingStream.
     ///
     /// When EnableComplexDatatypeSupport=true, SEA returns native Arrow types (ListType/MapType/StructType).
@@ -94,22 +94,26 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(batch.Column(0).IsNull(0), "Expected null value");
         }
 
-        // TODO: PECO-3014 - both Thrift and SEA now use ComplexTypeSerializingStream which
-        // emits System.Text.Json output for NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL elements,
-        // differing from the upstream test's expected server-emitted format. PECO-3032
-        // moved Thrift onto the same client-side serializer as SEA so the skip applies
-        // unconditionally now.
+        // PECO-3014: System.Text.Json formats NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL differently
+        // from what the upstream suite expects (server-emitted format). Skip only those projections;
+        // INT/LONG/STRING cases are unaffected and continue to run.
         protected override async System.Threading.Tasks.Task ValidateTestArrayData(string projection, string value)
         {
-            Skip.If(true, "Array element format differs from upstream expectation for NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL (PECO-3014)");
+            Skip.If(
+                projection.Contains("DOUBLE") || projection.Contains("NUMERIC") ||
+                projection.Contains("TIMESTAMP") || projection.Contains("DATE") ||
+                projection.Contains("INTERVAL"),
+                "PECO-3014: element format differs from upstream expectation for this projection");
             await base.ValidateTestArrayData(projection, value);
         }
 
-        // TODO: PECO-3014 - both Thrift and SEA now use ComplexTypeSerializingStream's
-        // map-value format (sorted by key, System.Text.Json output).
+        // PECO-3014: the upstream MAP test with integer keys expects bare-integer-key format
+        // (e.g. {1:"foo",...}) which is not valid JSON and differs from System.Text.Json output
+        // ({"1":"foo",...}). Skip only that case; the string-key case produces valid JSON that
+        // matches the upstream expectation.
         protected override async System.Threading.Tasks.Task ValidateTestMapData(string projection, string value)
         {
-            Skip.If(true, "Map value format differs from upstream expectation (PECO-3014)");
+            Skip.If(!value.StartsWith("{\""), "PECO-3014: expected map format uses non-JSON integer-key syntax");
             await base.ValidateTestMapData(projection, value);
         }
 

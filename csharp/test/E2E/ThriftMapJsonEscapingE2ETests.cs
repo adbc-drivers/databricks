@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Apache.Arrow;
@@ -44,19 +45,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
         }
 
-        private async Task<(AdbcConnection conn, IArrowArrayStream stream)> ExecuteAsync(string sql, string protocol)
+        private async Task ExecuteAsync(string sql, string protocol, Func<IArrowArrayStream, Task> act)
         {
             var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
             properties[DatabricksParameters.Protocol] = protocol;
+            properties[DatabricksParameters.EnableComplexDatatypeSupport] = "false";
 
-            AdbcDriver driver = new DatabricksDriver();
-            AdbcDatabase database = driver.Open(properties);
-            AdbcConnection connection = database.Connect(properties);
-
-            var statement = connection.CreateStatement();
+            using AdbcDriver driver = new DatabricksDriver();
+            using AdbcDatabase database = driver.Open(properties);
+            using AdbcConnection connection = database.Connect(properties);
+            using var statement = connection.CreateStatement();
             statement.SqlQuery = sql;
             QueryResult result = await statement.ExecuteQueryAsync();
-            return (connection, result.Stream!);
+            using var stream = result.Stream!;
+            await act(stream);
         }
 
         [SkippableTheory]
@@ -68,24 +70,23 @@ namespace AdbcDrivers.Databricks.Tests.E2E
             // — i.e. the value string contains two double-quote characters surrounding "quote".
             // Pre-fix, the Thrift path emits {"key":"val "quote""} (inner quotes unescaped),
             // which is invalid JSON.
-            var (conn, stream) = await ExecuteAsync(
+            await ExecuteAsync(
                 "SELECT MAP('key', 'val \"quote\"')",
-                protocol);
-            using (conn)
-            using (stream)
-            {
-                RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
-                Assert.NotNull(batch);
-                Assert.Equal(1, batch!.Length);
+                protocol,
+                async stream =>
+                {
+                    RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+                    Assert.NotNull(batch);
+                    Assert.Equal(1, batch!.Length);
 
-                string raw = ((StringArray)batch.Column(0)).GetString(0);
-                OutputHelper?.WriteLine($"[{protocol}] raw MAP column = {raw}");
+                    string raw = ((StringArray)batch.Column(0)).GetString(0);
+                    OutputHelper?.WriteLine($"[{protocol}] raw MAP column = {raw}");
 
-                // The string must be valid JSON — parseable by System.Text.Json.
-                using JsonDocument doc = JsonDocument.Parse(raw);
-                Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
-                Assert.Equal("val \"quote\"", doc.RootElement.GetProperty("key").GetString());
-            }
+                    // The string must be valid JSON — parseable by System.Text.Json.
+                    using JsonDocument doc = JsonDocument.Parse(raw);
+                    Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
+                    Assert.Equal("val \"quote\"", doc.RootElement.GetProperty("key").GetString());
+                });
         }
     }
 }
