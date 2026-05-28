@@ -177,12 +177,17 @@ namespace AdbcDrivers.Databricks.Tests
 
                 OutputHelper?.WriteLine($"[{description}] Dispose events: [{string.Join(", ", disposeEvents)}]");
 
-                // The composite_reader.close_operation event is only present after the fix.
-                // Without it, the CloudFetch path silently skips CloseOperation entirely.
-                Assert.True(disposeEvents.Contains("composite_reader.close_operation"),
-                    $"[{description}] composite_reader.close_operation event not found in " +
-                    $"DatabricksCompositeReader.Dispose. Without the fix, server operations are " +
-                    $"orphaned until SQL Gateway closes them with CommandInactivityTimeout (~1 hour).");
+                // The composite_reader.close_operation.started event is only present after
+                // the original CloseOperation fix (it was renamed from the bare
+                // "composite_reader.close_operation" by issue #489 to mark when the RPC
+                // begins). Without that fix, the CloudFetch path silently skips
+                // CloseOperation entirely and neither event is emitted.
+                Assert.True(disposeEvents.Contains("composite_reader.close_operation.started"),
+                    $"[{description}] composite_reader.close_operation.started event not found in " +
+                    $"DatabricksCompositeReader.Dispose. Without the close-operation fix, server " +
+                    $"operations are orphaned until SQL Gateway closes them with " +
+                    $"CommandInactivityTimeout (~1 hour). Got events: [" +
+                    string.Join(", ", disposeEvents) + "]");
             }
             finally
             {

@@ -252,7 +252,18 @@ namespace AdbcDrivers.Databricks.Reader
                             // Always close the operation here at the composite level.
                             // CloudFetchReader is protocol-agnostic and does not send CloseOperation,
                             // so we must not rely on the contained reader to do it.
-                            activity?.AddEvent("composite_reader.close_operation");
+                            //
+                            // Issue #489: bracket the Thrift TCloseOperationReq RPC with a pair
+                            // of events ("...started" before, "...completed" after) so the
+                            // timestamp delta between them captures the RPC's wall-clock
+                            // latency in the trace. Previously a single
+                            // "composite_reader.close_operation" event was emitted before the
+                            // call, which made its timestamp identical to the surrounding
+                            // "composite_reader.disposing" event and hid the RPC's cost.
+                            // Mirrors the cancel_operation event-pair pattern used in
+                            // HiveServer2Statement.CancelOperationAsync ("...starting" /
+                            // "...completed").
+                            activity?.AddEvent("composite_reader.close_operation.started");
                             // Time the TCloseOperationReq RPC so CLOSE_STATEMENT telemetry
                             // emitted later from DatabricksStatement.Dispose can report the
                             // actual server-side close latency (PECO-2991).
@@ -276,6 +287,13 @@ namespace AdbcDrivers.Databricks.Reader
                                     dbxStatement.CloseStatementRpcLatencyMs = closeStopwatch.ElapsedMilliseconds;
                                     dbxStatement.CloseStatementRpcError = closeError;
                                 }
+                                // Emit the matching "completed" event regardless of whether
+                                // the RPC threw so the trace always records when the close
+                                // call returned. Tag with error=true on failure so consumers
+                                // can distinguish a clean close from a thrown one.
+                                activity?.AddEvent(
+                                    "composite_reader.close_operation.completed",
+                                    [new("error", closeError != null)]);
                             }
                             if (_activeReader != null)
                             {
