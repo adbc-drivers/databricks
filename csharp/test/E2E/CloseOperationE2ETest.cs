@@ -47,6 +47,7 @@ namespace AdbcDrivers.Databricks.Tests
     public class CloseOperationE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IDisposable
     {
         private readonly List<(string ActivityName, string EventName)> _capturedEvents = new();
+        private readonly List<(string ActivityName, ActivityEvent Event)> _capturedFullEvents = new();
         private readonly object _capturedEventsLock = new();
         private readonly ActivityListener _activityListener;
         private bool _disposed;
@@ -67,6 +68,7 @@ namespace AdbcDrivers.Databricks.Tests
                         foreach (var evt in activity.Events)
                         {
                             _capturedEvents.Add((activity.OperationName, evt.Name));
+                            _capturedFullEvents.Add((activity.OperationName, evt));
                         }
                     }
                 }
@@ -181,6 +183,112 @@ namespace AdbcDrivers.Databricks.Tests
                     $"[{description}] composite_reader.close_operation event not found in " +
                     $"DatabricksCompositeReader.Dispose. Without the fix, server operations are " +
                     $"orphaned until SQL Gateway closes them with CommandInactivityTimeout (~1 hour).");
+            }
+            finally
+            {
+                connection.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Regression test for issue #489: the trace events bracketing the Thrift
+        /// CloseOperation RPC must allow operators to measure the RPC's latency.
+        ///
+        /// Previously DatabricksCompositeReader.Dispose emitted a single
+        /// "composite_reader.close_operation" event before invoking the RPC, so its
+        /// timestamp was identical to the surrounding "composite_reader.disposing"
+        /// event and the RPC's wall-clock cost was invisible in traces.
+        ///
+        /// The fix mirrors the cancel_operation event-pair pattern used in
+        /// HiveServer2Statement.CancelOperationAsync ("db.operation.cancel_operation.starting"
+        /// + ".completed"): emit "composite_reader.close_operation.started" BEFORE the
+        /// RPC and "composite_reader.close_operation.completed" AFTER it, so the
+        /// timestamp delta between them captures the RPC's latency.
+        /// </summary>
+        [SkippableFact]
+        public async Task DisposeCloseOperation_EmitsStartedAndCompletedWithDistinctTimestamps_Issue489()
+        {
+            lock (_capturedEventsLock)
+            {
+                _capturedEvents.Clear();
+                _capturedFullEvents.Clear();
+            }
+
+            var parameters = new Dictionary<string, string>
+            {
+                [DatabricksParameters.Protocol] = "thrift",
+                [DatabricksParameters.UseCloudFetch] = "false",
+                [DatabricksParameters.EnableDirectResults] = "false",
+            };
+
+            // Use a query that requires a real (non-inline) CloseOperation RPC so the
+            // event pair brackets a network round-trip with measurable latency.
+            const string query = "SELECT * FROM range(1, 100)";
+
+            var connection = NewConnection(TestConfiguration, parameters);
+            try
+            {
+                var statement = connection.CreateStatement();
+                statement.SqlQuery = query;
+                var result = await statement.ExecuteQueryAsync();
+
+                using (var reader = result.Stream!)
+                {
+                    RecordBatch? batch;
+                    while ((batch = await reader.ReadNextRecordBatchAsync()) != null)
+                    {
+                    }
+                }
+                // Reader.Dispose() above triggers DatabricksCompositeReader.Dispose,
+                // which is where the close_operation events are emitted.
+                statement.Dispose();
+
+                // Pull the events emitted by DatabricksCompositeReader.Dispose.
+                List<ActivityEvent> disposeEvents;
+                lock (_capturedEventsLock)
+                {
+                    disposeEvents = _capturedFullEvents
+                        .Where(e => e.ActivityName == "DatabricksCompositeReader.Dispose")
+                        .Select(e => e.Event)
+                        .ToList();
+                }
+
+                OutputHelper?.WriteLine(
+                    "Dispose events (name @ timestamp): [" +
+                    string.Join(", ", disposeEvents.Select(e => $"{e.Name} @ {e.Timestamp:HH:mm:ss.ffffff}")) +
+                    "]");
+
+                var startedEvent = disposeEvents
+                    .Where(e => e.Name == "composite_reader.close_operation.started")
+                    .Cast<ActivityEvent?>()
+                    .FirstOrDefault();
+                var completedEvent = disposeEvents
+                    .Where(e => e.Name == "composite_reader.close_operation.completed")
+                    .Cast<ActivityEvent?>()
+                    .FirstOrDefault();
+
+                Assert.True(startedEvent != null,
+                    "Expected 'composite_reader.close_operation.started' event in " +
+                    "DatabricksCompositeReader.Dispose. Without the fix the bare " +
+                    "'composite_reader.close_operation' event is emitted before the RPC " +
+                    "with the same timestamp as 'composite_reader.disposing', making the " +
+                    "RPC's latency unmeasurable. Got events: [" +
+                    string.Join(", ", disposeEvents.Select(e => e.Name)) + "]");
+                Assert.True(completedEvent != null,
+                    "Expected 'composite_reader.close_operation.completed' event in " +
+                    "DatabricksCompositeReader.Dispose. Without the fix only a single " +
+                    "pre-RPC event is emitted, so the RPC duration cannot be derived from " +
+                    "the trace. Got events: [" +
+                    string.Join(", ", disposeEvents.Select(e => e.Name)) + "]");
+
+                var startedAt = startedEvent!.Value.Timestamp;
+                var completedAt = completedEvent!.Value.Timestamp;
+                Assert.True(completedAt > startedAt,
+                    $"Expected 'composite_reader.close_operation.completed' timestamp " +
+                    $"({completedAt:HH:mm:ss.ffffff}) to be strictly later than " +
+                    $"'composite_reader.close_operation.started' ({startedAt:HH:mm:ss.ffffff}). " +
+                    "If they are equal, the RPC's latency is still invisible in the trace " +
+                    "(issue #489).");
             }
             finally
             {
