@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc;
@@ -42,6 +43,23 @@ namespace AdbcDrivers.Databricks
         public const string DefaultConfigEnvironmentVariable = "DATABRICKS_CONFIG_FILE";
 
         internal static readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(DatabricksDatabase));
+
+        /// <summary>
+        /// ActivitySource for spans emitted by <see cref="DatabricksDatabase"/>.
+        ///
+        /// Issue #488: the connection-parameter parser runs synchronously inside
+        /// the <see cref="DatabricksConnection"/> /
+        /// <see cref="StatementExecution.StatementExecutionConnection"/>
+        /// constructors invoked from <see cref="Connect"/>, BEFORE any
+        /// connection-level Activity is opened. Throws from that parser
+        /// (ArgumentException / ArgumentOutOfRangeException for bad timeout
+        /// values, non-bool strings, etc.) previously produced zero spans,
+        /// leaving fleet dashboards blind to parameter-mistake errors. The
+        /// activity opened in <see cref="Connect"/> via this source captures the
+        /// failure as a Status=Error span with an "exception" event, restoring
+        /// observability for that code path.
+        /// </summary>
+        private static readonly ActivitySource s_activitySource = new ActivitySource("AdbcDrivers.Databricks");
 
         readonly IReadOnlyDictionary<string, string> properties;
 
@@ -68,6 +86,14 @@ namespace AdbcDrivers.Databricks
 
         public override AdbcConnection Connect(IReadOnlyDictionary<string, string>? options)
         {
+            // Issue #488: open the Activity BEFORE parameter validation runs so
+            // synchronous throws from the parser (ArgumentException /
+            // ArgumentOutOfRangeException raised inside the DatabricksConnection
+            // or StatementExecutionConnection constructors) are recorded as
+            // Status=Error spans with an "exception" event. Without this wrapper
+            // the throw escapes before any connection-level Activity is created,
+            // leaving fleet dashboards blind to parameter-mistake errors.
+            using Activity? activity = s_activitySource.StartActivity("DatabricksDatabase.Connect");
             try
             {
                 IReadOnlyDictionary<string, string> mergedProperties = options == null
@@ -127,6 +153,7 @@ namespace AdbcDrivers.Databricks
                         nameof(mergedProperties));
                 }
 
+                if (activity?.Status == ActivityStatusCode.Unset) activity?.SetStatus(ActivityStatusCode.Ok);
                 return connection;
             }
             catch (AggregateException ae)
@@ -136,9 +163,25 @@ namespace AdbcDrivers.Databricks
                 if (ApacheUtility.ContainsException(ae, out AdbcException? adbcException) && adbcException != null)
                 {
                     // keep the entire chain, but throw the AdbcException
-                    throw new AdbcException(adbcException.Message, adbcException.Status, ae);
+                    var wrapped = new AdbcException(adbcException.Message, adbcException.Status, ae);
+                    activity?.AddException(wrapped);
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    throw wrapped;
                 }
 
+                activity?.AddException(ae);
+                activity?.SetStatus(ActivityStatusCode.Error);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Issue #488: parameter-validation throws (ArgumentException /
+                // ArgumentOutOfRangeException etc.) land here. Record the
+                // exception on the span so dashboards can group/filter by
+                // exception.type, then rethrow so callers see the original
+                // failure unchanged.
+                activity?.AddException(ex);
+                activity?.SetStatus(ActivityStatusCode.Error);
                 throw;
             }
         }
