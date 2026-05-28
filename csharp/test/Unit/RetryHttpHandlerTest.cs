@@ -22,7 +22,10 @@
 */
 
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -663,6 +666,286 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal(2, mockHandler.RequestCount); // 1 timeout + 1 success
+        }
+
+        // ---------------------------------------------------------------------
+        // Retry telemetry tests (issue #479)
+        //
+        // The RetryHttpHandler runs on every HTTP send and retries on
+        // Retry-After (503/429) responses and on transient transport errors —
+        // but historically it emitted zero per-attempt telemetry. A customer
+        // asking "did my failure retry then succeed, or did it fail without
+        // any retry?" could not answer from the trace alone.
+        //
+        // The fix (around the retry loop) is to:
+        //   - emit a `retry.attempt` event for each *retry* (i.e. not the
+        //     first try), carrying attempt_number/delay_ms/reason
+        //   - always set summary tags `retry.total_attempts` and
+        //     `retry.exhausted` on the wrapping SendAsync activity, even on
+        //     the no-retry-needed path (so dashboards can group/filter without
+        //     special-casing "tag absent")
+        //
+        // These tests capture the activity emitted by RetryHttpHandler via an
+        // ActivityListener attached to the MockActivityTracer's source name
+        // ("TestSource"), then assert on its Events and Tags.
+        // ---------------------------------------------------------------------
+
+        /// <summary>
+        /// Captures Activity objects emitted by an ActivitySource for in-test
+        /// assertions on tags and events.
+        /// </summary>
+        private sealed class ActivityCapture : IDisposable
+        {
+            private readonly ActivityListener _listener;
+            private readonly object _lock = new();
+            private readonly List<Activity> _stopped = new();
+
+            public ActivityCapture(string sourceName)
+            {
+                _listener = new ActivityListener
+                {
+                    ShouldListenTo = source => source.Name == sourceName,
+                    Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                    ActivityStopped = activity =>
+                    {
+                        lock (_lock) { _stopped.Add(activity); }
+                    }
+                };
+                ActivitySource.AddActivityListener(_listener);
+            }
+
+            public IReadOnlyList<Activity> StoppedActivities
+            {
+                get { lock (_lock) { return _stopped.ToArray(); } }
+            }
+
+            public void Dispose() => _listener.Dispose();
+        }
+
+        /// <summary>
+        /// Issue #479: even when no retry happens (first attempt succeeds),
+        /// the activity wrapping SendAsync must carry the summary tags
+        /// `retry.total_attempts` (=1) and `retry.exhausted` (=false). Without
+        /// always-set tags, dashboards have to detect "tag absent" and can't
+        /// group/filter cleanly.
+        /// </summary>
+        [Fact]
+        public async Task RetryTelemetry_NoRetryNeeded_AlwaysSetsSummaryTags_Issue479()
+        {
+            using var capture = new ActivityCapture("TestSource");
+
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Success")
+                });
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 5, 5, true, true);
+
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(1, mockHandler.RequestCount);
+
+            // Find the SendAsync activity emitted by the retry handler.
+            Activity? sendAsyncActivity = capture.StoppedActivities
+                .FirstOrDefault(a => a.OperationName == "SendAsync");
+            Assert.NotNull(sendAsyncActivity);
+
+            // Summary tags must ALWAYS be set, even when no retry happened.
+            var totalAttemptsTag = sendAsyncActivity!.TagObjects.FirstOrDefault(t => t.Key == "retry.total_attempts");
+            Assert.True(totalAttemptsTag.Key == "retry.total_attempts",
+                "Expected `retry.total_attempts` tag to always be set on the SendAsync activity, " +
+                "even when no retry was needed. Tags present: [" +
+                string.Join(", ", sendAsyncActivity.TagObjects.Select(t => t.Key)) + "]");
+            Assert.Equal(1, Convert.ToInt32(totalAttemptsTag.Value));
+
+            var exhaustedTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.exhausted");
+            Assert.True(exhaustedTag.Key == "retry.exhausted",
+                "Expected `retry.exhausted` tag to always be set on the SendAsync activity, " +
+                "even when no retry was needed. Tags present: [" +
+                string.Join(", ", sendAsyncActivity.TagObjects.Select(t => t.Key)) + "]");
+            Assert.Equal(false, exhaustedTag.Value);
+
+            // No retries happened, so no retry.attempt events should be emitted.
+            var retryEvents = sendAsyncActivity.Events.Where(e => e.Name == "retry.attempt").ToList();
+            Assert.Empty(retryEvents);
+        }
+
+        /// <summary>
+        /// Issue #479: each retry triggered by a Retry-After 503 response must
+        /// emit a `retry.attempt` event carrying `attempt_number`, `delay_ms`,
+        /// and a `reason` describing why the retry was scheduled. The final
+        /// `retry.total_attempts` tag reflects the number of retries, and
+        /// `retry.exhausted` is false because we ultimately succeeded.
+        /// </summary>
+        [Fact]
+        public async Task RetryTelemetry_RetryAfter503_EmitsAttemptEventsAndSummaryTags_Issue479()
+        {
+            using var capture = new ActivityCapture("TestSource");
+
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Headers = { { "Retry-After", "1" } },
+                    Content = new StringContent("Service Unavailable")
+                });
+
+            // Succeed after 2 503 responses (i.e. 2 retries).
+            mockHandler.SetResponseAfterRetryCount(2, new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("Success")
+            });
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true);
+
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(3, mockHandler.RequestCount); // initial + 2 retries
+
+            Activity? sendAsyncActivity = capture.StoppedActivities
+                .FirstOrDefault(a => a.OperationName == "SendAsync");
+            Assert.NotNull(sendAsyncActivity);
+
+            // We retried twice → two retry.attempt events.
+            var retryEvents = sendAsyncActivity!.Events
+                .Where(e => e.Name == "retry.attempt")
+                .ToList();
+            Assert.Equal(2, retryEvents.Count);
+
+            // Every retry.attempt event must carry attempt_number, delay_ms,
+            // and reason. attempt_number must be monotonically increasing
+            // starting at 1 (the first retry is the 1st *retry*, not the 0th).
+            for (int i = 0; i < retryEvents.Count; i++)
+            {
+                var evt = retryEvents[i];
+                var tags = evt.Tags.ToList();
+
+                var attemptTag = tags.FirstOrDefault(t => t.Key == "attempt_number");
+                Assert.True(attemptTag.Key == "attempt_number",
+                    $"retry.attempt event #{i} missing attempt_number. Tags: [" +
+                    string.Join(", ", tags.Select(t => $"{t.Key}={t.Value}")) + "]");
+                Assert.Equal(i + 1, Convert.ToInt32(attemptTag.Value));
+
+                var delayTag = tags.FirstOrDefault(t => t.Key == "delay_ms");
+                Assert.True(delayTag.Key == "delay_ms",
+                    $"retry.attempt event #{i} missing delay_ms. Tags: [" +
+                    string.Join(", ", tags.Select(t => $"{t.Key}={t.Value}")) + "]");
+                // Retry-After of "1" → 1000ms.
+                Assert.True(Convert.ToInt64(delayTag.Value) >= 1000,
+                    $"retry.attempt event #{i} delay_ms should be >= 1000 (Retry-After: 1). " +
+                    $"Got: {delayTag.Value}");
+
+                var reasonTag = tags.FirstOrDefault(t => t.Key == "reason");
+                Assert.True(reasonTag.Key == "reason",
+                    $"retry.attempt event #{i} missing reason. Tags: [" +
+                    string.Join(", ", tags.Select(t => $"{t.Key}={t.Value}")) + "]");
+                var reason = reasonTag.Value as string;
+                Assert.NotNull(reason);
+                // We don't pin the exact spelling, but it must reference 503.
+                Assert.Contains("503", reason!);
+            }
+
+            // Summary tags on the wrapping activity.
+            var totalAttemptsTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.total_attempts");
+            Assert.True(totalAttemptsTag.Key == "retry.total_attempts");
+            Assert.Equal(2, Convert.ToInt32(totalAttemptsTag.Value));
+
+            var exhaustedTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.exhausted");
+            Assert.True(exhaustedTag.Key == "retry.exhausted");
+            Assert.Equal(false, exhaustedTag.Value);
+        }
+
+        /// <summary>
+        /// Issue #479: when the retry budget is exhausted and the handler
+        /// gives up (returns the last failing response or throws), the
+        /// summary tag `retry.exhausted` must be true so dashboards can
+        /// distinguish "flaky-then-recovered" from "hard failure".
+        /// </summary>
+        [Fact]
+        public async Task RetryTelemetry_RetryBudgetExhausted_SetsExhaustedTrue_Issue479()
+        {
+            using var capture = new ActivityCapture("TestSource");
+
+            // 503 with Retry-After: 2, but our retry budget is 1s — so the
+            // very first retry would exceed the budget and the handler gives
+            // up before sleeping. attemptCount will be 1.
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Headers = { { "Retry-After", "2" } },
+                    Content = new StringContent("Service Unavailable")
+                });
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 1, 1, true, true);
+
+            var httpClient = new HttpClient(retryHandler);
+            await Assert.ThrowsAsync<DatabricksException>(async () =>
+                await httpClient.GetAsync("http://test.com"));
+
+            Activity? sendAsyncActivity = capture.StoppedActivities
+                .FirstOrDefault(a => a.OperationName == "SendAsync");
+            Assert.NotNull(sendAsyncActivity);
+
+            var exhaustedTag = sendAsyncActivity!.TagObjects.FirstOrDefault(t => t.Key == "retry.exhausted");
+            Assert.True(exhaustedTag.Key == "retry.exhausted",
+                "Expected `retry.exhausted` tag to be set when the retry budget is " +
+                "exceeded (issue #479).");
+            Assert.Equal(true, exhaustedTag.Value);
+
+            // retry.total_attempts is always set.
+            var totalAttemptsTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.total_attempts");
+            Assert.True(totalAttemptsTag.Key == "retry.total_attempts");
+            Assert.True(Convert.ToInt32(totalAttemptsTag.Value) >= 1);
+        }
+
+        /// <summary>
+        /// Issue #479: rate-limit 429 retries must also emit `retry.attempt`
+        /// events with a 429-shaped `reason` so the trace makes the throttle
+        /// case distinguishable from generic 503.
+        /// </summary>
+        [Fact]
+        public async Task RetryTelemetry_RetryAfter429_EmitsAttemptEventWithRateLimitReason_Issue479()
+        {
+            using var capture = new ActivityCapture("TestSource");
+
+            var mockHandler = new MockHttpMessageHandler(
+                new HttpResponseMessage((HttpStatusCode)429)
+                {
+                    Headers = { { "Retry-After", "1" } },
+                    Content = new StringContent("Too Many Requests")
+                });
+            mockHandler.SetResponseAfterRetryCount(1, new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("Success")
+            });
+
+            var mockTracer = new MockActivityTracer();
+            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 10, 10, true, true);
+
+            var httpClient = new HttpClient(retryHandler);
+            var response = await httpClient.GetAsync("http://test.com");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            Activity? sendAsyncActivity = capture.StoppedActivities
+                .FirstOrDefault(a => a.OperationName == "SendAsync");
+            Assert.NotNull(sendAsyncActivity);
+
+            var retryEvents = sendAsyncActivity!.Events.Where(e => e.Name == "retry.attempt").ToList();
+            Assert.Single(retryEvents);
+            var reasonTag = retryEvents[0].Tags.FirstOrDefault(t => t.Key == "reason");
+            Assert.True(reasonTag.Key == "reason");
+            var reason = reasonTag.Value as string;
+            Assert.NotNull(reason);
+            // Must reference 429 so 429 retries are distinguishable from 503.
+            Assert.Contains("429", reason!);
         }
 
         /// <summary>
