@@ -394,8 +394,24 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             }
                         }
 
-                        // Acquire a download slot
+                        // Acquire a download slot.
+                        //
+                        // Issue #483: time the semaphore wait so the
+                        // cloudfetch.download_slot_acquired event below can
+                        // surface "the call blocked waiting for another
+                        // download to finish" vs "acquired immediately."
+                        // Without this tag, slot contention is invisible in
+                        // traces — under high parallelism this is exactly
+                        // the diagnostic operators need ("downloads are slow
+                        // because they're queued").
+                        var slotWaitStopwatch = Stopwatch.StartNew();
+                        // Snapshot the queue depth at the moment of acquisition
+                        // (pending items still sitting in the download queue).
+                        // It's free to compute and gives the event a second
+                        // contention signal alongside wait_duration_ms.
+                        int queueDepthAtAcquisition = _downloadQueue.Count;
                         await _downloadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                        slotWaitStopwatch.Stop();
 
                         // Acquire memory for this download (FIFO - acquired in sequential loop)
                         long size = downloadResult.Size;
@@ -411,7 +427,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                         activity?.AddEvent("cloudfetch.download_slot_acquired", [
                             new("chunk_index", downloadResult.ChunkIndex),
-                            new("is_sequential_mode", sequentialPermit != null && sequentialPermit != SequentialDownloadPermit.NoOp)
+                            new("is_sequential_mode", sequentialPermit != null && sequentialPermit != SequentialDownloadPermit.NoOp),
+                            // Long, milliseconds — matches the existing convention used by
+                            // cleanup_duration_ms / duration_ms on other CloudFetch events
+                            // (see StragglerDownloadDetector).
+                            new("wait_duration_ms", slotWaitStopwatch.ElapsedMilliseconds),
+                            new("queue_depth", queueDepthAtAcquisition)
                         ]);
 
                         Task downloadTask;
