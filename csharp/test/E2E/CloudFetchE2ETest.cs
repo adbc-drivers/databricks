@@ -42,6 +42,13 @@ namespace AdbcDrivers.Databricks.Tests
     public class CloudFetchE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IDisposable
     {
         private readonly ActivityListener? _activityListener;
+        // Snapshot of stopped activities (operation name + tag list) so in-test
+        // assertions can inspect span tags without racing with the live
+        // ActivitySource. We materialize the tag list eagerly because
+        // Activity.TagObjects is enumerated lazily and may be cleared after
+        // the activity is disposed.
+        private readonly List<(string ActivityName, List<KeyValuePair<string, object?>> Tags)> _capturedActivities = new();
+        private readonly object _capturedActivitiesLock = new();
         private bool _disposed;
 
         // Activity source names for Databricks drivers
@@ -91,6 +98,15 @@ namespace AdbcDrivers.Databricks.Tests
                             Debug.WriteLine(tagMsg);
                             OutputHelper?.WriteLine(tagMsg);
                         }
+                    }
+                    // Snapshot the activity's tag list for in-test assertions.
+                    // We need TagObjects (not Tags) so non-string values like
+                    // int/long are preserved.
+                    lock (_capturedActivitiesLock)
+                    {
+                        _capturedActivities.Add((
+                            activity.OperationName,
+                            activity.TagObjects.ToList()));
                     }
                 }
             };
@@ -228,6 +244,125 @@ namespace AdbcDrivers.Databricks.Tests
 
             // Also log to the test output helper if available
             OutputHelper?.WriteLine($"[{protocolName}] Read exactly {totalRows} rows as expected");
+        }
+
+        /// <summary>
+        /// Regression test for issue #480: every <c>DownloadFile</c> span
+        /// emitted by <see cref="Reader.CloudFetch.CloudFetchDownloader"/>
+        /// must carry the OTel HTTP semantic attribute
+        /// <c>http.response.status_code</c> so operators can tell apart 200
+        /// (success), 403 (presigned URL expired), 503 (storage throttling),
+        /// and other HTTP-level failures.
+        ///
+        /// Before the fix the span had rich payload tags
+        /// (<c>cloudfetch.sanitized_url</c>, <c>cloudfetch.offset</c>,
+        /// <c>cloudfetch.expected_size_bytes</c>) and timing events
+        /// (<c>cloudfetch.download_complete</c> with
+        /// <c>latency_ms</c>/<c>throughput_mbps</c>) but no HTTP status code,
+        /// so a 403-expired-URL trace was indistinguishable from a 503-throttle
+        /// trace until you looked at the (now-fixed) exception event — and
+        /// only for failures that bubbled out.
+        ///
+        /// The fix captures <see cref="System.Net.Http.HttpResponseMessage.StatusCode"/>
+        /// right after <c>HttpClient.SendAsync</c> returns and writes it as an
+        /// <c>int</c> tag on the current activity (the <c>DownloadFile</c>
+        /// span). For the happy-path query used here it must be 200.
+        /// </summary>
+        [SkippableFact]
+        public async Task DownloadFile_EmitsHttpResponseStatusCode_Issue480()
+        {
+            lock (_capturedActivitiesLock) { _capturedActivities.Clear(); }
+
+            // Force CloudFetch on Thrift so DownloadFile spans are emitted.
+            // Mirror the TestCloudFetch large-query configuration: a small
+            // range query stays inline (no CloudFetch link is produced), so
+            // we use the same 1M-row store_sales query as TestCloudFetch with
+            // MaxBytesPerFile capped at 10MB to force the server to split
+            // results across multiple CloudFetch files. Each file goes
+            // through the DownloadFile span path.
+            var parameters = new Dictionary<string, string>
+            {
+                [DatabricksParameters.Protocol] = "thrift",
+                [DatabricksParameters.UseCloudFetch] = "true",
+                [DatabricksParameters.EnableDirectResults] = "true",
+                [DatabricksParameters.CanDecompressLz4] = "true",
+                [DatabricksParameters.MaxBytesPerFile] = "10485760", // 10MB — forces multiple files
+                [TelemetryConfiguration.PropertyKeyEnabled] = "true",
+            };
+
+            const string query = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
+
+            var connection = NewConnection(TestConfiguration, parameters);
+            try
+            {
+                await ExecuteAndValidateQuery(connection, query, 1000000, "Thrift");
+            }
+            finally
+            {
+                connection.Dispose();
+            }
+
+            // Pull all DownloadFile spans out of the capture.
+            List<(string ActivityName, List<KeyValuePair<string, object?>> Tags)> downloadFileSpans;
+            lock (_capturedActivitiesLock)
+            {
+                downloadFileSpans = _capturedActivities
+                    .Where(a => a.ActivityName == "DownloadFile")
+                    .ToList();
+            }
+
+            OutputHelper?.WriteLine(
+                $"Captured {downloadFileSpans.Count} DownloadFile span(s).");
+            foreach (var span in downloadFileSpans)
+            {
+                OutputHelper?.WriteLine(
+                    "  tags: [" +
+                    string.Join(", ", span.Tags.Select(t => $"{t.Key}={t.Value} ({t.Value?.GetType().Name ?? "null"})")) +
+                    "]");
+            }
+
+            Assert.True(downloadFileSpans.Count > 0,
+                "Expected at least one 'DownloadFile' span to be emitted while " +
+                "reading CloudFetch results. None were captured — either CloudFetch " +
+                "did not actually run (check Protocol/UseCloudFetch params) or the " +
+                "span has been renamed/removed.");
+
+            // The fix: every DownloadFile span must carry the OTel
+            // http.response.status_code tag with an int value of 200 on the
+            // happy path. Assert on every span (not just one) so the regression
+            // cannot reappear for a subset of the call sites.
+            foreach (var (activityName, tags) in downloadFileSpans)
+            {
+                var statusTag = tags.FirstOrDefault(t => t.Key == "http.response.status_code");
+
+                Assert.True(statusTag.Key == "http.response.status_code",
+                    $"Expected 'http.response.status_code' tag on '{activityName}' span. " +
+                    $"Without it, 403/503/timeout failures are indistinguishable in " +
+                    $"traces (issue #480). Got tags: [" +
+                    string.Join(", ", tags.Select(t => $"{t.Key}={t.Value}")) + "]");
+
+                // Per OTel HTTP semantic conventions the attribute is an int.
+                // Accept any integer width defensively in case the
+                // implementation widens to long.
+                int statusCode;
+                switch (statusTag.Value)
+                {
+                    case int i:
+                        statusCode = i;
+                        break;
+                    case long l:
+                        statusCode = (int)l;
+                        break;
+                    default:
+                        Assert.Fail(
+                            $"Expected 'http.response.status_code' tag to be an int on " +
+                            $"'{activityName}'. Got: {statusTag.Value} " +
+                            $"({statusTag.Value?.GetType().Name ?? "null"})");
+                        return;
+                }
+
+                Assert.Equal(200, statusCode);
+            }
         }
     }
 }
