@@ -466,6 +466,12 @@ namespace AdbcDrivers.Databricks
             Activity.Current?.SetTag("statement.property.complex_types_as_arrow", statement.UseArrowNativeTypes.ComplexTypesAsArrow);
             Activity.Current?.SetTag("statement.property.interval_types_as_arrow", statement.UseArrowNativeTypes.IntervalTypesAsArrow);
 
+            // Issue #478: propagate the configured query timeout onto the Execute
+            // span so timeout-related failures self-explain in traces. Previously the
+            // tag only appeared on CreateSessionRequest of a different trace, forcing
+            // operators to do duration math to infer the threshold.
+            Activity.Current?.SetTag(ApacheParameters.QueryTimeoutSeconds, QueryTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
             // Log CloudFetch configuration
             Activity.Current?.SetTag("statement.cloudfetch.enabled", useCloudFetch);
             Activity.Current?.SetTag("statement.cloudfetch.can_decompress_lz4", canDecompressLz4);
