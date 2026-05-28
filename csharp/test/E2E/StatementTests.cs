@@ -246,6 +246,110 @@ namespace AdbcDrivers.Databricks.Tests
                 $"client timeout, user cancel, and network drop. See issue #481.");
         }
 
+        /// <summary>
+        /// Regression test for issue #481, the user_cancel branch: when the same
+        /// long-running query is interrupted by an explicit <c>statement.Cancel()</c>
+        /// from a background task (rather than the client-side QueryTimeoutSeconds
+        /// firing), the Status=Error spans must carry
+        /// <c>db.error.kind = "user_cancel"</c> — not <c>"query_timeout"</c>.
+        ///
+        /// Both failure modes surface the same underlying
+        /// TaskCanceledException/TTransportException via the submodule's
+        /// <c>IsCancellation</c> path, so the classifier must rely on an explicit
+        /// signal from the parent's Cancel() override to distinguish them.
+        /// </summary>
+        [SkippableFact]
+        public async Task StatementCancel_TagsErrorKindAsUserCancel_Issue481()
+        {
+            const string DbErrorKindTagKey = "db.error.kind";
+            const string ExpectedKind = "user_cancel";
+
+            var capturedActivities = new List<Activity>();
+            var capturedLock = new object();
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name.StartsWith("AdbcDrivers.", StringComparison.Ordinal),
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                SampleUsingParentId = (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped = activity =>
+                {
+                    lock (capturedLock)
+                    {
+                        capturedActivities.Add(activity);
+                    }
+                },
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            using AdbcConnection connection = NewConnection();
+            using var statement = connection.CreateStatement();
+            // Generous QueryTimeoutSeconds so the timeout token CANNOT fire before our
+            // explicit Cancel() lands. Without this, a race could let the timeout signal
+            // arrive first and the listener would (correctly) classify as query_timeout,
+            // making the test non-deterministic.
+            statement.SetOption(ApacheParameters.QueryTimeoutSeconds, "120");
+            statement.SqlQuery = LongRunningStatementTimeoutTestData.LongRunningQuery;
+
+            var cancelTask = Task.Run(async () =>
+            {
+                // Give ExecuteQuery a moment to dispatch the statement and reach the
+                // polling phase before we cancel — otherwise Cancel() may run while no
+                // execute is in flight and have nothing to interrupt.
+                await Task.Delay(2000);
+                statement.Cancel();
+            });
+
+            var thrown = await Assert.ThrowsAnyAsync<Exception>(async () => await statement.ExecuteQueryAsync());
+            await cancelTask;
+            OutputHelper?.WriteLine($"Caught: {thrown.GetType().Name}: {thrown.Message}");
+
+            List<Activity> snapshot;
+            lock (capturedLock)
+            {
+                snapshot = capturedActivities.ToList();
+            }
+
+            var errorSpans = snapshot
+                .Where(a => a.Status == ActivityStatusCode.Error)
+                .ToList();
+            OutputHelper?.WriteLine($"Observed {errorSpans.Count} Status=Error span(s):");
+            foreach (var span in errorSpans)
+            {
+                var kindTag = span.GetTagItem(DbErrorKindTagKey);
+                OutputHelper?.WriteLine(
+                    $"  {span.OperationName} [{DbErrorKindTagKey}={kindTag ?? "<unset>"}]");
+            }
+
+            bool hasUserCancel = errorSpans.Any(span =>
+                string.Equals(
+                    span.GetTagItem(DbErrorKindTagKey) as string,
+                    ExpectedKind,
+                    StringComparison.Ordinal));
+
+            // We don't want a false negative if Cancel() landed too late and the timeout
+            // also fired — but at QueryTimeoutSeconds=120 with a 2s delay before Cancel,
+            // user-cancel should always win. Also assert no error span got mislabeled as
+            // query_timeout, which would indicate the AsyncLocal/Cancel race fence is
+            // broken.
+            bool hasQueryTimeout = errorSpans.Any(span =>
+                string.Equals(
+                    span.GetTagItem(DbErrorKindTagKey) as string,
+                    "query_timeout",
+                    StringComparison.Ordinal));
+
+            Assert.True(
+                hasUserCancel,
+                $"Expected at least one Status=Error span to carry " +
+                $"`{DbErrorKindTagKey}=\"{ExpectedKind}\"` after explicit Cancel() but " +
+                $"none did. Inspected {errorSpans.Count} error span(s). See issue #481.");
+            Assert.False(
+                hasQueryTimeout,
+                $"After explicit Cancel() no Status=Error span should be classified as " +
+                $"`{DbErrorKindTagKey}=\"query_timeout\"` (QueryTimeoutSeconds=120 cannot " +
+                $"have fired this fast). Mis-classification would indicate the user-cancel " +
+                $"flag did not propagate to the listener. See issue #481.");
+        }
+
         protected override void CreateNewTableName(out string tableName, out string fullTableName)
         {
             string catalogName = TestConfiguration.Metadata.Catalog;
