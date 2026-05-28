@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -157,6 +158,92 @@ namespace AdbcDrivers.Databricks.Tests
                 Add(new(null, LongRunningQuery, typeof(TimeoutException)));
                 Add(new(0, LongRunningQuery, null));
             }
+        }
+
+        /// <summary>
+        /// Regression test for issue #481: when a query fails because the client-side
+        /// QueryTimeoutSeconds fires, the resulting Status=Error span must carry a
+        /// semantic classification tag <c>db.error.kind = "query_timeout"</c>.
+        ///
+        /// Without this tag, dashboards can only group failures by <c>exception.type</c>
+        /// (which is <c>TaskCanceledException</c>/<c>TTransportException</c> for both
+        /// client timeouts AND user-initiated cancels AND network drops), so a debugger
+        /// has to read <c>exception.message</c> to tell them apart. The fix surfaces the
+        /// kind the driver already knows internally.
+        /// </summary>
+        [SkippableFact]
+        public void StatementTimeout_TagsErrorKindAsQueryTimeout_Issue481()
+        {
+            const string DbErrorKindTagKey = "db.error.kind";
+            const string ExpectedKind = "query_timeout";
+
+            // Capture all stopped activities so we can inspect the failing span post-hoc.
+            // The Databricks/HiveServer2 spans live on different ActivitySource names, so
+            // ShouldListenTo opts in to both families.
+            var capturedActivities = new List<Activity>();
+            var capturedLock = new object();
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name.StartsWith("AdbcDrivers.", StringComparison.Ordinal),
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                SampleUsingParentId = (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped = activity =>
+                {
+                    lock (capturedLock)
+                    {
+                        capturedActivities.Add(activity);
+                    }
+                },
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            // Mirror StatementTimeoutTest's setup: short QueryTimeoutSeconds against a
+            // deliberately long-running query so the client-side cancellation token fires.
+            using AdbcConnection connection = NewConnection();
+            using var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.QueryTimeoutSeconds, "5");
+            statement.SqlQuery = LongRunningStatementTimeoutTestData.LongRunningQuery;
+
+            var thrown = Assert.ThrowsAny<Exception>(() => statement.ExecuteQuery());
+            OutputHelper?.WriteLine($"Caught: {thrown.GetType().Name}: {thrown.Message}");
+
+            // Snapshot the captured spans now that the timeout has fired and all
+            // activities have stopped.
+            List<Activity> snapshot;
+            lock (capturedLock)
+            {
+                snapshot = capturedActivities.ToList();
+            }
+
+            // Inspect every Status=Error span emitted during this attempt. The driver
+            // currently records errors on submodule spans like ExecuteQueryAsyncInternal,
+            // PollForResponseAsync, ExecuteStatementAsync, and SendAsync. Any of these
+            // spans surfacing the timeout is a valid place to attach db.error.kind, so we
+            // assert that AT LEAST ONE such span carries the expected value.
+            var errorSpans = snapshot
+                .Where(a => a.Status == ActivityStatusCode.Error)
+                .ToList();
+            OutputHelper?.WriteLine($"Observed {errorSpans.Count} Status=Error span(s):");
+            foreach (var span in errorSpans)
+            {
+                var kindTag = span.GetTagItem(DbErrorKindTagKey);
+                OutputHelper?.WriteLine(
+                    $"  {span.OperationName} [{DbErrorKindTagKey}={kindTag ?? "<unset>"}]");
+            }
+
+            bool hasExpectedKind = errorSpans.Any(span =>
+                string.Equals(
+                    span.GetTagItem(DbErrorKindTagKey) as string,
+                    ExpectedKind,
+                    StringComparison.Ordinal));
+
+            Assert.True(
+                hasExpectedKind,
+                $"Expected at least one Status=Error span to carry " +
+                $"`{DbErrorKindTagKey}=\"{ExpectedKind}\"` but none did. " +
+                $"Inspected {errorSpans.Count} error span(s); all surface only " +
+                $"`exception.type` for classification, which is ambiguous between " +
+                $"client timeout, user cancel, and network drop. See issue #481.");
         }
 
         protected override void CreateNewTableName(out string tableName, out string fullTableName)
