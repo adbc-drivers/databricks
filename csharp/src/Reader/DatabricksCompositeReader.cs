@@ -277,6 +277,7 @@ namespace AdbcDrivers.Databricks.Reader
                             catch (Exception ex)
                             {
                                 closeError = ex;
+                                activity?.AddException(ex);
                                 throw;
                             }
                             finally
@@ -289,11 +290,10 @@ namespace AdbcDrivers.Databricks.Reader
                                 }
                                 // Emit the matching "completed" event regardless of whether
                                 // the RPC threw so the trace always records when the close
-                                // call returned. Tag with error=true on failure so consumers
-                                // can distinguish a clean close from a thrown one.
-                                activity?.AddEvent(
-                                    "composite_reader.close_operation.completed",
-                                    [new("error", closeError != null)]);
+                                // call returned. Error details, if any, are surfaced via
+                                // AddException above (matches the convention used in
+                                // HiveServer2Statement.CancelOperationAsync).
+                                activity?.AddEvent("composite_reader.close_operation.completed");
                             }
                             if (_activeReader != null)
                             {
