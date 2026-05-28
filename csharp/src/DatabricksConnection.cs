@@ -563,8 +563,23 @@ namespace AdbcDrivers.Databricks
                     CanUseMultipleCatalogs = _enableMultipleCatalogSupport,
                 };
 
-                // Log OpenSession request details
+                // Log OpenSession request details.
+                //
+                // Issue #486: emit the protocol version as both string (existing,
+                // kept for backward compatibility) and int (new companion tag).
+                // Inconsistent tag types on the same span broke dashboards that
+                // grouped/filtered by Thrift protocol version. Adding an int
+                // companion lets dashboards group/filter using a single type
+                // alongside connection.server_protocol_version.
+                //
+                // The int value is the human-readable ordinal version (V7 -> 7),
+                // not the underlying Thrift wire constant (42247 for
+                // SPARK_CLI_SERVICE_PROTOCOL_V7) — the wire constant is opaque
+                // and uninteresting for dashboards. This is additive: the
+                // existing string tag is preserved unchanged for backward
+                // compatibility.
                 activity?.SetTag("connection.client_protocol", req.Client_protocol.ToString());
+                activity?.SetTag(ConnectionOpenEvent.ClientProtocolVersion, GetClientProtocolOrdinal(req.Client_protocol));
 
                 // Set default namespace if available
                 if (_defaultNamespace != null)
@@ -593,6 +608,36 @@ namespace AdbcDrivers.Databricks
 
                 return req;
             });
+        }
+
+        /// <summary>
+        /// Extracts the ordinal protocol version (e.g. 7 for
+        /// <see cref="TProtocolVersion.SPARK_CLI_SERVICE_PROTOCOL_V7"/>) from a
+        /// <see cref="TProtocolVersion"/> enum value by parsing the trailing
+        /// V&lt;n&gt; suffix of its name.
+        ///
+        /// Used by the <c>connection.client_protocol_version</c> tag (issue
+        /// #486) so dashboards see a small, monotonic version number rather
+        /// than the opaque Thrift wire constant (42247 for V7). Falls back to
+        /// the raw enum value if the name does not match the expected
+        /// <c>*_PROTOCOL_V&lt;n&gt;</c> pattern, which preserves observability
+        /// for any future enum additions even if they break the convention.
+        /// </summary>
+        internal static int GetClientProtocolOrdinal(TProtocolVersion version)
+        {
+            string name = version.ToString();
+            int lastUnderscore = name.LastIndexOf('_');
+            if (lastUnderscore >= 0 && lastUnderscore < name.Length - 1)
+            {
+                string suffix = name.Substring(lastUnderscore + 1);
+                if (suffix.Length >= 2
+                    && suffix[0] == 'V'
+                    && int.TryParse(suffix.Substring(1), out int ordinal))
+                {
+                    return ordinal;
+                }
+            }
+            return (int)version;
         }
 
         protected override async Task HandleOpenSessionResponse(TOpenSessionResp? session, Activity? activity = default)

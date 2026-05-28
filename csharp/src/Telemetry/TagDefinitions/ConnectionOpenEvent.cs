@@ -103,6 +103,21 @@ namespace AdbcDrivers.Databricks.Telemetry.TagDefinitions
         public const string ServerAddress = "server.address";
 
         /// <summary>
+        /// Thrift client protocol version as an integer (e.g. 7 for
+        /// SPARK_CLI_SERVICE_PROTOCOL_V7). Companion to the existing string
+        /// tag <c>connection.client_protocol</c>, added in #486 to give
+        /// dashboards a uniform numeric representation that matches the
+        /// existing int tag <c>connection.server_protocol_version</c>. The
+        /// string tag is intentionally kept for backward compatibility.
+        /// Exported to local diagnostics only — protocol version is uninteresting
+        /// to backend telemetry but useful in local span dumps.
+        /// </summary>
+        [TelemetryTag("connection.client_protocol_version",
+            ExportScope = TagExportScope.ExportLocal,
+            Description = "Thrift client protocol version (int) — companion to connection.client_protocol (string); see #486")]
+        public const string ClientProtocolVersion = "connection.client_protocol_version";
+
+        /// <summary>
         /// Gets all tags that should be exported to Databricks telemetry service.
         /// </summary>
         /// <returns>A set of tag names for Databricks export.</returns>
