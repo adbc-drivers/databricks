@@ -851,10 +851,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 Assert.Contains("503", reason!);
             }
 
-            // Summary tags on the wrapping activity.
+            // Summary tags on the wrapping activity. total_attempts counts
+            // the initial send + each retry; 2 retries → 3 total attempts.
             var totalAttemptsTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.total_attempts");
             Assert.True(totalAttemptsTag.Key == "retry.total_attempts");
-            Assert.Equal(2, Convert.ToInt32(totalAttemptsTag.Value));
+            Assert.Equal(3, Convert.ToInt32(totalAttemptsTag.Value));
 
             var exhaustedTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.exhausted");
             Assert.True(exhaustedTag.Key == "retry.exhausted");
