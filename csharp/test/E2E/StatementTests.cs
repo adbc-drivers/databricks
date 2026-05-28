@@ -22,7 +22,9 @@
 */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -157,6 +159,80 @@ namespace AdbcDrivers.Databricks.Tests
                 Add(new(null, LongRunningQuery, typeof(TimeoutException)));
                 Add(new(0, LongRunningQuery, null));
             }
+        }
+
+        /// <summary>
+        /// Regression test for issue #478: when a query times out, the failing
+        /// HiveServer2Statement.ExecuteStatementAsync / ExecuteQueryAsyncInternal
+        /// spans must carry the configured "adbc.apache.statement.query_timeout_s"
+        /// tag so an operator reading just the failing span can see the threshold
+        /// without doing duration math from CreateSessionRequest of a different trace.
+        /// </summary>
+        [SkippableFact]
+        public void StatementTimeout_TagsExecuteSpanWithQueryTimeoutSeconds_Issue478()
+        {
+            // Arrange: short timeout against a query guaranteed to exceed it.
+            const int queryTimeoutSeconds = 5;
+            const string expectedTagKey = ApacheParameters.QueryTimeoutSeconds; // "adbc.apache.statement.query_timeout_s"
+
+            var stoppedActivities = new ConcurrentBag<Activity>();
+            var activitySourceNames = new HashSet<string>
+            {
+                "AdbcDrivers.Databricks",
+                "AdbcDrivers.Databricks.StatementExecution",
+                "AdbcDrivers.HiveServer2",
+            };
+
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = source => activitySourceNames.Contains(source.Name),
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped = activity => stoppedActivities.Add(activity),
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            var testConfiguration = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfiguration.QueryTimeoutSeconds = queryTimeoutSeconds.ToString();
+            testConfiguration.Query = LongRunningStatementTimeoutTestData.LongRunningQuery;
+
+            // Act + Assert (timeout)
+            Assert.Throws<TimeoutException>(() =>
+            {
+                using AdbcConnection connection = NewConnection(testConfiguration);
+                using AdbcStatement statement = connection.CreateStatement();
+                statement.SqlQuery = testConfiguration.Query;
+                statement.ExecuteQuery();
+            });
+
+            // Assert (tag is propagated): find the failing Execute span and confirm
+            // it carries the configured query_timeout_s threshold.
+            string[] candidateOperationNameSuffixes = new[]
+            {
+                ".ExecuteStatementAsync",
+                ".ExecuteQueryAsyncInternal",
+            };
+
+            var executeSpans = stoppedActivities
+                .Where(a => candidateOperationNameSuffixes.Any(sfx => a.OperationName.EndsWith(sfx, StringComparison.Ordinal)))
+                .ToList();
+
+            Assert.True(executeSpans.Count > 0,
+                $"Expected at least one Execute span among captured activities (got {stoppedActivities.Count}); " +
+                $"operation names: [{string.Join(", ", stoppedActivities.Select(a => a.OperationName).Distinct())}]");
+
+            // The fix is: at least one Execute span must carry the configured timeout
+            // value as a tag. We accept either the canonical ApacheParameters key
+            // ("adbc.apache.statement.query_timeout_s") on the span tags.
+            var taggedSpan = executeSpans.FirstOrDefault(a =>
+                a.Tags.Any(t => string.Equals(t.Key, expectedTagKey, StringComparison.Ordinal) &&
+                                string.Equals(t.Value, queryTimeoutSeconds.ToString(), StringComparison.Ordinal)));
+
+            Assert.True(taggedSpan != null,
+                $"Expected an Execute span tagged with '{expectedTagKey}={queryTimeoutSeconds}'. " +
+                $"Inspected {executeSpans.Count} Execute span(s); their tags: [" +
+                string.Join(" | ", executeSpans.Select(a =>
+                    a.OperationName + ": " + string.Join(",", a.Tags.Select(t => $"{t.Key}={t.Value}")))) +
+                "]");
         }
 
         protected override void CreateNewTableName(out string tableName, out string fullTableName)
