@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -57,6 +58,172 @@ namespace AdbcDrivers.Databricks
         // improving query performance by reducing the number of FetchResults calls needed.
         internal const long DatabricksBatchSizeDefault = 2000000;
         private const string QueryTagsKey = "query_tags";
+
+        // ----- Issue #481: db.error.kind classification on Status=Error spans -----
+        //
+        // Failure spans currently carry only `exception.type`, which is ambiguous:
+        // `TaskCanceledException`/`TTransportException` can mean client-side timeout,
+        // user-initiated Cancel(), or a mid-flight network drop. The driver knows
+        // internally which one it is — but the catch sites that know live in the
+        // hiveserver2 submodule (`HiveServer2Statement.IsCancellation` etc.) which we
+        // can't modify from this repo. So we register a process-global
+        // `ActivityListener` here that, on `ActivityStopped`, attaches a stable
+        // enum-string `db.error.kind` tag based on signals captured by the parent
+        // override path (an `AsyncLocal` execute context plus a user-cancel flag).
+        //
+        // Setting tags during `ActivityStopped` is safe: `Activity.IsStopped` flips to
+        // true only after all registered `ActivityStopped` callbacks return. The
+        // listener requests `PropagationData` sampling, the cheapest level that still
+        // delivers `ActivityStopped` callbacks; the effective recording level is the
+        // max across listeners so we never downgrade other consumers.
+        //
+        // An explicit static constructor below forces eager static-field
+        // initialization (defeating `beforeFieldInit` lazy semantics) so this listener
+        // is in place before the very first execute span is emitted.
+        internal const string DbErrorKindTagKey = "db.error.kind";
+        internal const string ErrorKindQueryTimeout = "query_timeout";
+        internal const string ErrorKindUserCancel = "user_cancel";
+
+        // Submodule activity OperationNames that mark execute-flavored spans where a
+        // cancellation/timeout/network failure can surface. Limiting the listener's
+        // work to these names keeps the hot-path overhead negligible.
+        private static readonly string[] s_executeFlavorOperationSuffixes = new[]
+        {
+            ".ExecuteQueryAsyncInternal",
+            ".ExecuteUpdateAsyncInternal",
+            ".ExecuteStatementAsync",
+            ".PollForResponseAsync",
+        };
+
+        // Exception type names (recorded as `exception.type` on the activity event)
+        // that indicate cancellation-class failures. `TimeoutException` shows up on
+        // the outer wrap; `TaskCanceledException`/`OperationCanceledException` show
+        // up on the inner spans; `TTransportException` is the Thrift-layer mapping of
+        // a cancelled socket read.
+        private static readonly HashSet<string> s_cancelClassExceptionTypes = new(StringComparer.Ordinal)
+        {
+            "TaskCanceledException",
+            "OperationCanceledException",
+            "TimeoutException",
+            "TTransportException",
+        };
+
+        /// <summary>
+        /// Per-execute classification context propagated via <see cref="AsyncLocal{T}"/>
+        /// so the post-hoc <see cref="ActivityListener"/> can tell a client-imposed
+        /// query timeout apart from a user-initiated <see cref="Cancel"/>.
+        /// </summary>
+        internal sealed class ErrorKindContext
+        {
+            // Set to true the instant the parent's Cancel() override fires so the
+            // listener can prefer `user_cancel` over `query_timeout` when both signals
+            // could fit. Volatile so writes from the cancelling thread are observed
+            // by the listener thread.
+            private int _userCancelInvoked;
+            public bool UserCancelInvoked => Volatile.Read(ref _userCancelInvoked) != 0;
+            public void MarkUserCancelInvoked() => Volatile.Write(ref _userCancelInvoked, 1);
+        }
+
+        private static readonly AsyncLocal<ErrorKindContext?> s_currentErrorKindContext = new();
+        private static readonly ActivityListener s_errorKindClassifier = RegisterErrorKindClassifier();
+
+        // Forces eager static-field initialization so the listener is installed
+        // before the first execute span is emitted by any DatabricksStatement.
+        static DatabricksStatement()
+        {
+            // Touch the listener field so the JIT cannot skip the initializer under
+            // `beforeFieldInit` semantics.
+            _ = s_errorKindClassifier;
+        }
+
+        private static ActivityListener RegisterErrorKindClassifier()
+        {
+            var listener = new ActivityListener
+            {
+                ShouldListenTo = _ => true,
+                // PropagationData is the lowest sampling level that still delivers
+                // ActivityStopped notifications. Effective recording level across all
+                // registered listeners is the max, so this never degrades exporters
+                // that ask for AllDataAndRecorded.
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.PropagationData,
+                SampleUsingParentId = (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.PropagationData,
+                ActivityStopped = activity =>
+                {
+                    try
+                    {
+                        ClassifyErrorKindIfMissing(activity);
+                    }
+                    catch
+                    {
+                        // Telemetry must never impact driver operations.
+                    }
+                },
+            };
+            ActivitySource.AddActivityListener(listener);
+            return listener;
+        }
+
+        private static void ClassifyErrorKindIfMissing(Activity activity)
+        {
+            // Fast-path: only act on Status=Error spans we plausibly own.
+            if (activity.Status != ActivityStatusCode.Error) return;
+
+            // Don't overwrite an already-classified span — a more-specific catch site
+            // closer to the failure may have tagged this directly in the future.
+            if (activity.GetTagItem(DbErrorKindTagKey) is not null) return;
+
+            // Narrow to the execute-flavored spans listed in #481's evidence trace.
+            string opName = activity.OperationName;
+            bool matchesExecuteFlavor = false;
+            for (int i = 0; i < s_executeFlavorOperationSuffixes.Length; i++)
+            {
+                if (opName.EndsWith(s_executeFlavorOperationSuffixes[i], StringComparison.Ordinal))
+                {
+                    matchesExecuteFlavor = true;
+                    break;
+                }
+            }
+            if (!matchesExecuteFlavor) return;
+
+            // The activity records exceptions via Activity.AddException(...) which
+            // creates an event named "exception" with tags including "exception.type".
+            string? exceptionType = null;
+            foreach (var evt in activity.Events)
+            {
+                if (!string.Equals(evt.Name, "exception", StringComparison.Ordinal)) continue;
+                foreach (var tag in evt.Tags)
+                {
+                    if (string.Equals(tag.Key, "exception.type", StringComparison.Ordinal))
+                    {
+                        exceptionType = tag.Value as string;
+                        break;
+                    }
+                }
+                if (exceptionType != null) break;
+            }
+            if (exceptionType == null) return;
+
+            // Strip namespace if AddException recorded a fully-qualified type name.
+            int lastDot = exceptionType.LastIndexOf('.');
+            string shortType = lastDot >= 0 ? exceptionType.Substring(lastDot + 1) : exceptionType;
+
+            if (!s_cancelClassExceptionTypes.Contains(shortType)) return;
+
+            // The parent ExecuteQueryAsync/ExecuteUpdateAsync overrides set
+            // s_currentErrorKindContext for the duration of the execute, and the
+            // parent Cancel() flips UserCancelInvoked. The AsyncLocal flows into the
+            // submodule's TraceActivityAsync delegate that owns this Activity, so
+            // when the listener fires for the inner span we still see the right
+            // context here. If UserCancelInvoked we are in a user-cancel path; if
+            // not, the cancellation token can only have fired from the configured
+            // QueryTimeoutSeconds, so the kind is `query_timeout`.
+            ErrorKindContext? ctx = s_currentErrorKindContext.Value;
+            string kind = ctx?.UserCancelInvoked == true
+                ? ErrorKindUserCancel
+                : ErrorKindQueryTimeout;
+            activity.SetTag(DbErrorKindTagKey, kind);
+        }
+
         private bool useCloudFetch;
         private bool canDecompressLz4;
         private long maxBytesPerFile;
@@ -211,29 +378,79 @@ namespace AdbcDrivers.Databricks
             CaptureRetryCount(ctx);
         }
 
+        // Tracks the in-flight Execute* call's error-kind context so DatabricksStatement.Cancel()
+        // can flip the user-cancel flag observed by the ActivityListener. Cleared in `finally`
+        // so a later Cancel() outside an active execute does not race against another caller's
+        // context. Stored on the instance (not in the AsyncLocal) because Cancel() is invoked
+        // from a different async flow than ExecuteQueryAsync.
+        private ErrorKindContext? _currentExecuteErrorKindContext;
+
+        /// <summary>
+        /// Activates the issue-#481 error-kind context for the duration of an Execute* call.
+        /// The AsyncLocal flows into the submodule's TraceActivityAsync delegate so the
+        /// listener sees this context when the inner activity stops. The instance pointer
+        /// allows <see cref="Cancel"/> to flip the user-cancel flag from a different flow.
+        /// </summary>
+        private IDisposable BeginErrorKindScope()
+        {
+            var ctx = new ErrorKindContext();
+            ErrorKindContext? previousAsync = s_currentErrorKindContext.Value;
+            ErrorKindContext? previousInstance = _currentExecuteErrorKindContext;
+            s_currentErrorKindContext.Value = ctx;
+            _currentExecuteErrorKindContext = ctx;
+            return new ErrorKindScope(this, previousAsync, previousInstance);
+        }
+
+        private sealed class ErrorKindScope : IDisposable
+        {
+            private readonly DatabricksStatement _statement;
+            private readonly ErrorKindContext? _previousAsync;
+            private readonly ErrorKindContext? _previousInstance;
+            public ErrorKindScope(DatabricksStatement statement, ErrorKindContext? previousAsync, ErrorKindContext? previousInstance)
+            {
+                _statement = statement;
+                _previousAsync = previousAsync;
+                _previousInstance = previousInstance;
+            }
+            public void Dispose()
+            {
+                s_currentErrorKindContext.Value = _previousAsync;
+                _statement._currentExecuteErrorKindContext = _previousInstance;
+            }
+        }
+
         public override QueryResult ExecuteQuery()
         {
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return base.ExecuteQuery();
+            if (ctx == null)
+            {
+                using (BeginErrorKindScope())
+                {
+                    return base.ExecuteQuery();
+                }
+            }
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
-            try
+            using (BeginErrorKindScope())
             {
-                QueryResult result = base.ExecuteQuery();
-                _lastQueryResult = result; // Store for telemetry
-                RecordSuccess(ctx);
-                return result;
-            }
-            catch (Exception ex)
-            {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
-                throw;
+                try
+                {
+                    QueryResult result = base.ExecuteQuery();
+                    _lastQueryResult = result; // Store for telemetry
+                    RecordSuccess(ctx);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    RecordError(ctx, ex);
+                    // Emit telemetry immediately on error (won't reach Dispose)
+                    EmitTelemetry(ctx);
+                    PendingTelemetryContext = null; // Clear to avoid double emission
+                    throw;
+                }
             }
         }
 
@@ -242,68 +459,95 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return await base.ExecuteQueryAsync();
+            if (ctx == null)
+            {
+                using (BeginErrorKindScope())
+                {
+                    return await base.ExecuteQueryAsync();
+                }
+            }
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
-            try
+            using (BeginErrorKindScope())
             {
-                QueryResult result = await base.ExecuteQueryAsync();
-                _lastQueryResult = result; // Store for telemetry
-                RecordSuccess(ctx);
-                return result;
-            }
-            catch (Exception ex)
-            {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
-                throw;
+                try
+                {
+                    QueryResult result = await base.ExecuteQueryAsync();
+                    _lastQueryResult = result; // Store for telemetry
+                    RecordSuccess(ctx);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    RecordError(ctx, ex);
+                    // Emit telemetry immediately on error (won't reach Dispose)
+                    EmitTelemetry(ctx);
+                    PendingTelemetryContext = null; // Clear to avoid double emission
+                    throw;
+                }
             }
         }
 
         public override UpdateResult ExecuteUpdate()
         {
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
-            if (ctx == null) return base.ExecuteUpdate();
+            if (ctx == null)
+            {
+                using (BeginErrorKindScope())
+                {
+                    return base.ExecuteUpdate();
+                }
+            }
 
             PendingTelemetryContext = ctx;
-            try
+            using (BeginErrorKindScope())
             {
-                UpdateResult result = base.ExecuteUpdate();
-                RecordSuccess(ctx);
-                return result;
-            }
-            catch (Exception ex)
-            {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
-                throw;
+                try
+                {
+                    UpdateResult result = base.ExecuteUpdate();
+                    RecordSuccess(ctx);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    RecordError(ctx, ex);
+                    // Emit telemetry immediately on error (won't reach Dispose)
+                    EmitTelemetry(ctx);
+                    PendingTelemetryContext = null; // Clear to avoid double emission
+                    throw;
+                }
             }
         }
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
         {
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
-            if (ctx == null) return await base.ExecuteUpdateAsync();
+            if (ctx == null)
+            {
+                using (BeginErrorKindScope())
+                {
+                    return await base.ExecuteUpdateAsync();
+                }
+            }
 
             PendingTelemetryContext = ctx;
-            try
+            using (BeginErrorKindScope())
             {
-                UpdateResult result = await base.ExecuteUpdateAsync();
-                RecordSuccess(ctx);
-                return result;
-            }
-            catch (Exception ex)
-            {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
-                throw;
+                try
+                {
+                    UpdateResult result = await base.ExecuteUpdateAsync();
+                    RecordSuccess(ctx);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    RecordError(ctx, ex);
+                    // Emit telemetry immediately on error (won't reach Dispose)
+                    EmitTelemetry(ctx);
+                    PendingTelemetryContext = null; // Clear to avoid double emission
+                    throw;
+                }
             }
         }
 
@@ -1351,6 +1595,16 @@ namespace AdbcDrivers.Databricks
         /// <inheritdoc/>
         public override void Cancel()
         {
+            // Issue #481: flag the currently in-flight Execute*'s error-kind context so
+            // the post-hoc ActivityListener classifies the resulting Status=Error spans
+            // as `user_cancel` instead of `query_timeout`. Both surface the same
+            // underlying TaskCanceledException/TTransportException via the submodule's
+            // IsCancellation path, so without this signal the listener could not
+            // disambiguate them. Marking BEFORE base.Cancel() ensures the flag is
+            // visible to the listener even if base.Cancel() itself throws and the
+            // execute path tears down immediately.
+            _currentExecuteErrorKindContext?.MarkUserCancelInvoked();
+
             // Emit CANCEL_STATEMENT telemetry around the base cancel call so we capture
             // user-initiated cancels even when the cancellation token has already
             // disposed the execute path's pending telemetry context. base.Cancel()
