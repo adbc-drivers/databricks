@@ -22,7 +22,9 @@
 */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -157,6 +159,80 @@ namespace AdbcDrivers.Databricks.Tests
                 Add(new(null, LongRunningQuery, typeof(TimeoutException)));
                 Add(new(0, LongRunningQuery, null));
             }
+        }
+
+        /// <summary>
+        /// Regression test for issue #484: HiveServer2Statement.ExecuteUpdateAsyncInternal
+        /// emits `db.response.returned_rows = -1` on every UPDATE-flavored statement
+        /// (CREATE/INSERT/UPDATE/DELETE) because Thrift doesn't return an affected-row
+        /// count via this pathway. The misleading sentinel clutters APM dashboards.
+        ///
+        /// The fix should ensure that when the value is -1, the tag is omitted entirely
+        /// (backends naturally interpret absent-tag as "unknown"). When the server does
+        /// return an affected-row count (>= 0), the tag should still be present.
+        /// </summary>
+        [SkippableFact]
+        public async Task ExecuteUpdate_DoesNotEmitMinusOneReturnedRows_Issue484()
+        {
+            const string returnedRowsTagKey = "db.response.returned_rows";
+
+            var stoppedActivities = new ConcurrentBag<Activity>();
+            var activitySourceNames = new HashSet<string>
+            {
+                "AdbcDrivers.Databricks",
+                "AdbcDrivers.Databricks.StatementExecution",
+                "AdbcDrivers.HiveServer2",
+            };
+
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = source => activitySourceNames.Contains(source.Name),
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped = activity => stoppedActivities.Add(activity),
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            // Use a transient table so we never collide with seeded state.
+            CreateNewTableName(out _, out string fullTableName);
+
+            using AdbcStatement createStmt = Connection.CreateStatement();
+            createStmt.SqlQuery = $"CREATE TABLE IF NOT EXISTS {fullTableName} (id INT, name STRING)";
+            await createStmt.ExecuteUpdateAsync();
+
+            try
+            {
+                using AdbcStatement insertStmt = Connection.CreateStatement();
+                insertStmt.SqlQuery = $"INSERT INTO {fullTableName} VALUES (1, 'a'), (2, 'b'), (3, 'c')";
+                await insertStmt.ExecuteUpdateAsync();
+
+                using AdbcStatement updateStmt = Connection.CreateStatement();
+                updateStmt.SqlQuery = $"UPDATE {fullTableName} SET name = 'updated' WHERE id = 1";
+                await updateStmt.ExecuteUpdateAsync();
+            }
+            finally
+            {
+                using AdbcStatement dropStmt = Connection.CreateStatement();
+                dropStmt.SqlQuery = $"DROP TABLE IF EXISTS {fullTableName}";
+                await dropStmt.ExecuteUpdateAsync();
+            }
+
+            // Inspect every captured activity (UPDATE-flavored statements run through
+            // HiveServer2Statement.ExecuteUpdateAsyncInternal — the offending span).
+            // No span should carry the -1 sentinel.
+            var spansWithMinusOne = stoppedActivities
+                .Where(a => a.TagObjects.Any(t =>
+                    string.Equals(t.Key, returnedRowsTagKey, StringComparison.Ordinal) &&
+                    t.Value is { } v &&
+                    string.Equals(v.ToString(), "-1", StringComparison.Ordinal)))
+                .ToList();
+
+            Assert.True(spansWithMinusOne.Count == 0,
+                $"Expected no captured spans to emit '{returnedRowsTagKey}=-1', but {spansWithMinusOne.Count} did. " +
+                $"Offending operation names: [{string.Join(", ", spansWithMinusOne.Select(a => a.OperationName).Distinct())}]. " +
+                $"Tags on offending spans: [" +
+                string.Join(" | ", spansWithMinusOne.Select(a =>
+                    a.OperationName + ": " + string.Join(",", a.TagObjects.Select(t => $"{t.Key}={t.Value}")))) +
+                "]");
         }
 
         protected override void CreateNewTableName(out string tableName, out string fullTableName)
