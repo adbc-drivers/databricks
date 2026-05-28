@@ -23,8 +23,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2.Hive2;
@@ -46,6 +48,20 @@ namespace AdbcDrivers.Databricks.Reader
         // When trimArrowBatchesToLimit=false (server default), the server may return more data
         // than the limit in the last batch but reports adjusted rowCount in metadata.
         private long _currentBatchExpectedRows;
+
+        // Issue #485: Track total bytes consumed by this inline reader so
+        // DatabricksCompositeReader.Dispose can emit a result.bytes_downloaded tag
+        // with the same shape as CloudFetchReader (which sets the tag inside its
+        // own Dispose, while Activity.Current is the composite Dispose span).
+        //
+        // Byte-counting convention: we count the wire-side size of each
+        // TSparkArrowBatch.Batch — i.e. the bytes received over the Thrift
+        // connection, before any LZ4 decompression. This matches CloudFetch,
+        // which uses DownloadResult.Size (the downloaded chunk size, also
+        // pre-decompression). The tag name "downloaded" is reused for
+        // dashboard/query compatibility even though inline data is not a
+        // separate download.
+        private long _totalBytesConsumed;
 
         public DatabricksReader(IHiveServer2Statement statement, Schema schema, IResponse response, TFetchResultsResp? initialResults, bool isLz4Compressed)
             : base(statement, schema, response, isLz4Compressed) // IHiveServer2Statement implements IActivityTracer
@@ -189,6 +205,13 @@ namespace AdbcDrivers.Databricks.Reader
                     ReadOnlyMemory<byte> dataToUse = new ReadOnlyMemory<byte>(batch.Batch);
                     int originalSize = batch.Batch.Length;
 
+                    // Issue #485: accumulate wire-side batch bytes for the
+                    // result.bytes_downloaded tag emitted on Dispose. We use the
+                    // pre-decompression size (originalSize) to match CloudFetch's
+                    // convention of counting downloaded/received bytes rather than
+                    // decompressed bytes.
+                    _totalBytesConsumed += originalSize;
+
                     // If LZ4 compression is enabled, decompress the data
                     if (isLz4Compressed)
                     {
@@ -241,6 +264,14 @@ namespace AdbcDrivers.Databricks.Reader
 
         protected override void Dispose(bool disposing)
         {
+            // Issue #485: emit the same result.bytes_downloaded tag CloudFetchReader
+            // emits, so DatabricksCompositeReader.Dispose carries a uniform
+            // byte-consumption signal on both reader paths. Activity.Current here
+            // is the composite Dispose span (BaseDatabricksReader.Dispose does not
+            // open its own activity), which is exactly where CloudFetchReader's
+            // tag lands today.
+            Activity.Current?.SetTag(StatementExecutionEvent.ResultBytesDownloaded, _totalBytesConsumed);
+
             base.Dispose(disposing);
         }
 
