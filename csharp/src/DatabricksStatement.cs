@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -57,6 +58,70 @@ namespace AdbcDrivers.Databricks
         // improving query performance by reducing the number of FetchResults calls needed.
         internal const long DatabricksBatchSizeDefault = 2000000;
         private const string QueryTagsKey = "query_tags";
+
+        // Issue #484: HiveServer2Statement.ExecuteUpdateAsyncInternal (in the
+        // submodule) unconditionally tags every UPDATE-flavored span with
+        // `db.response.returned_rows = -1` when Thrift returns no num_affected_rows
+        // column (CREATE / DDL paths). The -1 sentinel clutters APM dashboards by
+        // sorting alongside legitimate row counts. We can't modify the submodule, so
+        // we register a one-time process-global ActivityListener that strips the
+        // tag during ActivityStopped notification. The listener is registered before
+        // any FileActivityListener (which is created per-connection in Open()), so
+        // file exporters never see the -1 either.
+        //
+        // The static constructor below forces eager initialization of this field
+        // (defeating beforeFieldInit) so the listener is in place before the first
+        // ExecuteUpdate span is emitted.
+        private const string ReturnedRowsTagKey = "db.response.returned_rows";
+        private static readonly ActivityListener s_returnedRowsSentinelStripper = RegisterReturnedRowsSentinelStripper();
+
+        private static ActivityListener RegisterReturnedRowsSentinelStripper()
+        {
+            var listener = new ActivityListener
+            {
+                ShouldListenTo = _ => true,
+                // PropagationData is the lowest sampling level that still delivers
+                // ActivityStopped notifications. The effective recording level is
+                // the max across all registered listeners, so this does NOT degrade
+                // recording for other listeners that ask for AllDataAndRecorded.
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.PropagationData,
+                SampleUsingParentId = (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.PropagationData,
+                ActivityStopped = activity =>
+                {
+                    try
+                    {
+                        // Cheap pre-check: only inspect tags if the operation name matches
+                        // the offending submodule method.
+                        if (!activity.OperationName.EndsWith(".ExecuteUpdateAsyncInternal", StringComparison.Ordinal))
+                        {
+                            return;
+                        }
+                        foreach (var tag in activity.TagObjects)
+                        {
+                            if (!string.Equals(tag.Key, ReturnedRowsTagKey, StringComparison.Ordinal)) continue;
+                            // Match either boxed long/int -1 or string "-1".
+                            if ((tag.Value is long l && l == -1L)
+                                || (tag.Value is int i && i == -1)
+                                || (tag.Value != null && string.Equals(tag.Value.ToString(), "-1", StringComparison.Ordinal)))
+                            {
+                                // SetTag(key, null) removes the tag. Valid while the
+                                // activity is mid-Stop notification: IsStopped flips to
+                                // true only after all ActivityStopped listeners return.
+                                activity.SetTag(ReturnedRowsTagKey, null);
+                            }
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        // Telemetry must never impact driver operations.
+                    }
+                },
+            };
+            ActivitySource.AddActivityListener(listener);
+            return listener;
+        }
+
         private bool useCloudFetch;
         private bool canDecompressLz4;
         private long maxBytesPerFile;
@@ -96,6 +161,14 @@ namespace AdbcDrivers.Databricks
         internal Exception? CloseStatementRpcError { get; set; }
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
+
+        // Explicit static constructor forces eager static initialization (instead of
+        // beforeFieldInit lazy semantics), guaranteeing s_returnedRowsSentinelStripper
+        // is registered before the first ExecuteUpdate span is emitted.
+        static DatabricksStatement()
+        {
+            _ = s_returnedRowsSentinelStripper;
+        }
 
         public DatabricksStatement(DatabricksConnection connection)
             : base(connection)
