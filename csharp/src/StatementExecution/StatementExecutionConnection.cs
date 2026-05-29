@@ -870,7 +870,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         ///   <item><description>A pattern containing unescaped <c>%</c> or <c>_</c> → <c>SHOW CATALOGS LIKE '&lt;pat&gt;'</c> to enumerate matching catalogs, then per-catalog <c>SHOW SCHEMAS IN `&lt;cat&gt;`</c> calls aggregated together.</description></item>
         ///   <item><description>A literal name → single <c>SHOW SCHEMAS IN `&lt;catalog&gt;`</c> call.</description></item>
         /// </list>
-        /// Returns a list of <c>(catalog, schema)</c> pairs in deterministic order.
+        /// Returns a flat list of <c>(catalog, schema)</c> pairs in the order produced
+        /// by the backend (no client-side sorting).
         /// </summary>
         internal async Task<List<(string catalog, string schema)>> ListSchemasAsync(
             string? catalogPattern, string? schemaPattern, CancellationToken cancellationToken)
@@ -898,7 +899,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var matchedCatalogs = new List<string>();
                 foreach (var batch in catalogBatches)
                 {
-                    var catalogArray = batch.Column(0) as StringArray;
+                    var catalogArray = TryGetColumn<StringArray>(batch, "catalog");
                     if (catalogArray == null) continue;
                     for (int i = 0; i < catalogArray.Length; i++)
                     {
@@ -948,24 +949,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
-            bool showSchemasInAllCatalogs = catalog == null;
             var result = new List<(string, string)>();
             foreach (var batch in batches)
             {
-                StringArray? catalogArray = null;
-                StringArray? schemaArray;
-
-                if (showSchemasInAllCatalogs)
-                {
-                    schemaArray = batch.Column(0) as StringArray;
-                    catalogArray = batch.Column(1) as StringArray;
-                }
-                else
-                {
-                    schemaArray = batch.Column(0) as StringArray;
-                }
-
+                var schemaArray = TryGetColumn<StringArray>(batch, "databaseName");
                 if (schemaArray == null) continue;
+
+                // catalog column is only present in the IN ALL CATALOGS shape;
+                // for the literal-catalog shape we synthesize it from the parameter.
+                var catalogArray = TryGetColumn<StringArray>(batch, "catalog");
+
                 for (int i = 0; i < batch.Length; i++)
                 {
                     if (schemaArray.IsNull(i)) continue;

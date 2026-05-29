@@ -188,5 +188,50 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         {
             Assert.Equal("SHOW CATALOGS LIKE ''", new ShowCatalogsCommand("").Build());
         }
+
+        // MetadataCommandBase wildcard helpers (PECO-3035). These back the client-side
+        // catalog-wildcard expansion in StatementExecutionConnection.ListSchemasAsync,
+        // so the backslash-escape semantics must be locked in.
+
+        [Theory]
+        [InlineData(null, false)]
+        [InlineData("", false)]
+        [InlineData("abc", false)]
+        [InlineData("prod", false)]
+        [InlineData("*", false)]            // not a JDBC LIKE wildcard
+        [InlineData("%", true)]
+        [InlineData("_", true)]
+        [InlineData("abc%", true)]
+        [InlineData("_abc", true)]
+        [InlineData("a%b", true)]
+        [InlineData("a_b", true)]
+        [InlineData("\\%", false)]          // escaped %
+        [InlineData("\\_", false)]          // escaped _
+        [InlineData("\\\\%", true)]         // literal backslash + unescaped %
+        [InlineData("\\\\_", true)]         // literal backslash + unescaped _
+        [InlineData("\\\\\\%", false)]      // literal backslash + escaped %
+        [InlineData("\\\\\\_", false)]      // literal backslash + escaped _
+        [InlineData("\\", false)]           // lone trailing backslash
+        [InlineData("foo\\", false)]        // trailing backslash, no wildcard
+        [InlineData("foo\\%bar", false)]    // escaped % in the middle
+        [InlineData("foo\\%bar%baz", true)] // escaped % then unescaped %
+        public void ContainsUnescapedWildcard_HandlesEscapeSemantics(string? input, bool expected)
+        {
+            Assert.Equal(expected, MetadataCommandBase.ContainsUnescapedWildcard(input));
+        }
+
+        [Theory]
+        [InlineData(null, false)]
+        [InlineData("", false)]
+        [InlineData("%", true)]
+        [InlineData("*", true)]             // Spark/Hive convention, also fast-pathed
+        [InlineData("%%", false)]
+        [InlineData("_", false)]
+        [InlineData("prod", false)]
+        [InlineData("\\%", false)]
+        public void IsMatchAnything_TreatsOnlyBareWildcardsAsMatchAnything(string? input, bool expected)
+        {
+            Assert.Equal(expected, MetadataCommandBase.IsMatchAnything(input));
+        }
     }
 }
