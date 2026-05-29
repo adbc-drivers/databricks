@@ -15,6 +15,7 @@
  */
 
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
 {
@@ -145,6 +146,49 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
         internal static bool IsMatchAnything(string? pattern)
         {
             return pattern == "%" || pattern == "*";
+        }
+
+        /// <summary>
+        /// Compiles a JDBC LIKE pattern (with <c>%</c> / <c>_</c> wildcards and
+        /// <c>\</c> escapes, where <c>\%</c> / <c>\_</c> / <c>\\</c> are literal)
+        /// into a <see cref="Regex"/> for client-side filtering. Anchored at both
+        /// ends; case-sensitive. Used when wildcard expansion has to happen on
+        /// the driver side (e.g. catalog patterns on SEA — PECO-3035).
+        /// </summary>
+        internal static Regex JdbcLikeToRegex(string pattern)
+        {
+            var sb = new StringBuilder("^");
+            bool escapeNext = false;
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+                if (c == '\\')
+                {
+                    // Two backslashes → literal backslash.
+                    if (i + 1 < pattern.Length && pattern[i + 1] == '\\')
+                    {
+                        sb.Append("\\\\");
+                        i++;
+                        continue;
+                    }
+                    escapeNext = !escapeNext;
+                    continue;
+                }
+                if (escapeNext)
+                {
+                    sb.Append(Regex.Escape(c.ToString()));
+                    escapeNext = false;
+                    continue;
+                }
+                switch (c)
+                {
+                    case '%': sb.Append(".*"); break;
+                    case '_': sb.Append("."); break;
+                    default: sb.Append(Regex.Escape(c.ToString())); break;
+                }
+            }
+            sb.Append("$");
+            return new Regex(sb.ToString());
         }
     }
 }

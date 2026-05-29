@@ -233,5 +233,41 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         {
             Assert.Equal(expected, MetadataCommandBase.IsMatchAnything(input));
         }
+
+        [Theory]
+        // Literals (the helper is anchored, so "prod" only matches "prod" exactly).
+        [InlineData("prod", "prod", true)]
+        [InlineData("prod", "prod_2", false)]
+        [InlineData("prod", "production", false)]
+        // % wildcard — any sequence including empty.
+        [InlineData("%", "anything", true)]
+        [InlineData("%", "", true)]
+        [InlineData("comp%", "compute", true)]
+        [InlineData("comp%", "comp", true)]
+        [InlineData("comp%", "system", false)]
+        [InlineData("%comp", "mycomp", true)]
+        [InlineData("%comp", "myComp", false)]   // case-sensitive: comp ≠ Comp
+        [InlineData("%comp", "compsomething", false)]
+        // _ wildcard — exactly one char.
+        [InlineData("a_c", "abc", true)]
+        [InlineData("a_c", "ac", false)]
+        [InlineData("a_c", "abbc", false)]
+        // Escapes — \% / \_ must match the literal character.
+        [InlineData("comp\\%", "comp%", true)]
+        [InlineData("comp\\%", "compute", false)]
+        [InlineData("a\\_b", "a_b", true)]
+        [InlineData("a\\_b", "axb", false)]
+        // \\ → literal backslash.
+        [InlineData("a\\\\b", "a\\b", true)]
+        // Regex metacharacters in the literal portion must be escaped.
+        [InlineData("a.b", "a.b", true)]
+        [InlineData("a.b", "axb", false)]
+        [InlineData("a+b", "a+b", true)]
+        [InlineData("a+b", "ab", false)]
+        public void JdbcLikeToRegex_MatchesPatternSemantics(string pattern, string input, bool expectedMatch)
+        {
+            var regex = MetadataCommandBase.JdbcLikeToRegex(pattern);
+            Assert.Equal(expectedMatch, regex.IsMatch(input));
+        }
     }
 }

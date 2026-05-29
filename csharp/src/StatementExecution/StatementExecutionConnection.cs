@@ -866,9 +866,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// lookup — it does not expand <c>%</c> / <c>_</c> wildcards. To match Thrift
         /// behaviour (PECO-3035), this helper resolves wildcards client-side:
         /// <list type="bullet">
-        ///   <item><description><c>null</c> or "%"/"*" → <c>SHOW SCHEMAS IN ALL CATALOGS</c>.</description></item>
-        ///   <item><description>A pattern containing unescaped <c>%</c> or <c>_</c> → <c>SHOW CATALOGS LIKE '&lt;pat&gt;'</c> to enumerate matching catalogs, then per-catalog <c>SHOW SCHEMAS IN `&lt;cat&gt;`</c> calls aggregated together.</description></item>
-        ///   <item><description>A literal name → single <c>SHOW SCHEMAS IN `&lt;catalog&gt;`</c> call.</description></item>
+        ///   <item><description><c>null</c> or "%"/"*" → <c>SHOW SCHEMAS IN ALL CATALOGS</c> (single round-trip).</description></item>
+        ///   <item><description>A pattern containing unescaped <c>%</c> or <c>_</c> → still a single <c>SHOW SCHEMAS IN ALL CATALOGS</c>, then filter the returned <c>catalog</c> column against the JDBC pattern client-side.</description></item>
+        ///   <item><description>A literal name → single <c>SHOW SCHEMAS IN `&lt;catalog&gt;`</c> call (avoids fetching everything just to throw most of it away).</description></item>
         /// </list>
         /// Returns a flat list of <c>(catalog, schema)</c> pairs in the order produced
         /// by the backend (no client-side sorting).
@@ -882,46 +882,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return await ExecuteShowSchemasAsync(null, schemaPattern, cancellationToken).ConfigureAwait(false);
             }
 
-            // Non-trivial wildcard: enumerate matching catalogs and iterate per-catalog.
+            // Wildcard pattern: fetch all (catalog, schema) pairs in one round-trip and
+            // filter by the catalog pattern client-side. Avoids the N+1 round-trip cost
+            // of enumerating catalogs and querying per-catalog.
             if (MetadataCommands.MetadataCommandBase.ContainsUnescapedWildcard(catalogPattern))
             {
-                string catalogsSql = new ShowCatalogsCommand(catalogPattern).Build();
-                List<RecordBatch> catalogBatches;
-                try
+                var all = await ExecuteShowSchemasAsync(null, schemaPattern, cancellationToken).ConfigureAwait(false);
+                var catalogRegex = MetadataCommands.MetadataCommandBase.JdbcLikeToRegex(catalogPattern);
+                var filtered = new List<(string, string)>(all.Count);
+                foreach (var row in all)
                 {
-                    catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, cancellationToken).ConfigureAwait(false);
+                    if (catalogRegex.IsMatch(row.catalog))
+                        filtered.Add(row);
                 }
-                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                {
-                    return new List<(string, string)>();
-                }
-
-                var matchedCatalogs = new List<string>();
-                foreach (var batch in catalogBatches)
-                {
-                    var catalogArray = TryGetColumn<StringArray>(batch, "catalog");
-                    if (catalogArray == null) continue;
-                    for (int i = 0; i < catalogArray.Length; i++)
-                    {
-                        if (!catalogArray.IsNull(i))
-                            matchedCatalogs.Add(catalogArray.GetString(i));
-                    }
-                }
-
-                var aggregated = new List<(string, string)>();
-                foreach (string cat in matchedCatalogs)
-                {
-                    try
-                    {
-                        var perCatalog = await ExecuteShowSchemasAsync(cat, schemaPattern, cancellationToken).ConfigureAwait(false);
-                        aggregated.AddRange(perCatalog);
-                    }
-                    catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                    {
-                        // Catalog exists per SHOW CATALOGS but has no schemas / disappeared mid-query — skip.
-                    }
-                }
-                return aggregated;
+                return filtered;
             }
 
             // Literal catalog name.
