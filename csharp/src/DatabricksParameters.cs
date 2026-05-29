@@ -409,13 +409,6 @@ namespace AdbcDrivers.Databricks
         public const string WaitTimeout = "adbc.databricks.rest.wait_timeout";
 
         /// <summary>
-        /// Statement polling interval in milliseconds for async execution.
-        /// Default: 1000ms (1 second)
-        /// Only applicable when Protocol is "rest".
-        /// </summary>
-        public const string PollingInterval = "adbc.databricks.rest.polling_interval_ms";
-
-        /// <summary>
         /// Enable session management for Statement Execution API.
         /// When true, creates and reuses session across statements in a connection.
         /// When false, each statement executes without session context.

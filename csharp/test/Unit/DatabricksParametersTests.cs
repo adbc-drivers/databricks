@@ -54,12 +54,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public void TestPollingIntervalParameterExists()
-        {
-            Assert.Equal("adbc.databricks.rest.polling_interval_ms", DatabricksParameters.PollingInterval);
-        }
-
-        [Fact]
         public void TestEnableSessionManagementParameterExists()
         {
             Assert.Equal("adbc.databricks.rest.enable_session_management", DatabricksParameters.EnableSessionManagement);
@@ -86,7 +80,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.StartsWith("adbc.databricks.rest.", DatabricksParameters.ResultFormat);
             Assert.StartsWith("adbc.databricks.rest.", DatabricksParameters.ResultCompression);
             Assert.StartsWith("adbc.databricks.rest.", DatabricksParameters.WaitTimeout);
-            Assert.StartsWith("adbc.databricks.rest.", DatabricksParameters.PollingInterval);
         }
 
         [Fact]
