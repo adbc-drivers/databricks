@@ -158,8 +158,8 @@ fast-metadata path takes effect end-to-end:
 
 | Protocol | SQL emitted | Off-WLM signal | Where |
 |---|---|---|---|
-| SEA | `DESC TABLE EXTENDED <t> STATIC ONLY AS JSON` | HTTP header `x-databricks-sea-can-run-fully-sync: true` | Header is unconditionally set on metadata calls via `ExecuteMetadataSqlAsync` → `IsMetadata=true` → `StatementExecutionClient.cs:225`. SEA always targets a warehouse, so the flag alone gates the SQL change. |
-| Thrift | `DESC TABLE EXTENDED <t> STATIC ONLY AS JSON` | `TExecuteStatementReq.RunAsync = false` on the descStmt | `DatabricksStatement.GetColumnsExtendedAsync` flips both when `adbc.databricks.enable_fast_metadata_query=true` AND the connection path matches `/sql/1.0/(warehouses\|endpoints)/{id}` (general clusters: flag is ignored). |
+| SEA | `DESC TABLE EXTENDED <t> AS JSON STATIC ONLY` | HTTP header `x-databricks-sea-can-run-fully-sync: true` | Header is unconditionally set on metadata calls via `ExecuteMetadataSqlAsync` → `IsMetadata=true` → `StatementExecutionClient.cs:225`. SEA always targets a warehouse, so the flag alone gates the SQL change. |
+| Thrift | `DESC TABLE EXTENDED <t> AS JSON STATIC ONLY` | `TExecuteStatementReq.RunAsync = false` on the descStmt | `DatabricksStatement.GetColumnsExtendedAsync` flips both when `adbc.databricks.enable_fast_metadata_query=true` AND the connection path matches `/sql/1.0/(warehouses\|endpoints)/{id}` (general clusters: flag is ignored). |
 
 Both signals together are required:
 

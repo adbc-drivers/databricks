@@ -285,10 +285,10 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Whether to opt into the fast metadata query path for DESC TABLE EXTENDED.
-        /// When enabled, the driver emits the SQL modifier <c>STATIC ONLY</c> on
-        /// DESC TABLE EXTENDED AS JSON (runtime PR #198486), which tells the server to
-        /// skip Delta log access, Mesa RPCs, and other expensive I/O. The driver also
-        /// pairs the SQL change with the matching off-WLM signal per protocol:
+        /// When enabled, the driver emits <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON STATIC ONLY</c>
+        /// (runtime PR #198486), which tells the server to skip Delta log access, Mesa RPCs,
+        /// and other expensive I/O. The driver also pairs the SQL change with the matching
+        /// off-WLM signal per protocol:
         /// <list type="bullet">
         /// <item>Thrift: sets <c>RunAsync=false</c> on the descStmt, only when the connection
         /// targets a DBSQL warehouse (/sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}).

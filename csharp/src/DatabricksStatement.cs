@@ -1010,7 +1010,7 @@ namespace AdbcDrivers.Databricks
                 // path. Both the SQL keyword and RunAsync=false are required to take effect.
                 bool useFastMetadataQuery = connection.UseFastMetadataQuery;
                 string query = useFastMetadataQuery
-                    ? $"DESC TABLE EXTENDED {fullTableName} STATIC ONLY AS JSON"
+                    ? $"DESC TABLE EXTENDED {fullTableName} AS JSON STATIC ONLY"
                     : $"DESC TABLE EXTENDED {fullTableName} AS JSON";
                 activity?.AddEvent("statement.desc_table_extended.executing_query", [
                     new("query_summary", query.Length > 100 ? query.Substring(0, 100) + "..." : query),

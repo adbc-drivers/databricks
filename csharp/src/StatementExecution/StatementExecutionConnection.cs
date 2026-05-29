@@ -960,11 +960,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal bool UseDescTableExtended => _useDescTableExtended;
 
         /// <summary>
-        /// Whether to append the STATIC ONLY modifier to DESC TABLE EXTENDED AS JSON.
-        /// SEA always targets a DBSQL warehouse, so the flag alone is sufficient (no
-        /// warehouse-path check needed). The metadata-query header is already sent by
-        /// <see cref="ExecuteMetadataSqlAsync"/>, which provides the SEA equivalent of
-        /// Thrift's RunAsync=false signal.
+        /// Whether to emit <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON STATIC ONLY</c> in place of
+        /// the base <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON</c>. SEA always targets a DBSQL
+        /// warehouse, so the flag alone is sufficient (no warehouse-path check needed). The
+        /// metadata-query header is already sent by <see cref="ExecuteMetadataSqlAsync"/>,
+        /// which provides the SEA equivalent of Thrift's RunAsync=false signal.
         /// Default: false.
         /// </summary>
         internal bool EnableFastMetadataQuery => _enableFastMetadataQuery;

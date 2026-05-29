@@ -1357,7 +1357,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // here to enable the fast-metadata path end-to-end.
             bool useFastMetadataQuery = _connection.EnableFastMetadataQuery;
             string query = useFastMetadataQuery
-                ? $"DESC TABLE EXTENDED {fullTableName} STATIC ONLY AS JSON"
+                ? $"DESC TABLE EXTENDED {fullTableName} AS JSON STATIC ONLY"
                 : $"DESC TABLE EXTENDED {fullTableName} AS JSON";
 
             List<RecordBatch> batches;
