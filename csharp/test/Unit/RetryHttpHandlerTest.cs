@@ -674,20 +674,19 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         // The RetryHttpHandler runs on every HTTP send and retries on
         // Retry-After (503/429) responses and on transient transport errors —
         // but historically it emitted zero per-attempt telemetry. A customer
-        // asking "did my failure retry then succeed, or did it fail without
-        // any retry?" could not answer from the trace alone.
+        // reading their own driver logs asking "did my failure retry then
+        // succeed, or did it fail without any retry?" could not answer from
+        // the trace alone.
         //
-        // The fix (around the retry loop) is to:
-        //   - emit a `retry.attempt` event for each *retry* (i.e. not the
-        //     first try), carrying attempt_number/delay_ms/reason
-        //   - always set summary tags `retry.total_attempts` and
-        //     `retry.exhausted` on the wrapping SendAsync activity, even on
-        //     the no-retry-needed path (so dashboards can group/filter without
-        //     special-casing "tag absent")
+        // The fix (around the retry loop) is to emit a `retry.attempt` event
+        // for each *retry* (i.e. not the first try) on the wrapping SendAsync
+        // activity, carrying attempt_number/delay_ms/reason. The target
+        // consumer is the user reading local driver logs, so dashboard-shaped
+        // summary tags are intentionally not emitted.
         //
         // These tests capture the activity emitted by RetryHttpHandler via an
         // ActivityListener attached to the MockActivityTracer's source name
-        // ("TestSource"), then assert on its Events and Tags.
+        // ("TestSource"), then assert on its Events.
         // ---------------------------------------------------------------------
 
         /// <summary>
@@ -723,14 +722,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// Issue #479: even when no retry happens (first attempt succeeds),
-        /// the activity wrapping SendAsync must carry the summary tags
-        /// `retry.total_attempts` (=1) and `retry.exhausted` (=false). Without
-        /// always-set tags, dashboards have to detect "tag absent" and can't
-        /// group/filter cleanly.
+        /// Issue #479: when the first attempt succeeds, no `retry.attempt`
+        /// events should be emitted (there were no retries).
         /// </summary>
         [Fact]
-        public async Task RetryTelemetry_NoRetryNeeded_AlwaysSetsSummaryTags_Issue479()
+        public async Task RetryTelemetry_NoRetryNeeded_EmitsNoAttemptEvents_Issue479()
         {
             using var capture = new ActivityCapture("TestSource");
 
@@ -749,40 +745,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal(1, mockHandler.RequestCount);
 
-            // Find the SendAsync activity emitted by the retry handler.
             Activity? sendAsyncActivity = capture.StoppedActivities
                 .FirstOrDefault(a => a.OperationName == "SendAsync");
             Assert.NotNull(sendAsyncActivity);
 
-            // Summary tags must ALWAYS be set, even when no retry happened.
-            var totalAttemptsTag = sendAsyncActivity!.TagObjects.FirstOrDefault(t => t.Key == "retry.total_attempts");
-            Assert.True(totalAttemptsTag.Key == "retry.total_attempts",
-                "Expected `retry.total_attempts` tag to always be set on the SendAsync activity, " +
-                "even when no retry was needed. Tags present: [" +
-                string.Join(", ", sendAsyncActivity.TagObjects.Select(t => t.Key)) + "]");
-            Assert.Equal(1, Convert.ToInt32(totalAttemptsTag.Value));
-
-            var exhaustedTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.exhausted");
-            Assert.True(exhaustedTag.Key == "retry.exhausted",
-                "Expected `retry.exhausted` tag to always be set on the SendAsync activity, " +
-                "even when no retry was needed. Tags present: [" +
-                string.Join(", ", sendAsyncActivity.TagObjects.Select(t => t.Key)) + "]");
-            Assert.Equal(false, exhaustedTag.Value);
-
-            // No retries happened, so no retry.attempt events should be emitted.
-            var retryEvents = sendAsyncActivity.Events.Where(e => e.Name == "retry.attempt").ToList();
+            var retryEvents = sendAsyncActivity!.Events.Where(e => e.Name == "retry.attempt").ToList();
             Assert.Empty(retryEvents);
         }
 
         /// <summary>
         /// Issue #479: each retry triggered by a Retry-After 503 response must
         /// emit a `retry.attempt` event carrying `attempt_number`, `delay_ms`,
-        /// and a `reason` describing why the retry was scheduled. The final
-        /// `retry.total_attempts` tag reflects the number of retries, and
-        /// `retry.exhausted` is false because we ultimately succeeded.
+        /// and a `reason` describing why the retry was scheduled.
         /// </summary>
         [Fact]
-        public async Task RetryTelemetry_RetryAfter503_EmitsAttemptEventsAndSummaryTags_Issue479()
+        public async Task RetryTelemetry_RetryAfter503_EmitsAttemptEvents_Issue479()
         {
             using var capture = new ActivityCapture("TestSource");
 
@@ -850,60 +827,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 // We don't pin the exact spelling, but it must reference 503.
                 Assert.Contains("503", reason!);
             }
-
-            // Summary tags on the wrapping activity. total_attempts counts
-            // the initial send + each retry; 2 retries → 3 total attempts.
-            var totalAttemptsTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.total_attempts");
-            Assert.True(totalAttemptsTag.Key == "retry.total_attempts");
-            Assert.Equal(3, Convert.ToInt32(totalAttemptsTag.Value));
-
-            var exhaustedTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.exhausted");
-            Assert.True(exhaustedTag.Key == "retry.exhausted");
-            Assert.Equal(false, exhaustedTag.Value);
-        }
-
-        /// <summary>
-        /// Issue #479: when the retry budget is exhausted and the handler
-        /// gives up (returns the last failing response or throws), the
-        /// summary tag `retry.exhausted` must be true so dashboards can
-        /// distinguish "flaky-then-recovered" from "hard failure".
-        /// </summary>
-        [Fact]
-        public async Task RetryTelemetry_RetryBudgetExhausted_SetsExhaustedTrue_Issue479()
-        {
-            using var capture = new ActivityCapture("TestSource");
-
-            // 503 with Retry-After: 2, but our retry budget is 1s — so the
-            // very first retry would exceed the budget and the handler gives
-            // up before sleeping. attemptCount will be 1.
-            var mockHandler = new MockHttpMessageHandler(
-                new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
-                {
-                    Headers = { { "Retry-After", "2" } },
-                    Content = new StringContent("Service Unavailable")
-                });
-
-            var mockTracer = new MockActivityTracer();
-            var retryHandler = new RetryHttpHandler(mockHandler, mockTracer, 1, 1, true, true);
-
-            var httpClient = new HttpClient(retryHandler);
-            await Assert.ThrowsAsync<DatabricksException>(async () =>
-                await httpClient.GetAsync("http://test.com"));
-
-            Activity? sendAsyncActivity = capture.StoppedActivities
-                .FirstOrDefault(a => a.OperationName == "SendAsync");
-            Assert.NotNull(sendAsyncActivity);
-
-            var exhaustedTag = sendAsyncActivity!.TagObjects.FirstOrDefault(t => t.Key == "retry.exhausted");
-            Assert.True(exhaustedTag.Key == "retry.exhausted",
-                "Expected `retry.exhausted` tag to be set when the retry budget is " +
-                "exceeded (issue #479).");
-            Assert.Equal(true, exhaustedTag.Value);
-
-            // retry.total_attempts is always set.
-            var totalAttemptsTag = sendAsyncActivity.TagObjects.FirstOrDefault(t => t.Key == "retry.total_attempts");
-            Assert.True(totalAttemptsTag.Key == "retry.total_attempts");
-            Assert.True(Convert.ToInt32(totalAttemptsTag.Value) >= 1);
         }
 
         /// <summary>

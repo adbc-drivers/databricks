@@ -109,243 +109,202 @@ namespace AdbcDrivers.Databricks
             int totalTooManyRequestsRetrySeconds = 0;
             int totalTransportErrorRetrySeconds = 0;
 
-            // Issue #479: telemetry counters that survive across the retry
-            // loop so the summary tags (retry.total_attempts / retry.exhausted)
-            // can always be set on the wrapping activity — even when no retry
-            // happens at all.
-            //
-            // `httpSendCount` counts the number of HTTP sends actually
-            // attempted (starting at 1 — we always make at least one). This
-            // is distinct from `attemptCount`, which counts retryable
-            // failures (transport errors + retryable status codes); they
-            // diverge on the exhaustion path where the failure count is
-            // recorded but no further send is made.
-            int httpSendCount = 0;
-            int retryEventNumber = 0;
-            bool retryExhausted = false;
-
             // Use TraceActivityAsync to wrap the entire retry logic
             return await this.TraceActivityAsync(async activity =>
             {
-                try
+                do
                 {
-                    do
+                    // Set the content for each attempt (if needed)
+                    if (requestContentClone != null && request.Content == null)
                     {
-                        // Set the content for each attempt (if needed)
-                        if (requestContentClone != null && request.Content == null)
-                        {
-                            request.Content = await CloneHttpContentAsync(requestContentClone);
-                        }
+                        request.Content = await CloneHttpContentAsync(requestContentClone);
+                    }
 
-                        // Try to send the request, catching transport-level errors for retry.
-                        // Use a per-request timeout to detect dead connections (e.g., TCP half-open).
-                        // This is separate from the caller's cancellation token (query timeout).
-                        using var requestTimeoutCts = _httpRequestTimeoutSeconds > 0
-                            ? new CancellationTokenSource(TimeSpan.FromSeconds(_httpRequestTimeoutSeconds))
-                            : null;
-                        using var linkedCts = requestTimeoutCts != null
-                            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestTimeoutCts.Token)
-                            : null;
-                        var requestToken = linkedCts?.Token ?? cancellationToken;
+                    // Try to send the request, catching transport-level errors for retry.
+                    // Use a per-request timeout to detect dead connections (e.g., TCP half-open).
+                    // This is separate from the caller's cancellation token (query timeout).
+                    using var requestTimeoutCts = _httpRequestTimeoutSeconds > 0
+                        ? new CancellationTokenSource(TimeSpan.FromSeconds(_httpRequestTimeoutSeconds))
+                        : null;
+                    using var linkedCts = requestTimeoutCts != null
+                        ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestTimeoutCts.Token)
+                        : null;
+                    var requestToken = linkedCts?.Token ?? cancellationToken;
 
-                        httpSendCount++;
-                        try
-                        {
-                            response = await base.SendAsync(request, requestToken);
-                        }
-                        catch (Exception ex) when (!cancellationToken.IsCancellationRequested
-                            && _transportErrorRetryEnabled
-                            && IsTransientTransportException(ex, cancellationToken))
-                        {
-
-                            attemptCount++;
-                            lastTransportException = ex;
-
-                            activity?.SetTag("http.retry.attempt", attemptCount);
-                            activity?.SetTag("http.retry.transport_error", ex.GetType().Name);
-                            activity?.SetTag("http.retry.transport_error_message", ex.Message);
-
-                            int transportWaitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
-                            lastErrorMessage = $"Transport error ({ex.GetType().Name}: {ex.Message}). Using exponential backoff of {transportWaitSeconds} seconds. Attempt {attemptCount}.";
-
-                            // Reset the request content for the next attempt
-                            request.Content = null;
-
-                            // Check if we would exceed the transport error retry timeout
-                            if (_retryTimeoutSeconds > 0 && totalTransportErrorRetrySeconds + transportWaitSeconds > _retryTimeoutSeconds)
-                            {
-                                activity?.SetTag("http.retry.outcome", "transport_error_timeout_exceeded");
-                                activity?.SetTag("http.retry.total_attempts", attemptCount);
-                                retryExhausted = true;
-                                break;
-                            }
-                            totalTransportErrorRetrySeconds += transportWaitSeconds;
-
-                            // Issue #479: emit a per-retry event BEFORE we
-                            // sleep so the trace makes the retry visible even
-                            // if the process dies during the delay. The
-                            // attempt_number is the 1-indexed retry counter
-                            // (1 = first retry).
-                            retryEventNumber++;
-                            activity?.AddEvent("retry.attempt", new List<KeyValuePair<string, object?>>
-                            {
-                                new("attempt_number", retryEventNumber),
-                                new("delay_ms", (long)transportWaitSeconds * 1000L),
-                                new("reason", $"transport_error_{ex.GetType().Name}")
-                            });
-
-                            await Task.Delay(TimeSpan.FromSeconds(transportWaitSeconds), cancellationToken);
-                            currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
-                            continue;
-                        }
-
-                        // We got a response — clear any earlier transport error so the final
-                        // exception (if we later exceed the HTTP retry budget) reflects the
-                        // actual HTTP failure, not a stale transport error.
-                        lastTransportException = null;
-
-                        // If it's not a retryable status code, return immediately
-                        if (!IsRetryableStatusCode(response.StatusCode))
-                        {
-                            return response;
-                        }
+                    try
+                    {
+                        response = await base.SendAsync(request, requestToken);
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested
+                        && _transportErrorRetryEnabled
+                        && IsTransientTransportException(ex, cancellationToken))
+                    {
 
                         attemptCount++;
+                        lastTransportException = ex;
 
-                        // Capture status code before disposing the response
-                        HttpStatusCode statusCode = response.StatusCode;
-                        bool isTooManyRequests = statusCode == (HttpStatusCode)429;
-
-                        // Log this retry attempt
                         activity?.SetTag("http.retry.attempt", attemptCount);
-                        activity?.SetTag("http.response.status_code", (int)statusCode);
+                        activity?.SetTag("http.retry.transport_error", ex.GetType().Name);
+                        activity?.SetTag("http.retry.transport_error_message", ex.Message);
 
-                        int waitSeconds;
-
-                        // Issue #479: derive a reason string the retry.attempt
-                        // event below will carry. We thread it alongside the
-                        // existing lastErrorMessage so the event tag and the
-                        // exception text stay consistent.
-                        string retryReason;
-
-                        // Check for Retry-After header
-                        if (response.Headers.TryGetValues("Retry-After", out var retryAfterValues))
-                        {
-                            // Parse the Retry-After value
-                            string retryAfterValue = string.Join(",", retryAfterValues);
-                            if (int.TryParse(retryAfterValue, out int retryAfterSeconds) && retryAfterSeconds > 0)
-                            {
-                                // Use the Retry-After value
-                                waitSeconds = retryAfterSeconds;
-                                lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using server-specified retry after {waitSeconds} seconds. Attempt {attemptCount}.";
-                                retryReason = $"retry_after_{(int)statusCode}";
-                            }
-                            else
-                            {
-                                // Invalid Retry-After value, use exponential backoff
-                                waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
-                                lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Invalid Retry-After header, using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
-                                retryReason = $"retry_after_{(int)statusCode}_invalid_header";
-                            }
-                        }
-                        else
-                        {
-                            // No Retry-After header, use exponential backoff
-                            waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
-                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
-                            retryReason = $"retry_after_{(int)statusCode}_no_header";
-                        }
-
-                        // Dispose the response before retrying
-                        response.Dispose();
+                        int transportWaitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
+                        lastErrorMessage = $"Transport error ({ex.GetType().Name}: {ex.Message}). Using exponential backoff of {transportWaitSeconds} seconds. Attempt {attemptCount}.";
 
                         // Reset the request content for the next attempt
                         request.Content = null;
 
-                        // Check if we would exceed the timeout after waiting, based on error type
-                        if (isTooManyRequests)
+                        // Check if we would exceed the transport error retry timeout
+                        if (_retryTimeoutSeconds > 0 && totalTransportErrorRetrySeconds + transportWaitSeconds > _retryTimeoutSeconds)
                         {
-                            // Check 429 rate limit timeout
-                            if (_rateLimitRetryTimeoutSeconds > 0 && totalTooManyRequestsRetrySeconds + waitSeconds > _rateLimitRetryTimeoutSeconds)
-                            {
-                                // We've exceeded the rate limit retry timeout, so break out of the loop
-                                activity?.SetTag("http.retry.outcome", "rate_limit_timeout_exceeded");
-                                activity?.SetTag("http.retry.total_attempts", attemptCount);
-                                retryExhausted = true;
-                                break;
-                            }
-                            totalTooManyRequestsRetrySeconds += waitSeconds;
+                            activity?.SetTag("http.retry.outcome", "transport_error_timeout_exceeded");
+                            activity?.SetTag("http.retry.total_attempts", attemptCount);
+                            break;
+                        }
+                        totalTransportErrorRetrySeconds += transportWaitSeconds;
+
+                        // Issue #479: emit a per-retry event BEFORE we sleep so the
+                        // trace makes the retry visible even if the process dies
+                        // during the delay. attempt_number reuses attemptCount
+                        // (1-indexed retry counter).
+                        activity?.AddEvent("retry.attempt", new List<KeyValuePair<string, object?>>
+                        {
+                            new("attempt_number", attemptCount),
+                            new("delay_ms", (long)transportWaitSeconds * 1000L),
+                            new("reason", $"transport_error_{ex.GetType().Name}")
+                        });
+
+                        await Task.Delay(TimeSpan.FromSeconds(transportWaitSeconds), cancellationToken);
+                        currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
+                        continue;
+                    }
+
+                    // We got a response — clear any earlier transport error so the final
+                    // exception (if we later exceed the HTTP retry budget) reflects the
+                    // actual HTTP failure, not a stale transport error.
+                    lastTransportException = null;
+
+                    // If it's not a retryable status code, return immediately
+                    if (!IsRetryableStatusCode(response.StatusCode))
+                    {
+                        return response;
+                    }
+
+                    attemptCount++;
+
+                    // Capture status code before disposing the response
+                    HttpStatusCode statusCode = response.StatusCode;
+                    bool isTooManyRequests = statusCode == (HttpStatusCode)429;
+
+                    // Log this retry attempt
+                    activity?.SetTag("http.retry.attempt", attemptCount);
+                    activity?.SetTag("http.response.status_code", (int)statusCode);
+
+                    int waitSeconds;
+
+                    // Issue #479: derive a reason string the retry.attempt
+                    // event below will carry. We thread it alongside the
+                    // existing lastErrorMessage so the event tag and the
+                    // exception text stay consistent.
+                    string retryReason;
+
+                    // Check for Retry-After header
+                    if (response.Headers.TryGetValues("Retry-After", out var retryAfterValues))
+                    {
+                        // Parse the Retry-After value
+                        string retryAfterValue = string.Join(",", retryAfterValues);
+                        if (int.TryParse(retryAfterValue, out int retryAfterSeconds) && retryAfterSeconds > 0)
+                        {
+                            // Use the Retry-After value
+                            waitSeconds = retryAfterSeconds;
+                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using server-specified retry after {waitSeconds} seconds. Attempt {attemptCount}.";
+                            retryReason = $"retry_after_{(int)statusCode}";
                         }
                         else
                         {
-                            // Check service unavailable timeout for other retryable errors (408, 502, 503, 504)
-                            if (_retryTimeoutSeconds > 0 && totalServiceUnavailableRetrySeconds + waitSeconds > _retryTimeoutSeconds)
-                            {
-                                // We've exceeded the retry timeout, so break out of the loop
-                                activity?.SetTag("http.retry.outcome", "timeout_exceeded");
-                                activity?.SetTag("http.retry.total_attempts", attemptCount);
-                                retryExhausted = true;
-                                break;
-                            }
-                            totalServiceUnavailableRetrySeconds += waitSeconds;
+                            // Invalid Retry-After value, use exponential backoff
+                            waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
+                            lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Invalid Retry-After header, using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
+                            retryReason = $"retry_after_{(int)statusCode}_invalid_header";
                         }
+                    }
+                    else
+                    {
+                        // No Retry-After header, use exponential backoff
+                        waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
+                        lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
+                        retryReason = $"retry_after_{(int)statusCode}_no_header";
+                    }
 
-                        // Issue #479: emit a retry.attempt event BEFORE the
-                        // Task.Delay below. This lives on the SendAsync
-                        // activity (the one TraceActivityAsync just created
-                        // above) so a single completed activity carries all
-                        // its retry attempts as ordered events, plus the
-                        // summary tags appended in the finally block.
-                        retryEventNumber++;
-                        activity?.AddEvent("retry.attempt", new List<KeyValuePair<string, object?>>
+                    // Dispose the response before retrying
+                    response.Dispose();
+
+                    // Reset the request content for the next attempt
+                    request.Content = null;
+
+                    // Check if we would exceed the timeout after waiting, based on error type
+                    if (isTooManyRequests)
+                    {
+                        // Check 429 rate limit timeout
+                        if (_rateLimitRetryTimeoutSeconds > 0 && totalTooManyRequestsRetrySeconds + waitSeconds > _rateLimitRetryTimeoutSeconds)
                         {
-                            new("attempt_number", retryEventNumber),
-                            new("delay_ms", (long)waitSeconds * 1000L),
-                            new("reason", retryReason)
-                        });
-
-                        // Wait for the calculated time
-                        await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
-
-                        // Increase backoff for next attempt (exponential backoff)
-                        currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
-                    } while (!cancellationToken.IsCancellationRequested);
-
-                    // If we get here, we've either exceeded the timeout or been cancelled
-                    if (cancellationToken.IsCancellationRequested)
+                            // We've exceeded the rate limit retry timeout, so break out of the loop
+                            activity?.SetTag("http.retry.outcome", "rate_limit_timeout_exceeded");
+                            activity?.SetTag("http.retry.total_attempts", attemptCount);
+                            break;
+                        }
+                        totalTooManyRequestsRetrySeconds += waitSeconds;
+                    }
+                    else
                     {
-                        activity?.SetTag("http.retry.outcome", "cancelled");
-                        activity?.SetTag("http.retry.total_attempts", attemptCount);
-                        retryExhausted = true;
-                        throw new OperationCanceledException("Request cancelled during retry wait", cancellationToken);
+                        // Check service unavailable timeout for other retryable errors (408, 502, 503, 504)
+                        if (_retryTimeoutSeconds > 0 && totalServiceUnavailableRetrySeconds + waitSeconds > _retryTimeoutSeconds)
+                        {
+                            // We've exceeded the retry timeout, so break out of the loop
+                            activity?.SetTag("http.retry.outcome", "timeout_exceeded");
+                            activity?.SetTag("http.retry.total_attempts", attemptCount);
+                            break;
+                        }
+                        totalServiceUnavailableRetrySeconds += waitSeconds;
                     }
 
-                    // If the last error was a transport error, wrap and rethrow the original exception
-                    if (lastTransportException != null)
+                    // Issue #479: emit a retry.attempt event BEFORE Task.Delay
+                    // below. This lives on the SendAsync activity (created by
+                    // TraceActivityAsync above) so a single completed activity
+                    // carries all its retry attempts as ordered events.
+                    activity?.AddEvent("retry.attempt", new List<KeyValuePair<string, object?>>
                     {
-                        retryExhausted = true;
-                        throw new DatabricksException(
-                            lastErrorMessage ?? $"Transport error and retry timeout exceeded: {lastTransportException.Message}",
-                            AdbcStatusCode.IOError,
-                            lastTransportException)
-                            .SetSqlState("08001");
-                    }
+                        new("attempt_number", attemptCount),
+                        new("delay_ms", (long)waitSeconds * 1000L),
+                        new("reason", retryReason)
+                    });
 
-                    retryExhausted = true;
-                    throw new DatabricksException(lastErrorMessage ?? "Service temporarily unavailable and retry timeout exceeded", AdbcStatusCode.IOError)
+                    // Wait for the calculated time
+                    await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
+
+                    // Increase backoff for next attempt (exponential backoff)
+                    currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
+                } while (!cancellationToken.IsCancellationRequested);
+
+                // If we get here, we've either exceeded the timeout or been cancelled
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    activity?.SetTag("http.retry.outcome", "cancelled");
+                    activity?.SetTag("http.retry.total_attempts", attemptCount);
+                    throw new OperationCanceledException("Request cancelled during retry wait", cancellationToken);
+                }
+
+                // If the last error was a transport error, wrap and rethrow the original exception
+                if (lastTransportException != null)
+                {
+                    throw new DatabricksException(
+                        lastErrorMessage ?? $"Transport error and retry timeout exceeded: {lastTransportException.Message}",
+                        AdbcStatusCode.IOError,
+                        lastTransportException)
                         .SetSqlState("08001");
                 }
-                finally
-                {
-                    // Issue #479: ALWAYS emit summary tags — even on the
-                    // no-retry-needed path, even when we threw. Without
-                    // always-set tags, dashboards have to detect "tag
-                    // absent" to distinguish "successful first try" from
-                    // "this handler never ran"; setting both unconditionally
-                    // lets queries group/filter cleanly.
-                    activity?.SetTag("retry.total_attempts", httpSendCount);
-                    activity?.SetTag("retry.exhausted", retryExhausted);
-                }
+
+                throw new DatabricksException(lastErrorMessage ?? "Service temporarily unavailable and retry timeout exceeded", AdbcStatusCode.IOError)
+                    .SetSqlState("08001");
             });
         }
 
