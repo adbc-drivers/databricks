@@ -322,7 +322,7 @@ namespace AdbcDrivers.Databricks
             {
                 // Check if feature flag cache is enabled (default: true).
                 // Only an explicit, parseable "false" disables it; an absent or
-                // unparseable value keeps the default.
+                // unparsable value keeps the default.
                 bool enabled = true;
                 if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) &&
                     bool.TryParse(enabledStr, out bool parsedEnabled))

@@ -610,7 +610,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public async Task MergePropertiesWithFeatureFlagsAsync_PropertySetToInvalidValue_ReturnsLocalProperties()
         {
-            // Arrange - FeatureFlagCacheEnabled set to a non-boolean value. An unparseable
+            // Arrange - FeatureFlagCacheEnabled set to a non-boolean value. An unparsable
             // value keeps the default (enabled), so the merge proceeds; it returns local
             // properties here only because no resolvable host is present.
             var localProperties = new Dictionary<string, string>
@@ -682,7 +682,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public async Task FeatureFlagContext_CreateAsync_429_UsesFixedNegativeTtl()
         {
             // Retry-After is intentionally ignored: the negative TTL is a fixed 60s.
-            var httpClient = CreateMockHttpClient(HttpStatusCode.TooManyRequests);
+            // Use (HttpStatusCode)429 since HttpStatusCode.TooManyRequests is not defined on net472.
+            var httpClient = CreateMockHttpClient((HttpStatusCode)429);
             var context = await FeatureFlagContext.CreateAsync("rl.databricks.com", httpClient, DriverVersion);
 
             Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
