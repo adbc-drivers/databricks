@@ -570,9 +570,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         #region MergePropertiesWithFeatureFlagsAsync Default Behavior Tests
 
         [Fact]
-        public async Task MergePropertiesWithFeatureFlagsAsync_PropertyNotSet_ReturnsLocalProperties()
+        public async Task MergePropertiesWithFeatureFlagsAsync_PropertyNotSet_DefaultsToEnabled()
         {
-            // Arrange - No FeatureFlagCacheEnabled property set (default: false)
+            // Arrange - No FeatureFlagCacheEnabled property set. The default is now ENABLED,
+            // so the merge proceeds past the enabled-check; it returns local properties here
+            // only because no resolvable host (adbc.spark.host / uri) is present.
             var localProperties = new Dictionary<string, string>
             {
                 ["host"] = TestHost,
@@ -583,7 +585,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             // Act
             var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
 
-            // Assert - Should return local properties unchanged (feature flags skipped)
+            // Assert - No resolvable host => returns local properties unchanged
             Assert.Same(localProperties, result);
         }
 
@@ -608,7 +610,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public async Task MergePropertiesWithFeatureFlagsAsync_PropertySetToInvalidValue_ReturnsLocalProperties()
         {
-            // Arrange - FeatureFlagCacheEnabled set to a non-boolean value
+            // Arrange - FeatureFlagCacheEnabled set to a non-boolean value. An unparseable
+            // value keeps the default (enabled), so the merge proceeds; it returns local
+            // properties here only because no resolvable host is present.
             var localProperties = new Dictionary<string, string>
             {
                 ["host"] = TestHost,
@@ -619,8 +623,113 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             // Act
             var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
 
-            // Assert - Should return local properties unchanged (can't parse as bool)
+            // Assert - No resolvable host => returns local properties unchanged
             Assert.Same(localProperties, result);
+        }
+
+        #endregion
+
+        #region Feature Flag HttpClient Timeout Tests
+
+        [Fact]
+        public void CreateFeatureFlagHttpClient_NoOverride_DefaultsToFiveSecondTimeout()
+        {
+            // Arrange - no feature_flag_timeout_seconds property set
+            var properties = new Dictionary<string, string>();
+
+            // Act
+            using var client = AdbcDrivers.Databricks.Http.HttpClientFactory
+                .CreateFeatureFlagHttpClient(properties, TestHost, DriverVersion);
+
+            // Assert - default is 5s (would be 10s before the change)
+            Assert.Equal(TimeSpan.FromSeconds(5), client.Timeout);
+        }
+
+        [Fact]
+        public void CreateFeatureFlagHttpClient_WithOverride_HonorsConfiguredTimeout()
+        {
+            // Arrange - explicit override must still win over the default
+            var properties = new Dictionary<string, string>
+            {
+                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "3"
+            };
+
+            // Act
+            using var client = AdbcDrivers.Databricks.Http.HttpClientFactory
+                .CreateFeatureFlagHttpClient(properties, TestHost, DriverVersion);
+
+            // Assert
+            Assert.Equal(TimeSpan.FromSeconds(3), client.Timeout);
+        }
+
+        #endregion
+
+        #region Negative Cache Tests
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_Success_StatusHealthyNoNegativeTtl()
+        {
+            var response = new FeatureFlagsResponse { Flags = new List<FeatureFlagEntry>(), TtlSeconds = 300 };
+            var context = await FeatureFlagContext.CreateAsync("ok.databricks.com", CreateMockHttpClient(response), DriverVersion);
+
+            Assert.Equal(FeatureFlagFetchStatus.Healthy, context.LastFetchStatus);
+            Assert.Null(context.NegativeTtl);
+
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_429_UsesFixedNegativeTtl()
+        {
+            // Retry-After is intentionally ignored: the negative TTL is a fixed 60s.
+            var httpClient = CreateMockHttpClient(HttpStatusCode.TooManyRequests);
+            var context = await FeatureFlagContext.CreateAsync("rl.databricks.com", httpClient, DriverVersion);
+
+            Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
+            Assert.Equal(FeatureFlagContext.DefaultNegativeTtl, context.NegativeTtl);
+
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_ServerError_UsesDefaultNegativeTtl()
+        {
+            var context = await FeatureFlagContext.CreateAsync(
+                "err.databricks.com", CreateMockHttpClient(HttpStatusCode.InternalServerError), DriverVersion);
+
+            Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
+            Assert.Equal(FeatureFlagContext.DefaultNegativeTtl, context.NegativeTtl);
+
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_Timeout_DoesNotThrowAndUsesDefaultNegativeTtl()
+        {
+            // HttpClient timeout surfaces as TaskCanceledException with an un-cancelled request token;
+            // it must be treated as a failed fetch (negatively cached), not propagated.
+            var context = await FeatureFlagContext.CreateAsync(
+                "to.databricks.com", CreateTimeoutMockHttpClient(), DriverVersion);
+
+            Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
+            Assert.Equal(FeatureFlagContext.DefaultNegativeTtl, context.NegativeTtl);
+
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_CallerCancellation_Propagates()
+        {
+            // A genuinely cancelled caller token must propagate, unlike an HttpClient timeout.
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                FeatureFlagContext.CreateAsync(
+                    "cancel.databricks.com",
+                    CreateDelayedMockHttpClient(new FeatureFlagsResponse { Flags = new List<FeatureFlagEntry>() }, delayMs: 1000),
+                    DriverVersion,
+                    cancellationToken: cts.Token));
         }
 
         #endregion
@@ -686,6 +795,24 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         private static HttpClient CreateMockHttpClient(HttpStatusCode statusCode)
         {
             return CreateMockHttpClient(statusCode, "");
+        }
+
+        private static HttpClient CreateTimeoutMockHttpClient()
+        {
+            // Simulate an HttpClient timeout: SendAsync throws TaskCanceledException
+            // without the caller's token being cancelled.
+            var mockHandler = new Mock<HttpMessageHandler>();
+            mockHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ThrowsAsync(new TaskCanceledException("Simulated HttpClient timeout"));
+
+            return new HttpClient(mockHandler.Object)
+            {
+                BaseAddress = new Uri("https://test.databricks.com")
+            };
         }
 
         private static HttpClient CreateDelayedMockHttpClient(FeatureFlagsResponse response, int delayMs)

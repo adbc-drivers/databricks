@@ -71,8 +71,9 @@ namespace AdbcDrivers.Databricks.Tests
             // Log the TTL from the server
             OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] TTL from server: {context.Ttl.TotalSeconds} seconds");
 
-            // Note: We don't assert flags.Count > 0 because the server may return empty flags
-            // in some environments, but we verify the infrastructure works
+            // Happy path: the connector-service endpoint should return at least one flag.
+            // Requires a flag-configured workspace (the CI/test workspace).
+            Assert.True(flags.Count > 0, "Feature flag endpoint should return at least one flag");
 
             // Execute a simple query to verify the connection works
             using var statement = connection.CreateStatement();
@@ -204,12 +205,13 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         /// <summary>
-        /// Creates a connection with feature flag cache explicitly enabled.
+        /// Creates a connection with the feature flag cache active. The cache is enabled by
+        /// default, so this intentionally does NOT set adbc.databricks.feature_flag_cache_enabled,
+        /// which exercises the default-on behavior end-to-end.
         /// </summary>
         private AdbcConnection NewConnectionWithFeatureFlagCache()
         {
             var parameters = GetDriverParameters(TestConfiguration);
-            parameters[DatabricksParameters.FeatureFlagCacheEnabled] = "true";
             var driver = new DatabricksDriver();
             var database = driver.Open(parameters);
             return database.Connect(new Dictionary<string, string>());
