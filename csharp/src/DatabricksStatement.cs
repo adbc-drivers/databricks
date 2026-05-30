@@ -89,6 +89,28 @@ namespace AdbcDrivers.Databricks
         private readonly Stopwatch _statementLifetimeStopwatch = Stopwatch.StartNew();
         private bool _closeStatementTelemetryEmitted;
 
+        // Issue #477: long-lived "lifetime" Activity that wraps every per-call activity
+        // emitted on behalf of this statement. Parented explicitly to the connection's
+        // own lifetime Activity (see DatabricksConnection.LifetimeActivity) so the
+        // hierarchy is robust even when the Statement is constructed on a different
+        // async context than where the Connection was opened — in that case
+        // Activity.Current here would NOT see the connection's lifetime Activity.
+        // Stopped in Dispose AFTER the statement's CLOSE_STATEMENT telemetry has been
+        // emitted so any close-side spans (DatabricksCompositeReader.Dispose, the
+        // CloseStatement RPC) chain underneath this scope.
+        //
+        // STATIC ActivitySource is intentional: the per-instance source held by
+        // <see cref="ActivityTrace"/> is shared with the connection and disposed
+        // inside <c>TracingConnection.Dispose</c> BEFORE <see cref="DatabricksConnection.Dispose"/>
+        // returns. Listeners registered against that source stop receiving
+        // notifications once it's disposed, so a Stop() called from the statement
+        // Dispose path (which might run alongside or after connection disposal in
+        // pooled scenarios) would silently drop. A process-wide static source
+        // survives both lifecycles.
+        private static readonly ActivitySource s_lifetimeActivitySource = new ActivitySource("AdbcDrivers.Databricks");
+        private Activity? _lifetimeActivity;
+        private bool _lifetimeActivityStopped;
+
         // Populated by DatabricksCompositeReader.Dispose when it issues TCloseOperationReq
         // to the server. Lets us report the actual close-RPC latency in the CLOSE_STATEMENT
         // telemetry event emitted at statement Dispose, instead of a meaningless 0.
@@ -127,6 +149,21 @@ namespace AdbcDrivers.Databricks
             {
                 SetOption(ApacheParameters.PollTimeMilliseconds, DatabricksConstants.DefaultAsyncExecPollIntervalMs.ToString());
             }
+
+            // Issue #477: open the statement-lifetime Activity here. Pass the connection's
+            // lifetime Activity Context explicitly as the parent so the hierarchy is
+            // robust against cross-async-context construction — Activity.Current is
+            // AsyncLocal, so if CreateStatement is invoked on a continuation that didn't
+            // observe the connection-open context, Activity.Current would NOT see
+            // ConnectionLifetime. The default ActivityContext (when LifetimeActivity is
+            // null, e.g. no listener was attached when the connection was opened) is
+            // "no parent", which still lets the statement-lifetime Activity be its own
+            // root and parent all per-call activities under one TraceId.
+            var connectionLifetimeContext = connection.LifetimeActivity?.Context ?? default;
+            _lifetimeActivity = s_lifetimeActivitySource.StartActivity(
+                "DatabricksStatement.Lifetime",
+                ActivityKind.Internal,
+                connectionLifetimeContext);
         }
 
         private StatementTelemetryContext? CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type statementType)
@@ -1346,6 +1383,20 @@ namespace AdbcDrivers.Databricks
                 }
             }
             base.Dispose(disposing);
+
+            // Issue #477: stop the statement-lifetime Activity LAST so any spans emitted
+            // during base.Dispose (e.g. the per-statement CloseStatement RPC, the
+            // composite-reader's CloseOperation, etc.) chain underneath this scope.
+            // Idempotent across repeated Dispose() calls.
+            if (disposing)
+            {
+                if (!_lifetimeActivityStopped)
+                {
+                    _lifetimeActivityStopped = true;
+                    _lifetimeActivity?.Stop();
+                    _lifetimeActivity = null;
+                }
+            }
         }
 
         /// <inheritdoc/>

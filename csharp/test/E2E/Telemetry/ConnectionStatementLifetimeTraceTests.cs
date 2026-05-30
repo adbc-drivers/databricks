@@ -214,18 +214,30 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 $"Captured operations under StatementLifetime: [{string.Join(", ", statementChildren.Select(a => a.OperationName))}]; " +
                 $"All captured operations: [{string.Join(", ", activities.Select(a => a.OperationName).Distinct())}].");
 
-            // ---- Assertion 5: every captured activity shares the ConnectionLifetime TraceId. ----
+            // ---- Assertion 5: every per-connection captured activity shares the ConnectionLifetime TraceId. ----
             // This is the headline assertion for the fleet visualization concern in #477.
-            // Today, every per-call activity has its own TraceId; after the fix they all
-            // share one root TraceId per connection.
-            var distinctTraceIds = activities.Select(a => a.TraceId).Distinct().ToList();
+            // Today, every per-call activity has its own TraceId; after the fix every activity
+            // on the connection-scope source (AdbcDrivers.Databricks) shares one root TraceId.
+            //
+            // The FeatureFlagCache source (AdbcDrivers.Databricks.FeatureFlagCache) is
+            // intentionally NOT under the connection scope — it runs in DatabricksDatabase.Connect
+            // BEFORE the DatabricksConnection constructor (and therefore before
+            // ConnectionLifetime opens), so it has its own TraceId. That's fine; it's not part
+            // of the per-connection visualization that #477 fixes. Exclude it from the
+            // singleton-TraceId check to avoid coupling this test to that orthogonal source.
+            var connectionScopeActivities = activities
+                .Where(a => a.SourceName == "AdbcDrivers.Databricks")
+                .ToList();
+            var distinctTraceIds = connectionScopeActivities.Select(a => a.TraceId).Distinct().ToList();
             Assert.True(
                 distinctTraceIds.Count == 1,
                 $"Issue #477: expected a single TraceId across the entire connection " +
                 $"lifetime (so trace-tree visualization works), got {distinctTraceIds.Count} " +
-                $"distinct TraceIds: [{string.Join(", ", distinctTraceIds)}]. " +
+                $"distinct TraceIds on source 'AdbcDrivers.Databricks': [{string.Join(", ", distinctTraceIds)}]. " +
                 "MemoryStress baseline shows 12,958 TraceIds across one test run — the " +
                 "Lifetime activities collapse that to one TraceId per connection.");
+            // Sanity check: ConnectionLifetime's TraceId is the one shared by everyone else.
+            Assert.Equal(connectionLifetime.TraceId, distinctTraceIds[0]);
         }
 
         /// <summary>
