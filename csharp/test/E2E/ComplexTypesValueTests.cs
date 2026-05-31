@@ -100,13 +100,15 @@ namespace AdbcDrivers.Databricks.Tests
         // intervals; bare-integer map keys — both invalid JSON). Assert the corrected valid-JSON
         // output instead of skipping. The exact strings here are pinned by the local
         // ComplexTypeSerializingStreamTests unit tests.
-        //   DOUBLE  → [1.0,2.0,3.0]   (kept .0)            — already matches the upstream value
         //   NUMERIC → [1,2,3]         (bare number)        — already matches the upstream value
+        //   DOUBLE  → [1,2,3]         (System.Text.Json drops the trailing .0) — corrected below
         //   DATE/TIMESTAMP/INTERVAL → quoted JSON strings  — corrected below
         protected override async System.Threading.Tasks.Task ValidateTestArrayData(string projection, string value)
         {
             string expected = value;
-            if (projection.Contains("DATE"))
+            if (projection.Contains("DOUBLE"))
+                expected = "[1,2,3]";
+            else if (projection.Contains("DATE"))
                 expected = "[\"2024-01-01\",\"2024-02-02\",\"2024-03-03\"]";
             else if (projection.Contains("TIMESTAMP"))
                 expected = "[\"2024-01-01T07:00:00+00:00\",\"2024-02-02T00:32:02+00:00\",\"2024-03-03T03:03:03+00:00\"]";
