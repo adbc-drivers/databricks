@@ -114,6 +114,19 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
+        public async Task Array_DayTimeDuration_Format()
+        {
+            // INTERVAL DAY TO SECOND arrives as DurationArray; serialized via the same
+            // "D HH:MM:SS.nnnnnnnnn" format IntervalSerializingStream uses for top-level columns.
+            ListArray.Builder b = new ListArray.Builder(DurationType.Microsecond);
+            DurationArray.Builder vb = (DurationArray.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(304_215_000_000L); // 3 d 12 h 30 m 15 s
+            Assert.Equal("[\"3 12:30:15.000000000\"]",
+                await Serialize("ARRAY<INTERVAL DAY TO SECOND>", b.Build()));
+        }
+
+        [Fact]
         public async Task Map_StringValueWithQuotes_IsEscapedJson()
         {
             // A MAP value containing double quotes must be escaped as \" (relaxed encoder),
