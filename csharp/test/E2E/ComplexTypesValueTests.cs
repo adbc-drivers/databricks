@@ -94,27 +94,38 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(batch.Column(0).IsNull(0), "Expected null value");
         }
 
-        // PECO-3014: System.Text.Json formats NUMERIC/DOUBLE/DATE/TIMESTAMP/INTERVAL differently
-        // from what the upstream suite expects (server-emitted format). Skip only those projections;
-        // INT/LONG/STRING cases are unaffected and continue to run.
+        // Complex-type elements are serialized client-side by ComplexTypeSerializingStream
+        // (System.Text.Json), which emits valid JSON. That differs from the upstream baseline,
+        // whose expected strings encode the old server-emitted format (unquoted dates/timestamps/
+        // intervals; bare-integer map keys — both invalid JSON). Assert the corrected valid-JSON
+        // output instead of skipping. The exact strings here are pinned by the local
+        // ComplexTypeSerializingStreamTests unit tests.
+        //   DOUBLE  → [1.0,2.0,3.0]   (kept .0)            — already matches the upstream value
+        //   NUMERIC → [1,2,3]         (bare number)        — already matches the upstream value
+        //   DATE/TIMESTAMP/INTERVAL → quoted JSON strings  — corrected below
         protected override async System.Threading.Tasks.Task ValidateTestArrayData(string projection, string value)
         {
-            Skip.If(
-                projection.Contains("DOUBLE") || projection.Contains("NUMERIC") ||
-                projection.Contains("TIMESTAMP") || projection.Contains("DATE") ||
-                projection.Contains("INTERVAL"),
-                "PECO-3014: element format differs from upstream expectation for this projection");
-            await base.ValidateTestArrayData(projection, value);
+            string expected = value;
+            if (projection.Contains("DATE"))
+                expected = "[\"2024-01-01\",\"2024-02-02\",\"2024-03-03\"]";
+            else if (projection.Contains("TIMESTAMP"))
+                expected = "[\"2024-01-01T07:00:00+00:00\",\"2024-02-02T00:32:02+00:00\",\"2024-03-03T03:03:03+00:00\"]";
+            else if (projection.Contains("INTERVAL"))
+                expected = "[\"123-11\",\"5-0\",\"0-6\"]";
+
+            await base.ValidateTestArrayData(projection, expected);
         }
 
-        // PECO-3014: the upstream MAP test with integer keys expects bare-integer-key format
-        // (e.g. {1:"foo",...}) which is not valid JSON and differs from System.Text.Json output
-        // ({"1":"foo",...}). Skip only that case; the string-key case produces valid JSON that
-        // matches the upstream expectation.
+        // Integer-key maps: the upstream baseline expects bare-integer keys ({1:"foo"}) which is
+        // invalid JSON. ComplexTypeSerializingStream emits quoted, key-sorted JSON ({"1":"foo"}).
+        // The string-key case already matches the upstream (sorted) expectation.
         protected override async System.Threading.Tasks.Task ValidateTestMapData(string projection, string value)
         {
-            Skip.If(!value.StartsWith("{\""), "PECO-3014: expected map format uses non-JSON integer-key syntax");
-            await base.ValidateTestMapData(projection, value);
+            string expected = value.StartsWith("{\"")
+                ? value
+                : "{\"1\":\"John Doe\",\"2\":\"Jane Doe\",\"3\":\"Jack Doe\"}";
+
+            await base.ValidateTestMapData(projection, expected);
         }
 
         // COMPLEX-001: Simple ARRAY of integers

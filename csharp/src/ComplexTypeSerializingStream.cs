@@ -16,7 +16,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
@@ -175,10 +177,50 @@ namespace AdbcDrivers.Databricks
             {
                 ListArray la => ToListOrMap(la, index),
                 StructArray sa => ToDict(sa, index),
-                Decimal128Array dec => dec.GetString(index),            // preserve precision as string
+                // DECIMAL: emit as a bare JSON number (not a quoted string) so the output matches
+                // the JDBC driver and is valid JSON. The decimal's string form is written raw so
+                // values beyond C# decimal's ~28-digit range (DECIMAL(38, …)) keep full precision.
+                Decimal128Array dec => RawNumber(dec.GetString(index)),
+                Decimal256Array dec => RawNumber(dec.GetString(index)),
+                // DOUBLE/FLOAT: System.Text.Json renders integral values without a fractional part
+                // (1.0 -> 1). Restore the trailing ".0" so DOUBLE columns stay visibly floating
+                // point, matching JDBC (Java's Double.toString) and the upstream baseline.
+                DoubleArray d => RealNumber(d.GetValue(index)),
+                FloatArray f => RealNumber(f.GetValue(index)),
                 Date32Array d32 => d32.GetDateTime(index)?.ToString("yyyy-MM-dd"),
-                _ => array.ValueAt(index, StructResultType.Object)      // int, long, float, bool, string, timestamp, etc.
+                // INTERVAL: native YearMonth/Duration arrays serialize to {} via System.Text.Json
+                // (no public properties). Render the same "Y-M" / "D HH:MM:SS.nnnnnnnnn" strings
+                // IntervalSerializingStream produces for top-level interval columns.
+                YearMonthIntervalArray ym => IntervalSerializingStream.FormatYearMonth(ym.GetValue(index)!.Value.Months),
+                DurationArray dur => IntervalSerializingStream.FormatDuration(dur.GetValue(index)!.Value, ((DurationType)dur.Data.DataType).Unit),
+                _ => array.ValueAt(index, StructResultType.Object)      // int, long, bool, string, timestamp, etc.
             };
+        }
+
+        /// <summary>
+        /// Wraps a numeric string as a raw JSON number node so <see cref="JsonSerializer"/> emits it
+        /// unquoted (e.g. <c>1</c>, not <c>"1"</c>) with full precision.
+        /// </summary>
+        private static JsonNode? RawNumber(string? numericText) =>
+            numericText == null ? null : JsonNode.Parse(numericText);
+
+        /// <summary>
+        /// Renders a floating-point value as a JSON number that keeps a trailing ".0" for integral
+        /// values (e.g. <c>1.0</c>), leaving fractional and scientific-notation forms untouched.
+        /// Each overload formats from its own type so float values aren't widened to double (which
+        /// would introduce spurious digits, e.g. 1.1f -> 1.100000023841858).
+        /// </summary>
+        private static JsonNode? RealNumber(double? value) =>
+            value == null ? null : RealNumberFromString(value.Value.ToString(CultureInfo.InvariantCulture));
+
+        private static JsonNode? RealNumber(float? value) =>
+            value == null ? null : RealNumberFromString(value.Value.ToString(CultureInfo.InvariantCulture));
+
+        private static JsonNode? RealNumberFromString(string s)
+        {
+            if (s.IndexOf('.') < 0 && s.IndexOf('E') < 0 && s.IndexOf('e') < 0)
+                s += ".0";
+            return JsonNode.Parse(s);
         }
 
         private static object ToListOrMap(ListArray listArray, int index)
