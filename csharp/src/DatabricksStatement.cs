@@ -222,10 +222,14 @@ namespace AdbcDrivers.Databricks
             PendingTelemetryContext = ctx;
             try
             {
-                QueryResult result = MaybeWrapComplexTypes(base.ExecuteQuery());
-                _lastQueryResult = result; // Store for telemetry
+                QueryResult result = base.ExecuteQuery();
+                // Store the UNWRAPPED result for telemetry: EmitTelemetry inspects
+                // _lastQueryResult.Stream via `is CloudFetchReader/DatabricksCompositeReader`
+                // to read chunk metrics and IsCompressed/ResultFormat. ComplexTypeSerializingStream
+                // would mask those types, so keep the real reader here and wrap only on return.
+                _lastQueryResult = result;
                 RecordSuccess(ctx);
-                return result;
+                return MaybeWrapComplexTypes(result);
             }
             catch (Exception ex)
             {
@@ -248,10 +252,12 @@ namespace AdbcDrivers.Databricks
             PendingTelemetryContext = ctx;
             try
             {
-                QueryResult result = MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
-                _lastQueryResult = result; // Store for telemetry
+                QueryResult result = await base.ExecuteQueryAsync();
+                // Store the UNWRAPPED result for telemetry (see ExecuteQuery for rationale):
+                // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
+                _lastQueryResult = result;
                 RecordSuccess(ctx);
-                return result;
+                return MaybeWrapComplexTypes(result);
             }
             catch (Exception ex)
             {
