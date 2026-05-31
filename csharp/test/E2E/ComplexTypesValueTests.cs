@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -156,6 +157,33 @@ namespace AdbcDrivers.Databricks.Tests
             await ValidateComplexColumnAsync(
                 "SELECT MAP(CAST('a' AS STRING), CAST(1 AS INT), CAST('b' AS STRING), CAST(2 AS INT))",
                 """{"a":1,"b":2}""");
+        }
+
+        // PECO-3032 (D3): a MAP value containing double-quote characters must serialize to valid
+        // JSON. The pre-fix Thrift server path emitted {"key":"val "quote""} (inner quotes
+        // unescaped — invalid JSON); client-side System.Text.Json serialization escapes them.
+        // Asserted by parse + round-trip rather than an exact string, since the escape form
+        // (\" vs ") is an encoder detail. Runs on whichever protocol the matrix selects.
+        [SkippableFact]
+        public async Task MapValueContainingDoubleQuote_ReturnsValidJson()
+        {
+            Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
+
+            // Literal MAP value is: val "quote" (the value string contains two double quotes).
+            Statement.SqlQuery = "SELECT MAP('key', 'val \"quote\"')";
+            QueryResult result = await Statement.ExecuteQueryAsync();
+
+            using IArrowArrayStream stream = result.Stream ?? throw new InvalidOperationException("stream is null");
+            RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            Assert.Equal(1, batch!.Length);
+
+            string raw = ((StringArray)batch.Column(0)).GetString(0);
+            OutputHelper?.WriteLine($"raw MAP column = {raw}");
+
+            using JsonDocument doc = JsonDocument.Parse(raw);
+            Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
+            Assert.Equal("val \"quote\"", doc.RootElement.GetProperty("key").GetString());
         }
 
         // COMPLEX-003: Simple STRUCT with two scalar fields
