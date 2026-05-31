@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -94,39 +95,46 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(batch.Column(0).IsNull(0), "Expected null value");
         }
 
-        // Complex-type elements are serialized client-side by ComplexTypeSerializingStream
-        // (System.Text.Json), which emits valid JSON. That differs from the upstream baseline,
-        // whose expected strings encode the old server-emitted format (unquoted dates/timestamps/
-        // intervals; bare-integer map keys — both invalid JSON). Assert the corrected valid-JSON
-        // output instead of skipping. The exact strings here are pinned by the local
-        // ComplexTypeSerializingStreamTests unit tests.
-        //   NUMERIC → [1,2,3]         (bare number)        — already matches the upstream value
-        //   DOUBLE  → [1,2,3]         (System.Text.Json drops the trailing .0) — corrected below
-        //   DATE/TIMESTAMP/INTERVAL → quoted JSON strings  — corrected below
+        // Databricks serializes complex-type elements client-side via ComplexTypeSerializingStream
+        // (System.Text.Json, valid JSON). For the projections below that differs from the upstream
+        // baseline, which encodes the old server-emitted format — unquoted dates/timestamps/intervals
+        // and bare-integer map keys, neither of which is valid JSON. We can't fix this at the call
+        // site (the [InlineData] lives in the shared Common base, which the Spark tests also inherit
+        // and which still use the server format), so map each affected projection to its corrected,
+        // valid-JSON expectation here. The exact strings are pinned by ComplexTypeSerializingStreamTests.
+        // INT/LONG/NUMERIC/STRING and bare-double already match the baseline and are intentionally absent.
+        // Keys must match the base [InlineData] projection verbatim; a drifted key falls back to the
+        // inherited value and the test fails loudly rather than silently passing.
+        private static readonly Dictionary<string, string> CorrectedArrayExpectations = new Dictionary<string, string>
+        {
+            ["ARRAY(CAST(1 AS DOUBLE), 2, 3)"] = "[1,2,3]",
+            ["ARRAY(CAST('2024-01-01T00:00:00Z' AS DATE), CAST('2024-02-02T02:02:02Z' AS DATE), CAST('2024-03-03T03:03:03Z' AS DATE))"] =
+                "[\"2024-01-01\",\"2024-02-02\",\"2024-03-03\"]",
+            ["ARRAY(CAST('2024-01-01T00:00:00-07:00' AS TIMESTAMP), CAST('2024-02-02T02:02:02+01:30' AS TIMESTAMP), CAST('2024-03-03T03:03:03Z' AS TIMESTAMP))"] =
+                "[\"2024-01-01T07:00:00+00:00\",\"2024-02-02T00:32:02+00:00\",\"2024-03-03T03:03:03+00:00\"]",
+            ["ARRAY(INTERVAL 123 YEARS 11 MONTHS, INTERVAL 5 YEARS, INTERVAL 6 MONTHS)"] =
+                "[\"123-11\",\"5-0\",\"0-6\"]",
+        };
+
+        private static readonly Dictionary<string, string> CorrectedMapExpectations = new Dictionary<string, string>
+        {
+            // Integer keys: baseline {1:"foo"} is invalid JSON; we emit quoted, key-sorted JSON.
+            ["MAP(1, 'John Doe', 2, 'Jane Doe', 3, 'Jack Doe')"] =
+                "{\"1\":\"John Doe\",\"2\":\"Jane Doe\",\"3\":\"Jack Doe\"}",
+            // The string-key case already matches the upstream (sorted) expectation.
+        };
+
         protected override async System.Threading.Tasks.Task ValidateTestArrayData(string projection, string value)
         {
-            string expected = value;
-            if (projection.Contains("DOUBLE"))
-                expected = "[1,2,3]";
-            else if (projection.Contains("DATE"))
-                expected = "[\"2024-01-01\",\"2024-02-02\",\"2024-03-03\"]";
-            else if (projection.Contains("TIMESTAMP"))
-                expected = "[\"2024-01-01T07:00:00+00:00\",\"2024-02-02T00:32:02+00:00\",\"2024-03-03T03:03:03+00:00\"]";
-            else if (projection.Contains("INTERVAL"))
-                expected = "[\"123-11\",\"5-0\",\"0-6\"]";
-
+            if (!CorrectedArrayExpectations.TryGetValue(projection, out string? expected))
+                expected = value;
             await base.ValidateTestArrayData(projection, expected);
         }
 
-        // Integer-key maps: the upstream baseline expects bare-integer keys ({1:"foo"}) which is
-        // invalid JSON. ComplexTypeSerializingStream emits quoted, key-sorted JSON ({"1":"foo"}).
-        // The string-key case already matches the upstream (sorted) expectation.
         protected override async System.Threading.Tasks.Task ValidateTestMapData(string projection, string value)
         {
-            string expected = value.StartsWith("{\"")
-                ? value
-                : "{\"1\":\"John Doe\",\"2\":\"Jane Doe\",\"3\":\"Jack Doe\"}";
-
+            if (!CorrectedMapExpectations.TryGetValue(projection, out string? expected))
+                expected = value;
             await base.ValidateTestMapData(projection, expected);
         }
 
