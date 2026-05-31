@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -70,6 +71,15 @@ namespace AdbcDrivers.Databricks
     /// </summary>
     internal sealed class ComplexTypeSerializingStream : IArrowArrayStream
     {
+        // Use the relaxed encoder so complex-type values are serialized as data, not HTML:
+        // a double quote becomes \" (not ") and non-ASCII / < > & are emitted verbatim
+        // rather than \uXXXX-escaped. The output is still valid JSON; "unsafe" only refers to
+        // embedding directly in HTML, which is the consuming application's concern, not ours.
+        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
+
         private readonly IArrowArrayStream _inner;
         private readonly Schema _schema;
         private readonly HashSet<int> _complexColumnIndices;
@@ -134,7 +144,7 @@ namespace AdbcDrivers.Databricks
                 if (array.IsNull(i))
                     builder.AppendNull();
                 else
-                    builder.Append(JsonSerializer.Serialize(ToObject(array, i)));
+                    builder.Append(JsonSerializer.Serialize(ToObject(array, i), JsonOptions));
             }
             return builder.Build();
         }

@@ -113,6 +113,20 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal("[\"123-11\"]", await Serialize("ARRAY<INTERVAL YEAR TO MONTH>", b.Build()));
         }
 
+        [Fact]
+        public async Task Map_StringValueWithQuotes_IsEscapedJson()
+        {
+            // A MAP value containing double quotes must be escaped as \" (relaxed encoder),
+            // not the HTML-safe " — and must round-trip. This is the PECO-3032 core case.
+            MapArray.Builder mb = new MapArray.Builder(new MapType(StringType.Default, StringType.Default));
+            StringArray.Builder kb = (StringArray.Builder)mb.KeyBuilder;
+            StringArray.Builder vb = (StringArray.Builder)mb.ValueBuilder;
+            mb.Append();
+            kb.Append("key1");
+            vb.Append("val \"quote\"");
+            Assert.Equal("{\"key1\":\"val \\\"quote\\\"\"}", await Serialize("MAP<STRING,STRING>", mb.Build()));
+        }
+
         // ----- helpers -----------------------------------------------------
 
         private static async Task<string?> Serialize(string sqlName, IArrowArray nativeArray)

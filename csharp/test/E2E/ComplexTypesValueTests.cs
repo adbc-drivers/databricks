@@ -280,15 +280,15 @@ namespace AdbcDrivers.Databricks.Tests
         // COMPLEX-015: a MAP value containing double-quote characters must serialize to valid,
         // escaped JSON (PECO-3032 / D3). The pre-fix Thrift server path left the inner quotes
         // unescaped (malformed JSON). System.Text.Json escapes each inner double quote as the
-        // six-character \u0022 sequence, so the expected string below contains literal \u0022
-        // (a raw string literal, so the backslash is not an escape).
+        // \" (the relaxed JSON encoder), so the value parses and round-trips. The \" below is
+        // literal text in a raw string literal.
         [SkippableFact]
         public async Task COMPLEX015_MapValueWithDoubleQuotes()
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
             await ValidateComplexColumnAsync(
                 """SELECT MAP('key1', 'val "quote"')""",
-                """{"key1":"val \u0022quote\u0022"}""");
+                """{"key1":"val \"quote\""}""");
         }
     }
 }
