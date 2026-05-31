@@ -134,10 +134,11 @@ namespace AdbcDrivers.Databricks.Tests
 
             var parameters = new Dictionary<string, string>
             {
-                [DatabricksParameters.Protocol] = "thrift",
                 [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
                 [DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString(),
             };
+            if (!string.IsNullOrEmpty(TestConfiguration.Protocol))
+                parameters[DatabricksParameters.Protocol] = TestConfiguration.Protocol;
 
             // Keep connection alive without disposing — simulates a connection pool.
             // In a pool CloseSession is never sent, so CloseOperation is the only mechanism
