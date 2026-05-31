@@ -287,8 +287,8 @@ namespace AdbcDrivers.Databricks.Tests
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
             await ValidateComplexColumnAsync(
-                "SELECT MAP('key', 'val \"quote\"')",
-                """{"key":"val \u0022quote\u0022"}""");
+                """SELECT MAP('key1', 'val "quote"')""",
+                """{"key1":"val \u0022quote\u0022"}""");
         }
     }
 }
