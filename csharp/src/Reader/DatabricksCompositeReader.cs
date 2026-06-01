@@ -290,10 +290,12 @@ namespace AdbcDrivers.Databricks.Reader
                                 }
                                 // Emit the matching "completed" event regardless of whether
                                 // the RPC threw so the trace always records when the close
-                                // call returned. Error details, if any, are surfaced via
-                                // AddException above (matches the convention used in
-                                // HiveServer2Statement.CancelOperationAsync).
-                                activity?.AddEvent("composite_reader.close_operation.completed");
+                                // call returned. Error details are also surfaced via
+                                // AddException above; the tag here lets consumers filter
+                                // clean vs. failed closes without parsing the exception.
+                                activity?.AddEvent("composite_reader.close_operation.completed", [
+                                    new("error", closeError != null)
+                                ]);
                             }
                             if (_activeReader != null)
                             {

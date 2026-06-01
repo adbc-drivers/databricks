@@ -265,11 +265,11 @@ namespace AdbcDrivers.Databricks.Tests
 
                 var startedEvent = disposeEvents
                     .Where(e => e.Name == "composite_reader.close_operation.started")
-                    .Cast<ActivityEvent?>()
+                    .Select(e => (ActivityEvent?)e)
                     .FirstOrDefault();
                 var completedEvent = disposeEvents
                     .Where(e => e.Name == "composite_reader.close_operation.completed")
-                    .Cast<ActivityEvent?>()
+                    .Select(e => (ActivityEvent?)e)
                     .FirstOrDefault();
 
                 Assert.True(startedEvent != null,
