@@ -180,8 +180,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _waitTimeoutSeconds = waitTimeoutSeconds;
             _pollingIntervalMs = pollingIntervalMs;
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
-            _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
-                properties, ApacheParameters.QueryTimeoutSeconds, 0);
+
+            // Validate config-supplied statement options so bad config throws ArgumentOutOfRangeException
+            // at CreateStatement time, matching the Thrift path. BatchSize is read-only on SEA — validated
+            // for parity but otherwise unused at the statement level.
+            _queryTimeoutSeconds = properties.TryGetValue(ApacheParameters.QueryTimeoutSeconds, out string? queryTimeoutValue)
+                ? StatementOptionValidator.ValidateQueryTimeout(ApacheParameters.QueryTimeoutSeconds, queryTimeoutValue)
+                : 0;
+            if (properties.TryGetValue(ApacheParameters.BatchSize, out string? batchSizeValue))
+            {
+                StatementOptionValidator.ValidateBatchSize(ApacheParameters.BatchSize, batchSizeValue);
+            }
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -239,19 +248,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 // Validate these options to match Thrift path behavior (throw ArgumentOutOfRangeException
                 // for invalid values), even though they are read-only in SEA (set at connection level).
+                // The same validators run at construction (see constructor / connection), so SetOption
+                // and bad-config behave identically to Thrift.
                 case ApacheParameters.PollTimeMilliseconds:
-                    if (string.IsNullOrEmpty(value) || !int.TryParse(value, out int pollTimeMs) || pollTimeMs < 0)
-                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than or equal to 0.");
+                    StatementOptionValidator.ValidatePollTime(key, value);
                     break;
                 case ApacheParameters.BatchSize:
-                    if (string.IsNullOrEmpty(value) || !long.TryParse(value, out long batchSize) || batchSize <= 0)
-                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than zero.");
+                    StatementOptionValidator.ValidateBatchSize(key, value);
                     break;
                 case ApacheParameters.BatchSizeStopCondition:
                     break;
                 case ApacheParameters.QueryTimeoutSeconds:
-                    if (string.IsNullOrEmpty(value) || !int.TryParse(value, out int queryTimeoutSecs) || queryTimeoutSecs < 0)
-                        throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value of 0 (infinite) or greater.");
+                    StatementOptionValidator.ValidateQueryTimeout(key, value);
                     break;
 
                 case DatabricksParameters.QueryTags:

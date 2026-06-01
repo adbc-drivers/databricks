@@ -339,8 +339,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // PECO-3064: adbc.apache.statement.polltime_ms is the single key for SEA polling cadence
             // (consolidated with the Thrift path). SEA defaults to 1000 ms — HTTP/JSON polls are
             // heavier than Thrift's 100 ms default — but both protocols share the same property.
-            _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
-                properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
+            // Validated via StatementOptionValidator so an invalid poll time throws
+            // ArgumentOutOfRangeException (matching Thrift), allowing 0 (no delay) and up.
+            _pollingIntervalMs = properties.TryGetValue(ApacheParameters.PollTimeMilliseconds, out string? pollTimeValue)
+                ? StatementOptionValidator.ValidatePollTime(ApacheParameters.PollTimeMilliseconds, pollTimeValue)
+                : 1000;
 
             // Tracing propagation configuration. Base class (TracingConnection) already handles ActivityTrace init.
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
