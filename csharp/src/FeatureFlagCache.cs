@@ -412,6 +412,7 @@ namespace AdbcDrivers.Databricks
                 .GetResult();
         }
 
+
         /// <summary>
         /// Tries to extract the host from properties without throwing.
         /// Handles cases where user puts protocol in host (e.g., "https://myhost.databricks.com").
