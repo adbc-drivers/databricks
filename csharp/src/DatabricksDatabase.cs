@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -161,19 +162,22 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Merges properties with environment config and feature flags from server.
+        /// Merges properties with environment config and fires a background feature flag warm-up.
         /// This is the single place where all property merging happens for both Thrift and REST connections.
         /// </summary>
         /// <param name="properties">Properties to merge.</param>
-        /// <returns>Merged properties dictionary.</returns>
+        /// <returns>Merged properties dictionary (feature flags applied on subsequent connections once cached).</returns>
         private static IReadOnlyDictionary<string, string> MergeWithEnvironmentConfigAndFeatureFlags(IReadOnlyDictionary<string, string> properties)
         {
-            // First, merge with environment config
             var mergedWithEnvConfig = MergeWithDefaultEnvironmentConfig(properties);
 
-            // Then, merge with feature flags from server (cached per host)
-            return FeatureFlagCache.GetInstance()
-                .MergePropertiesWithFeatureFlags(mergedWithEnvConfig, s_assemblyVersion);
+            // Fire-and-forget: warm the feature flag cache in the background.
+            // On a cache hit the task completes immediately; on a miss it fetches and caches
+            // so subsequent Connect() calls get flags applied synchronously (cache hit path).
+            _ = Task.Run(() => FeatureFlagCache.GetInstance()
+                .MergePropertiesWithFeatureFlagsAsync(mergedWithEnvConfig, s_assemblyVersion));
+
+            return mergedWithEnvConfig;
         }
 
         /// <summary>

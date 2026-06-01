@@ -93,7 +93,7 @@ namespace AdbcDrivers.Databricks.Http
             string host,
             string assemblyVersion)
         {
-            const int DefaultFeatureFlagTimeoutSeconds = 10;
+            const int DefaultFeatureFlagTimeoutSeconds = 5;
 
             var timeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(
                 properties,
