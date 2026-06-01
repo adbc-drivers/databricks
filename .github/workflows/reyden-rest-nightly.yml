@@ -1,0 +1,208 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Reyden REST Nightly E2E
+
+on:
+  schedule:
+    # 02:00 UTC daily — off-peak for US, Reyden warehouse is available
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.repository }}-reyden-rest-nightly
+  cancel-in-progress: false
+
+jobs:
+  reyden-rest-nightly:
+    name: "Reyden REST Nightly E2E"
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_REYDEN_HTTP_PATH }}
+      DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+      DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4.3.1
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Generate OAuth access token
+        id: oauth
+        run: |
+          OAUTH_RESPONSE=$(curl -s -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/oidc/v1/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${{ env.DATABRICKS_TEST_CLIENT_ID }}" \
+            -d "client_secret=${{ env.DATABRICKS_TEST_CLIENT_SECRET }}" \
+            -d "scope=sql")
+          OAUTH_TOKEN=$(echo "$OAUTH_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+          if [ -z "$OAUTH_TOKEN" ]; then
+            echo "ERROR: Failed to generate OAuth token"
+            exit 1
+          fi
+          echo "::add-mask::$OAUTH_TOKEN"
+          echo "OAUTH_TOKEN=$OAUTH_TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Compute per-run schema name
+        id: schema
+        run: |
+          PER_RUN_SCHEMA="adbc_testing_run_${{ github.run_id }}_${{ github.run_attempt }}_rest"
+          echo "PER_RUN_SCHEMA=$PER_RUN_SCHEMA" >> $GITHUB_OUTPUT
+          echo "Per-run schema: main.$PER_RUN_SCHEMA"
+          WAREHOUSE_ID=$(echo "${{ env.DATABRICKS_HTTP_PATH }}" | awk -F/ '{print $NF}')
+          if [ -z "$WAREHOUSE_ID" ]; then
+            echo "ERROR: Could not extract warehouse id from DATABRICKS_HTTP_PATH"
+            exit 1
+          fi
+          echo "WAREHOUSE_ID=$WAREHOUSE_ID" >> $GITHUB_OUTPUT
+
+      - name: Provision per-run schema
+        env:
+          OAUTH_TOKEN: ${{ steps.oauth.outputs.OAUTH_TOKEN }}
+          PER_RUN_SCHEMA: ${{ steps.schema.outputs.PER_RUN_SCHEMA }}
+          WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
+        run: |
+          set -e
+          STATEMENT="CREATE SCHEMA IF NOT EXISTS main.${PER_RUN_SCHEMA}"
+          PAYLOAD=$(jq -n --arg w "$WAREHOUSE_ID" --arg s "$STATEMENT" '{warehouse_id: $w, statement: $s, wait_timeout: "30s"}')
+          RESPONSE=$(curl -sS -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/api/2.0/sql/statements" \
+            -H "Authorization: Bearer $OAUTH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
+          if [ "$STATUS" != "SUCCEEDED" ]; then
+            echo "ERROR: CREATE SCHEMA failed (status=$STATUS)"
+            echo "Response: $RESPONSE"
+            exit 1
+          fi
+          echo "Created schema: main.${PER_RUN_SCHEMA}"
+
+      - name: Seed test data
+        env:
+          OAUTH_TOKEN: ${{ steps.oauth.outputs.OAUTH_TOKEN }}
+          PER_RUN_SCHEMA: ${{ steps.schema.outputs.PER_RUN_SCHEMA }}
+          WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
+          DATABRICKS_SERVER_HOSTNAME: ${{ env.DATABRICKS_SERVER_HOSTNAME }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re, sys, urllib.request
+
+          with open("csharp/test/Resources/Databricks.sql") as f:
+              content = f.read()
+          content = re.sub(r"^\s*--.*$", "", content, flags=re.MULTILINE)
+          full_table = f"main.{os.environ['PER_RUN_SCHEMA']}.adbc_testing_table"
+          content = content.replace("{ADBC_CATALOG}.{ADBC_DATASET}.{ADBC_TABLE}", full_table)
+          statements = [s.strip() for s in content.split(";") if s.strip()]
+
+          host = os.environ["DATABRICKS_SERVER_HOSTNAME"]
+          token = os.environ["OAUTH_TOKEN"]
+          warehouse = os.environ["WAREHOUSE_ID"]
+          url = f"https://{host}/api/2.0/sql/statements"
+
+          for i, stmt in enumerate(statements, 1):
+              payload = json.dumps({
+                  "warehouse_id": warehouse,
+                  "statement": stmt,
+                  "wait_timeout": "30s",
+              }).encode()
+              req = urllib.request.Request(
+                  url, data=payload,
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(req) as resp:
+                  body = json.loads(resp.read())
+              state = body.get("status", {}).get("state", "")
+              if state != "SUCCEEDED":
+                  print(f"ERROR: statement {i} failed (state={state})")
+                  print(f"Statement: {stmt[:200]}")
+                  print(f"Response: {json.dumps(body, indent=2)}")
+                  sys.exit(1)
+              print(f"OK [{i}/{len(statements)}]: {stmt[:80].replace(chr(10), ' ')}")
+          print(f"Seeded {len(statements)} statements into main.{os.environ['PER_RUN_SCHEMA']}")
+          PYEOF
+
+      - name: Create Databricks config file
+        env:
+          PER_RUN_SCHEMA: ${{ steps.schema.outputs.PER_RUN_SCHEMA }}
+        run: |
+          mkdir -p ~/.databricks
+          cat > ~/.databricks/connection.json << EOF
+          {
+            "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
+            "auth_type": "oauth",
+            "grant_type": "client_credentials",
+            "client_id": "${{ env.DATABRICKS_TEST_CLIENT_ID }}",
+            "client_secret": "${{ env.DATABRICKS_TEST_CLIENT_SECRET }}",
+            "scope": "sql",
+            "access_token": "${{ steps.oauth.outputs.OAUTH_TOKEN }}",
+            "type": "databricks",
+            "protocol": "rest",
+            "catalog": "main",
+            "db_schema": "${PER_RUN_SCHEMA}",
+            "query": "SELECT * FROM main.${PER_RUN_SCHEMA}.adbc_testing_table",
+            "expectedResults": 12,
+            "isCITesting": true,
+            "tracePropagationEnabled": "true",
+            "traceParentHeaderName": "traceparent",
+            "traceStateEnabled": "false",
+            "metadata": {
+              "catalog": "main",
+              "schema": "${PER_RUN_SCHEMA}",
+              "table": "adbc_testing_table",
+              "expectedColumnCount": 19
+            }
+          }
+          EOF
+          echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> $GITHUB_ENV
+
+      - name: Build
+        shell: bash
+        run: |
+          ./ci/scripts/csharp_build.sh "${{ github.workspace }}"
+
+      - name: Run All Tests
+        shell: bash
+        run: |
+          export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
+          ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
+
+      - name: Drop per-run schema
+        if: always() && steps.schema.outputs.PER_RUN_SCHEMA != ''
+        env:
+          OAUTH_TOKEN: ${{ steps.oauth.outputs.OAUTH_TOKEN }}
+          PER_RUN_SCHEMA: ${{ steps.schema.outputs.PER_RUN_SCHEMA }}
+          WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
+        run: |
+          STATEMENT="DROP SCHEMA IF EXISTS main.${PER_RUN_SCHEMA} CASCADE"
+          PAYLOAD=$(jq -n --arg w "$WAREHOUSE_ID" --arg s "$STATEMENT" '{warehouse_id: $w, statement: $s, wait_timeout: "30s"}')
+          RESPONSE=$(curl -sS -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/api/2.0/sql/statements" \
+            -H "Authorization: Bearer $OAUTH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
+          if [ "$STATUS" != "SUCCEEDED" ]; then
+            echo "WARNING: DROP SCHEMA failed (status=$STATUS)"
+            echo "Response: $RESPONSE"
+          else
+            echo "Dropped schema: main.${PER_RUN_SCHEMA}"
+          fi
