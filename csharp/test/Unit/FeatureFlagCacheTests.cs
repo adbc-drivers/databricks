@@ -674,19 +674,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         #region Negative Cache Tests
 
         [Fact]
-        public async Task FeatureFlagContext_CreateAsync_Success_StatusHealthyNoNegativeTtl()
+        public async Task FeatureFlagContext_CreateAsync_Success_StatusHealthy()
         {
             var response = new FeatureFlagsResponse { Flags = new List<FeatureFlagEntry>(), TtlSeconds = 300 };
             var context = await FeatureFlagContext.CreateAsync("ok.databricks.com", CreateMockHttpClient(response), DriverVersion);
 
             Assert.Equal(FeatureFlagFetchStatus.Healthy, context.LastFetchStatus);
-            Assert.Null(context.NegativeTtl);
 
             context.Dispose();
         }
 
         [Fact]
-        public async Task FeatureFlagContext_CreateAsync_429_UsesFixedNegativeTtl()
+        public async Task FeatureFlagContext_CreateAsync_429_SetsFailedStatus()
         {
             // Retry-After is intentionally ignored: the negative TTL is a fixed 60s.
             // Use (HttpStatusCode)429 since HttpStatusCode.TooManyRequests is not defined on net472.
@@ -694,25 +693,23 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var context = await FeatureFlagContext.CreateAsync("rl.databricks.com", httpClient, DriverVersion);
 
             Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
-            Assert.Equal(FeatureFlagContext.DefaultNegativeTtl, context.NegativeTtl);
 
             context.Dispose();
         }
 
         [Fact]
-        public async Task FeatureFlagContext_CreateAsync_ServerError_UsesDefaultNegativeTtl()
+        public async Task FeatureFlagContext_CreateAsync_ServerError_SetsFailedStatus()
         {
             var context = await FeatureFlagContext.CreateAsync(
                 "err.databricks.com", CreateMockHttpClient(HttpStatusCode.InternalServerError), DriverVersion);
 
             Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
-            Assert.Equal(FeatureFlagContext.DefaultNegativeTtl, context.NegativeTtl);
 
             context.Dispose();
         }
 
         [Fact]
-        public async Task FeatureFlagContext_CreateAsync_Timeout_DoesNotThrowAndUsesDefaultNegativeTtl()
+        public async Task FeatureFlagContext_CreateAsync_Timeout_DoesNotThrowAndSetsFailedStatus()
         {
             // HttpClient timeout surfaces as TaskCanceledException with an un-cancelled request token;
             // it must be treated as a failed fetch (negatively cached), not propagated.
@@ -720,7 +717,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "to.databricks.com", CreateTimeoutMockHttpClient(), DriverVersion);
 
             Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
-            Assert.Equal(FeatureFlagContext.DefaultNegativeTtl, context.NegativeTtl);
 
             context.Dispose();
         }

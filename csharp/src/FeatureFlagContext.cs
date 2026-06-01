@@ -133,13 +133,6 @@ namespace AdbcDrivers.Databricks
         public FeatureFlagFetchStatus LastFetchStatus { get; private set; } = FeatureFlagFetchStatus.Healthy;
 
         /// <summary>
-        /// Negative-cache TTL to apply for a failed fetch (fixed <see cref="DefaultNegativeTtl"/>).
-        /// Null when the last fetch was healthy.
-        /// </summary>
-        public TimeSpan? NegativeTtl =>
-            LastFetchStatus == FeatureFlagFetchStatus.Failed ? DefaultNegativeTtl : (TimeSpan?)null;
-
-        /// <summary>
         /// Internal constructor - use CreateAsync factory method for production code.
         /// Made internal to allow test code to create instances without HTTP calls.
         /// </summary>
