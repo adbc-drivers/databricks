@@ -21,6 +21,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.HiveServer2.Spark;
@@ -44,7 +45,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string _warehouseId;
         private readonly string? _orgId;
         private string? _catalog;
-        private readonly string? _schema;
+        private string? _schema;
         private readonly HttpClient _httpClient;
         private readonly HttpClient _cloudFetchHttpClient; // Separate HttpClient without auth headers for CloudFetch downloads
         private readonly IReadOnlyDictionary<string, string> _properties;
@@ -54,28 +55,36 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _sessionId;
         private readonly SemaphoreSlim _sessionLock = new SemaphoreSlim(1, 1);
 
-        // Configuration for statement creation
-        private readonly string _resultDisposition;
-        private readonly string _resultFormat;
-        private readonly string? _resultCompression;
-        private readonly int _waitTimeoutSeconds;
-        private readonly int _pollingIntervalMs;
-        private readonly bool _enablePKFK;
-        private readonly bool _enableMultipleCatalogSupport;
-        private readonly bool _useDescTableExtended;
+        // Configuration for statement creation — assigned by ValidateProperties().
+        private string _resultDisposition = null!;
+        private string _resultFormat = null!;
+        private string? _resultCompression;
+        private int _waitTimeoutSeconds;
+        private int _pollingIntervalMs;
+        private bool _enablePKFK;
+        private bool _enableMultipleCatalogSupport;
+        private bool _useDescTableExtended;
+        private bool _applySSPWithQueries;
+
+        // Connection bring-up timeout (PECO-3059). Mirrors the Thrift path's
+        // ConnectTimeoutMilliseconds — used as a CancellationToken bound on
+        // CreateSession to honor adbc.spark.connect_timeout_ms on the SEA path.
+        // Default matches HiveServer2Connection.ConnectTimeoutMillisecondsDefault (30 s).
+        private const int ConnectTimeoutMillisecondsDefault = 30000;
+        private int _connectTimeoutMilliseconds;
 
         // Memory pooling (shared across connection)
         private readonly Microsoft.IO.RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
         private readonly System.Buffers.ArrayPool<byte> _lz4BufferPool;
 
-        // Tracing propagation configuration
-        private readonly bool _tracePropagationEnabled;
-        private readonly string _traceParentHeaderName;
-        private readonly bool _traceStateEnabled;
-        private readonly bool _enableComplexDatatypeSupport;
+        // Tracing propagation configuration — assigned by ValidateProperties().
+        private bool _tracePropagationEnabled;
+        private string _traceParentHeaderName = null!;
+        private bool _traceStateEnabled;
+        private bool _enableComplexDatatypeSupport;
 
-        // Authentication support
-        private readonly string? _identityFederationClientId;
+        // Authentication support — assigned by ValidateProperties().
+        private string? _identityFederationClientId;
 
         /// <summary>
         /// Creates a new Statement Execution connection with internally managed HTTP client.
@@ -200,57 +209,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             string baseUrl = $"https://{hostName}";
 
-            // Connection feature flags — parse before catalog/schema loading that depends on them
-            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
-            _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
-            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
-
-            // Session configuration
-            // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
-            // This matches DatabricksConnection (Thrift) behavior: when flag=false, the session uses
-            // the server's default catalog rather than a client-specified one.
-            if (_enableMultipleCatalogSupport)
-            {
-                properties.TryGetValue(AdbcOptions.Connection.CurrentCatalog, out _catalog);
-                // Match Thrift behavior: SPARK is a legacy alias — map it to null so the
-                // runtime falls back to the workspace default (typically hive_metastore).
-                _catalog = DatabricksConnection.HandleSparkCatalog(_catalog);
-            }
-            properties.TryGetValue(AdbcOptions.Connection.CurrentDbSchema, out _schema);
-
-            // Result configuration.
-            // The driver only implements LZ4_FRAME decompression; gzip is not supported.
-            // cloudfetch.lz4.enabled=true (default) → request LZ4_FRAME compression.
-            // cloudfetch.lz4.enabled=false → null (no compression).
-            _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
-            _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
-            bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
-            _resultCompression = canDecompressLz4 ? "LZ4_FRAME" : null;
-
-            _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
-            if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
-                directResults.Equals("false", StringComparison.OrdinalIgnoreCase))
-            {
-                _waitTimeoutSeconds = 0;
-            }
-            _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.PollingInterval, 1000);
+            // Centralized property parsing / validation. Every property-driven field is parsed
+            // and validated in one place so the constructor body stays focused on wiring.
+            ValidateProperties();
 
             // Memory pooling
             _recyclableMemoryStreamManager = memoryStreamManager ?? new Microsoft.IO.RecyclableMemoryStreamManager();
             _lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
-
-            // Tracing propagation configuration
-            // Base class (TracingConnection) already handles ActivityTrace initialization
-            _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
-            _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
-            _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
-            _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableComplexDatatypeSupport, false);
-
-            // Authentication configuration
-            if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
-            {
-                _identityFederationClientId = identityFederationClientId;
-            }
 
             // Create or use provided HTTP client
             if (httpClient != null)
@@ -329,6 +294,108 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
+        /// Parses and validates every property-driven option for this connection in one place,
+        /// keeping option-handling logic centralized rather than scattered through the constructor.
+        /// </summary>
+        private void ValidateProperties()
+        {
+            var properties = _properties;
+
+            // Connection feature flags — must be parsed before catalog loading (depends on _enableMultipleCatalogSupport).
+            _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
+            _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
+            _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
+            // When true, SSPs (adbc.databricks.ssp_*) are applied via post-open SET statements
+            // rather than CreateSession.session_confs — mirrors Thrift's behavior so callers
+            // who depend on the SET-statement path (e.g., for audit visibility or for SSPs
+            // the server validates differently in CreateSession vs SET) get the same semantics
+            // on SEA. JDBC has no equivalent flag — this is parity with the Thrift driver only.
+            _applySSPWithQueries = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.ApplySSPWithQueries, false);
+
+            // Session configuration.
+            // Only supply catalog from connection properties when EnableMultipleCatalogSupport is true.
+            // This matches DatabricksConnection (Thrift) behavior: when flag=false, the session uses
+            // the server's default catalog rather than a client-specified one.
+            if (_enableMultipleCatalogSupport)
+            {
+                properties.TryGetValue(AdbcOptions.Connection.CurrentCatalog, out _catalog);
+                // Match Thrift behavior: SPARK is a legacy alias — map it to null so the
+                // runtime falls back to the workspace default (typically hive_metastore).
+                _catalog = DatabricksConnection.HandleSparkCatalog(_catalog);
+            }
+            properties.TryGetValue(AdbcOptions.Connection.CurrentDbSchema, out _schema);
+
+            // Result configuration.
+            // The driver only implements LZ4_FRAME decompression; gzip is not supported (PECO-3056).
+            // cloudfetch.lz4.enabled=true (default) → request LZ4_FRAME compression.
+            // cloudfetch.lz4.enabled=false → null (server treats as no compression).
+            _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
+            _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
+            bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
+            _resultCompression = canDecompressLz4 ? "LZ4_FRAME" : null;
+
+            _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
+            if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
+                directResults.Equals("false", StringComparison.OrdinalIgnoreCase))
+            {
+                _waitTimeoutSeconds = 0;
+            }
+            // PECO-3064: adbc.apache.statement.polltime_ms is the single key for SEA polling cadence
+            // (consolidated with the Thrift path). SEA defaults to 1000 ms — HTTP/JSON polls are
+            // heavier than Thrift's 100 ms default — but both protocols share the same property.
+            _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
+                properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
+
+            // Tracing propagation configuration. Base class (TracingConnection) already handles ActivityTrace init.
+            _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
+            _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
+            _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
+            _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableComplexDatatypeSupport, false);
+
+            // Authentication configuration.
+            if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
+            {
+                _identityFederationClientId = identityFederationClientId;
+            }
+
+            // PECO-3059: honor adbc.spark.connect_timeout_ms on the SEA path. The Thrift path uses
+            // this value as a CancellationToken bound on OpenSession; mirror that here for CreateSession.
+            // 0 means infinite. Negative values are invalid (matches Thrift's SparkHttpConnection validation).
+            int connectTimeoutMs = ConnectTimeoutMillisecondsDefault;
+            if (properties.TryGetValue(SparkParameters.ConnectTimeoutMilliseconds, out string? connectTimeoutStr))
+            {
+                if (!int.TryParse(connectTimeoutStr, System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out int parsed) ||
+                    parsed < 0)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        SparkParameters.ConnectTimeoutMilliseconds,
+                        connectTimeoutStr,
+                        $"must be a value of 0 (infinite) or between 1 .. {int.MaxValue}. default is {ConnectTimeoutMillisecondsDefault} milliseconds.");
+                }
+                connectTimeoutMs = parsed;
+            }
+
+            // Mirror DatabricksConnection.ValidateOptions parity-bump: when temporarily-unavailable retry is on,
+            // the retry budget must fit inside the connect-timeout token — otherwise the connect-timeout
+            // would cancel mid-retry-loop before the server warms up.
+            bool temporarilyUnavailableRetry = PropertyHelper.GetBooleanPropertyWithValidation(
+                properties, DatabricksParameters.TemporarilyUnavailableRetry, true);
+            int temporarilyUnavailableRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(
+                properties,
+                DatabricksParameters.TemporarilyUnavailableRetryTimeout,
+                DatabricksConstants.DefaultTemporarilyUnavailableRetryTimeout);
+            if (temporarilyUnavailableRetry &&
+                temporarilyUnavailableRetryTimeout * 1000L > connectTimeoutMs &&
+                connectTimeoutMs != 0) // 0 == infinite — don't shrink it
+            {
+                long bumped = temporarilyUnavailableRetryTimeout * 1000L;
+                connectTimeoutMs = bumped > int.MaxValue ? int.MaxValue : (int)bumped;
+            }
+            _connectTimeoutMilliseconds = connectTimeoutMs;
+        }
+
+        /// <summary>
         /// Gets the host from the connection properties.
         /// </summary>
         /// <param name="properties">Connection properties.</param>
@@ -378,13 +445,35 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             if (_sessionId == null)
             {
-                await _sessionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                // PECO-3059: bound the session bring-up with adbc.spark.connect_timeout_ms.
+                // The Thrift path applies this same timeout to OpenSession via a
+                // CancellationToken; we mirror that here. 0 means infinite — skip the
+                // timer entirely so we don't fight an external caller-supplied token.
+                using var connectTimeoutCts = _connectTimeoutMilliseconds > 0
+                    ? new CancellationTokenSource(TimeSpan.FromMilliseconds(_connectTimeoutMilliseconds))
+                    : null;
+                using var linkedCts = connectTimeoutCts != null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connectTimeoutCts.Token)
+                    : null;
+                CancellationToken openToken = linkedCts?.Token ?? cancellationToken;
+
+                // Track lock ownership so the single finally only releases when we actually acquired it.
+                // This collapses the previous outer/inner try pair into one — see PR #466 review feedback.
+                bool lockAcquired = false;
                 try
                 {
+                    await _sessionLock.WaitAsync(openToken).ConfigureAwait(false);
+                    lockAcquired = true;
+
                     // Double-check after acquiring lock
                     if (_sessionId == null)
                     {
-                        var sessionConfigs = ExtractServerSideProperties(_properties);
+                        // When apply_ssp_with_queries=true, SSPs are deferred to post-open SET
+                        // statements (see ApplyServerSidePropertiesAsync), so omit them here to
+                        // avoid double-setting and to match Thrift parity.
+                        var sessionConfigs = _applySSPWithQueries
+                            ? new Dictionary<string, string>()
+                            : ExtractServerSideProperties(_properties);
                         var request = new CreateSessionRequest
                         {
                             WarehouseId = _warehouseId,
@@ -395,8 +484,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                         try
                         {
-                            var response = await _client.CreateSessionAsync(request, cancellationToken).ConfigureAwait(false);
+                            var response = await _client.CreateSessionAsync(request, openToken).ConfigureAwait(false);
                             _sessionId = response.SessionId;
+                        }
+                        // PECO-3059: when the connect-timeout fired before the caller's token,
+                        // translate any exception (including DatabricksException-wrapped OAuth
+                        // cancellations) into TimeoutException for parity with HiveServer2Connection.
+                        // This filter must run BEFORE the unconditional DatabricksException
+                        // rethrow because OAuthClientCredentialsProvider wraps cancelled HTTP
+                        // calls as DatabricksException("Failed to acquire OAuth access token: …").
+                        catch (Exception ex) when (
+                            connectTimeoutCts != null &&
+                            connectTimeoutCts.IsCancellationRequested &&
+                            !cancellationToken.IsCancellationRequested)
+                        {
+                            throw new TimeoutException(
+                                "The operation timed out while attempting to open a session. Please try increasing connect timeout.",
+                                ex);
                         }
                         catch (DatabricksException)
                         {
@@ -419,9 +523,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         }
                     }
                 }
+                catch (OperationCanceledException ex) when (
+                    connectTimeoutCts != null &&
+                    connectTimeoutCts.IsCancellationRequested &&
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    // The semaphore wait itself was cancelled by the connect-timeout token
+                    // (rare but possible under contention).
+                    throw new TimeoutException(
+                        "The operation timed out while attempting to open a session. Please try increasing connect timeout.",
+                        ex);
+                }
                 finally
                 {
-                    _sessionLock.Release();
+                    if (lockAcquired)
+                    {
+                        _sessionLock.Release();
+                    }
                 }
             }
         }
@@ -891,6 +1009,48 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// Applies server-side properties (adbc.databricks.ssp_*) by executing
+        /// <c>SET key=value</c> statements after the session is open. No-op when
+        /// <c>apply_ssp_with_queries=false</c> — in that case the values are
+        /// already in <see cref="CreateSessionRequest.SessionConfigs"/> from
+        /// <see cref="OpenAsync"/>. Mirrors <c>DatabricksConnection.ApplyServerSidePropertiesAsync</c>
+        /// on the Thrift path so both protocols honor the same flag.
+        /// </summary>
+        public async Task ApplyServerSidePropertiesAsync(CancellationToken cancellationToken = default)
+        {
+            if (!_applySSPWithQueries)
+            {
+                return;
+            }
+
+            var serverSideProperties = ExtractServerSideProperties(_properties);
+            if (serverSideProperties.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var property in serverSideProperties)
+            {
+                // Backtick-escaped to match the Thrift path's SET escaping (DatabricksConnection.EscapeSqlString)
+                // — preserves values containing reserved characters while keeping a SET-compatible literal.
+                string escapedValue = "`" + property.Value.Replace("`", "``") + "`";
+                string query = $"SET {property.Key}={escapedValue}";
+
+                try
+                {
+                    using var stmt = (StatementExecutionStatement)CreateStatement();
+                    stmt.SqlQuery = query;
+                    await stmt.ExecuteUpdateAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // Best-effort, matching Thrift behavior — a single bad SSP value should not
+                    // tear down the whole session. The error is surfaced in tracing only.
+                }
+            }
         }
 
         /// <summary>

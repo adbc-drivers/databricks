@@ -16,8 +16,10 @@
 
 using System;
 using System.Collections.Generic;
-using Apache.Arrow.Adbc;
+using System.Diagnostics;
+using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
 using Xunit;
 using Xunit.Abstractions;
@@ -43,7 +45,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             // and OAuth M2M (client_credentials) flow (implemented in PECO-2857).
         }
 
-        private AdbcConnection CreateRestConnection()
+        private AdbcConnection CreateRestConnection(IReadOnlyDictionary<string, string>? extraProperties = null)
         {
             var properties = new Dictionary<string, string>
             {
@@ -98,6 +100,15 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             if (!string.IsNullOrEmpty(TestConfiguration.OAuthScope))
             {
                 properties[DatabricksParameters.OAuthScope] = TestConfiguration.OAuthScope;
+            }
+
+            // Test-specific overrides take precedence over TestConfiguration defaults.
+            if (extraProperties != null)
+            {
+                foreach (var kv in extraProperties)
+                {
+                    properties[kv.Key] = kv.Value;
+                }
             }
 
             var driver = new DatabricksDriver();
@@ -431,6 +442,46 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             var batch = reader.ReadNextRecordBatchAsync().Result;
             Assert.NotNull(batch);
             Assert.Equal(1, batch.Length);
+        }
+
+        // PECO-3064: adbc.apache.statement.polltime_ms is the single key driving SEA's polling
+        // cadence (consolidated with the Thrift path). The polling cadence dominates wall-clock
+        // for async queries (wait_timeout=0): the first GetStatement happens only after
+        // Task.Delay(_pollingIntervalMs), so an unusually large interval is directly observable.
+        //
+        //  - wait_timeout=0 forces async-then-poll (no server-side block).
+        //  - enable_direct_results=false ensures wait_timeout isn't overridden by the connection.
+        //  - polltime_ms=2000 → total wall-clock >= 1800ms.
+        //  - If the SEA path were to ignore polltime_ms and fall back to the 1000ms default,
+        //    wall-clock would be ~1100ms and this test fails.
+        [SkippableFact]
+        public void ExecuteQuery_PollTimeMs_DrivesSeaPollingCadence()
+        {
+            SkipIfNotConfigured();
+
+            const int slowPollMs = 2000;
+            var extra = new Dictionary<string, string>
+            {
+                [ApacheParameters.PollTimeMilliseconds] = slowPollMs.ToString(),
+                [DatabricksParameters.WaitTimeout] = "0",
+                [DatabricksParameters.EnableDirectResults] = "false",
+            };
+
+            using var connection = CreateRestConnection(extra);
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = "SELECT 1 AS value";
+
+            var sw = Stopwatch.StartNew();
+            var result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            while (reader.ReadNextRecordBatchAsync().Result != null) { }
+            sw.Stop();
+
+            Assert.True(
+                sw.ElapsedMilliseconds >= 1800,
+                $"Expected polltime_ms={slowPollMs} to drive SEA polling cadence, but query " +
+                $"completed in {sw.ElapsedMilliseconds}ms (expected >= 1800ms). " +
+                $"This indicates polltime_ms is not wired into SEA's polling interval.");
         }
     }
 }
