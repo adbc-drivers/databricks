@@ -770,6 +770,38 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 Assert.Equal(i + 1, Convert.ToInt32(tags["attempt_number"]));
                 Assert.True(Convert.ToInt64(tags["delay_ms"]) >= 1000); // Retry-After: 1 → 1000ms
                 Assert.Contains(expectedReasonSubstring, (string)tags["reason"]!);
+                Assert.Equal((int)status, Convert.ToInt32(tags["status_code"])); // folded from the old http.response.status_code tag
+            }
+        }
+
+        /// <summary>
+        /// Issue #479: a retry triggered by a transient transport error emits a
+        /// `retry.attempt` event carrying the per-retry detail that used to be written
+        /// as overwritten span tags — attempt_number, reason, and error_message.
+        /// </summary>
+        [Fact]
+        public async Task RetryTelemetry_TransportError_EmitsAttemptEventWithErrorDetail_Issue479()
+        {
+            using var capture = new ActivityCapture("TestSource");
+
+            var mockHandler = new MockHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.OK));
+            // Throw a transient transport error for the first 2 attempts, then succeed.
+            mockHandler.SetExceptionForRequestCount(2, new HttpRequestException("Connection refused"));
+
+            var retryHandler = new RetryHttpHandler(mockHandler, new MockActivityTracer(), 10, 10, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
+            await new HttpClient(retryHandler).GetAsync("http://test.com");
+
+            Activity sendAsync = capture.StoppedActivities.Single(a => a.OperationName == "SendAsync");
+            var events = sendAsync.Events.Where(e => e.Name == "retry.attempt").ToList();
+            Assert.Equal(2, events.Count); // 2 transport failures → 2 retry events
+
+            for (int i = 0; i < events.Count; i++)
+            {
+                var tags = events[i].Tags.ToDictionary(t => t.Key, t => t.Value);
+                Assert.Equal(i + 1, Convert.ToInt32(tags["attempt_number"]));
+                Assert.Contains("transport_error", (string)tags["reason"]!);
+                Assert.Equal("Connection refused", (string)tags["error_message"]!);
             }
         }
 
