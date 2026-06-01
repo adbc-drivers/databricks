@@ -15,6 +15,7 @@
 */
 
 using System.Collections.Generic;
+using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Http;
 using Xunit;
 
