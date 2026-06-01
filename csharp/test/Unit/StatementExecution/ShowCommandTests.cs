@@ -188,5 +188,86 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         {
             Assert.Equal("SHOW CATALOGS LIKE ''", new ShowCatalogsCommand("").Build());
         }
+
+        // MetadataCommandBase wildcard helpers (PECO-3035). These back the client-side
+        // catalog-wildcard expansion in StatementExecutionConnection.ListSchemasAsync,
+        // so the backslash-escape semantics must be locked in.
+
+        [Theory]
+        [InlineData(null, false)]
+        [InlineData("", false)]
+        [InlineData("abc", false)]
+        [InlineData("prod", false)]
+        [InlineData("*", false)]            // not a JDBC LIKE wildcard
+        [InlineData("%", true)]
+        [InlineData("_", true)]
+        [InlineData("abc%", true)]
+        [InlineData("_abc", true)]
+        [InlineData("a%b", true)]
+        [InlineData("a_b", true)]
+        [InlineData("\\%", false)]          // escaped %
+        [InlineData("\\_", false)]          // escaped _
+        [InlineData("\\\\%", true)]         // literal backslash + unescaped %
+        [InlineData("\\\\_", true)]         // literal backslash + unescaped _
+        [InlineData("\\\\\\%", false)]      // literal backslash + escaped %
+        [InlineData("\\\\\\_", false)]      // literal backslash + escaped _
+        [InlineData("\\", false)]           // lone trailing backslash
+        [InlineData("foo\\", false)]        // trailing backslash, no wildcard
+        [InlineData("foo\\%bar", false)]    // escaped % in the middle
+        [InlineData("foo\\%bar%baz", true)] // escaped % then unescaped %
+        public void ContainsUnescapedWildcard_HandlesEscapeSemantics(string? input, bool expected)
+        {
+            Assert.Equal(expected, MetadataCommandBase.ContainsUnescapedWildcard(input));
+        }
+
+        [Theory]
+        [InlineData(null, false)]
+        [InlineData("", false)]
+        [InlineData("%", true)]
+        [InlineData("*", true)]             // Spark/Hive convention, also fast-pathed
+        [InlineData("%%", false)]
+        [InlineData("_", false)]
+        [InlineData("prod", false)]
+        [InlineData("\\%", false)]
+        public void IsMatchAnything_TreatsOnlyBareWildcardsAsMatchAnything(string? input, bool expected)
+        {
+            Assert.Equal(expected, MetadataCommandBase.IsMatchAnything(input));
+        }
+
+        [Theory]
+        // Literals (the helper is anchored, so "prod" only matches "prod" exactly).
+        [InlineData("prod", "prod", true)]
+        [InlineData("prod", "prod_2", false)]
+        [InlineData("prod", "production", false)]
+        // % wildcard — any sequence including empty.
+        [InlineData("%", "anything", true)]
+        [InlineData("%", "", true)]
+        [InlineData("comp%", "compute", true)]
+        [InlineData("comp%", "comp", true)]
+        [InlineData("comp%", "system", false)]
+        [InlineData("%comp", "mycomp", true)]
+        [InlineData("%comp", "myComp", false)]   // case-sensitive: comp ≠ Comp
+        [InlineData("%comp", "compsomething", false)]
+        // _ wildcard — exactly one char.
+        [InlineData("a_c", "abc", true)]
+        [InlineData("a_c", "ac", false)]
+        [InlineData("a_c", "abbc", false)]
+        // Escapes — \% / \_ must match the literal character.
+        [InlineData("comp\\%", "comp%", true)]
+        [InlineData("comp\\%", "compute", false)]
+        [InlineData("a\\_b", "a_b", true)]
+        [InlineData("a\\_b", "axb", false)]
+        // \\ → literal backslash.
+        [InlineData("a\\\\b", "a\\b", true)]
+        // Regex metacharacters in the literal portion must be escaped.
+        [InlineData("a.b", "a.b", true)]
+        [InlineData("a.b", "axb", false)]
+        [InlineData("a+b", "a+b", true)]
+        [InlineData("a+b", "ab", false)]
+        public void JdbcLikeToRegex_MatchesPatternSemantics(string pattern, string input, bool expectedMatch)
+        {
+            var regex = MetadataCommandBase.JdbcLikeToRegex(pattern);
+            Assert.Equal(expectedMatch, regex.IsMatch(input));
+        }
     }
 }

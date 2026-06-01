@@ -1076,62 +1076,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     && MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) != null)
                     return MetadataSchemaFactory.CreateEmptySchemasResult();
 
-                string sql = new ShowSchemasCommand(
+                // PECO-3035: catalog follows JDBC LIKE semantics. ListSchemasAsync expands
+                // wildcards client-side (SHOW SCHEMAS IN ALL CATALOGS or per-catalog dispatch)
+                // and returns a flat list of (catalog, schema) pairs.
+                var rows = await _connection.ListSchemasAsync(
                     catalog,
-                    EscapePatternWildcardsInName(_metadataSchemaName)).Build();
-                activity?.SetTag("sql_query", sql);
-
-                List<RecordBatch> batches;
-                try
-                {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                {
-                    activity?.AddEvent("statement.get_schemas.object_not_found", [
-                        new("error", ex.Message)
-                    ]);
-                    return MetadataSchemaFactory.CreateEmptySchemasResult();
-                }
-
-                // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
-                // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
-                bool showAllCatalogs = catalog == null;
+                    EscapePatternWildcardsInName(_metadataSchemaName),
+                    cancellationToken).ConfigureAwait(false);
 
                 var tableSchemaBuilder = new StringArray.Builder();
                 var tableCatalogBuilder = new StringArray.Builder();
-                int count = 0;
-                foreach (var batch in batches)
+                foreach (var (cat, schemaName) in rows)
                 {
-                    StringArray? catalogArray = null;
-                    StringArray? schemaArray = null;
-
-                    if (showAllCatalogs)
-                    {
-                        schemaArray = batch.Column(0) as StringArray;
-                        catalogArray = batch.Column(1) as StringArray;
-                    }
-                    else
-                    {
-                        schemaArray = batch.Column(0) as StringArray;
-                    }
-
-                    if (schemaArray == null) continue;
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (schemaArray.IsNull(i)) continue;
-                        tableSchemaBuilder.Append(schemaArray.GetString(i));
-                        string catalogValue = catalogArray != null && !catalogArray.IsNull(i)
-                            ? catalogArray.GetString(i)
-                            : catalog ?? "";
-                        tableCatalogBuilder.Append(catalogValue);
-                        count++;
-                    }
+                    tableSchemaBuilder.Append(schemaName);
+                    tableCatalogBuilder.Append(cat);
                 }
 
-                activity?.SetTag("result_count", count);
+                activity?.SetTag("result_count", rows.Count);
                 var schema = MetadataSchemaFactory.CreateSchemasSchema();
-                return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
+                return new QueryResult(rows.Count, new HiveInfoArrowStream(schema, new IArrowArray[]
                 {
                     tableSchemaBuilder.Build(), tableCatalogBuilder.Build()
                 }));
