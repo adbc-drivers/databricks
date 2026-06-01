@@ -47,6 +47,7 @@ namespace AdbcDrivers.Databricks.Tests
     public class CloseOperationE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IDisposable
     {
         private readonly List<(string ActivityName, string EventName)> _capturedEvents = new();
+        private readonly List<(string ActivityName, IEnumerable<KeyValuePair<string, object?>> Tags)> _capturedTags = new();
         private readonly object _capturedEventsLock = new();
         private readonly ActivityListener _activityListener;
         private bool _disposed;
@@ -68,6 +69,9 @@ namespace AdbcDrivers.Databricks.Tests
                         {
                             _capturedEvents.Add((activity.OperationName, evt.Name));
                         }
+                        // Snapshot the tag set into a materialized list so we don't hold
+                        // a reference to Activity's internal collection after it's recycled.
+                        _capturedTags.Add((activity.OperationName, activity.TagObjects.ToList()));
                     }
                 }
             };
@@ -130,7 +134,7 @@ namespace AdbcDrivers.Databricks.Tests
         [MemberData(nameof(TestCases))]
         public async Task DisposeEmitsCloseOperationEvent(string description, string query, bool useCloudFetch, bool enableDirectResults)
         {
-            lock (_capturedEventsLock) { _capturedEvents.Clear(); }
+            lock (_capturedEventsLock) { _capturedEvents.Clear(); _capturedTags.Clear(); }
 
             var parameters = new Dictionary<string, string>
             {
@@ -181,6 +185,115 @@ namespace AdbcDrivers.Databricks.Tests
                     $"[{description}] composite_reader.close_operation event not found in " +
                     $"DatabricksCompositeReader.Dispose. Without the fix, server operations are " +
                     $"orphaned until SQL Gateway closes them with CommandInactivityTimeout (~1 hour).");
+            }
+            finally
+            {
+                connection.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Regression test for issue #485: the inline result path must emit the same
+        /// <c>result.bytes_downloaded</c> tag on <c>DatabricksCompositeReader.Dispose</c>
+        /// as the CloudFetch path, so debug tooling and dashboards filtering on this tag
+        /// see a uniform "bytes consumed by reader" signal regardless of which reader
+        /// was active.
+        ///
+        /// Before the fix, only the CloudFetch path tagged the composite Dispose span
+        /// with <c>result.bytes_downloaded</c> (via <c>CloudFetchReader.Dispose</c>
+        /// running under the composite Dispose Activity). The inline
+        /// <c>DatabricksReader.Dispose</c> emitted no such tag.
+        ///
+        /// The fix tracks bytes consumed in <see cref="DatabricksReader"/> as each
+        /// inline Arrow batch is processed, and emits the matching tag on Dispose so
+        /// the composite span carries it on both paths. The tag name is kept identical
+        /// to CloudFetch even though "downloaded" is technically a stretch for inline
+        /// data (which arrives via the Thrift connection rather than a separate
+        /// download), because dashboards and queries filtering on this tag should
+        /// work uniformly for both readers.
+        /// </summary>
+        [SkippableFact]
+        public async Task Dispose_InlineReader_EmitsBytesDownloaded_Issue485()
+        {
+            lock (_capturedEventsLock) { _capturedEvents.Clear(); _capturedTags.Clear(); }
+
+            var parameters = new Dictionary<string, string>
+            {
+                [DatabricksParameters.Protocol] = "thrift",
+                // Force the inline result path (no CloudFetch). We deliberately keep
+                // DirectResults disabled so the driver fetches results via the inline
+                // FetchResults RPC, guaranteeing DatabricksReader processes at least
+                // one TSparkArrowBatch and accumulates bytes.
+                [DatabricksParameters.UseCloudFetch] = "false",
+                [DatabricksParameters.EnableDirectResults] = "false",
+            };
+
+            // Small range query — produces a single inline batch via Thrift FetchResults.
+            const string query = "SELECT * FROM range(1, 100)";
+
+            var connection = NewConnection(TestConfiguration, parameters);
+            try
+            {
+                var statement = connection.CreateStatement();
+                statement.SqlQuery = query;
+                var result = await statement.ExecuteQueryAsync();
+
+                long totalRows = 0;
+                using (var reader = result.Stream!)
+                {
+                    RecordBatch? batch;
+                    while ((batch = await reader.ReadNextRecordBatchAsync()) != null)
+                    {
+                        totalRows += batch.Length;
+                    }
+                }
+                // reader.Dispose() above triggers DatabricksCompositeReader.Dispose,
+                // which is where the result.bytes_downloaded tag must now be present
+                // for the inline path (issue #485).
+                statement.Dispose();
+
+                OutputHelper?.WriteLine($"Inline reader consumed {totalRows} rows; checking composite Dispose tags.");
+
+                // Pull the tags emitted by DatabricksCompositeReader.Dispose.
+                List<KeyValuePair<string, object?>> disposeTags;
+                lock (_capturedEventsLock)
+                {
+                    disposeTags = _capturedTags
+                        .Where(e => e.ActivityName == "DatabricksCompositeReader.Dispose")
+                        .SelectMany(e => e.Tags)
+                        .ToList();
+                }
+
+                OutputHelper?.WriteLine(
+                    "Composite Dispose tags: [" +
+                    string.Join(", ", disposeTags.Select(t => $"{t.Key}={t.Value}")) + "]");
+
+                // Sanity: confirm we exercised the inline path. CloudFetch parity test
+                // already covers the CloudFetchReader case.
+                var activeReaderTag = disposeTags
+                    .FirstOrDefault(t => t.Key == "reader.active_reader_type");
+                Assert.Equal("DatabricksReader", activeReaderTag.Value as string);
+
+                // The core assertion: the inline path must now emit the same byte counter
+                // tag as CloudFetch, with a strictly positive value (we consumed at least
+                // one non-empty inline batch).
+                var bytesTag = disposeTags
+                    .Where(t => t.Key == "result.bytes_downloaded")
+                    .Cast<KeyValuePair<string, object?>?>()
+                    .FirstOrDefault();
+
+                Assert.True(bytesTag != null,
+                    "Expected 'result.bytes_downloaded' tag on DatabricksCompositeReader.Dispose " +
+                    "for the inline result path (issue #485). Before the fix only CloudFetchReader " +
+                    "emits this tag, so dashboards filtering on byte-consumption see no signal for " +
+                    "inline-path disposes. Got tags: [" +
+                    string.Join(", ", disposeTags.Select(t => t.Key)) + "]");
+
+                long bytesValue = Convert.ToInt64(bytesTag!.Value.Value);
+                Assert.True(bytesValue > 0,
+                    $"Expected 'result.bytes_downloaded' > 0 on inline Dispose; got {bytesValue}. " +
+                    "The inline reader must accumulate per-batch byte sizes as batches are " +
+                    "consumed so this tag reflects the total bytes the reader processed.");
             }
             finally
             {
