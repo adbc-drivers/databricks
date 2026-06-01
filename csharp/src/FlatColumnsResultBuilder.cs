@@ -71,7 +71,11 @@ namespace AdbcDrivers.Databricks
 
                     if (info.Precision[i].HasValue) columnSizeBuilder.Append(info.Precision[i]!.Value); else columnSizeBuilder.AppendNull();
 
-                    bufferLengthBuilder.AppendNull(); // JDBC spec: BUFFER_LENGTH is unused, always null
+                    // BUFFER_LENGTH is a JDBC-compatibility column in the getColumns metadata result
+                    // (ADBC surfaces the same value as xdbc_buffer_length). It is defined as "not used"
+                    // by the JDBC contract, so no driver populates it — always null here, matching the
+                    // Thrift path (server leaves it unset) and the SEA DESC TABLE EXTENDED path.
+                    bufferLengthBuilder.AppendNull();
 
                     if (info.Scale[i].HasValue) decimalDigitsBuilder.Append(info.Scale[i]!.Value); else decimalDigitsBuilder.AppendNull();
 
