@@ -24,6 +24,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks;
+using AdbcDrivers.HiveServer2.Spark;
 using Moq;
 using Moq.Protected;
 using Xunit;
@@ -572,20 +573,23 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public async Task MergePropertiesWithFeatureFlagsAsync_PropertyNotSet_DefaultsToEnabled()
         {
-            // Arrange - No FeatureFlagCacheEnabled property set. The default is now ENABLED,
-            // so the merge proceeds past the enabled-check; it returns local properties here
-            // only because no resolvable host (adbc.spark.host / uri) is present.
+            // Arrange - No FeatureFlagCacheEnabled property set. The default is ENABLED,
+            // so the merge proceeds past the enabled-check, finds the host via
+            // SparkParameters.HostName, attempts a fetch (which fails for this test host),
+            // and returns local properties unchanged due to the resilient error-handling path.
+            // A 1s timeout keeps the test fast even when DNS/connection fails.
             var localProperties = new Dictionary<string, string>
             {
-                ["host"] = TestHost,
+                [SparkParameters.HostName] = TestHost,
+                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "1",
                 ["some_property"] = "some_value"
             };
-            var cache = FeatureFlagCache.GetInstance();
+            var cache = new FeatureFlagCache();
 
             // Act
             var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
 
-            // Assert - No resolvable host => returns local properties unchanged
+            // Assert - fetch fails for test host => resilient path returns local properties unchanged
             Assert.Same(localProperties, result);
         }
 
@@ -611,19 +615,22 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public async Task MergePropertiesWithFeatureFlagsAsync_PropertySetToInvalidValue_ReturnsLocalProperties()
         {
             // Arrange - FeatureFlagCacheEnabled set to a non-boolean value. An unparsable
-            // value keeps the default (enabled), so the merge proceeds; it returns local
-            // properties here only because no resolvable host is present.
+            // value keeps the default (enabled), so the merge proceeds, finds the host,
+            // attempts a fetch (which fails for this test host), and falls back to local
+            // properties via the resilient error-handling path.
+            // A 1s timeout keeps the test fast even when DNS/connection fails.
             var localProperties = new Dictionary<string, string>
             {
-                ["host"] = TestHost,
+                [SparkParameters.HostName] = TestHost,
+                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "1",
                 [DatabricksParameters.FeatureFlagCacheEnabled] = "notabool"
             };
-            var cache = FeatureFlagCache.GetInstance();
+            var cache = new FeatureFlagCache();
 
             // Act
             var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
 
-            // Assert - No resolvable host => returns local properties unchanged
+            // Assert - fetch fails for test host => resilient path returns local properties unchanged
             Assert.Same(localProperties, result);
         }
 
