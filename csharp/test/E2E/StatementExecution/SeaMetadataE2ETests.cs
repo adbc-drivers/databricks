@@ -34,7 +34,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
     public class SeaMetadataE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         private const string TestCatalog = "main";
-        private const string TestSchema = "adbc_testing";
+        // Read-only fixture schema. CREATE/DROP/INSERT must use
+        // TestConfiguration.Metadata.Schema instead.
+        private const string TestSchema = DatabricksTestEnvironment.FixtureSchema;
         private const string TestTable = "all_column_types";
 
         public SeaMetadataE2ETests(ITestOutputHelper? outputHelper)

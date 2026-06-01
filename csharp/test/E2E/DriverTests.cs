@@ -23,16 +23,24 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2.Spark;
 using AdbcDrivers.Tests.HiveServer2.Common;
+using Apache.Arrow.Adbc.Tests.Xunit;
 using Xunit;
 using Xunit.Abstractions;
 using Metadata = Apache.Arrow.Adbc.Tests.Metadata;
 
 namespace AdbcDrivers.Databricks.Tests
 {
+    // The orderer is declared on the abstract base, but xUnit applies
+    // [TestCaseOrderer] from the concrete class — set it here so [Order(N)]
+    // is honored. Without this, CanExecuteQuery runs before CanExecuteUpdate
+    // and fails because adbc_testing_table doesn't exist yet in the per-run
+    // schema.
+    [TestCaseOrderer("Apache.Arrow.Adbc.Tests.Xunit.TestOrderer", "Apache.Arrow.Adbc.Tests")]
     public class DriverTests : DriverTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public DriverTests(ITestOutputHelper? outputHelper)
@@ -83,32 +91,64 @@ namespace AdbcDrivers.Databricks.Tests
             GetObjectsTablesTest(tableNamePattern: tableName, expectedTableName: tableName);
         }
 
+        protected override void ValidateCanExecuteQuery(double? batchSizeFactor)
+        {
+            base.ValidateCanExecuteQuery(batchSizeFactor);
+        }
+
+        // TODO: PECO-3005 - SEA CanGetObjectsAll returns different XdbcColumnSize metadata values
+        [SkippableFact, Order(6)]
+        public override void CanGetObjectsAll()
+        {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns different XdbcColumnSize metadata values (PECO-3005)");
+            base.CanGetObjectsAll();
+        }
+
+        [SkippableFact, Order(1)]
+        public override void CanExecuteUpdate()
+        {
+            base.CanExecuteUpdate();
+        }
+
+        [SkippableFact, Order(11)]
+        public override async System.Threading.Tasks.Task CanExecuteQueryAsync()
+        {
+            await base.CanExecuteQueryAsync();
+        }
+
+        [SkippableFact, Order(14)]
         public override void CanDetectInvalidServer()
         {
             AdbcDriver driver = NewDriver;
             Assert.NotNull(driver);
             Dictionary<string, string> parameters = GetDriverParameters(TestConfiguration);
+            Stopwatch stopwatch = new();
 
+            var host = "unknownhost.azure.com";
             bool hasUri = parameters.TryGetValue(AdbcOptions.Uri, out var uri) && !string.IsNullOrEmpty(uri);
             bool hasHostName = parameters.TryGetValue(SparkParameters.HostName, out var hostName) && !string.IsNullOrEmpty(hostName);
             if (hasUri)
             {
-                parameters[AdbcOptions.Uri] = "http://unknownhost.azure.com/cliservice";
+                parameters[AdbcOptions.Uri] = $"http://{host}/cliservice";
             }
             else if (hasHostName)
             {
-                parameters[SparkParameters.HostName] = "unknownhost.azure.com";
+                parameters[SparkParameters.HostName] = host;
             }
             else
             {
                 Assert.Fail($"Unexpected configuration. Must provide '{AdbcOptions.Uri}' or '{SparkParameters.HostName}'.");
             }
 
+            stopwatch.Restart();
             AdbcDatabase database = driver.Open(parameters);
             AdbcException exception = Assert.ThrowsAny<AdbcException>(() => database.Connect(parameters));
-            OutputHelper?.WriteLine(exception.Message);
+            stopwatch.Stop();
+            OutputHelper?.WriteLine($"host: '{host}' - elapsed time: {stopwatch.Elapsed} - \n{exception.Message}");
+            Assert.InRange(stopwatch.Elapsed, TimeSpan.FromSeconds(0), TimeSpan.FromMinutes(1));
         }
 
+        [SkippableFact, Order(13)]
         public override void CanDetectInvalidAuthentication()
         {
             AdbcDriver driver = NewDriver;

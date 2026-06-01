@@ -121,6 +121,36 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         }
 
         /// <summary>
+        /// Finds the first captured proto log whose operation type matches
+        /// <paramref name="operationType"/>. Use this in preference to <c>logs[0]</c>
+        /// when other lifecycle events (CREATE_SESSION, DELETE_SESSION, CLOSE_STATEMENT)
+        /// may also be in the buffer (PECO-2991).
+        /// </summary>
+        public static OssSqlDriverTelemetryLog GetProtoLogByOperation(
+            IEnumerable<TelemetryFrontendLog> logs,
+            Operation.Types.Type operationType)
+        {
+            foreach (var log in logs)
+            {
+                if (log.Entry?.SqlDriverLog?.SqlOperation?.OperationDetail?.OperationType == operationType)
+                {
+                    return log.Entry.SqlDriverLog;
+                }
+            }
+            Assert.Fail($"No telemetry log found with operation type {operationType}");
+            return null!; // unreachable
+        }
+
+        /// <summary>
+        /// Convenience wrapper for the common case of asserting on the EXECUTE_STATEMENT
+        /// log, which used to be <c>logs[0]</c> before PECO-2991 added the surrounding
+        /// CREATE_SESSION / CLOSE_STATEMENT lifecycle events to the captured buffer.
+        /// </summary>
+        public static OssSqlDriverTelemetryLog GetExecuteStatementLog(
+            IEnumerable<TelemetryFrontendLog> logs)
+            => GetProtoLogByOperation(logs, Operation.Types.Type.ExecuteStatement);
+
+        /// <summary>
         /// Asserts that basic session-level fields are populated correctly.
         /// </summary>
         public static void AssertSessionFieldsPopulated(OssSqlDriverTelemetryLog protoLog)

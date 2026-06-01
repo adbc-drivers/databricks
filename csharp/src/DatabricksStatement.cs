@@ -69,7 +69,31 @@ namespace AdbcDrivers.Databricks
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
-        private StatementTelemetryContext? _pendingTelemetryContext; // Telemetry context pending emission on Dispose
+
+        /// <summary>
+        /// Telemetry context for the current statement execution, pending emission on Dispose.
+        /// Set before calling base.ExecuteQueryAsync()/ExecuteQuery() so that
+        /// <see cref="DatabricksConnection.NewReader{T}"/> can forward it to the
+        /// composite reader and operation status poller. The poller increments
+        /// <see cref="StatementTelemetryContext.PollCount"/> and accumulates
+        /// <see cref="StatementTelemetryContext.PollLatencyMs"/> on each
+        /// GetOperationStatus call so the emitted telemetry log carries the
+        /// <c>n_operation_status_calls</c> and <c>operation_status_latency_millis</c>
+        /// fields (PECO-2992). After a successful execute the same instance remains
+        /// here until <see cref="EmitTelemetry"/> is invoked from Dispose.
+        /// </summary>
+        internal StatementTelemetryContext? PendingTelemetryContext { get; private set; }
+
+        // Stopwatch covering the lifetime of this statement, started at construction.
+        // Used to scope CANCEL_STATEMENT timing within the statement's lifetime.
+        private readonly Stopwatch _statementLifetimeStopwatch = Stopwatch.StartNew();
+        private bool _closeStatementTelemetryEmitted;
+
+        // Populated by DatabricksCompositeReader.Dispose when it issues TCloseOperationReq
+        // to the server. Lets us report the actual close-RPC latency in the CLOSE_STATEMENT
+        // telemetry event emitted at statement Dispose, instead of a meaningless 0.
+        internal long? CloseStatementRpcLatencyMs { get; set; }
+        internal Exception? CloseStatementRpcError { get; set; }
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
@@ -192,22 +216,27 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return base.ExecuteQuery();
+            if (ctx == null) return MaybeWrapComplexTypes(base.ExecuteQuery());
 
+            // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
+            PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = base.ExecuteQuery();
-                _lastQueryResult = result; // Store for telemetry
+                // Store the UNWRAPPED result for telemetry: EmitTelemetry inspects
+                // _lastQueryResult.Stream via `is CloudFetchReader/DatabricksCompositeReader`
+                // to read chunk metrics and IsCompressed/ResultFormat. ComplexTypeSerializingStream
+                // would mask those types, so keep the real reader here and wrap only on return.
+                _lastQueryResult = result;
                 RecordSuccess(ctx);
-                _pendingTelemetryContext = ctx; // Store for emission on Dispose
-                return result;
+                return MaybeWrapComplexTypes(result);
             }
             catch (Exception ex)
             {
                 RecordError(ctx, ex);
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
-                _pendingTelemetryContext = null; // Clear to avoid double emission
+                PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
         }
@@ -217,24 +246,42 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return await base.ExecuteQueryAsync();
+            if (ctx == null) return MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
 
+            // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
+            PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
-                _lastQueryResult = result; // Store for telemetry
+                // Store the UNWRAPPED result for telemetry (see ExecuteQuery for rationale):
+                // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
+                _lastQueryResult = result;
                 RecordSuccess(ctx);
-                _pendingTelemetryContext = ctx; // Store for emission on Dispose
-                return result;
+                return MaybeWrapComplexTypes(result);
             }
             catch (Exception ex)
             {
                 RecordError(ctx, ex);
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
-                _pendingTelemetryContext = null; // Clear to avoid double emission
+                PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
+        }
+
+        /// <summary>
+        /// When <see cref="enableComplexDatatypeSupport"/> is <c>false</c>, wraps the
+        /// result stream with <see cref="ComplexTypeSerializingStream"/> so native ARRAY /
+        /// MAP / STRUCT arrays returned by the server (we always request
+        /// <c>ComplexTypesAsArrow=true</c>) are serialized to JSON strings client-side via
+        /// System.Text.Json. This guarantees valid JSON escaping — fixing the server-side
+        /// malformed-JSON bug for MAP values containing double quotes (PECO-3032 / D3).
+        /// When the flag is true the native stream is returned unchanged.
+        /// </summary>
+        private QueryResult MaybeWrapComplexTypes(QueryResult result)
+        {
+            if (enableComplexDatatypeSupport || result.Stream == null) return result;
+            return new QueryResult(result.RowCount, new ComplexTypeSerializingStream(result.Stream));
         }
 
         public override UpdateResult ExecuteUpdate()
@@ -242,11 +289,11 @@ namespace AdbcDrivers.Databricks
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return base.ExecuteUpdate();
 
+            PendingTelemetryContext = ctx;
             try
             {
                 UpdateResult result = base.ExecuteUpdate();
                 RecordSuccess(ctx);
-                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
             catch (Exception ex)
@@ -254,7 +301,7 @@ namespace AdbcDrivers.Databricks
                 RecordError(ctx, ex);
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
-                _pendingTelemetryContext = null; // Clear to avoid double emission
+                PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
         }
@@ -264,11 +311,11 @@ namespace AdbcDrivers.Databricks
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return await base.ExecuteUpdateAsync();
 
+            PendingTelemetryContext = ctx;
             try
             {
                 UpdateResult result = await base.ExecuteUpdateAsync();
                 RecordSuccess(ctx);
-                _pendingTelemetryContext = ctx; // Store for emission on Dispose
                 return result;
             }
             catch (Exception ex)
@@ -276,7 +323,7 @@ namespace AdbcDrivers.Databricks
                 RecordError(ctx, ex);
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
-                _pendingTelemetryContext = null; // Clear to avoid double emission
+                PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
         }
@@ -399,19 +446,23 @@ namespace AdbcDrivers.Databricks
             base.SetStatementProperties(statement);
 
             // Set Databricks-specific statement properties
-            // TODO: Ensure this is set dynamically depending on server capabilities.
             statement.EnforceResultPersistenceMode = false;
             statement.CanReadArrowResult = true;
+
+            // Gate advanced Arrow native types on protocol V5+, matching JDBC behavior.
+            // TimestampAsArrow is always set; the rest require V5+.
+            // If the server protocol version is unknown (null), default to enabling them.
+            var serverProtocolVersion = ((DatabricksConnection)Connection).ServerProtocolVersion;
+            bool advancedArrowTypes = serverProtocolVersion == null
+                || FeatureVersionNegotiator.SupportsAdvancedArrowTypes(serverProtocolVersion.Value);
 
             statement.UseArrowNativeTypes = new TSparkArrowTypes
             {
                 TimestampAsArrow = true,
-                DecimalAsArrow = true,
-                // When false (default), complex types (ARRAY, MAP, STRUCT) are returned as JSON-encoded
-                // strings by the Thrift server. When true, the server returns native Arrow types.
-                // Note: Thrift ARRAY_TYPE responses do not embed element type info, so callers cannot
-                // reliably determine element types; returning strings is the safe default.
-                ComplexTypesAsArrow = enableComplexDatatypeSupport,
+                DecimalAsArrow = advancedArrowTypes,
+                // Request native complex types when V5+ so ComplexTypeSerializingStream can
+                // re-serialize them client-side with correct JSON escaping (PECO-3032).
+                ComplexTypesAsArrow = advancedArrowTypes,
                 IntervalTypesAsArrow = false,
             };
 
@@ -1272,13 +1323,103 @@ namespace AdbcDrivers.Databricks
         /// <param name="disposing">True if disposing managed resources.</param>
         protected override void Dispose(bool disposing)
         {
-            if (disposing && _pendingTelemetryContext != null)
+            if (disposing)
             {
-                // Emit telemetry now that results have been consumed
-                EmitTelemetry(_pendingTelemetryContext);
-                _pendingTelemetryContext = null;
+                if (PendingTelemetryContext != null)
+                {
+                    // Emit telemetry now that results have been consumed
+                    EmitTelemetry(PendingTelemetryContext);
+                    PendingTelemetryContext = null;
+                }
+
+                // Emit a CLOSE_STATEMENT telemetry event once per statement disposal,
+                // independently of any EXECUTE_STATEMENT/metadata event already emitted.
+                // operation_latency_ms reflects the TCloseOperationReq RPC duration when
+                // the result reader actually closed the operation server-side
+                // (DatabricksCompositeReader stashes that timing here); if no close RPC
+                // was issued (e.g. user disposed the statement without consuming results,
+                // or the operation was already closed by direct-results), elapsedMs is 0
+                // and the event acts purely as a lifecycle marker.
+                // _closeStatementTelemetryEmitted makes the emission idempotent across
+                // repeated Dispose() calls (PECO-2991).
+                try
+                {
+                    if (!_closeStatementTelemetryEmitted)
+                    {
+                        var session = ((DatabricksConnection)Connection).TelemetrySession;
+                        if (session?.TelemetryClient != null)
+                        {
+                            _closeStatementTelemetryEmitted = true;
+                            ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                                OperationType.CloseStatement,
+                                Telemetry.Proto.Statement.Types.Type.Unspecified,
+                                StatementId,
+                                elapsedMs: CloseStatementRpcLatencyMs ?? 0,
+                                error: CloseStatementRpcError);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "operation_type", "CLOSE_STATEMENT" }
+                        }));
+                }
             }
             base.Dispose(disposing);
+        }
+
+        /// <inheritdoc/>
+        public override void Cancel()
+        {
+            // Emit CANCEL_STATEMENT telemetry around the base cancel call so we capture
+            // user-initiated cancels even when the cancellation token has already
+            // disposed the execute path's pending telemetry context. base.Cancel()
+            // signals the cancellation token source and is idempotent across repeats
+            // (PECO-2991). Each invocation emits its own event so analysts can see
+            // duplicate user-initiated cancels.
+            Exception? error = null;
+            long startMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
+            try
+            {
+                base.Cancel();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                throw;
+            }
+            finally
+            {
+                try
+                {
+                    var session = ((DatabricksConnection)Connection).TelemetrySession;
+                    if (session?.TelemetryClient != null)
+                    {
+                        long elapsedMs = _statementLifetimeStopwatch.ElapsedMilliseconds - startMs;
+                        ((DatabricksConnection)Connection).EmitStatementOperationTelemetry(
+                            OperationType.CancelStatement,
+                            Telemetry.Proto.Statement.Types.Type.Unspecified,
+                            StatementId,
+                            elapsedMs,
+                            error);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.emit.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message },
+                            { "operation_type", "CANCEL_STATEMENT" }
+                        }));
+                }
+            }
         }
     }
 }

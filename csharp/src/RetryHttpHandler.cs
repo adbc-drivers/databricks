@@ -328,10 +328,16 @@ namespace AdbcDrivers.Databricks
                 return false;
             }
 
-            // HttpRequestException: connection refused, DNS failure, TCP reset, etc.
-            if (ex is HttpRequestException)
+            // HttpRequestException: connection refused, TCP reset, etc.
+            if (ex is HttpRequestException httpEx)
             {
-                return true;
+#if NET8_0_OR_GREATER
+                if (httpEx.HttpRequestError == HttpRequestError.NameResolutionError)
+                {
+                    return false;
+                }
+#endif
+                return httpEx.InnerException == null || IsTransientTransportException(httpEx.InnerException, cancellationToken);
             }
 
             // IOException: connection dropped mid-transfer
@@ -340,10 +346,26 @@ namespace AdbcDrivers.Databricks
                 return true;
             }
 
-            // SocketException: low-level network errors (wrapped or standalone)
-            if (ex is SocketException)
+            // SocketException/WebException: low-level network errors (wrapped or standalone)
+            if (ex is SocketException sockEx)
             {
-                return true;
+                if (sockEx.SocketErrorCode == SocketError.HostNotFound)
+                {
+                    return false;
+                }
+
+                return sockEx.InnerException == null
+                    || IsTransientTransportException(sockEx.InnerException, cancellationToken);
+            }
+            if (ex is WebException webEx)
+            {
+                if (webEx.Status == WebExceptionStatus.NameResolutionFailure)
+                {
+                    return false;
+                }
+
+                return webEx.InnerException == null
+                    || IsTransientTransportException(webEx.InnerException, cancellationToken);
             }
 
             // TaskCanceledException NOT caused by the caller's token.

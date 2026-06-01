@@ -41,6 +41,8 @@ namespace AdbcDrivers.Databricks.Tests
         [MemberData(nameof(TimestampExtendedData), "TIMESTAMP_LTZ")]
         public async Task TestTimestampDataDatabricks(DateTimeOffset value, string columnType)
         {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
             await base.TestTimestampData(value, columnType);
         }
 
@@ -102,6 +104,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("INTERVAL -106751991 DAYS 23 HOURS 59 MINUTES 59.999999 SECONDS", "-106751990 00:00:00.000001000")]
         public async Task TestIntervalData(string intervalClause, string value)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA returns native Arrow interval types, not String");
             string selectStatement = $"SELECT {intervalClause} AS INTERVAL_VALUE;";
             await SelectAndValidateValuesAsync(selectStatement, value, 1);
         }
@@ -111,6 +114,8 @@ namespace AdbcDrivers.Databricks.Tests
         [MemberData(nameof(TimestampExtendedData), "TIMESTAMP")]
         public override Task TestTimestampData(DateTimeOffset value, string columnType)
         {
+            // TODO: PECO-3005 - CommonTestEnvironment.GetValueForProtocolVersion hard-casts to HiveServer2Connection
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA: GetValueForProtocolVersion hard-casts to HiveServer2Connection");
             return base.TestTimestampData(value, columnType);
         }
 

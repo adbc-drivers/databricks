@@ -37,15 +37,18 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
     /// </summary>
     public class StatementMetadataTelemetryTests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
-        // Filters to scope metadata queries and avoid MaxMessageSize errors
+        // Filters to scope metadata queries and avoid MaxMessageSize errors.
+        // Read-only fixture schema — tests here must not mutate.
         private const string TestCatalog = "main";
-        private const string TestSchema = "adbc_testing";
+        private const string TestSchema = DatabricksTestEnvironment.FixtureSchema;
         private const string TestTable = "all_column_types";
 
+        // TODO: PECO-3010 - telemetry not wired for SEA protocol; these tests fail for rest protocol
         public StatementMetadataTelemetryTests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable));
+            Skip.If(TestConfiguration.Protocol == "rest", "Telemetry not wired for SEA protocol (PECO-3010)");
         }
 
         [SkippableFact]

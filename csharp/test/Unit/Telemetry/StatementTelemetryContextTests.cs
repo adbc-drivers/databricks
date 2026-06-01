@@ -391,6 +391,76 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
+        public void StatementTelemetryLog_WithIsInternalCall_FlagsOperationDetailAsInternal()
+        {
+            // Regression test for PECO-2993: driver-initiated statements (e.g., USE SCHEMA from
+            // SetSchema, SET key=value from ApplyServerSidePropertiesAsync) must set
+            // OperationDetail.is_internal_call = true so they can be filtered in production telemetry.
+
+            // Arrange
+            TelemetrySessionContext sessionContext = CreateTestSessionContext();
+            StatementTelemetryContext context = new StatementTelemetryContext(sessionContext);
+            context.OperationType = OperationType.ExecuteStatement;
+            context.StatementType = StatementType.Update;
+            context.IsInternalCall = true;
+
+            // Act
+            OssSqlDriverTelemetryLog log = context.BuildTelemetryLog();
+
+            // Assert - is_internal_call propagated to proto even when polling fields are absent
+            Assert.NotNull(log.SqlOperation);
+            Assert.NotNull(log.SqlOperation.OperationDetail);
+            Assert.True(log.SqlOperation.OperationDetail.IsInternalCall,
+                "IsInternalCall=true on the context must serialize to OperationDetail.is_internal_call=true");
+            Assert.Equal(OperationType.ExecuteStatement, log.SqlOperation.OperationDetail.OperationType);
+        }
+
+        [Fact]
+        public void StatementTelemetryLog_WithIsInternalCallAndPolling_FlagsOperationDetailAsInternal()
+        {
+            // Regression test for PECO-2993: ensure IsInternalCall is also propagated through the
+            // polling-populated OperationDetail branch.
+
+            // Arrange
+            TelemetrySessionContext sessionContext = CreateTestSessionContext();
+            StatementTelemetryContext context = new StatementTelemetryContext(sessionContext);
+            context.OperationType = OperationType.ExecuteStatement;
+            context.IsInternalCall = true;
+            context.PollCount = 2;
+            context.PollLatencyMs = 100;
+
+            // Act
+            OssSqlDriverTelemetryLog log = context.BuildTelemetryLog();
+
+            // Assert
+            Assert.NotNull(log.SqlOperation);
+            Assert.NotNull(log.SqlOperation.OperationDetail);
+            Assert.True(log.SqlOperation.OperationDetail.IsInternalCall);
+            Assert.Equal(2, log.SqlOperation.OperationDetail.NOperationStatusCalls);
+            Assert.Equal(100, log.SqlOperation.OperationDetail.OperationStatusLatencyMillis);
+        }
+
+        [Fact]
+        public void StatementTelemetryLog_DefaultIsInternalCall_IsFalse()
+        {
+            // Sanity check: user-initiated queries (where IsInternalCall is never set) emit
+            // is_internal_call=false. Pairs with the regression tests above.
+
+            // Arrange
+            TelemetrySessionContext sessionContext = CreateTestSessionContext();
+            StatementTelemetryContext context = new StatementTelemetryContext(sessionContext);
+            context.OperationType = OperationType.ExecuteStatement;
+
+            // Act
+            OssSqlDriverTelemetryLog log = context.BuildTelemetryLog();
+
+            // Assert
+            Assert.NotNull(log.SqlOperation);
+            Assert.NotNull(log.SqlOperation.OperationDetail);
+            Assert.False(log.SqlOperation.OperationDetail.IsInternalCall);
+        }
+
+        [Fact]
         public void StatementTelemetryContext_StopwatchTiming_IsConsistent()
         {
             // Arrange

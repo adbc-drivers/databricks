@@ -67,8 +67,8 @@ Implement the core telemetry infrastructure including feature flag management, p
 | Test Type | Test Name | Input | Expected Output |
 |-----------|-----------|-------|-----------------|
 | Unit | `TelemetryConfiguration_DefaultValues_AreCorrect` | No properties | Enabled=true, BatchSize=100, FlushIntervalMs=5000 |
-| Unit | `TelemetryConfiguration_FromProperties_ParsesCorrectly` | `{"telemetry.enabled": "false", "telemetry.batch_size": "50"}` | Enabled=false, BatchSize=50 |
-| Unit | `TelemetryConfiguration_InvalidProperty_UsesDefault` | `{"telemetry.batch_size": "invalid"}` | BatchSize=100 (default) |
+| Unit | `TelemetryConfiguration_FromProperties_ParsesCorrectly` | `{"adbc.databricks.telemetry.enabled": "false", "adbc.databricks.telemetry.batch_size": "50"}` | Enabled=false, BatchSize=50 |
+| Unit | `TelemetryConfiguration_InvalidProperty_UsesDefault` | `{"adbc.databricks.telemetry.batch_size": "invalid"}` | BatchSize=100 (default) |
 
 **Implementation Notes**:
 - Implemented with graceful degradation for invalid values (uses defaults instead of throwing exceptions)
@@ -84,7 +84,7 @@ Implement the core telemetry infrastructure including feature flag management, p
 
 **Key Design Decisions**:
 1. **Graceful degradation**: Invalid property values use defaults rather than throwing exceptions to ensure telemetry failures don't impact driver operations
-2. **Property naming**: Used `telemetry.*` prefix for connection properties and `DATABRICKS_TELEMETRY_*` for environment variables
+2. **Property naming**: Used `adbc.databricks.telemetry.*` prefix for connection properties and `DATABRICKS_TELEMETRY_*` for environment variables
 3. **Non-negative vs Positive**: MaxRetries and RetryDelayMs allow zero (for disabling), while BatchSize, FlushIntervalMs, and CircuitBreakerThreshold require positive values
 
 ---

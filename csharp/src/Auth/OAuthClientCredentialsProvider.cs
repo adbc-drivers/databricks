@@ -28,6 +28,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.Auth
 {
@@ -117,7 +118,36 @@ namespace AdbcDrivers.Databricks.Auth
             try
             {
                 response = await _httpClient.SendAsync(request, cancellationToken);
+
+                // SEA re-throws DatabricksException as-is, so we must set AdbcStatusCode.Unauthorized here
+                // explicitly. The Thrift path does this differently: THttpTransport wraps all exceptions in
+                // TTransportException, and HiveServer2Connection.IsUnauthorized then walks the inner exception
+                // chain to find an HttpRequestException with StatusCode == 401. We preserve that chain by
+                // including HttpRequestException as the inner exception (3-arg ctor requires .NET 5+).
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                    response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    string errorBody = await response.Content.ReadAsStringAsync();
+#if NET5_0_OR_GREATER
+                    var httpEx = new HttpRequestException(
+                        $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).",
+                        null,
+                        response.StatusCode);
+#else
+                    var httpEx = new HttpRequestException(
+                        $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).");
+#endif
+                    throw new DatabricksException(
+                        $"Failed to acquire OAuth access token: HTTP {(int)response.StatusCode} ({response.StatusCode}). Response: {errorBody}",
+                        AdbcStatusCode.Unauthorized,
+                        httpEx);
+                }
+
                 response.EnsureSuccessStatusCode();
+            }
+            catch (DatabricksException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

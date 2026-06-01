@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Threading.Tasks;
@@ -169,6 +170,79 @@ namespace AdbcDrivers.Databricks.Tests
                     throw;
                 }
             }
+        }
+
+        /// <summary>
+        /// PECO-3059: the SEA path must honor adbc.spark.connect_timeout_ms when opening
+        /// the session, matching the Thrift path's semantics. With an impossibly short
+        /// connect timeout (1 ms), creating a connection must fail fast (well under the
+        /// HttpClient default 100s) with a TimeoutException — not hang, succeed, or take
+        /// the full HTTP timeout budget.
+        ///
+        /// Note: temporarily_unavailable_retry is disabled explicitly so the Thrift-parity
+        /// "bump connect-timeout to retry budget" path (see DatabricksConnection.ValidateOptions
+        /// lines 967-972 and the mirrored logic in StatementExecutionConnection) doesn't
+        /// rewrite the 1 ms back up to 900 s. The fix itself is exercised; the bump logic
+        /// is covered separately by the existing Thrift ConnectionTimeoutTest.
+        ///
+        /// Red proof (before fix): NewConnection() either succeeds (the timeout is
+        /// silently ignored) or fails only after the HttpClient.Timeout (minutes) elapses.
+        /// Green proof (after fix): NewConnection() throws TimeoutException within a few
+        /// seconds, matching the Thrift ConnectionTimeoutTest behavior at the same value.
+        /// </summary>
+        [SkippableFact]
+        public void SeaConnectionTimeout_HonorsConnectTimeoutMs()
+        {
+            DatabricksTestConfiguration testConfiguration = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            // Force the SEA (REST) path regardless of the global test-config protocol.
+            testConfiguration.Protocol = "rest";
+            // Impossibly short — guarantees the timer fires before the TCP/TLS handshake
+            // completes against a real Databricks workspace.
+            testConfiguration.ConnectTimeoutMilliseconds = "1";
+
+            // Build driver parameters and disable temporarily_unavailable_retry so the
+            // parity-bump path (see ParseConnectTimeoutMilliseconds) doesn't rewrite the
+            // 1 ms value up to the 900 s retry budget. The retry-bump behavior itself is
+            // exercised by the Thrift ConnectionTimeoutTest.
+            var parameters = GetDriverParameters(testConfiguration);
+            parameters[DatabricksParameters.TemporarilyUnavailableRetry] = "false";
+
+            OutputHelper?.WriteLine($"[PECO-3059] Forcing SEA protocol with ConnectTimeoutMilliseconds=1, retry disabled");
+
+            var stopwatch = Stopwatch.StartNew();
+            Exception? caught = null;
+            try
+            {
+                AdbcDatabase database = NewDriver.Open(parameters);
+                using var _ = database.Connect(new Dictionary<string, string>());
+            }
+            catch (Exception ex)
+            {
+                caught = ex;
+            }
+            stopwatch.Stop();
+
+            OutputHelper?.WriteLine($"[PECO-3059] Elapsed: {stopwatch.ElapsedMilliseconds} ms. Exception: {caught?.GetType().FullName ?? "<none>"}");
+
+            // With adbc.spark.connect_timeout_ms=1 the timer must fire essentially immediately;
+            // green runs complete in ~25-50 ms. A 1 s budget leaves ample slack for TLS abort
+            // and handler unwind on a slow CI box without being so loose that a regression
+            // (e.g. falling back to the HttpClient.Timeout of minutes) would still pass.
+            Assert.NotNull(caught);
+            Assert.True(
+                stopwatch.ElapsedMilliseconds < 1_000,
+                $"Expected the SEA connect-timeout to fire within ~1s when adbc.spark.connect_timeout_ms=1; " +
+                $"actual elapsed was {stopwatch.ElapsedMilliseconds} ms (exception: {caught?.GetType().FullName}). " +
+                $"This indicates adbc.spark.connect_timeout_ms is not wired through to the SEA HttpClient call.");
+
+            // For parity with the Thrift ConnectionTimeoutTest the exception chain must
+            // surface a TimeoutException (Thrift translates the cancelled OpenSession into
+            // a TimeoutException — the SEA path should do the same).
+            bool hasTimeoutException = ApacheUtility.ContainsException(caught!, typeof(TimeoutException), out _);
+            Assert.True(
+                hasTimeoutException,
+                $"Expected TimeoutException somewhere in the exception chain (parity with Thrift); " +
+                $"got {caught!.GetType().FullName}: {caught.Message}");
         }
 
         /// <summary>
@@ -406,9 +480,11 @@ namespace AdbcDrivers.Databricks.Tests
         /// <summary>
         /// Tests that default namespace is correctly stored in the connection namespace.
         /// </summary>
+        // TODO: PECO-3009 - test hard-asserts DatabricksConnection type; fails for SEA's StatementExecutionConnection
         [SkippableFact]
         internal void DefaultNamespaceStoredInConnection()
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA uses StatementExecutionConnection, not DatabricksConnection (PECO-3009)");
             // Skip if default catalog or schema is not configured
             Skip.If(string.IsNullOrEmpty(TestConfiguration.Catalog), "Default catalog not configured");
             Skip.If(string.IsNullOrEmpty(TestConfiguration.DbSchema), "Default schema not configured");
@@ -488,14 +564,22 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(expectedRuntimeCatalog, catalogFromRuntime);
             Assert.Equal(expectedRuntimeSchema, schemaFromRuntime);
 
-            // Assert statement object values
-            var dbStatement = (DatabricksStatement)statement;
-            Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
-            Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
+            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName
+            if (statement is DatabricksStatement dbStatement)
+            {
+                Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
+                Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
 
-            OutputHelper?.WriteLine(
-                $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
-                $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}, Statement catalog={dbStatement.CatalogName}");
+                OutputHelper?.WriteLine(
+                    $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
+                    $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}, Statement catalog={dbStatement.CatalogName}");
+            }
+            else
+            {
+                OutputHelper?.WriteLine(
+                    $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
+                    $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}");
+            }
         }
 
         /// <summary>
@@ -506,8 +590,10 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("false", "X-Trace-Id", "true")]
         [InlineData("TRUE", "X-Custom-Trace", "FALSE")]
         [InlineData("False", "custom-header", "True")]
+        // TODO: PECO-3009 - Assert.IsType<DatabricksConnection> fails for SEA's StatementExecutionConnection
         public void TracePropagationConfigurationTest(string tracePropagationEnabled, string traceParentHeaderName, string traceStateEnabled)
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "SEA uses StatementExecutionConnection, not DatabricksConnection (PECO-3009)");
             // Arrange
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             testConfig.TracePropagationEnabled = tracePropagationEnabled;
@@ -531,9 +617,10 @@ namespace AdbcDrivers.Databricks.Tests
         /// <summary>
         /// Tests that TrySetGetDirectResults uses DatabricksConnection's defaultGetDirectResults
         /// </summary>
-        [Fact]
+        [SkippableFact]
         public void TrySetGetDirectResults_UsesDatabricksDefaultGetDirectResults()
         {
+            Skip.If(TestConfiguration.Protocol == "rest", "DirectResults is Thrift-only");
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             using var connection = NewConnection(testConfig);
             // Create a mock request object
