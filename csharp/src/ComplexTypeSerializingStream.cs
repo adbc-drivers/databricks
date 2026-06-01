@@ -16,7 +16,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
@@ -32,17 +34,28 @@ namespace AdbcDrivers.Databricks
     /// into STRING columns containing their JSON representation.
     ///
     /// <para>
-    /// Applied when <c>EnableComplexDatatypeSupport=false</c> (the default) so that SEA
-    /// results match the legacy Thrift behavior of returning JSON strings for complex types.
+    /// Applied when <c>EnableComplexDatatypeSupport=false</c> (the default) on both the Thrift
+    /// and SEA paths so that both return consistent, correctly-escaped JSON strings for complex
+    /// types regardless of what the server emits.
     /// </para>
     ///
     /// <para><strong>Why both schema and data must be converted:</strong>
     /// Arrow streaming is strongly typed: the <see cref="Schema"/> and the arrays inside each
-    /// <see cref="RecordBatch"/> must agree on the column type. The manifest schema (built by
-    /// <c>TryGetSchemaFromManifest</c>) already declares complex columns as
-    /// <see cref="StringType"/>, so this stream only needs to convert the native Arrow arrays
-    /// (<c>ListArray</c>, <c>StructArray</c>, etc.) to <see cref="StringArray"/> at read time.
-    /// The schema it exposes to callers is the inner stream's schema unchanged.
+    /// <see cref="RecordBatch"/> must agree on the column type.
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <strong>SEA path:</strong> the manifest schema already declares complex columns as
+    ///     <see cref="StringType"/>, so only the batch data (native <c>ListArray</c> /
+    ///     <c>StructArray</c> / etc.) needs converting; the schema is passed through unchanged.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <strong>Thrift path:</strong> the driver requests <c>ComplexTypesAsArrow=true</c>
+    ///     from the server, so the inner IPC schema carries native
+    ///     <c>ListType</c> / <c>MapType</c> / <c>StructType</c>. Both the schema and the batch
+    ///     data must be flattened to <see cref="StringType"/> / <see cref="StringArray"/> to
+    ///     keep them in agreement. <see cref="FlattenComplexColumns"/> handles the schema side.
+    ///   </description></item>
+    /// </list>
     /// </para>
     ///
     /// <para><strong>Column detection:</strong>
@@ -58,6 +71,15 @@ namespace AdbcDrivers.Databricks
     /// </summary>
     internal sealed class ComplexTypeSerializingStream : IArrowArrayStream
     {
+        // Use the relaxed encoder so complex-type values are serialized as data, not HTML:
+        // a double quote becomes \" (not ") and non-ASCII / < > & are emitted verbatim
+        // rather than \uXXXX-escaped. The output is still valid JSON; "unsafe" only refers to
+        // embedding directly in HTML, which is the consuming application's concern, not ours.
+        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
+
         private readonly IArrowArrayStream _inner;
         private readonly Schema _schema;
         private readonly HashSet<int> _complexColumnIndices;
@@ -65,8 +87,27 @@ namespace AdbcDrivers.Databricks
         public ComplexTypeSerializingStream(IArrowArrayStream inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            _schema = inner.Schema;
-            _complexColumnIndices = DetectComplexColumns(_schema);
+            _complexColumnIndices = DetectComplexColumns(inner.Schema);
+            // Flatten complex columns to StringType so the exposed schema matches the
+            // string-serialized batches this stream produces. For SEA the inner schema
+            // already has StringType for complex columns (manifest-driven), so this is a
+            // no-op. For Thrift with ComplexTypesAsArrow=true, the inner IPC schema has
+            // native ListType/MapType/StructType — we must report StringType to keep
+            // schema and batch types consistent.
+            _schema = FlattenComplexColumns(inner.Schema, _complexColumnIndices);
+        }
+
+        private static Schema FlattenComplexColumns(Schema schema, HashSet<int> complexIndices)
+        {
+            if (complexIndices.Count == 0) return schema;
+            List<Field> fields = new List<Field>(schema.FieldsList.Count);
+            for (int i = 0; i < schema.FieldsList.Count; i++)
+            {
+                Field f = schema.FieldsList[i];
+                IArrowType arrowType = complexIndices.Contains(i) ? StringType.Default : f.DataType;
+                fields.Add(new Field(f.Name, arrowType, f.IsNullable, f.Metadata));
+            }
+            return new Schema(fields, schema.Metadata);
         }
 
         public Schema Schema => _schema;
@@ -103,7 +144,7 @@ namespace AdbcDrivers.Databricks
                 if (array.IsNull(i))
                     builder.AppendNull();
                 else
-                    builder.Append(JsonSerializer.Serialize(ToObject(array, i)));
+                    builder.Append(JsonSerializer.Serialize(ToObject(array, i), JsonOptions));
             }
             return builder.Build();
         }
@@ -145,11 +186,27 @@ namespace AdbcDrivers.Databricks
             {
                 ListArray la => ToListOrMap(la, index),
                 StructArray sa => ToDict(sa, index),
-                Decimal128Array dec => dec.GetString(index),            // preserve precision as string
+                // DECIMAL: emit as a bare JSON number (not a quoted string) so the output matches
+                // the JDBC driver and is valid JSON. The decimal's string form is written raw so
+                // values beyond C# decimal's ~28-digit range (DECIMAL(38, …)) keep full precision.
+                Decimal128Array dec => RawNumber(dec.GetString(index)),
+                Decimal256Array dec => RawNumber(dec.GetString(index)),
                 Date32Array d32 => d32.GetDateTime(index)?.ToString("yyyy-MM-dd"),
-                _ => array.ValueAt(index, StructResultType.Object)      // int, long, float, bool, string, timestamp, etc.
+                // INTERVAL: native YearMonth/Duration arrays serialize to {} via System.Text.Json
+                // (no public properties). Render the same "Y-M" / "D HH:MM:SS.nnnnnnnnn" strings
+                // IntervalSerializingStream produces for top-level interval columns.
+                YearMonthIntervalArray ym => IntervalSerializingStream.FormatYearMonth(ym.GetValue(index)!.Value.Months),
+                DurationArray dur => IntervalSerializingStream.FormatDuration(dur.GetValue(index)!.Value, ((DurationType)dur.Data.DataType).Unit),
+                _ => array.ValueAt(index, StructResultType.Object)      // int, long, double, float, bool, string, timestamp, etc.
             };
         }
+
+        /// <summary>
+        /// Wraps a numeric string as a raw JSON number node so <see cref="JsonSerializer"/> emits it
+        /// unquoted (e.g. <c>1</c>, not <c>"1"</c>) with full precision.
+        /// </summary>
+        private static JsonNode? RawNumber(string? numericText) =>
+            numericText == null ? null : JsonNode.Parse(numericText);
 
         private static object ToListOrMap(ListArray listArray, int index)
         {
