@@ -216,16 +216,20 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return base.ExecuteQuery();
+            if (ctx == null) return MaybeWrapComplexTypes(base.ExecuteQuery());
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = base.ExecuteQuery();
-                _lastQueryResult = result; // Store for telemetry
+                // Store the UNWRAPPED result for telemetry: EmitTelemetry inspects
+                // _lastQueryResult.Stream via `is CloudFetchReader/DatabricksCompositeReader`
+                // to read chunk metrics and IsCompressed/ResultFormat. ComplexTypeSerializingStream
+                // would mask those types, so keep the real reader here and wrap only on return.
+                _lastQueryResult = result;
                 RecordSuccess(ctx);
-                return result;
+                return MaybeWrapComplexTypes(result);
             }
             catch (Exception ex)
             {
@@ -242,16 +246,18 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return await base.ExecuteQueryAsync();
+            if (ctx == null) return MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
-                _lastQueryResult = result; // Store for telemetry
+                // Store the UNWRAPPED result for telemetry (see ExecuteQuery for rationale):
+                // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
+                _lastQueryResult = result;
                 RecordSuccess(ctx);
-                return result;
+                return MaybeWrapComplexTypes(result);
             }
             catch (Exception ex)
             {
@@ -261,6 +267,21 @@ namespace AdbcDrivers.Databricks
                 PendingTelemetryContext = null; // Clear to avoid double emission
                 throw;
             }
+        }
+
+        /// <summary>
+        /// When <see cref="enableComplexDatatypeSupport"/> is <c>false</c>, wraps the
+        /// result stream with <see cref="ComplexTypeSerializingStream"/> so native ARRAY /
+        /// MAP / STRUCT arrays returned by the server (we always request
+        /// <c>ComplexTypesAsArrow=true</c>) are serialized to JSON strings client-side via
+        /// System.Text.Json. This guarantees valid JSON escaping — fixing the server-side
+        /// malformed-JSON bug for MAP values containing double quotes (PECO-3032 / D3).
+        /// When the flag is true the native stream is returned unchanged.
+        /// </summary>
+        private QueryResult MaybeWrapComplexTypes(QueryResult result)
+        {
+            if (enableComplexDatatypeSupport || result.Stream == null) return result;
+            return new QueryResult(result.RowCount, new ComplexTypeSerializingStream(result.Stream));
         }
 
         public override UpdateResult ExecuteUpdate()
@@ -425,19 +446,23 @@ namespace AdbcDrivers.Databricks
             base.SetStatementProperties(statement);
 
             // Set Databricks-specific statement properties
-            // TODO: Ensure this is set dynamically depending on server capabilities.
             statement.EnforceResultPersistenceMode = false;
             statement.CanReadArrowResult = true;
+
+            // Gate advanced Arrow native types on protocol V5+, matching JDBC behavior.
+            // TimestampAsArrow is always set; the rest require V5+.
+            // If the server protocol version is unknown (null), default to enabling them.
+            var serverProtocolVersion = ((DatabricksConnection)Connection).ServerProtocolVersion;
+            bool advancedArrowTypes = serverProtocolVersion == null
+                || FeatureVersionNegotiator.SupportsAdvancedArrowTypes(serverProtocolVersion.Value);
 
             statement.UseArrowNativeTypes = new TSparkArrowTypes
             {
                 TimestampAsArrow = true,
-                DecimalAsArrow = true,
-                // When false (default), complex types (ARRAY, MAP, STRUCT) are returned as JSON-encoded
-                // strings by the Thrift server. When true, the server returns native Arrow types.
-                // Note: Thrift ARRAY_TYPE responses do not embed element type info, so callers cannot
-                // reliably determine element types; returning strings is the safe default.
-                ComplexTypesAsArrow = enableComplexDatatypeSupport,
+                DecimalAsArrow = advancedArrowTypes,
+                // Request native complex types when V5+ so ComplexTypeSerializingStream can
+                // re-serialize them client-side with correct JSON escaping (PECO-3032).
+                ComplexTypesAsArrow = advancedArrowTypes,
                 IntervalTypesAsArrow = false,
             };
 

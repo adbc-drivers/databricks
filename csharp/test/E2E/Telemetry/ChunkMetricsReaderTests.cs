@@ -382,6 +382,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
         /// Helper method to get ChunkMetrics from reader using reflection.
         /// CloudFetchReader is internal, so we need reflection to access GetChunkMetrics().
         /// Works with both CloudFetchReader and DatabricksCompositeReader.
+        /// The reader may be wrapped by decorator streams (e.g. ComplexTypeSerializingStream
+        /// or IntervalSerializingStream) that don't expose GetChunkMetrics themselves; in that
+        /// case we unwrap their private "_inner" stream until we reach the reader that does.
         /// </summary>
         private object? GetChunkMetricsViaReflection(object reader)
         {
@@ -390,9 +393,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
             // Try to get GetChunkMetrics method (available on both CloudFetchReader and DatabricksCompositeReader)
             var method = readerType.GetMethod("GetChunkMetrics", BindingFlags.Public | BindingFlags.Instance);
 
-            if (method == null)
+            // Unwrap decorator streams (ComplexTypeSerializingStream / IntervalSerializingStream)
+            // that hold the real reader in a private "_inner" field.
+            while (method == null)
             {
-                throw new InvalidOperationException($"GetChunkMetrics method not found on {readerType.Name}");
+                var innerField = readerType.GetField("_inner", BindingFlags.NonPublic | BindingFlags.Instance);
+                var inner = innerField?.GetValue(reader);
+                if (inner == null)
+                {
+                    throw new InvalidOperationException($"GetChunkMetrics method not found on {reader.GetType().Name}");
+                }
+
+                reader = inner;
+                readerType = reader.GetType();
+                method = readerType.GetMethod("GetChunkMetrics", BindingFlags.Public | BindingFlags.Instance);
             }
 
             var result = method.Invoke(reader, null);

@@ -38,6 +38,12 @@ namespace AdbcDrivers.Databricks
     {
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
+        /// Takes precedence over <see cref="DefaultConfigEnvironmentVariable"/> when both are set.
+        /// </summary>
+        public const string AdbcConfigEnvironmentVariable = "ADBC_DATABRICKS_CONFIG_FILE";
+
+        /// <summary>
+        /// The environment variable name that contains the path to the default Databricks configuration file.
         /// </summary>
         public const string DefaultConfigEnvironmentVariable = "DATABRICKS_CONFIG_FILE";
 
@@ -171,16 +177,18 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Automatically merges properties from the default DATABRICKS_CONFIG_FILE environment variable with passed-in properties.
+        /// Automatically merges properties from the default config environment variable with passed-in properties.
+        /// Checks ADBC_DATABRICKS_CONFIG_FILE first, falling back to DATABRICKS_CONFIG_FILE.
         /// The merge priority is controlled by the "adbc.databricks.driver_config_take_precedence" property.
-        /// If DATABRICKS_CONFIG_FILE is not set or invalid, only passed-in properties are used.
+        /// If neither environment variable is set or valid, only passed-in properties are used.
         /// </summary>
         /// <param name="properties">Properties passed to constructor.</param>
         /// <returns>Merged properties dictionary.</returns>
         private static IReadOnlyDictionary<string, string> MergeWithDefaultEnvironmentConfig(IReadOnlyDictionary<string, string> properties)
         {
-            // Try to load configuration from the default environment variable
-            var environmentConfig = DatabricksConfiguration.TryFromEnvironmentVariable(DefaultConfigEnvironmentVariable);
+            // Try to load configuration: ADBC_DATABRICKS_CONFIG_FILE takes precedence over DATABRICKS_CONFIG_FILE
+            var environmentConfig = DatabricksConfiguration.TryFromEnvironmentVariable(AdbcConfigEnvironmentVariable)
+                ?? DatabricksConfiguration.TryFromEnvironmentVariable(DefaultConfigEnvironmentVariable);
 
             if (environmentConfig != null)
             {

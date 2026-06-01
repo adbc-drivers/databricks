@@ -24,19 +24,28 @@ namespace AdbcDrivers.Databricks.Http
     internal static class UserAgentHelper
     {
         /// <summary>
-        /// Builds the User-Agent string for ADBC driver HTTP requests (e.g., feature flag fetching).
-        /// Format: AdbcDatabricksDriver/{version} [user_agent_entry]
+        /// Builds the User-Agent string used by every Databricks driver HTTP request — feature-flag
+        /// fetches, and (via delegation) the SEA statement-execution path.
+        /// Format: {DriverName}/{version} [product] [user_agent_entry],
+        /// e.g. <c>ADBCDatabricksDriver/1.2.3 REST custom-entry</c>.
         /// </summary>
         /// <param name="assemblyVersion">The driver version.</param>
         /// <param name="properties">Connection properties (optional, for user_agent_entry).</param>
+        /// <param name="product">Optional product/component token inserted after the version
+        /// (e.g. "REST" for the SEA path). Thrift adds its own "Thrift/{v}" token in the base class.</param>
         /// <returns>The User-Agent string.</returns>
         /// <remarks>
-        /// This is used for internal driver HTTP requests like feature flag fetching.
-        /// Statement execution uses ADBCDatabricksDriver as the User-Agent.
+        /// The prefix is derived from <see cref="DatabricksConnection.DatabricksDriverName"/> so it
+        /// stays consistent with the Thrift transport user agent (which uses the same driver name).
         /// </remarks>
-        public static string GetUserAgent(string assemblyVersion, IReadOnlyDictionary<string, string>? properties = null)
+        public static string GetUserAgent(string assemblyVersion, IReadOnlyDictionary<string, string>? properties = null, string? product = null)
         {
-            string baseUserAgent = $"AdbcDatabricksDriver/{assemblyVersion}";
+            string baseUserAgent = $"{DatabricksConnection.DatabricksDriverName.Replace(" ", "")}/{assemblyVersion}";
+
+            if (!string.IsNullOrEmpty(product))
+            {
+                baseUserAgent += $" {product}";
+            }
 
             if (properties != null)
             {
