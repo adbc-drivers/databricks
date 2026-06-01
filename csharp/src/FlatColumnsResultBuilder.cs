@@ -71,10 +71,13 @@ namespace AdbcDrivers.Databricks
 
                     if (info.Precision[i].HasValue) columnSizeBuilder.Append(info.Precision[i]!.Value); else columnSizeBuilder.AppendNull();
 
-                    // BUFFER_LENGTH is a JDBC-compatibility column in the getColumns metadata result
-                    // (ADBC surfaces the same value as xdbc_buffer_length). It is defined as "not used"
-                    // by the JDBC contract, so no driver populates it — always null here, matching the
-                    // Thrift path (server leaves it unset) and the SEA DESC TABLE EXTENDED path.
+                    // BUFFER_LENGTH is an ODBC carryover (SQLColumns col 8): the byte size an ODBC
+                    // application would allocate to bind/fetch the column into its own C buffer.
+                    // Managed APIs that own their buffers have no use for it, so JDBC marks it
+                    // "not used" — and ADBC even less so, since results are self-describing Arrow
+                    // (buffer sizes come from the column's type + data, not from a metadata field).
+                    // Always null here, matching the Thrift path and the SEA DESC TABLE EXTENDED path.
+                    // (ADBC surfaces the same field as xdbc_buffer_length.)
                     bufferLengthBuilder.AppendNull();
 
                     if (info.Scale[i].HasValue) decimalDigitsBuilder.Append(info.Scale[i]!.Value); else decimalDigitsBuilder.AppendNull();
