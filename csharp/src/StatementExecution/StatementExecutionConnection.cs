@@ -417,21 +417,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Builds the user agent string for HTTP requests.
-        /// Format: ADBCDatabricksDriver/{version} REST
+        /// Format: ADBCDatabricksDriver/{version} REST [user_agent_entry] — delegated to
+        /// <see cref="UserAgentHelper"/> so the prefix/entry handling stays shared with the
+        /// feature-flag path. "REST" marks the SEA transport (Thrift uses a "Thrift/{v}" token).
         /// </summary>
         private string GetUserAgent(IReadOnlyDictionary<string, string> properties)
-        {
-            string baseUserAgent = $"{DatabricksConnection.DatabricksDriverName.Replace(" ", "")}/{DatabricksConnection.DriverVersion} REST";
-
-            // Check if a client has provided a user-agent entry
-            string userAgentEntry = PropertyHelper.GetStringProperty(properties, "adbc.spark.user_agent_entry", string.Empty);
-            if (!string.IsNullOrWhiteSpace(userAgentEntry))
-            {
-                return $"{baseUserAgent} {userAgentEntry}";
-            }
-
-            return baseUserAgent;
-        }
+            => UserAgentHelper.GetUserAgent(DatabricksConnection.DriverVersion, properties, product: "REST");
 
         /// <summary>
         /// Opens the connection and creates a session.
