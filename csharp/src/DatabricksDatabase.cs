@@ -58,6 +58,17 @@ namespace AdbcDrivers.Databricks
         /// Sized for 4MB buffers (Databricks maxBlockSize) with capacity for 10 buffers.
         /// This pool is instance-based to allow cleanup when the database is disposed.
         /// </summary>
+        /// <remarks>
+        /// IMPORTANT: This pool MUST remain database-scoped — do not promote it to a static or
+        /// otherwise global/process-wide pool. <see cref="CustomLZ4FrameReader.ReleaseBuffer"/>
+        /// returns the decoder's work buffers <b>without</b> clearing them (a measured perf win;
+        /// K4os bounds every read to the bytes it actually decoded, so stale bytes are never
+        /// surfaced on the normal path). Because the buffers are not zeroed on return, the pool's
+        /// reuse boundary is also a data-isolation boundary: a database-scoped pool only ever
+        /// recycles buffers among connections of that one database. A global pool would let a
+        /// buffer rented by one DatabricksDatabase's decode be handed to another's — surfacing
+        /// stale decode bytes across tenants in a multi-tenant host. Keep it instance-scoped.
+        /// </remarks>
         internal readonly System.Buffers.ArrayPool<byte> Lz4BufferPool =
             System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
 
