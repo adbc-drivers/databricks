@@ -28,6 +28,18 @@ using Apache.Arrow.Adbc.Tracing;
 namespace AdbcDrivers.Databricks
 {
     /// <summary>
+    /// Result of the most recent feature-flag fetch.
+    /// </summary>
+    internal enum FeatureFlagFetchStatus
+    {
+        /// <summary>The most recent fetch succeeded.</summary>
+        Healthy,
+
+        /// <summary>The most recent fetch failed (timeout / 429 / 5xx) and is negatively cached.</summary>
+        Failed
+    }
+
+    /// <summary>
     /// Holds feature flag state for a host.
     /// Cached by FeatureFlagCache with TTL-based expiration.
     /// </summary>
@@ -58,6 +70,12 @@ namespace AdbcDrivers.Databricks
         /// Default TTL (15 minutes) if server doesn't specify ttl_seconds.
         /// </summary>
         public static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(15);
+
+        /// <summary>
+        /// Fixed negative-cache TTL (60s) applied when a fetch fails. Kept short so the
+        /// driver recovers quickly once the connector-service is healthy again.
+        /// </summary>
+        public static readonly TimeSpan DefaultNegativeTtl = TimeSpan.FromSeconds(60);
 
         /// <summary>
         /// Default feature flag endpoint format. {0} = driver version.
@@ -106,6 +124,13 @@ namespace AdbcDrivers.Databricks
         /// Gets the current refresh interval (alias for Ttl).
         /// </summary>
         public TimeSpan RefreshInterval => Ttl;
+
+        /// <summary>
+        /// Outcome of the most recent fetch. Failed contexts are cached with a short
+        /// negative TTL so a slow/erroring connector-service is not retried on every
+        /// connection.
+        /// </summary>
+        public FeatureFlagFetchStatus LastFetchStatus { get; private set; } = FeatureFlagFetchStatus.Healthy;
 
         /// <summary>
         /// Internal constructor - use CreateAsync factory method for production code.
@@ -159,8 +184,13 @@ namespace AdbcDrivers.Databricks
             // Initial async fetch - wait for it to complete
             await context.FetchFeatureFlagsAsync("Initial", cancellationToken).ConfigureAwait(false);
 
-            // Start background refresh task
-            context.StartBackgroundRefresh();
+            // Only run the background refresh loop for a healthy context. A failed initial
+            // fetch is negatively cached with a short TTL and recovers when the cache entry
+            // expires and the next connection recreates it.
+            if (context.LastFetchStatus == FeatureFlagFetchStatus.Healthy)
+            {
+                context.StartBackgroundRefresh();
+            }
 
             return context;
         }
@@ -287,22 +317,49 @@ namespace AdbcDrivers.Databricks
 
                 activity?.SetTag("feature_flags.response.status_code", (int)response.StatusCode);
 
-                // Use the standard EnsureSuccessOrThrow extension method
-                response.EnsureSuccessOrThrow();
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Negative-cache the failure with a short fixed TTL so a slow/erroring
+                    // connector-service is not retried on every connection.
+                    RecordFailure();
+                    activity?.SetStatus(ActivityStatusCode.Error, $"HTTP {(int)response.StatusCode}");
+                    activity?.AddEvent("feature_flags.fetch.http_error", [
+                        new("status_code", (int)response.StatusCode),
+                        new("negative_ttl_seconds", DefaultNegativeTtl.TotalSeconds)
+                    ]);
+                    return;
+                }
 
                 var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                // Reset the baseline TTL so a context recovering from a prior failure does
+                // not keep the short negative interval; ProcessResponse may override it with
+                // the server-provided ttl_seconds.
+                Ttl = DefaultTtl;
                 ProcessResponse(content, activity);
+                RecordSuccess();
 
                 activity?.SetStatus(ActivityStatusCode.Ok);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Genuine cancellation (Dispose / caller token) - propagate.
+                throw;
+            }
             catch (OperationCanceledException)
             {
-                // Propagate cancellation
-                throw;
+                // HttpClient timeout surfaces as TaskCanceledException with the request
+                // token NOT cancelled. Treat it as a failed fetch and recover via the
+                // negative TTL instead of breaking the caller or the background refresh loop.
+                RecordFailure();
+                activity?.SetStatus(ActivityStatusCode.Error, "timeout");
+                activity?.AddEvent("feature_flags.fetch.timeout", [
+                    new("negative_ttl_seconds", DefaultNegativeTtl.TotalSeconds)
+                ]);
             }
             catch (Exception ex)
             {
-                // Swallow exceptions - telemetry should not break the connection
+                // Swallow other exceptions - feature flags must not break the connection.
+                RecordFailure();
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 activity?.AddEvent("feature_flags.fetch.failed", [
                     new("error.message", ex.Message),
@@ -352,6 +409,25 @@ namespace AdbcDrivers.Databricks
                     new("error.type", ex.GetType().Name)
                 ]);
             }
+        }
+
+        /// <summary>
+        /// Marks the most recent fetch as failed. A failed context is negatively cached
+        /// with the fixed <see cref="DefaultNegativeTtl"/> by <see cref="FeatureFlagCache"/>;
+        /// this intentionally does not change the background refresh cadence of an
+        /// already-healthy context, which keeps retrying at its server TTL.
+        /// </summary>
+        private void RecordFailure()
+        {
+            LastFetchStatus = FeatureFlagFetchStatus.Failed;
+        }
+
+        /// <summary>
+        /// Marks the most recent fetch as healthy.
+        /// </summary>
+        private void RecordSuccess()
+        {
+            LastFetchStatus = FeatureFlagFetchStatus.Healthy;
         }
 
         /// <summary>
