@@ -223,15 +223,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         {
             SkipIfNotConfigured();
 
+            bool usePredefinedTable = TestConfiguration.IsReadOnly;
+            Skip.If(usePredefinedTable && string.IsNullOrEmpty(TestConfiguration.MutableTable), "IsReadOnly mode requires mutableTable in test config");
+
             using var connection = CreateRestConnection();
-            var tableName = $"test_insert_{Guid.NewGuid():N}".Substring(0, 40);
+            string tableName = usePredefinedTable ? TestConfiguration.MutableTable : $"test_insert_{Guid.NewGuid():N}".Substring(0, 40);
 
             try
             {
-                // Create table
-                using var createStatement = connection.CreateStatement();
-                createStatement.SqlQuery = $"CREATE TABLE {tableName} (id INT, name STRING) USING DELTA";
-                createStatement.ExecuteUpdate();
+                if (!usePredefinedTable)
+                {
+                    using var createStatement = connection.CreateStatement();
+                    createStatement.SqlQuery = $"CREATE TABLE {tableName} (id INT, name STRING) USING DELTA";
+                    createStatement.ExecuteUpdate();
+                }
 
                 // Insert data
                 using var insertStatement = connection.CreateStatement();
@@ -243,10 +248,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             }
             finally
             {
-                // Cleanup
-                using var dropStatement = connection.CreateStatement();
-                dropStatement.SqlQuery = $"DROP TABLE IF EXISTS {tableName}";
-                dropStatement.ExecuteUpdate();
+                if (!usePredefinedTable)
+                {
+                    // Cleanup
+                    using var dropStatement = connection.CreateStatement();
+                    dropStatement.SqlQuery = $"DROP TABLE IF EXISTS {tableName}";
+                    dropStatement.ExecuteUpdate();
+                }
             }
         }
 
@@ -254,6 +262,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         public void ExecuteUpdate_UpdateData_ReturnsAffectedRows()
         {
             SkipIfNotConfigured();
+            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support UPDATE");
 
             using var connection = CreateRestConnection();
             var tableName = $"test_update_{Guid.NewGuid():N}".Substring(0, 40);
@@ -290,6 +299,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         public void ExecuteUpdate_DeleteData_ReturnsAffectedRows()
         {
             SkipIfNotConfigured();
+            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support DELETE");
 
             using var connection = CreateRestConnection();
             var tableName = $"test_delete_{Guid.NewGuid():N}".Substring(0, 40);
@@ -349,23 +359,32 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         {
             SkipIfNotConfigured();
 
+            bool usePredefinedTable = TestConfiguration.IsReadOnly;
+            Skip.If(usePredefinedTable && string.IsNullOrEmpty(TestConfiguration.MutableTable), "IsReadOnly mode requires mutableTable in test config");
+
             using var connection = CreateRestConnection();
-            var tableName = $"test_query_after_insert_{Guid.NewGuid():N}".Substring(0, 40);
+            string tableName = usePredefinedTable ? TestConfiguration.MutableTable : $"test_query_after_insert_{Guid.NewGuid():N}".Substring(0, 40);
+            // Use unique IDs to isolate rows across concurrent runs when sharing the mutable table.
+            int id1 = usePredefinedTable ? Math.Abs(Guid.NewGuid().GetHashCode()) : 1;
+            int id2 = id1 + 1;
 
             try
             {
-                // Create and populate table
-                using var createStatement = connection.CreateStatement();
-                createStatement.SqlQuery = $"CREATE TABLE {tableName} (id INT, name STRING) USING DELTA";
-                createStatement.ExecuteUpdate();
+                if (!usePredefinedTable)
+                {
+                    using var createStatement = connection.CreateStatement();
+                    createStatement.SqlQuery = $"CREATE TABLE {tableName} (id INT, name STRING) USING DELTA";
+                    createStatement.ExecuteUpdate();
+                }
 
                 using var insertStatement = connection.CreateStatement();
-                insertStatement.SqlQuery = $"INSERT INTO {tableName} VALUES (1, 'Alice'), (2, 'Bob')";
+                insertStatement.SqlQuery = $"INSERT INTO {tableName} VALUES ({id1}, 'Alice'), ({id2}, 'Bob')";
                 insertStatement.ExecuteUpdate();
 
-                // Query the data
+                // Query the data — filter by unique IDs when using the shared mutable table.
+                string whereClause = usePredefinedTable ? $" WHERE id IN ({id1}, {id2})" : "";
                 using var selectStatement = connection.CreateStatement();
-                selectStatement.SqlQuery = $"SELECT * FROM {tableName} ORDER BY id";
+                selectStatement.SqlQuery = $"SELECT * FROM {tableName}{whereClause} ORDER BY id";
                 var queryResult = selectStatement.ExecuteQuery();
 
                 Assert.NotNull(queryResult);
@@ -384,10 +403,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             }
             finally
             {
-                // Cleanup
-                using var dropStatement = connection.CreateStatement();
-                dropStatement.SqlQuery = $"DROP TABLE IF EXISTS {tableName}";
-                dropStatement.ExecuteUpdate();
+                if (!usePredefinedTable)
+                {
+                    // Cleanup
+                    using var dropStatement = connection.CreateStatement();
+                    dropStatement.SqlQuery = $"DROP TABLE IF EXISTS {tableName}";
+                    dropStatement.ExecuteUpdate();
+                }
             }
         }
 

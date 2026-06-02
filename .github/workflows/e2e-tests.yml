@@ -226,6 +226,20 @@ jobs:
               # Keep log noise low — first 80 chars per statement.
               print(f"OK [{i}/{len(statements)}]: {stmt[:80].replace(chr(10), ' ')}")
           print(f"Seeded {len(statements)} statements into main.{os.environ['PER_RUN_SCHEMA']}")
+
+          # Create an empty mutable table for INSERT tests (used when execution routes through Reyden,
+          # which supports INSERT but not CREATE TABLE).
+          schema = os.environ["PER_RUN_SCHEMA"]
+          mutable_stmt = f"CREATE TABLE IF NOT EXISTS main.{schema}.adbc_testing_mutable (id INT, name STRING) USING DELTA"
+          payload = json.dumps({"warehouse_id": warehouse, "statement": mutable_stmt, "wait_timeout": "30s"}).encode()
+          req = urllib.request.Request(url, data=payload,
+              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, method="POST")
+          with urllib.request.urlopen(req) as resp:
+              body = json.loads(resp.read())
+          if body.get("status", {}).get("state", "") != "SUCCEEDED":
+              print(f"ERROR: CREATE mutable table failed: {json.dumps(body, indent=2)}")
+              sys.exit(1)
+          print(f"Created mutable table: main.{schema}.adbc_testing_mutable")
           PYEOF
 
       - name: Create Databricks config file
@@ -250,6 +264,8 @@ jobs:
             "query": "SELECT * FROM main.${PER_RUN_SCHEMA}.adbc_testing_table",
             "expectedResults": 12,
             "isCITesting": true,
+            "isReadOnly": ${{ inputs.use_reyden_for_execution == true }},
+            "mutableTable": "main.${PER_RUN_SCHEMA}.adbc_testing_mutable",
             "tracePropagationEnabled": "true",
             "traceParentHeaderName": "traceparent",
             "traceStateEnabled": "false",

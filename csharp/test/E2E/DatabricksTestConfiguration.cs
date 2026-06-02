@@ -58,6 +58,12 @@ namespace AdbcDrivers.Databricks.Tests
         [JsonPropertyName("isCITesting"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool IsCITesting { get; set; } = false;
 
+        [JsonPropertyName("isReadOnly"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool IsReadOnly { get; set; } = false;
+
+        [JsonPropertyName("mutableTable"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public string MutableTable { get; set; } = string.Empty;
+
         [JsonPropertyName("enableRunAsyncInThriftOp"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public string EnableRunAsyncInThriftOp { get; set; } = string.Empty;
 

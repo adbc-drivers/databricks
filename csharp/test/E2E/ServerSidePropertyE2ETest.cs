@@ -106,6 +106,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData(false)]
         public async Task TestServerSidePropertyOnSeaPath(bool applyWithQueries)
         {
+            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support bare SET statement");
             var additionalConnectionParams = new Dictionary<string, string>()
             {
                 // Force the SEA path regardless of the test config's default protocol.
