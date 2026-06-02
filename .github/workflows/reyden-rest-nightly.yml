@@ -26,4 +26,5 @@ jobs:
     with:
       protocol: rest
       use_reyden_for_execution: true
+      e2e_only: true
     secrets: inherit

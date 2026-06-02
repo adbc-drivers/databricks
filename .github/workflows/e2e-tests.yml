@@ -27,6 +27,11 @@ on:
         required: false
         default: false
         type: boolean
+      e2e_only:
+        description: 'Skip unit tests — run only E2E tests (excludes Tests.Unit namespace).'
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       protocol:
@@ -269,7 +274,11 @@ jobs:
         shell: bash
         run: |
           export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
-          ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
+          FILTER_ARG=""
+          if [[ "${{ inputs.e2e_only }}" == "true" ]]; then
+            FILTER_ARG="--filter FullyQualifiedName!~Tests.Unit"
+          fi
+          ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}" $FILTER_ARG
 
       # Always run, even on test failure or job cancellation, so we don't
       # leak schemas in the workspace.

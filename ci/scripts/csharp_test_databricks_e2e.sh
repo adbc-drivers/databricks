@@ -16,10 +16,8 @@
 
 set -ex
 
-# Run all tests (both E2E and Unit tests)
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-# Run all tests in the Databricks test project
-dotnet test --verbosity normal
+dotnet test --verbosity normal ${@:2}
 popd
