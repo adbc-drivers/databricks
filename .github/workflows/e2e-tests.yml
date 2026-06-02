@@ -15,6 +15,17 @@
 name: Tests Workflow
 
 on:
+  workflow_call:
+    inputs:
+      protocol:
+        description: 'Protocol to test (thrift, rest, or both)'
+        required: false
+        default: 'rest'
+        type: string
+    secrets:
+      execution_http_path:
+        description: 'HTTP path for test execution (overrides TEST_PECO_WAREHOUSE_HTTP_PATH). Setup/teardown always use TEST_PECO_WAREHOUSE_HTTP_PATH.'
+        required: false
   workflow_dispatch:
     inputs:
       protocol:
@@ -51,7 +62,11 @@ jobs:
         protocol: ${{ inputs.protocol == 'thrift' && fromJson('["thrift"]') || inputs.protocol == 'rest' && fromJson('["rest"]') || fromJson('["thrift","rest"]') }}
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
+      # Setup/teardown always use the regular warehouse (supports DDL).
+      # Test execution uses execution_http_path when provided (e.g. Reyden),
+      # otherwise falls back to the same regular warehouse.
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      EXECUTION_HTTP_PATH: ${{ secrets.execution_http_path || secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
       DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
       DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
     steps:
@@ -216,7 +231,7 @@ jobs:
           mkdir -p ~/.databricks
           cat > ~/.databricks/connection.json << EOF
           {
-            "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.DATABRICKS_HTTP_PATH }}",
+            "uri": "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}${{ env.EXECUTION_HTTP_PATH }}",
             "auth_type": "oauth",
             "grant_type": "client_credentials",
             "client_id": "${{ env.DATABRICKS_TEST_CLIENT_ID }}",
