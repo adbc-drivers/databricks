@@ -136,9 +136,13 @@ namespace AdbcDrivers.Databricks.Tests
 
             var parameters = new Dictionary<string, string>
             {
-                // Protocol intentionally omitted — the CloseOperation code path is
-                // protocol-agnostic (see class docstring), so the test runs under
-                // whatever protocol the CI matrix / connection config selects.
+                // Thrift-specific by design: the assertion targets the
+                // composite_reader.close_operation event emitted by
+                // DatabricksCompositeReader.Dispose, which only exists on the Thrift
+                // path. The REST path (StatementExecutionConnection) has no composite
+                // reader, so this test pins Thrift rather than inheriting the matrix
+                // protocol. (Skipping it on REST-only warehouses is tracked separately.)
+                [DatabricksParameters.Protocol] = "thrift",
                 [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
                 [DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString(),
             };
@@ -223,7 +227,8 @@ namespace AdbcDrivers.Databricks.Tests
 
             var parameters = new Dictionary<string, string>
             {
-                // Protocol intentionally omitted — inherits the configured protocol.
+                // Thrift-specific by design — see DisposeEmitsCloseOperationEvent.
+                [DatabricksParameters.Protocol] = "thrift",
                 [DatabricksParameters.UseCloudFetch] = "false",
                 [DatabricksParameters.EnableDirectResults] = "false",
             };
