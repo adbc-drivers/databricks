@@ -346,6 +346,53 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
+        public void TelemetryObserver_OnFinalized_ThenLifecycleCalls_AreNoOps()
+        {
+            // Arrange: drive the observer to a finalized state with a known context snapshot.
+            (TelemetryObserver observer, CapturingTelemetryClient client) = CreateObserver();
+            observer.OnExecuteStarted(StatementType.Query, OperationType.ExecuteStatement, isCompressed: true);
+            observer.OnExecuteSucceeded("stmt-pre-final", ExecutionResultFormat.InlineArrow);
+            observer.OnFinalized();
+
+            Assert.Equal(1, client.EnqueueCallCount);
+            Assert.True(observer.HasEmitted);
+
+            // Capture the post-finalize context fingerprint so we can prove subsequent
+            // lifecycle calls do not mutate state.
+            string? statementIdAfterFinal = observer.Context.StatementId;
+            StatementType stmtTypeAfterFinal = observer.Context.StatementType;
+            ExecutionResultFormat resultFormatAfterFinal = observer.Context.ResultFormat;
+            bool isCompressedAfterFinal = observer.Context.IsCompressed;
+            int? pollCountAfterFinal = observer.Context.PollCount;
+            long? consumedAfterFinal = observer.Context.ResultsConsumedMs;
+            bool hasErrorAfterFinal = observer.Context.HasError;
+
+            // Act: call every non-terminal lifecycle method with different values that
+            // would visibly mutate the context if the gate were missing.
+            observer.OnExecuteStarted(StatementType.Update, OperationType.ExecuteStatementAsync, isCompressed: false);
+            observer.OnExecuteSucceeded("stmt-after-final-must-not-stick", ExecutionResultFormat.ExternalLinks);
+            observer.OnPollCompleted(count: 99, latencyMs: 9999);
+            observer.OnFirstBatchReady(latencyMs: 7777);
+            observer.OnConsumed(latencyMs: 8888);
+            observer.OnChunksDownloaded(new ChunkMetrics { TotalChunksPresent = 42, TotalChunksIterated = 42 });
+            observer.OnError(new InvalidOperationException("post-finalize error"));
+
+            // Second OnFinalized must also be a no-op.
+            observer.OnFinalized();
+
+            // Assert: no second enqueue, no observable mutation.
+            Assert.Equal(1, client.EnqueueCallCount);
+            Assert.Equal(statementIdAfterFinal, observer.Context.StatementId);
+            Assert.Equal(stmtTypeAfterFinal, observer.Context.StatementType);
+            Assert.Equal(resultFormatAfterFinal, observer.Context.ResultFormat);
+            Assert.Equal(isCompressedAfterFinal, observer.Context.IsCompressed);
+            Assert.Equal(pollCountAfterFinal, observer.Context.PollCount);
+            Assert.Equal(consumedAfterFinal, observer.Context.ResultsConsumedMs);
+            Assert.Equal(hasErrorAfterFinal, observer.Context.HasError);
+            Assert.Null(observer.Context.TotalChunksPresent);
+        }
+
+        [Fact]
         public void TelemetryObserver_OnPollCompleted_StoresCountAndLatency()
         {
             // Arrange

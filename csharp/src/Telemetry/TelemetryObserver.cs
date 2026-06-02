@@ -95,6 +95,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         public void OnExecuteStarted(StatementType stmtType, OperationType opType, bool isCompressed) =>
             Safe(() =>
             {
+                if (IsFinalized()) return;
                 _ctx.StatementType = stmtType;
                 _ctx.OperationType = opType;
                 _ctx.IsCompressed = isCompressed;
@@ -104,6 +105,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         public void OnExecuteSucceeded(string statementId, ExecutionResultFormat resultFormat) =>
             Safe(() =>
             {
+                if (IsFinalized()) return;
                 _ctx.StatementId = statementId;
                 _ctx.ResultFormat = resultFormat;
                 _ctx.RecordExecuteComplete();
@@ -113,6 +115,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         public void OnPollCompleted(int count, long latencyMs) =>
             Safe(() =>
             {
+                if (IsFinalized()) return;
                 _ctx.PollCount = count;
                 _ctx.PollLatencyMs = latencyMs;
             });
@@ -121,6 +124,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         public void OnFirstBatchReady(long latencyMs) =>
             Safe(() =>
             {
+                if (IsFinalized()) return;
                 // Only the first call wins: the underlying setter is null-guarded so
                 // repeated calls (e.g. inline reader emits one, cloud-fetch reader emits
                 // another) do not overwrite the earliest observed latency.
@@ -132,12 +136,17 @@ namespace AdbcDrivers.Databricks.Telemetry
 
         /// <inheritdoc />
         public void OnConsumed(long latencyMs) =>
-            Safe(() => _ctx.ResultsConsumedMs = latencyMs);
+            Safe(() =>
+            {
+                if (IsFinalized()) return;
+                _ctx.ResultsConsumedMs = latencyMs;
+            });
 
         /// <inheritdoc />
         public void OnChunksDownloaded(ChunkMetrics metrics) =>
             Safe(() =>
             {
+                if (IsFinalized()) return;
                 // Tolerate a null or empty ChunkMetrics — the gap-fix plumbing may not be
                 // landed yet, and the proto fields are nullable on the wire.
                 if (metrics == null)
@@ -156,17 +165,23 @@ namespace AdbcDrivers.Databricks.Telemetry
         public void OnError(Exception ex) =>
             Safe(() =>
             {
+                if (IsFinalized()) return;
                 if (ex == null)
                 {
                     return;
                 }
                 _ctx.HasError = true;
-                // GetType().Name is always safe; do not capture ex.Message here unless we
-                // have explicit consent: the proto's DriverErrorInfo.error_message field is
-                // pending LPP review (see ConnectionTelemetry.EmitOperationTelemetry).
                 _ctx.ErrorName = ex.GetType().Name;
+                // .Message is captured in-memory only. The proto's DriverErrorInfo.error_message
+                // field is pending LPP review (see ConnectionTelemetry.EmitOperationTelemetry),
+                // so BuildTelemetryLog does NOT serialize ErrorMessage into the wire payload
+                // today. SafeMessage neutralizes the rare case where ex.Message itself throws.
                 _ctx.ErrorMessage = SafeMessage(ex);
             });
+
+        // After OnFinalized has fired (the terminal call), all other lifecycle methods are
+        // no-ops per the interface contract. Centralized here so each Safe() body stays terse.
+        private bool IsFinalized() => Volatile.Read(ref _emitted) != 0;
 
         /// <inheritdoc />
         public void OnFinalized()
@@ -228,7 +243,8 @@ namespace AdbcDrivers.Databricks.Telemetry
                         tags: new ActivityTagsCollection
                         {
                             { "error.type", ex.GetType().Name },
-                            { "error.message", ex.Message }
+                            { "error.message", SafeMessage(ex) },
+                            { "observer.suppressed.source", "TelemetryObserver" },
                         }));
                 }
                 catch
