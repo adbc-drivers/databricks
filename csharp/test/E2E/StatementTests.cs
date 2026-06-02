@@ -46,6 +46,7 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         // Reyden does not support DDL (CREATE TABLE) — hide the inherited test and skip it.
+#pragma warning disable xUnit1024
         [SkippableFact]
         public new async Task CanInteractUsingSetOptions()
         {
@@ -60,6 +61,7 @@ namespace AdbcDrivers.Databricks.Tests
             Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support SHOW COLUMNS");
             await base.CanGetColumns();
         }
+#pragma warning restore xUnit1024
 
         // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate poll time option
         protected override void ValidateCanSetOptionPollTime(string value, bool throws = false)
