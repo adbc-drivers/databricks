@@ -32,6 +32,11 @@ on:
         required: false
         default: false
         type: boolean
+      publish_dashboard:
+        description: 'Publish parsed test results to the GitHub Pages E2E nightly dashboard (gh-pages branch). Intended for nightly runs.'
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       protocol:
@@ -294,7 +299,21 @@ jobs:
           if [[ "${{ inputs.e2e_only }}" == "true" ]]; then
             FILTER_ARG="--filter FullyQualifiedName!~Tests.Unit"
           fi
-          ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}" $FILTER_ARG
+          # Always emit a TRX so the dashboard can parse pass/fail/skip + per-test
+          # failure detail, even when the run fails (set -e in the script still
+          # writes the TRX before the non-zero exit; the upload step is always()).
+          ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}" $FILTER_ARG \
+            --logger "trx;LogFileName=results-${{ matrix.protocol }}.trx" \
+            --results-directory "${{ github.workspace }}/TestResults"
+
+      - name: Upload test results (TRX)
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: e2e-trx-${{ matrix.protocol }}
+          path: ${{ github.workspace }}/TestResults/*.trx
+          if-no-files-found: warn
+          retention-days: 7
 
       # Always run, even on test failure or job cancellation, so we don't
       # leak schemas in the workspace.
@@ -319,4 +338,67 @@ jobs:
             echo "Response: $RESPONSE"
           else
             echo "Dropped schema: main.${PER_RUN_SCHEMA}"
+          fi
+
+  # Parse the TRX results and publish an append-only history dashboard to the
+  # gh-pages branch (served at https://adbc-drivers.github.io/databricks/e2e-nightly/).
+  # Runs only when the caller opts in (nightly), and always() so a failed test
+  # run is still recorded — surfacing failures is the whole point of the page.
+  publish-dashboard:
+    name: Publish E2E Dashboard
+    needs: run-e2e-tests
+    if: always() && inputs.publish_dashboard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # push parsed results to the gh-pages branch
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Download test results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          pattern: e2e-trx-*
+          path: trx
+
+      - name: Build dashboard and push to gh-pages
+        env:
+          RUN_READ_ONLY: ${{ inputs.use_reyden_for_execution }}
+        run: |
+          set -e
+          shopt -s nullglob
+          RUN_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export RUN_TIMESTAMP
+
+          dirs=(trx/e2e-trx-*)
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "No TRX artifacts found — nothing to publish."
+            exit 0
+          fi
+
+          git fetch origin gh-pages
+          git worktree add /tmp/ghp gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          for d in "${dirs[@]}"; do
+            proto="${d#trx/e2e-trx-}"
+            export RUN_PROTOCOL="$proto"
+            echo "::group::Parsing $proto"
+            python3 .github/scripts/parse-trx-to-json.py "/tmp/record-${proto}.json" "$d"
+            python3 .github/scripts/update-e2e-dashboard.py \
+              "/tmp/record-${proto}.json" /tmp/ghp/e2e-nightly .github/e2e-dashboard/index.html
+            echo "::endgroup::"
+          done
+
+          cd /tmp/ghp
+          git add e2e-nightly
+          if git diff --cached --quiet; then
+            echo "No dashboard changes to commit."
+          else
+            git commit -m "e2e-nightly: record run ${GITHUB_RUN_ID} (${GITHUB_REF_NAME})"
+            git push origin gh-pages
+            echo "Published: https://adbc-drivers.github.io/databricks/e2e-nightly/"
           fi

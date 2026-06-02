@@ -20,6 +20,11 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
 
+# Grant the reusable workflow permission to push the parsed results to the
+# gh-pages branch (the dashboard's append-only history store).
+permissions:
+  contents: write
+
 jobs:
   reyden-rest-nightly:
     uses: ./.github/workflows/e2e-tests.yml
@@ -27,4 +32,5 @@ jobs:
       protocol: rest
       use_reyden_for_execution: true
       e2e_only: true
+      publish_dashboard: true
     secrets: inherit
