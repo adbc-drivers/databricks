@@ -25,5 +25,5 @@ jobs:
     uses: ./.github/workflows/e2e-tests.yml
     with:
       protocol: rest
-    secrets:
-      execution_http_path: ${{ secrets.TEST_PECO_REYDEN_HTTP_PATH }}
+      use_reyden_for_execution: true
+    secrets: inherit

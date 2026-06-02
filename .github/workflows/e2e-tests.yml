@@ -22,10 +22,11 @@ on:
         required: false
         default: 'rest'
         type: string
-    secrets:
-      execution_http_path:
-        description: 'HTTP path for test execution (overrides TEST_PECO_WAREHOUSE_HTTP_PATH). Setup/teardown always use TEST_PECO_WAREHOUSE_HTTP_PATH.'
+      use_reyden_for_execution:
+        description: 'Route test execution through the Reyden warehouse (TEST_PECO_REYDEN_HTTP_PATH). Setup/teardown always use TEST_PECO_WAREHOUSE_HTTP_PATH.'
         required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       protocol:
@@ -63,10 +64,9 @@ jobs:
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       # Setup/teardown always use the regular warehouse (supports DDL).
-      # Test execution uses execution_http_path when provided (e.g. Reyden),
-      # otherwise falls back to the same regular warehouse.
+      # Test execution uses Reyden when use_reyden_for_execution=true.
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
-      EXECUTION_HTTP_PATH: ${{ secrets.execution_http_path || secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+      EXECUTION_HTTP_PATH: ${{ inputs.use_reyden_for_execution && secrets.TEST_PECO_REYDEN_HTTP_PATH || secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
       DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
       DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
     steps:
