@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<!--
+ Copyright (c) 2025 ADBC Drivers Contributors
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E2E Nightly Dashboard — Databricks ADBC</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --pass:#2e9e5b; --fail:#d83b3b; --skip:#c9a227; --ink:#222; --muted:#6b7280; --line:#e3e6ea; }
+  * { box-sizing: border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         margin:0; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:1200px; margin:0 auto; padding:32px 20px 80px; }
+  header h1 { margin:0 0 4px; font-size:26px; }
+  header .sub { color:var(--muted); font-size:14px; }
+  header .sub a { color:#2563eb; text-decoration:none; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin:24px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  .card .label { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .card .value { font-size:28px; font-weight:700; margin-top:4px; }
+  .card.pass .value { color:var(--pass); } .card.fail .value { color:var(--fail); } .card.skip .value { color:var(--skip); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:20px; margin:18px 0; }
+  .panel h2 { margin:0 0 14px; font-size:18px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .bar { height:8px; border-radius:4px; background:var(--line); overflow:hidden; display:flex; min-width:90px; }
+  .bar > span { display:block; height:100%; }
+  .sig { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  .pill { display:inline-block; font-size:12px; font-weight:600; padding:2px 8px; border-radius:99px; }
+  .pill.green { background:#e6f4ec; color:var(--pass); } .pill.red { background:#fbe7e7; color:var(--fail); }
+  tr.run { cursor:pointer; } tr.run:hover { background:#fafbfc; }
+  tr.run .caret { color:var(--muted); }
+  .detail td { background:#fafbfc; }
+  .fail-list { margin:0; padding:0; list-style:none; }
+  .fail-list li { padding:6px 0; border-bottom:1px dashed var(--line); }
+  .fail-list .tname { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; word-break:break-word; }
+  .fail-list .msg { color:var(--muted); font-size:12px; margin-top:2px; white-space:pre-wrap; word-break:break-word; }
+  .muted { color:var(--muted); } .small { font-size:12px; }
+  .group-h { margin:12px 0 4px; font-size:13px; font-weight:700; }
+  canvas { max-height:340px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>E2E Nightly Test Dashboard</h1>
+    <div class="sub" id="subtitle">Loading…</div>
+  </header>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="panel">
+    <h2>Trend (per nightly run)</h2>
+    <canvas id="trendChart"></canvas>
+  </div>
+
+  <div class="panel" id="analysisPanel">
+    <h2>Latest run — failure analysis</h2>
+    <div id="analysis"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Run history <span class="muted small">(click a row to expand failures)</span></h2>
+    <table>
+      <thead><tr>
+        <th></th><th>Date (UTC)</th><th>Protocol</th><th class="num">Pass rate</th>
+        <th class="num">Passed</th><th class="num">Failed</th><th class="num">Skipped</th>
+        <th>Result</th><th></th>
+      </tr></thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+  </div>
+
+  <footer class="muted small">
+    Data stored in <code>e2e-nightly/data/</code> on the <code>gh-pages</code> branch · append-only history.
+  </footer>
+</div>
+
+<script>
+const DATA = "data/runs.json";
+const fmtDate = ts => { if (!ts) return "—"; const d = new Date(ts); return isNaN(d) ? ts : d.toISOString().slice(0,16).replace("T"," "); };
+const esc = s => (s||"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function bar(p, f, s) {
+  const t = p+f+s || 1;
+  return `<div class="bar" title="${p} passed / ${f} failed / ${s} skipped">
+    <span style="width:${100*p/t}%;background:var(--pass)"></span>
+    <span style="width:${100*f/t}%;background:var(--fail)"></span>
+    <span style="width:${100*s/t}%;background:var(--skip)"></span></div>`;
+}
+
+function renderCards(latest) {
+  const c = document.getElementById("cards");
+  if (!latest) { c.innerHTML = '<div class="card"><div class="label">No runs yet</div></div>'; return; }
+  c.innerHTML = `
+    <div class="card"><div class="label">Pass rate</div><div class="value">${latest.pass_rate ?? 0}%</div></div>
+    <div class="card"><div class="label">Total</div><div class="value">${latest.total ?? 0}</div></div>
+    <div class="card pass"><div class="label">Passed</div><div class="value">${latest.passed ?? 0}</div></div>
+    <div class="card fail"><div class="label">Failed</div><div class="value">${latest.failed ?? 0}</div></div>
+    <div class="card skip"><div class="label">Skipped</div><div class="value">${latest.skipped ?? 0}</div></div>`;
+}
+
+function renderTrend(runs) {
+  const labels = runs.map(r => fmtDate(r.timestamp));
+  const ctx = document.getElementById("trendChart");
+  new Chart(ctx, {
+    data: {
+      labels,
+      datasets: [
+        { type:"bar", label:"Passed",  data:runs.map(r=>r.passed),  backgroundColor:"#2e9e5b", stack:"s" },
+        { type:"bar", label:"Failed",  data:runs.map(r=>r.failed),  backgroundColor:"#d83b3b", stack:"s" },
+        { type:"bar", label:"Skipped", data:runs.map(r=>r.skipped), backgroundColor:"#c9a227", stack:"s" },
+        { type:"line", label:"Pass rate %", data:runs.map(r=>r.pass_rate), yAxisID:"y1",
+          borderColor:"#2563eb", backgroundColor:"#2563eb", tension:.25, pointRadius:3 },
+      ]
+    },
+    options: {
+      responsive:true, interaction:{mode:"index",intersect:false},
+      scales:{ x:{stacked:true}, y:{stacked:true, title:{display:true,text:"tests"}},
+        y1:{position:"right", min:0, max:100, grid:{drawOnChartArea:false}, title:{display:true,text:"pass %"}} }
+    }
+  });
+}
+
+function renderAnalysis(latest) {
+  const el = document.getElementById("analysis");
+  if (!latest || !latest.failed) { el.innerHTML = '<p class="muted">No failures in the latest run. 🎉</p>'; return; }
+  const sigRows = Object.entries(latest.by_signature||{}).map(([k,v]) =>
+    `<tr><td class="sig">${esc(k)}</td><td class="num">${v}</td></tr>`).join("");
+  const clsRows = Object.entries(latest.by_class||{}).map(([k,v]) =>
+    `<tr><td class="sig">${esc(k)}</td><td class="num">${v}</td></tr>`).join("");
+  el.innerHTML = `
+    <p class="muted small">Latest run <a href="${esc(latest.html_url)}">#${esc(latest.run_number||latest.run_id)}</a>
+       (${esc(latest.protocol)}${latest.read_only?", read-only":""}) — ${latest.failed} failures grouped below.</p>
+    <div class="group-h">By failure signature (root cause)</div>
+    <table><thead><tr><th>Signature</th><th class="num">Count</th></tr></thead><tbody>${sigRows}</tbody></table>
+    <div class="group-h">By test class</div>
+    <table><thead><tr><th>Class</th><th class="num">Count</th></tr></thead><tbody>${clsRows}</tbody></table>`;
+}
+
+async function toggleDetail(tr, run) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains("detail")) { next.remove(); tr.querySelector(".caret").textContent="▸"; return; }
+  tr.querySelector(".caret").textContent="▾";
+  const det = document.createElement("tr");
+  det.className = "detail";
+  det.innerHTML = `<td colspan="9" class="muted small">Loading failures…</td>`;
+  tr.after(det);
+  try {
+    const r = await fetch("data/" + run.detail);
+    const full = await r.json();
+    if (!full.failures || !full.failures.length) { det.firstChild.innerHTML = '<span class="muted">No failure detail recorded.</span>'; return; }
+    let html = "", curSig = null;
+    for (const f of full.failures) {
+      if (f.signature !== curSig) { curSig = f.signature; html += `<div class="group-h sig">${esc(curSig)}</div>`; }
+      html += `<ul class="fail-list"><li><div class="tname">${esc(f.name)}</div>` +
+              (f.message ? `<div class="msg">${esc(f.message)}</div>` : "") + `</li></ul>`;
+    }
+    det.firstChild.innerHTML = html;
+  } catch (e) {
+    det.firstChild.innerHTML = `<span class="muted">Could not load detail: ${esc(String(e))}</span>`;
+  }
+}
+
+function renderHistory(runs) {
+  const body = document.getElementById("historyBody");
+  body.innerHTML = "";
+  [...runs].reverse().forEach(run => {
+    const tr = document.createElement("tr");
+    tr.className = "run";
+    const ok = (run.failed||0) === 0;
+    tr.innerHTML = `
+      <td class="caret">▸</td>
+      <td>${fmtDate(run.timestamp)}</td>
+      <td>${esc(run.protocol)}${run.read_only?' <span class="muted small">(ro)</span>':""}</td>
+      <td class="num">${run.pass_rate ?? 0}%</td>
+      <td class="num">${run.passed ?? 0}</td>
+      <td class="num">${run.failed ?? 0}</td>
+      <td class="num">${run.skipped ?? 0}</td>
+      <td>${bar(run.passed||0, run.failed||0, run.skipped||0)}</td>
+      <td><a href="${esc(run.html_url)}" onclick="event.stopPropagation()" target="_blank">run ↗</a>
+          <span class="pill ${ok?'green':'red'}">${ok?'pass':'fail'}</span></td>`;
+    tr.addEventListener("click", () => toggleDetail(tr, run));
+    body.appendChild(tr);
+  });
+}
+
+(async function () {
+  let runs = [];
+  try { runs = await (await fetch(DATA + "?_=" + Date.now())).json(); } catch (e) {}
+  document.getElementById("subtitle").innerHTML =
+    runs.length ? `${runs.length} nightly run(s) recorded · last updated ${fmtDate(runs[runs.length-1].timestamp)} UTC`
+                : "No runs recorded yet — the dashboard populates after the first nightly run.";
+  const latest = runs[runs.length-1];
+  renderCards(latest);
+  if (runs.length) renderTrend(runs);
+  renderAnalysis(latest);
+  renderHistory(runs);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1058 @@
+{
+  "run_id": "26806281933",
+  "run_attempt": "1",
+  "run_number": "10",
+  "timestamp": "2026-06-02T07:52:55Z",
+  "commit": "82a9085b5ef62e80c3293c32a803e926a486e798",
+  "branch": "ci/reyden-rest-nightly",
+  "protocol": "rest",
+  "read_only": true,
+  "workflow": "Reyden REST Nightly E2E",
+  "html_url": "https://github.com/adbc-drivers/databricks/actions/runs/26806281933",
+  "total": 816,
+  "passed": 498,
+  "failed": 127,
+  "skipped": 191,
+  "pass_rate": 61.0,
+  "by_signature": {
+    "Assertion failed (value mismatch)": 72,
+    "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)": 26,
+    "AdbcDrivers.Databricks.DatabricksException": 23,
+    "Apache.Arrow.Adbc.AdbcException": 4,
+    "SQL syntax error": 2
+  },
+  "by_class": {
+    "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
+    "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest": 20,
+    "AdbcDrivers.Databricks.Tests.StringValueTests": 15,
+    "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 14,
+    "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest": 14,
+    "AdbcDrivers.Databricks.Tests.DriverTests": 7,
+    "AdbcDrivers.Databricks.Tests.DateTimeValueTests": 7,
+    "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest": 4,
+    "AdbcDrivers.Databricks.Tests.ClientTests": 2,
+    "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests": 2,
+    "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest": 2,
+    "AdbcDrivers.Databricks.Tests.IntervalValueTests": 2,
+    "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1,
+    "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1
+  },
+  "failures": [
+    {
+      "name": "AdbcDrivers.Databricks.Tests.ClientTests.CanClientExecuteUpdate",
+      "class": "AdbcDrivers.Databricks.Tests.ClientTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSER_UNSUPPORTED_FEATURE] CREATE OR REPLACE TABLE SQLSTATE: 0A000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.ClientTests.VerifyTypesAndValues",
+      "class": "AdbcDrivers.Databricks.Tests.ClientTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [CAST_INVALID_INPUT] The value Jane Doe of the type string cannot be cast to long because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests.TestArrayData(projection: \"ARRAY(CAST('John Doe' AS STRING), 2, 3)\", value: \"[\\\"John Doe\\\",\\\"2\\\",\\\"3\\\"]\")",
+      "class": "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [CAST_INVALID_INPUT] The value John Doe of the type string cannot be cast to long because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 0 })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 300 })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = null })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = null, ExceptionType = typeof(System.TimeoutException), MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 10 })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = typeof(System.TimeoutException), ExceptionType = typeof(Thrift.Transport.TTransportException), MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 1 })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 0 })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 300 })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = null })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = typeof(System.TimeoutException), MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 10 })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = typeof(Thrift.Transport.TTransportException), MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 1 })",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanExecuteUpdate",
+      "class": "AdbcDrivers.Databricks.Tests.DriverTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSER_UNSUPPORTED_FEATURE] CREATE OR REPLACE TABLE SQLSTATE: 0A000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetObjectsTablesWithSpecialCharacter(tableName: \"3rd_identifier\")",
+      "class": "AdbcDrivers.Databricks.Tests.DriverTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported CREATE type: SCHEMA SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetObjectsTablesWithSpecialCharacter(tableName: \"MyIdentifier\")",
+      "class": "AdbcDrivers.Databricks.Tests.DriverTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported CREATE type: SCHEMA SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetObjectsTablesWithSpecialCharacter(tableName: \"ONE\")",
+      "class": "AdbcDrivers.Databricks.Tests.DriverTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported CREATE type: SCHEMA SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetObjectsTablesWithSpecialCharacter(tableName: \"mYiDentifier\")",
+      "class": "AdbcDrivers.Databricks.Tests.DriverTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported CREATE type: SCHEMA SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetTableSchema",
+      "class": "AdbcDrivers.Databricks.Tests.DriverTests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.SEA_GetColumnsExtended_FallbackAndDescTable_SameResults",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.SEA_GetColumnsExtended_Returns20Columns",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [DELTA_MALFORMED_JSON] Delta error: Malformed JSON: Unsupported Delta table type: 'interval year to month' at line 1 column 962 SQLSTATE: XXKDS",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.SEA_GetPrimaryKeys_ReturnsPKColumns",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [DELTA_MALFORMED_JSON] Delta error: Malformed JSON: Unsupported Delta table type: 'interval year to month' at line 1 column 962 SQLSTATE: XXKDS",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.SEA_GetTableSchema_ReturnsFields",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
+      "stack": "",
+      "signature": "AdbcDrivers.Databricks.DatabricksException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: False, enableDirectResults: False, protocol: \"rest\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : Error in download process",
+      "stack": "",
+      "signature": "Apache.Arrow.Adbc.AdbcException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: False, enableDirectResults: True, protocol: \"rest\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : Error in download process",
+      "stack": "",
+      "signature": "Apache.Arrow.Adbc.AdbcException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: True, enableDirectResults: False, protocol: \"rest\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : Error in download process",
+      "stack": "",
+      "signature": "Apache.Arrow.Adbc.AdbcException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: True, enableDirectResults: True, protocol: \"rest\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : Error in download process",
+      "stack": "",
+      "signature": "Apache.Arrow.Adbc.AdbcException"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"information_schema\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"information_schema\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: null, enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"default\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"main\", inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"information_schema\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"main\", inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"information_schema\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"information_schema\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: null, enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"default\")",
+      "class": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 1970-01-01T00:00:00.0000000+00:00, columnType: \"DATE\")",
+      "class": "AdbcDrivers.Databricks.Tests.DateTimeValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 2026-06-02T07:54:38.5079158+00:00, columnType: \"DATE\")",
+      "class": "AdbcDrivers.Databricks.Tests.DateTimeValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 9999-12-31T23:59:59.9999999+00:00, columnType: \"DATE\")",
+      "class": "AdbcDrivers.Databricks.Tests.DateTimeValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 1970-01-01T00:00:00.0000000+00:00, columnType: \"TIMESTAMP_NTZ\")",
+      "class": "AdbcDrivers.Databricks.Tests.DateTimeValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 2026-06-02T07:54:38.5079158+00:00, columnType: \"TIMESTAMP_NTZ\")",
+      "class": "AdbcDrivers.Databricks.Tests.DateTimeValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 2026-06-02T11:54:38.5079167+04:00, columnType: \"TIMESTAMP_NTZ\")",
+      "class": "AdbcDrivers.Databricks.Tests.DateTimeValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 9999-12-31T23:59:59.9999999+00:00, columnType: \"TIMESTAMP_NTZ\")",
+      "class": "AdbcDrivers.Databricks.Tests.DateTimeValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DriverResilienceTests.StatementReuse_SequentialQueries_ReturnsCorrectResults",
+      "class": "AdbcDrivers.Databricks.Tests.DriverResilienceTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Strings differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanExecuteUpdateAsync",
+      "class": "AdbcDrivers.Databricks.Tests.DriverTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests.ExecuteQuery_AfterInsert_ReturnsInsertedData",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests.ExecuteUpdate_InsertData_ReturnsAffectedRows",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests",
+      "outcome": "Failed",
+      "message": "Expected non-negative affected rows, got -1",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: -1.7976931348623157E+308)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: -Infinity)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0.014999999999999999)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0.20000000000000001)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 1.7976931348623157E+308)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 123.40000000000001)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: Infinity)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: NaN)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerMinMax(value: -2147483648)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerMinMax(value: 2147483647)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: -1)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: 0)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: 1)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"-2.0030000000000000000000000000000000000\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"0E-37\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"1E-37\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"4.8500000000000000000000000000000000000\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"9.5545204502636499875576383003668916798\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLongMinMax(value: -9223372036854775808)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLongMinMax(value: 9223372036854775807)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestRoundingNumbers(input: -672.613, output: -672.61)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestRoundingNumbers(input: 2.467, output: 2.47)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallIntMinMax(value: -32768)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallIntMinMax(value: 32767)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"-1\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"-99\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"0\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"1\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"99\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"-999999999999999999999999999999999999.99\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"0.00\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"4.85\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"999999999999999999999999999999999999.99\")",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestTinyIntMinMax(value: -128)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestTinyIntMinMax(value: 127)",
+      "class": "AdbcDrivers.Databricks.Tests.NumericValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \" Leading and trailing spaces \")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \"\")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \"\u4f60\u597d\")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: null)",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \" Leading and trailing spaces \")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \"\")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \"\u4f60\u597d\")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: null)",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \" Leading and trailing spaces \")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \"\")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \"\u4f60\u597d\")",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: null)",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
+      "class": "AdbcDrivers.Databricks.Tests.StringValueTests",
+      "outcome": "Failed",
+      "message": "Assert.Equal() Failure: Values differ",
+      "stack": "",
+      "signature": "Assertion failed (value mismatch)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest.TestServerSideProperty(applyWithQueries: False)",
+      "class": "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSE_SYNTAX_ERROR] Syntax error at or near end of input. Expected identifier but got end of input. SQLSTATE: 42601",
+      "stack": "",
+      "signature": "SQL syntax error"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest.TestServerSideProperty(applyWithQueries: True)",
+      "class": "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest",
+      "outcome": "Failed",
+      "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSE_SYNTAX_ERROR] Syntax error at or near end of input. Expected identifier but got end of input. SQLSTATE: 42601",
+      "stack": "",
+      "signature": "SQL syntax error"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest.DisposeCloseOperation_EmitsStartedAndCompletedWithDistinctTimestamps_Issue489",
+      "class": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest.DisposeEmitsCloseOperationEvent(description: \"CloudFetch\", query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, useCloudFetch: True, enableDirectResults: True)",
+      "class": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest.DisposeEmitsCloseOperationEvent(description: \"Inline+DirectResults\", query: \"SELECT 1 AS val\", useCloudFetch: False, enableDirectResults: True)",
+      "class": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest.DisposeEmitsCloseOperationEvent(description: \"Inline+NoDirectResults\", query: \"SELECT * FROM range(1, 100)\", useCloudFetch: False, enableDirectResults: False)",
+      "class": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: False, enableDirectResults: False, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: False, enableDirectResults: True, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: True, enableDirectResults: False, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: True, enableDirectResults: True, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000) LIMIT 0\", rowCount: 0, useCloudFetch: False, enableDirectResults: True, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000) LIMIT 0\", rowCount: 0, useCloudFetch: True, enableDirectResults: True, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000)\", rowCount: 1000, useCloudFetch: False, enableDirectResults: False, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000)\", rowCount: 1000, useCloudFetch: False, enableDirectResults: True, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000)\", rowCount: 1000, useCloudFetch: True, enableDirectResults: False, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000)\", rowCount: 1000, useCloudFetch: True, enableDirectResults: True, protocol: \"thrift\")",
+      "class": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetCatalogs_ThriftAndSEA_SameRowCount",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetColumnsExtended_ThriftAndSEA_32ColumnSchema",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetColumnsExtended_ThriftAndSEA_SameColumnNames",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetTableSchema_ThriftAndSEA_SameFieldNames",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetTables_ThriftAndSEA_SameCount",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetCatalogs_ContainsMain",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetColumnsExtended_Returns20Columns",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetPrimaryKeys_ReturnsPKColumns",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetTableSchema_Returns20Fields",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetTables_ReturnsAllColumnTypes",
+      "class": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.IntervalValueTests.INTERVAL009_YearMonthInterval_ThriftAndSEAReturnSameData",
+      "class": "AdbcDrivers.Databricks.Tests.IntervalValueTests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    },
+    {
+      "name": "AdbcDrivers.Databricks.Tests.IntervalValueTests.INTERVAL010_DayToSecondInterval_ThriftAndSEAReturnSameData",
+      "class": "AdbcDrivers.Databricks.Tests.IntervalValueTests",
+      "outcome": "Failed",
+      "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
+      "stack": "",
+      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+    }
+  ]
+}
