@@ -136,7 +136,9 @@ namespace AdbcDrivers.Databricks.Tests
 
             var parameters = new Dictionary<string, string>
             {
-                [DatabricksParameters.Protocol] = "thrift",
+                // Protocol intentionally omitted — the CloseOperation code path is
+                // protocol-agnostic (see class docstring), so the test runs under
+                // whatever protocol the CI matrix / connection config selects.
                 [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
                 [DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString(),
             };
@@ -221,7 +223,7 @@ namespace AdbcDrivers.Databricks.Tests
 
             var parameters = new Dictionary<string, string>
             {
-                [DatabricksParameters.Protocol] = "thrift",
+                // Protocol intentionally omitted — inherits the configured protocol.
                 [DatabricksParameters.UseCloudFetch] = "false",
                 [DatabricksParameters.EnableDirectResults] = "false",
             };
