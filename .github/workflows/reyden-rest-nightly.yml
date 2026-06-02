@@ -79,22 +79,22 @@ jobs:
         env:
           OAUTH_TOKEN: ${{ steps.oauth.outputs.OAUTH_TOKEN }}
           PER_RUN_SCHEMA: ${{ steps.schema.outputs.PER_RUN_SCHEMA }}
-          WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
         run: |
           set -e
-          STATEMENT="CREATE SCHEMA IF NOT EXISTS main.${PER_RUN_SCHEMA}"
-          PAYLOAD=$(jq -n --arg w "$WAREHOUSE_ID" --arg s "$STATEMENT" '{warehouse_id: $w, statement: $s, wait_timeout: "30s"}')
-          RESPONSE=$(curl -sS -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/api/2.0/sql/statements" \
+          # Reyden warehouse rejects CREATE SCHEMA via the SQL statement API;
+          # use the Unity Catalog REST API instead.
+          PAYLOAD=$(jq -n --arg name "$PER_RUN_SCHEMA" '{catalog_name: "main", name: $name}')
+          RESPONSE=$(curl -sS -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/api/2.1/unity-catalog/schemas" \
             -H "Authorization: Bearer $OAUTH_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
-          STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
-          if [ "$STATUS" != "SUCCEEDED" ]; then
-            echo "ERROR: CREATE SCHEMA failed (status=$STATUS)"
+          FULL_NAME=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('full_name', ''))")
+          if [ -z "$FULL_NAME" ]; then
+            echo "ERROR: CREATE SCHEMA failed"
             echo "Response: $RESPONSE"
             exit 1
           fi
-          echo "Created schema: main.${PER_RUN_SCHEMA}"
+          echo "Created schema: $FULL_NAME"
 
       - name: Seed test data
         env:
@@ -191,18 +191,10 @@ jobs:
         env:
           OAUTH_TOKEN: ${{ steps.oauth.outputs.OAUTH_TOKEN }}
           PER_RUN_SCHEMA: ${{ steps.schema.outputs.PER_RUN_SCHEMA }}
-          WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
         run: |
-          STATEMENT="DROP SCHEMA IF EXISTS main.${PER_RUN_SCHEMA} CASCADE"
-          PAYLOAD=$(jq -n --arg w "$WAREHOUSE_ID" --arg s "$STATEMENT" '{warehouse_id: $w, statement: $s, wait_timeout: "30s"}')
-          RESPONSE=$(curl -sS -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/api/2.0/sql/statements" \
-            -H "Authorization: Bearer $OAUTH_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
-          STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
-          if [ "$STATUS" != "SUCCEEDED" ]; then
-            echo "WARNING: DROP SCHEMA failed (status=$STATUS)"
-            echo "Response: $RESPONSE"
-          else
-            echo "Dropped schema: main.${PER_RUN_SCHEMA}"
-          fi
+          # Use the Unity Catalog REST API to match how the schema was created.
+          RESPONSE=$(curl -sS -X DELETE \
+            "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/api/2.1/unity-catalog/schemas/main.${PER_RUN_SCHEMA}?force=true" \
+            -H "Authorization: Bearer $OAUTH_TOKEN")
+          echo "Drop response: $RESPONSE"
+          echo "Dropped schema: main.${PER_RUN_SCHEMA}"
