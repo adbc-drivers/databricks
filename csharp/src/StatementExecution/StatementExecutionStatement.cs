@@ -1371,7 +1371,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (string.IsNullOrEmpty(resultJson))
                 throw new FormatException($"Empty result from {query}");
 
-            var descResult = System.Text.Json.JsonSerializer.Deserialize<DescTableExtendedResult>(resultJson!);
+            var descResult = System.Text.Json.JsonSerializer.Deserialize(resultJson!, DescTableJsonContext.Default.DescTableExtendedResult);
             if (descResult == null)
                 throw new FormatException($"Failed to parse JSON result from {query}");
 

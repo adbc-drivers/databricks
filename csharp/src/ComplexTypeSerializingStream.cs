@@ -16,6 +16,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -75,7 +78,7 @@ namespace AdbcDrivers.Databricks
         // a double quote becomes \" (not ") and non-ASCII / < > & are emitted verbatim
         // rather than \uXXXX-escaped. The output is still valid JSON; "unsafe" only refers to
         // embedding directly in HTML, which is the consuming application's concern, not ours.
-        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
+        private static readonly JsonWriterOptions WriterOptions = new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         };
@@ -139,14 +142,129 @@ namespace AdbcDrivers.Databricks
         private static StringArray SerializeToStringArray(IArrowArray array)
         {
             StringArray.Builder builder = new StringArray.Builder();
+
+            // Write each value with a manual Utf8JsonWriter rather than JsonSerializer.Serialize.
+            // The value graph (ToObject) is a closed set of Arrow scalar types, lists, and
+            // dictionaries, so we can emit it without reflection — keeping this trim- and
+            // NativeAOT-safe. A single stream/writer pair is reused across rows to avoid
+            // per-row allocations.
+            using MemoryStream stream = new MemoryStream();
+            using Utf8JsonWriter writer = new Utf8JsonWriter(stream, WriterOptions);
             for (int i = 0; i < array.Length; i++)
             {
                 if (array.IsNull(i))
+                {
                     builder.AppendNull();
-                else
-                    builder.Append(JsonSerializer.Serialize(ToObject(array, i), JsonOptions));
+                    continue;
+                }
+
+                stream.SetLength(0);
+                writer.Reset(stream);
+                WriteJsonValue(writer, ToObject(array, i));
+                writer.Flush();
+                builder.Append(Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length));
             }
             return builder.Build();
+        }
+
+        /// <summary>
+        /// Writes a value from the <see cref="ToObject"/> graph to <paramref name="writer"/>.
+        /// The graph is a closed set of types: <see cref="JsonNode"/> (raw numbers), strings,
+        /// the boxed CLR primitives produced by <see cref="IArrowArrayExtensions.ValueAt"/>,
+        /// <see cref="IReadOnlyDictionary{TKey,TValue}"/> (struct/map), and lists. Output matches
+        /// what <c>System.Text.Json</c>'s default converters would have produced for these types.
+        /// </summary>
+        private static void WriteJsonValue(Utf8JsonWriter writer, object? value)
+        {
+            switch (value)
+            {
+                case null:
+                    writer.WriteNullValue();
+                    break;
+                case JsonNode node:
+                    node.WriteTo(writer);
+                    break;
+                case string s:
+                    writer.WriteStringValue(s);
+                    break;
+                case bool b:
+                    writer.WriteBooleanValue(b);
+                    break;
+                case sbyte v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case byte v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case short v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case ushort v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case int v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case uint v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case long v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case ulong v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case float v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case double v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case decimal v:
+                    writer.WriteNumberValue(v);
+                    break;
+                case DateTime v:
+                    writer.WriteStringValue(v);
+                    break;
+                case DateTimeOffset v:
+                    writer.WriteStringValue(v);
+                    break;
+                case Guid v:
+                    writer.WriteStringValue(v);
+                    break;
+                case byte[] bytes:
+                    writer.WriteBase64StringValue(bytes);
+                    break;
+#if NET6_0_OR_GREATER
+                case TimeOnly t:
+                    // System.Text.Json renders TimeOnly as an ISO 8601 time string.
+                    writer.WriteStringValue(t.ToString("O", CultureInfo.InvariantCulture));
+                    break;
+#endif
+                case TimeSpan ts:
+                    writer.WriteStringValue(ts.ToString("c", CultureInfo.InvariantCulture));
+                    break;
+                case IReadOnlyDictionary<string, object?> dict:
+                    writer.WriteStartObject();
+                    foreach (KeyValuePair<string, object?> kvp in dict)
+                    {
+                        writer.WritePropertyName(kvp.Key);
+                        WriteJsonValue(writer, kvp.Value);
+                    }
+                    writer.WriteEndObject();
+                    break;
+                case IEnumerable<object?> list:
+                    writer.WriteStartArray();
+                    foreach (object? item in list)
+                        WriteJsonValue(writer, item);
+                    writer.WriteEndArray();
+                    break;
+                default:
+                    // Rare Arrow scalar types not enumerated above (e.g. native interval structs):
+                    // fall back to their invariant string form to keep the output valid JSON.
+                    writer.WriteStringValue(Convert.ToString(value, CultureInfo.InvariantCulture));
+                    break;
+            }
         }
 
         /// <summary>

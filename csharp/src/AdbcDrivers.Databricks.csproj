@@ -1,8 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks Condition="'$(IsWindows)'=='true'">netstandard2.0;net472;net8.0</TargetFrameworks>
-		<TargetFrameworks Condition="'$(TargetFrameworks)'==''">netstandard2.0;net8.0</TargetFrameworks>
+    <TargetFrameworks Condition="'$(IsWindows)'=='true'">netstandard2.0;net472;net8.0;net10.0</TargetFrameworks>
+		<TargetFrameworks Condition="'$(TargetFrameworks)'==''">netstandard2.0;net8.0;net10.0</TargetFrameworks>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <!--
+    Verify the driver is AOT/trim-safe under net10.0 without yet producing a
+    native build. IsAotCompatible turns on the trim, single-file, and AOT
+    Roslyn analyzers (and marks the assembly IsTrimmable) so a normal build
+    surfaces IL2xxx/IL3xxx warnings; with TreatWarningsAsErrors they fail the
+    build. The actual NativeAOT publish will live in a separate project.
+  -->
+  <PropertyGroup Condition="'$(TargetFramework)'=='net10.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="K4os.Compression.LZ4" />
