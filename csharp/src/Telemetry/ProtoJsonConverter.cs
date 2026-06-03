@@ -55,6 +55,17 @@ namespace AdbcDrivers.Databricks.Telemetry
             OssSqlDriverTelemetryLog value,
             JsonSerializerOptions options)
         {
+            WriteValue(writer, value);
+        }
+
+        /// <summary>
+        /// Writes the snake_case proto JSON for <paramref name="value"/> directly to
+        /// <paramref name="writer"/>. Exposed so the AOT-safe manual frontend-log serializer
+        /// (<see cref="TelemetryPayloadWriter"/>) can reuse the exact same proto formatting as the
+        /// reflection-based converter path, keeping a single source of truth.
+        /// </summary>
+        internal static void WriteValue(Utf8JsonWriter writer, OssSqlDriverTelemetryLog? value)
+        {
             if (value == null)
             {
                 writer.WriteNullValue();
