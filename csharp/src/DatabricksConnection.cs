@@ -132,6 +132,23 @@ namespace AdbcDrivers.Databricks
         private bool _sessionDeleteTelemetryEmitted;
         internal TelemetrySessionContext? TelemetrySession => _telemetry.Session;
 
+        // Set once the server-side session is known to be closed/expired (e.g. inactivity
+        // timeout). The session handle held by this connection is then permanently stale, so
+        // every subsequent operation should fail fast rather than reusing the dead handle.
+        private volatile bool _sessionInvalid;
+
+        /// <summary>
+        /// True when the server-side session has been closed or has expired. Once set, the
+        /// connection can no longer execute statements and must be disposed and re-created.
+        /// </summary>
+        internal bool IsSessionInvalid => _sessionInvalid;
+
+        /// <summary>
+        /// Marks the connection's server-side session as closed/expired. Idempotent and
+        /// thread-safe. Subsequent operations fail fast with <see cref="DatabricksSessionExpiredException"/>.
+        /// </summary>
+        internal void MarkSessionInvalid() => _sessionInvalid = true;
+
         /// <summary>
         /// RecyclableMemoryStreamManager for LZ4 decompression.
         /// If provided by Database, this is shared across all connections for optimal pooling.
