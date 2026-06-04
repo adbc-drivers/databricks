@@ -48,16 +48,43 @@ def signature_for(message):
         return "Unknown / no message"
     m = message.replace("\r", " ").replace("\n", " ")
 
+    # Order matters: the most specific patterns win. In particular the
+    # Thrift-on-SEA and CloudFetch buckets must be matched before the generic
+    # "Couldn't connect / HttpRequestException" transport bucket, because their
+    # messages also contain that text.
     patterns = [
+        # --- Reyden capability gaps (expected; see SIG_CATEGORY) -------------
+        # A Thrift session against a SEA/REST-only warehouse (e.g. Reyden) has
+        # no Thrift endpoint, so the server returns ENDPOINT_NOT_FOUND. This is
+        # NOT a missing/misconfigured warehouse — the warehouse works over REST.
+        (r"Thrift server error.*ENDPOINT_NOT_FOUND|ENDPOINT_NOT_FOUND.*Thrift server error",
+         "Thrift endpoint unavailable on SEA/Reyden warehouse"),
+        (r"Error in download process|CloudFetch.*download",
+         "CloudFetch not supported on Reyden (download failed)"),
+        (r"PARSER_UNSUPPORTED_FEATURE|UNSUPPORTED_FEATURE|Unsupported statement|"
+         r"Unsupported CREATE type|Unsupported Delta table type|Unsupported .*type",
+         "Reyden unsupported feature (DDL / statement / type)"),
+        # --- Environment / infra --------------------------------------------
         (r"ENDPOINT_NOT_FOUND", "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"),
         (r"read[- ]?only|READ_ONLY|cannot be modified|not.*allowed.*read", "Read-only warehouse rejected write/DDL"),
-        (r"INSERT|UPDATE|DELETE|MERGE|CREATE TABLE|DROP TABLE|ALTER TABLE", "DML/DDL rejected"),
         (r"PERMISSION_DENIED|not authorized|Forbidden|HTTP 403", "Permission denied (403)"),
         (r"timeout|timed out|TimeoutException", "Timeout"),
         (r"Couldn't connect|connection refused|HttpRequestException", "Connection / transport error"),
-        (r"TABLE_OR_VIEW_NOT_FOUND|cannot be found|does not exist", "Object not found"),
+        # --- Genuine SQL errors with specific codes ------------------------
+        # Checked before the broad assertion bucket below, whose "expected"
+        # token also appears in "Expected identifier ..." syntax-error text.
         (r"PARSE_SYNTAX_ERROR|SYNTAX_ERROR", "SQL syntax error"),
+        # --- Genuine driver bugs --------------------------------------------
+        # A value/cast mismatch means the test got PAST any setup (a rejected
+        # CREATE TABLE would have failed earlier with an "Unsupported …" message
+        # in the Reyden-gap bucket above). So a wrong value on an
+        # INSERT→SELECT→DELETE round-trip is a real driver bug, e.g. a SEA-path
+        # result-serialization difference — not expected Reyden behaviour.
+        (r"CAST_INVALID_INPUT", "Type cast mismatch on round-trip"),
+        (r"TABLE_OR_VIEW_NOT_FOUND|cannot be found|does not exist", "Object not found"),
         (r"Assert\.|Equal\(|Xunit|expected", "Assertion failed (value mismatch)"),
+        # --- Generic DML/DDL rejection (catch-all, lowest priority) --------
+        (r"INSERT|UPDATE|DELETE|MERGE|CREATE TABLE|DROP TABLE|ALTER TABLE", "DML/DDL rejected"),
     ]
     for pat, label in patterns:
         if re.search(pat, m, re.IGNORECASE):
@@ -67,6 +94,43 @@ def signature_for(message):
     if exc:
         return exc.group(1)
     return "Other"
+
+
+# Root-cause category layered on top of the fine-grained signature. The
+# dashboard rolls failures up to these three buckets so a low raw pass-rate
+# (dominated by expected Reyden gaps) doesn't mask the genuine driver bugs.
+#
+# Classification hinges on WHICH step failed, which the message already encodes:
+#   - A test with a CREATE TABLE/SCHEMA step that Reyden can't run fails AT that
+#     step with an "Unsupported …" message -> CAT_REYDEN_GAP (expected).
+#   - A value/cast mismatch means setup succeeded and the INSERT→SELECT→DELETE
+#     round-trip returned wrong data -> CAT_REAL (a genuine driver bug).
+CAT_REYDEN_GAP = "Reyden capability gap (expected)"
+CAT_ENVIRONMENT = "Environment / infra"
+CAT_REAL = "Real issue / to investigate"
+
+# Explicit signature -> category map. Any signature not listed here (including
+# the dynamic "<ExceptionType>" fallbacks and the value/cast/DML/syntax buckets)
+# is treated as CAT_REAL so genuine, unclassified failures surface rather than
+# hide.
+_SIGNATURE_CATEGORY = {
+    "Thrift endpoint unavailable on SEA/Reyden warehouse": CAT_REYDEN_GAP,
+    "CloudFetch not supported on Reyden (download failed)": CAT_REYDEN_GAP,
+    "Reyden unsupported feature (DDL / statement / type)": CAT_REYDEN_GAP,
+    "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)": CAT_ENVIRONMENT,
+    "Read-only warehouse rejected write/DDL": CAT_ENVIRONMENT,
+    "Permission denied (403)": CAT_ENVIRONMENT,
+    "Timeout": CAT_ENVIRONMENT,
+    "Connection / transport error": CAT_ENVIRONMENT,
+    # "Assertion failed (value mismatch)", "Type cast mismatch on round-trip",
+    # "Object not found", "DML/DDL rejected", "SQL syntax error", "Other",
+    # "Unknown / no message" and any "<ExceptionType>" fall through to CAT_REAL.
+}
+
+
+def category_for(signature):
+    """Map a fine-grained signature to one of the four root-cause buckets."""
+    return _SIGNATURE_CATEGORY.get(signature, CAT_REAL)
 
 
 def class_of(test_name):
@@ -150,6 +214,7 @@ def main():
     # Trim payload: keep full detail for failures only.
     for r in failed:
         r["signature"] = signature_for(r["message"])
+        r["category"] = category_for(r["signature"])
         if len(r["message"]) > 2000:
             r["message"] = r["message"][:2000] + " …(truncated)"
         if len(r["stack"]) > 2000:
@@ -157,9 +222,11 @@ def main():
 
     by_signature = {}
     by_class = {}
+    by_category = {}
     for r in failed:
         by_signature[r["signature"]] = by_signature.get(r["signature"], 0) + 1
         by_class[r["class"]] = by_class.get(r["class"], 0) + 1
+        by_category[r["category"]] = by_category.get(r["category"], 0) + 1
 
     total = len(all_results)
     record = {
@@ -182,9 +249,10 @@ def main():
         "failed": len(failed),
         "skipped": len(skipped),
         "pass_rate": round(100.0 * len(passed) / total, 1) if total else 0.0,
+        "by_category": dict(sorted(by_category.items(), key=lambda kv: -kv[1])),
         "by_signature": dict(sorted(by_signature.items(), key=lambda kv: -kv[1])),
         "by_class": dict(sorted(by_class.items(), key=lambda kv: -kv[1])),
-        "failures": sorted(failed, key=lambda r: (r["signature"], r["name"])),
+        "failures": sorted(failed, key=lambda r: (r["category"], r["signature"], r["name"])),
     }
 
     with open(out_path, "w") as f:
