@@ -83,5 +83,55 @@
       "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1
     },
     "detail": "run-27001243914-rest.json"
+  },
+  {
+    "run_id": "27043719780",
+    "run_attempt": "1",
+    "run_number": "15",
+    "timestamp": "2026-06-05T23:22:12Z",
+    "commit": "3733b4768e19f49980ee9d1b3d3e98442f9b2919",
+    "branch": "ci/reyden-rest-nightly",
+    "protocol": "rest",
+    "read_only": true,
+    "html_url": "https://github.com/adbc-drivers/databricks/actions/runs/27043719780",
+    "total": 796,
+    "passed": 501,
+    "failed": 116,
+    "skipped": 179,
+    "pass_rate": 62.9,
+    "by_category": {
+      "Real issue / to investigate": 80,
+      "Reyden capability gap (expected)": 36
+    },
+    "by_signature": {
+      "Assertion failed (value mismatch)": 73,
+      "Unsupported statement: SHOW COLUMNS": 17,
+      "SQL syntax error": 5,
+      "Unsupported CREATE type: SCHEMA": 4,
+      "Reyden unsupported feature (other)": 4,
+      "CloudFetch not supported on Reyden (download failed)": 4,
+      "Thrift endpoint unavailable on SEA/Reyden warehouse": 3,
+      "Unsupported type: INTERVAL": 2,
+      "Type cast mismatch on round-trip": 2,
+      "Unsupported feature: CREATE OR REPLACE TABLE": 2
+    },
+    "by_class": {
+      "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
+      "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest": 20,
+      "AdbcDrivers.Databricks.Tests.StringValueTests": 15,
+      "AdbcDrivers.Databricks.Tests.StatementTests": 8,
+      "AdbcDrivers.Databricks.Tests.DateTimeValueTests": 7,
+      "AdbcDrivers.Databricks.Tests.DriverTests": 7,
+      "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 4,
+      "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest": 4,
+      "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests": 4,
+      "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest": 4,
+      "AdbcDrivers.Databricks.Tests.IntervalValueTests": 2,
+      "AdbcDrivers.Databricks.Tests.ClientTests": 2,
+      "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1,
+      "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest": 1,
+      "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1
+    },
+    "detail": "run-27043719780-rest.json"
   }
 ]
