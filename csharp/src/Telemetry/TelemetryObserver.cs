@@ -33,18 +33,24 @@ namespace AdbcDrivers.Databricks.Telemetry
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Fail-open:</b> Every public method routes through the private <c>Safe(Action)</c>
-    /// helper, which swallows any exception and emits an OpenTelemetry activity event. This
-    /// concentrates the fail-open contract in exactly one place rather than scattering
-    /// try/catch boilerplate across each method body.
+    /// <b>Fail-open:</b> The lifecycle methods are plain field assignments and a couple of
+    /// guarded helpers; they cannot realistically throw. Only <see cref="OnFinalized"/> does
+    /// risky work (proto build + telemetry-client enqueue), and the try/catch is scoped to
+    /// exactly that block. Exceptions are surfaced as an OpenTelemetry activity event on the
+    /// ambient <see cref="Activity"/>, not propagated to the caller.
     /// </para>
     /// <para>
     /// <b>Thread-safe:</b> The scalar writes into the per-statement context are inherently
-    /// safe for the lifecycle calls (each is called at most a small number of times from
-    /// the statement's execution path or the reader's disposal thread). The terminal
+    /// safe for the lifecycle calls (each is called at most a small number of times from the
+    /// statement's execution path or the reader's disposal thread). The terminal
     /// <see cref="OnFinalized"/> uses <see cref="Interlocked.CompareExchange(ref int, int, int)"/>
     /// on an <c>_emitted</c> flag to guarantee exactly-once enqueue even if it is invoked
     /// concurrently from multiple threads (e.g. error path + dispose path).
+    /// </para>
+    /// <para>
+    /// <b>Post-finalize:</b> Every non-terminal lifecycle method short-circuits on
+    /// <see cref="IsFinalized"/>, so any stray call after <see cref="OnFinalized"/> is a true
+    /// no-op per the interface contract.
     /// </para>
     /// <para>
     /// <b>Non-blocking:</b> <see cref="OnFinalized"/> only enqueues the log into the
@@ -92,117 +98,101 @@ namespace AdbcDrivers.Databricks.Telemetry
         internal bool HasEmitted => Volatile.Read(ref _emitted) != 0;
 
         /// <inheritdoc />
-        public void OnExecuteStarted(StatementType stmtType, OperationType opType, bool isCompressed) =>
-            Safe(() =>
-            {
-                if (IsFinalized()) return;
-                _ctx.StatementType = stmtType;
-                _ctx.OperationType = opType;
-                _ctx.IsCompressed = isCompressed;
-            });
+        public void OnExecuteStarted(StatementType stmtType, OperationType opType, bool isCompressed)
+        {
+            if (IsFinalized()) return;
+            _ctx.StatementType = stmtType;
+            _ctx.OperationType = opType;
+            _ctx.IsCompressed = isCompressed;
+        }
 
         /// <inheritdoc />
-        public void OnExecuteSucceeded(string statementId, ExecutionResultFormat resultFormat) =>
-            Safe(() =>
-            {
-                if (IsFinalized()) return;
-                _ctx.StatementId = statementId;
-                _ctx.ResultFormat = resultFormat;
-                _ctx.RecordExecuteComplete();
-            });
+        public void OnExecuteSucceeded(string statementId, ExecutionResultFormat resultFormat)
+        {
+            if (IsFinalized()) return;
+            _ctx.StatementId = statementId;
+            _ctx.ResultFormat = resultFormat;
+            _ctx.RecordExecuteComplete();
+        }
 
         /// <inheritdoc />
-        public void OnPollCompleted(int count, long latencyMs) =>
-            Safe(() =>
-            {
-                if (IsFinalized()) return;
-                _ctx.PollCount = count;
-                _ctx.PollLatencyMs = latencyMs;
-            });
+        public void OnPollCompleted(int count, long latencyMs)
+        {
+            if (IsFinalized()) return;
+            _ctx.PollCount = count;
+            _ctx.PollLatencyMs = latencyMs;
+        }
 
         /// <inheritdoc />
-        public void OnFirstBatchReady(long latencyMs) =>
-            Safe(() =>
+        public void OnFirstBatchReady(long latencyMs)
+        {
+            if (IsFinalized()) return;
+            // Only the first call wins: the underlying setter is null-guarded so
+            // repeated calls (e.g. inline reader emits one, cloud-fetch reader emits
+            // another) do not overwrite the earliest observed latency.
+            if (_ctx.FirstBatchReadyMs == null)
             {
-                if (IsFinalized()) return;
-                // Only the first call wins: the underlying setter is null-guarded so
-                // repeated calls (e.g. inline reader emits one, cloud-fetch reader emits
-                // another) do not overwrite the earliest observed latency.
-                if (_ctx.FirstBatchReadyMs == null)
-                {
-                    _ctx.FirstBatchReadyMs = latencyMs;
-                }
-            });
+                _ctx.FirstBatchReadyMs = latencyMs;
+            }
+        }
 
         /// <inheritdoc />
-        public void OnConsumed(long latencyMs) =>
-            Safe(() =>
-            {
-                if (IsFinalized()) return;
-                _ctx.ResultsConsumedMs = latencyMs;
-            });
+        public void OnConsumed(long latencyMs)
+        {
+            if (IsFinalized()) return;
+            _ctx.ResultsConsumedMs = latencyMs;
+        }
 
         /// <inheritdoc />
-        public void OnChunksDownloaded(ChunkMetrics metrics) =>
-            Safe(() =>
-            {
-                if (IsFinalized()) return;
-                // Tolerate a null or empty ChunkMetrics — the gap-fix plumbing may not be
-                // landed yet, and the proto fields are nullable on the wire.
-                if (metrics == null)
-                {
-                    return;
-                }
-                _ctx.SetChunkDetails(
-                    metrics.TotalChunksPresent,
-                    metrics.TotalChunksIterated,
-                    metrics.InitialChunkLatencyMs,
-                    metrics.SlowestChunkLatencyMs,
-                    metrics.SumChunksDownloadTimeMs);
-            });
+        public void OnChunksDownloaded(ChunkMetrics metrics)
+        {
+            if (IsFinalized() || metrics == null) return;
+            // Tolerate an empty ChunkMetrics — the gap-fix plumbing may not be landed
+            // yet, and the proto fields are nullable on the wire.
+            _ctx.SetChunkDetails(
+                metrics.TotalChunksPresent,
+                metrics.TotalChunksIterated,
+                metrics.InitialChunkLatencyMs,
+                metrics.SlowestChunkLatencyMs,
+                metrics.SumChunksDownloadTimeMs);
+        }
 
         /// <inheritdoc />
-        public void OnError(Exception ex) =>
-            Safe(() =>
-            {
-                if (IsFinalized()) return;
-                if (ex == null)
-                {
-                    return;
-                }
-                _ctx.HasError = true;
-                _ctx.ErrorName = ex.GetType().Name;
-                // .Message is captured in-memory only. The proto's DriverErrorInfo.error_message
-                // field is pending LPP review (see ConnectionTelemetry.EmitOperationTelemetry),
-                // so BuildTelemetryLog does NOT serialize ErrorMessage into the wire payload
-                // today. SafeMessage neutralizes the rare case where ex.Message itself throws.
-                _ctx.ErrorMessage = SafeMessage(ex);
-            });
-
-        // After OnFinalized has fired (the terminal call), all other lifecycle methods are
-        // no-ops per the interface contract. Centralized here so each Safe() body stays terse.
-        private bool IsFinalized() => Volatile.Read(ref _emitted) != 0;
+        public void OnError(Exception ex)
+        {
+            if (IsFinalized() || ex == null) return;
+            _ctx.HasError = true;
+            _ctx.ErrorName = ex.GetType().Name;
+            // .Message is captured in-memory only. The proto's DriverErrorInfo.error_message
+            // field is pending LPP review (see ConnectionTelemetry.EmitOperationTelemetry),
+            // so BuildTelemetryLog does NOT serialize ErrorMessage into the wire payload
+            // today. SafeMessage neutralizes the rare case where ex.Message itself throws.
+            _ctx.ErrorMessage = SafeMessage(ex);
+        }
 
         /// <inheritdoc />
         public void OnFinalized()
         {
-            // Idempotency gate: only the first caller proceeds. Doing this outside Safe()
-            // ensures even a defective Safe() helper can't bypass the once-only semantics.
+            // Idempotency gate: only the first caller proceeds.
             if (Interlocked.CompareExchange(ref _emitted, 1, 0) != 0)
             {
                 return;
             }
 
-            Safe(() =>
+            ITelemetryClient? client = _session.TelemetryClient;
+            if (client == null)
             {
-                ITelemetryClient? client = _session.TelemetryClient;
-                if (client == null)
-                {
-                    // Telemetry is disabled at the session level. The idempotency flag has
-                    // already been set so a subsequent OnFinalized() remains a no-op.
-                    return;
-                }
+                // Telemetry is disabled at the session level. The idempotency flag is
+                // already set so a subsequent OnFinalized() remains a no-op.
+                return;
+            }
 
+            // The only genuinely risky work in this class: proto construction and
+            // enqueue into the telemetry client. Anything else above this point is
+            // plain field writes that cannot throw. The catch is scoped tightly so the
+            // suppression only ever covers the real risk surface.
+            try
+            {
                 Proto.OssSqlDriverTelemetryLog log = _ctx.BuildTelemetryLog();
                 TelemetryFrontendLog frontendLog = new TelemetryFrontendLog
                 {
@@ -221,19 +211,6 @@ namespace AdbcDrivers.Databricks.Telemetry
                 // Enqueue is non-blocking; the client buffers events and flushes on a
                 // background timer. No HTTP I/O happens on the calling thread.
                 client.Enqueue(frontendLog);
-            });
-        }
-
-        /// <summary>
-        /// Concentrates the fail-open try/catch in one place. Any exception is suppressed
-        /// and surfaced as an OpenTelemetry activity event so it is still observable in
-        /// traces without affecting the caller's control flow.
-        /// </summary>
-        private static void Safe(Action action)
-        {
-            try
-            {
-                action();
             }
             catch (Exception ex)
             {
@@ -253,6 +230,10 @@ namespace AdbcDrivers.Databricks.Telemetry
                 }
             }
         }
+
+        // After OnFinalized has fired, all other lifecycle methods are no-ops per the
+        // interface contract. Centralized here so each method body stays terse.
+        private bool IsFinalized() => Volatile.Read(ref _emitted) != 0;
 
         // Some exceptions throw from their .Message property (rare but observed in the
         // wild for user-defined types). Wrap it so OnError can never become a source of
