@@ -27,7 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\hiveserver2\csharp\arrow-adbc\csharp\test\Apache.Arrow.Adbc.Tests\Apache.Arrow.Adbc.Testing.csproj" />
-    <ProjectReference Include="..\hiveserver2\csharp\test\AdbcDrivers.Tests.HiveServer2.csproj" />
+    <ProjectReference Include="..\hiveserver2\csharp\test\AdbcDrivers.Tests.HiveServer2\AdbcDrivers.Tests.HiveServer2.csproj" />
     <ProjectReference Include="..\src\AdbcDrivers.Databricks.csproj" />
   </ItemGroup>
 

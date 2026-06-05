@@ -37,7 +37,8 @@ namespace AdbcDrivers.Databricks.Tests
 {
     /// <summary>
     /// End-to-end tests for the CloudFetch feature in the Databricks ADBC driver.
-    /// Tests both Thrift and Statement Execution REST API protocols.
+    /// Runs under the protocol selected by the connection config / CI matrix
+    /// (the suite is exercised against both Thrift and REST as separate jobs).
     /// </summary>
     public class CloudFetchE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IDisposable
     {
@@ -111,48 +112,51 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         /// <summary>
-        /// Test cases for CloudFetch with protocol dimension.
-        /// Format: (query, expected row count, use cloud fetch, enable direct results, protocol)
+        /// Test cases for CloudFetch.
+        /// Format: (query, expected row count, use cloud fetch, enable direct results)
+        ///
+        /// The protocol is NOT a test-case dimension: each case runs under the protocol
+        /// selected by the connection config / CI matrix (separate rest and thrift jobs),
+        /// so it isn't duplicated or hardcoded here.
         /// </summary>
         public static IEnumerable<object[]> TestCases()
         {
-            string[] protocols = { "thrift", "rest" };
-
             string zeroQuery = "SELECT * FROM range(1000) LIMIT 0";
             string smallQuery = "SELECT * FROM range(1000)";
             string largeQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
 
-            foreach (var protocol in protocols)
-            {
-                // LIMIT 0 test cases - edge case for empty result set (PECO-2524)
-                yield return new object[] { zeroQuery, 0, true, true, protocol };
-                yield return new object[] { zeroQuery, 0, false, true, protocol };
+            // LIMIT 0 test cases - edge case for empty result set (PECO-2524)
+            yield return new object[] { zeroQuery, 0, true, true };
+            yield return new object[] { zeroQuery, 0, false, true };
 
-                // Small query test cases
-                yield return new object[] { smallQuery, 1000, true, true, protocol };
-                yield return new object[] { smallQuery, 1000, false, true, protocol };
-                yield return new object[] { smallQuery, 1000, true, false, protocol };
-                yield return new object[] { smallQuery, 1000, false, false, protocol };
+            // Small query test cases
+            yield return new object[] { smallQuery, 1000, true, true };
+            yield return new object[] { smallQuery, 1000, false, true };
+            yield return new object[] { smallQuery, 1000, true, false };
+            yield return new object[] { smallQuery, 1000, false, false };
 
-                // Large query test cases
-                yield return new object[] { largeQuery, 1000000, true, true, protocol };
-                yield return new object[] { largeQuery, 1000000, false, true, protocol };
-                yield return new object[] { largeQuery, 1000000, true, false, protocol };
-                yield return new object[] { largeQuery, 1000000, false, false, protocol };
-            }
+            // Large query test cases
+            yield return new object[] { largeQuery, 1000000, true, true };
+            yield return new object[] { largeQuery, 1000000, false, true };
+            yield return new object[] { largeQuery, 1000000, true, false };
+            yield return new object[] { largeQuery, 1000000, false, false };
         }
 
         /// <summary>
         /// Integration test for running queries against a real Databricks cluster with different CloudFetch settings.
-        /// Tests both Thrift and Statement Execution REST API protocols.
+        /// Runs under the protocol selected by the connection config / CI matrix (rest or thrift).
         /// </summary>
         [Theory]
         [MemberData(nameof(TestCases))]
-        public async Task TestCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults, string protocol)
+        public async Task TestCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults)
         {
+            // Effective protocol comes from config (mirrors DatabricksDatabase's default),
+            // not from the test — so the rest-only setup below tracks the configured protocol.
+            string protocol = string.IsNullOrEmpty(TestConfiguration.Protocol)
+                ? "thrift" : TestConfiguration.Protocol.ToLowerInvariant();
+
             var parameters = new Dictionary<string, string>
             {
-                [DatabricksParameters.Protocol] = protocol,
                 [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
                 [DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString(),
                 [DatabricksParameters.CanDecompressLz4] = "true",
