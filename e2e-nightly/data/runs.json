@@ -38,5 +38,50 @@
       "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1
     },
     "detail": "run-26806281933-rest.json"
+  },
+  {
+    "run_id": "27001243914",
+    "run_attempt": "1",
+    "run_number": "14",
+    "timestamp": "2026-06-05T08:02:37Z",
+    "commit": "a039bae3059ff2e4182de23c163443b05f6841fc",
+    "branch": "ci/reyden-rest-nightly",
+    "protocol": "rest",
+    "read_only": true,
+    "html_url": "https://github.com/adbc-drivers/databricks/actions/runs/27001243914",
+    "total": 816,
+    "passed": 498,
+    "failed": 127,
+    "skipped": 191,
+    "pass_rate": 61.0,
+    "by_category": {
+      "Real issue / to investigate": 76,
+      "Reyden capability gap (expected)": 51
+    },
+    "by_signature": {
+      "Assertion failed (value mismatch)": 72,
+      "Thrift endpoint unavailable on SEA/Reyden warehouse": 26,
+      "Reyden unsupported feature (DDL / statement / type)": 21,
+      "CloudFetch not supported on Reyden (download failed)": 4,
+      "Type cast mismatch on round-trip": 2,
+      "SQL syntax error": 2
+    },
+    "by_class": {
+      "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
+      "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest": 20,
+      "AdbcDrivers.Databricks.Tests.StringValueTests": 15,
+      "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 14,
+      "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest": 14,
+      "AdbcDrivers.Databricks.Tests.DriverTests": 7,
+      "AdbcDrivers.Databricks.Tests.DateTimeValueTests": 7,
+      "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest": 4,
+      "AdbcDrivers.Databricks.Tests.ClientTests": 2,
+      "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests": 2,
+      "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest": 2,
+      "AdbcDrivers.Databricks.Tests.IntervalValueTests": 2,
+      "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1,
+      "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1
+    },
+    "detail": "run-27001243914-rest.json"
   }
 ]
