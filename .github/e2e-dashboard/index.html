@@ -119,6 +119,63 @@ const CATEGORIES = {
 };
 const catBadge = name => `<span class="catbadge ${(CATEGORIES[name]||{}).cls||""}">${esc(name)}</span>`;
 
+// Plain-language "what it is" per failure signature (keys must match
+// parse-trx-to-json.py's signature_for output).
+const SIGNATURE_DESCRIPTIONS = {
+  "Thrift endpoint unavailable on SEA/Reyden warehouse": "REST-only warehouse has no Thrift endpoint",
+  "CloudFetch not supported on Reyden (download failed)": "cloud result download not supported",
+  "Unsupported statement: SHOW COLUMNS": "metadata path not implemented",
+  "Unsupported CREATE type: SCHEMA": "cannot create schema",
+  "Unsupported feature: CREATE OR REPLACE TABLE": "cannot create / replace table",
+  "Unsupported type: INTERVAL": "cannot store / read interval",
+  "Reyden unsupported feature (other)": "other unsupported DDL / statement / type",
+  "Reyden unsupported feature (DDL / statement / type)": "unsupported DDL / statement / type",
+  "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)": "warehouse missing or misconfigured",
+  "Read-only warehouse rejected write/DDL": "warehouse is read-only",
+  "Permission denied (403)": "auth / permission issue",
+  "Timeout": "operation timed out",
+  "Connection / transport error": "could not connect to the server",
+  "SQL syntax error": "malformed statement emitted by the driver",
+  "Type cast mismatch on round-trip": "value came back wrong-typed — driver bug",
+  "Object not found": "metadata resolved a missing object",
+  "Assertion failed (value mismatch)": "round-trip returned wrong data — driver bug",
+  "DML/DDL rejected": "write / DDL rejected",
+};
+const sigDesc = s => SIGNATURE_DESCRIPTIONS[s] || "";
+
+// Class.Method, dropping the namespace prefix and the parameter list.
+const shortTest = name => {
+  const base = (name || "").split("(")[0];
+  return base.split(".").slice(-2).join(".");
+};
+
+// Per-error table for the latest run: Category | Error | Count | What it is | Tests.
+function sigDetailTable(failures) {
+  if (!failures || !failures.length) return '<span class="muted">No failure detail recorded.</span>';
+  const groups = {};
+  for (const f of failures) {
+    const cat = f.category || "Uncategorized", sig = f.signature || "Unknown";
+    const key = cat + " " + sig;
+    (groups[key] ??= { cat, sig, items: [] }).items.push(f);
+  }
+  const rows = Object.values(groups)
+    .sort((a, b) => a.cat < b.cat ? -1 : a.cat > b.cat ? 1 : b.items.length - a.items.length)
+    .map(({ cat, sig, items }) => {
+      const tests = [...new Set(items.map(f => shortTest(f.name)))].sort();
+      const shown = tests.slice(0, 8).map(esc).join("<br>") +
+        (tests.length > 8 ? `<br><span class="muted">+${tests.length - 8} more</span>` : "");
+      return `<tr>
+        <td>${catBadge(cat)}</td>
+        <td class="sig">${esc(sig)}</td>
+        <td class="num">${items.length}</td>
+        <td>${esc(sigDesc(sig))}</td>
+        <td class="small">${shown}</td></tr>`;
+    }).join("");
+  return `<table><thead><tr>
+      <th>Category</th><th>Error</th><th class="num">Count</th><th>What it is</th><th>Tests</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 function bar(p, f, s) {
   const t = p+f+s || 1;
   return `<div class="bar" title="${p} passed / ${f} failed / ${s} skipped">
@@ -160,7 +217,7 @@ function renderTrend(runs) {
   });
 }
 
-function renderAnalysis(latest) {
+async function renderAnalysis(latest) {
   const el = document.getElementById("analysis");
   if (!latest || !latest.failed) { el.innerHTML = '<p class="muted">No failures in the latest run. 🎉</p>'; return; }
   const catEntries = Object.entries(latest.by_category||{});
@@ -175,18 +232,21 @@ function renderAnalysis(latest) {
     <table><thead><tr><th>Category</th><th class="num">Count</th></tr></thead><tbody>${catRows}</tbody></table>
     ${legend}` : "";
 
-  const sigRows = Object.entries(latest.by_signature||{}).map(([k,v]) =>
-    `<tr><td class="sig">${esc(k)}</td><td class="num">${v}</td></tr>`).join("");
-  const clsRows = Object.entries(latest.by_class||{}).map(([k,v]) =>
-    `<tr><td class="sig">${esc(k)}</td><td class="num">${v}</td></tr>`).join("");
   el.innerHTML = `
     <p class="muted small">Latest run <a href="${esc(latest.html_url)}">#${esc(latest.run_number||latest.run_id)}</a>
-       (${esc(latest.protocol)}${latest.read_only?", read-only":""}) — ${latest.failed} failures grouped below.</p>
+       (${esc(latest.protocol)}${latest.read_only?", read-only":""}) — ${latest.failed} failures.</p>
     ${catSection}
-    <div class="group-h">By failure signature (root cause)</div>
-    <table><thead><tr><th>Signature</th><th class="num">Count</th></tr></thead><tbody>${sigRows}</tbody></table>
-    <div class="group-h">By test class</div>
-    <table><thead><tr><th>Class</th><th class="num">Count</th></tr></thead><tbody>${clsRows}</tbody></table>`;
+    <div class="group-h">By error (root cause)</div>
+    <div id="sigTable" class="muted small">Loading per-error detail…</div>`;
+
+  // The per-error table needs the failure list (test names) from the run detail file.
+  try {
+    const full = await (await fetch("data/" + latest.detail + "?_=" + Date.now())).json();
+    document.getElementById("sigTable").innerHTML = sigDetailTable(full.failures || []);
+  } catch (e) {
+    document.getElementById("sigTable").innerHTML =
+      `<span class="muted">Could not load per-error detail: ${esc(String(e))}</span>`;
+  }
 }
 
 async function toggleDetail(tr, run) {

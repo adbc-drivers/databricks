@@ -61,9 +61,16 @@ def signature_for(message):
          "Thrift endpoint unavailable on SEA/Reyden warehouse"),
         (r"Error in download process|CloudFetch.*download",
          "CloudFetch not supported on Reyden (download failed)"),
-        (r"PARSER_UNSUPPORTED_FEATURE|UNSUPPORTED_FEATURE|Unsupported statement|"
+        # Specific unsupported features, split out so the dashboard shows each
+        # distinct gap (count + what it means) rather than one opaque bucket.
+        (r"Unsupported statement:\s*SHOW COLUMNS", "Unsupported statement: SHOW COLUMNS"),
+        (r"Unsupported CREATE type:\s*SCHEMA", "Unsupported CREATE type: SCHEMA"),
+        (r"CREATE OR REPLACE TABLE", "Unsupported feature: CREATE OR REPLACE TABLE"),
+        (r"interval year to month|interval day to second", "Unsupported type: INTERVAL"),
+        # Any other unsupported DDL/statement/type Reyden rejects.
+        (r"PARSER_UNSUPPORTED_FEATURE|UNSUPPORTED_FEATURE|DELTA_UNSUPPORTED|Unsupported statement|"
          r"Unsupported CREATE type|Unsupported Delta table type|Unsupported .*type",
-         "Reyden unsupported feature (DDL / statement / type)"),
+         "Reyden unsupported feature (other)"),
         # --- Environment / infra --------------------------------------------
         (r"ENDPOINT_NOT_FOUND", "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"),
         (r"read[- ]?only|READ_ONLY|cannot be modified|not.*allowed.*read", "Read-only warehouse rejected write/DDL"),
@@ -116,6 +123,12 @@ CAT_REAL = "Real issue / to investigate"
 _SIGNATURE_CATEGORY = {
     "Thrift endpoint unavailable on SEA/Reyden warehouse": CAT_REYDEN_GAP,
     "CloudFetch not supported on Reyden (download failed)": CAT_REYDEN_GAP,
+    "Unsupported statement: SHOW COLUMNS": CAT_REYDEN_GAP,
+    "Unsupported CREATE type: SCHEMA": CAT_REYDEN_GAP,
+    "Unsupported feature: CREATE OR REPLACE TABLE": CAT_REYDEN_GAP,
+    "Unsupported type: INTERVAL": CAT_REYDEN_GAP,
+    "Reyden unsupported feature (other)": CAT_REYDEN_GAP,
+    # Back-compat: older runs used one combined signature.
     "Reyden unsupported feature (DDL / statement / type)": CAT_REYDEN_GAP,
     "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)": CAT_ENVIRONMENT,
     "Read-only warehouse rejected write/DDL": CAT_ENVIRONMENT,
