@@ -45,24 +45,6 @@ namespace AdbcDrivers.Databricks.Tests
         {
         }
 
-        // Reyden does not support DDL (CREATE TABLE) — hide the inherited test and skip it.
-#pragma warning disable xUnit1024
-        [SkippableFact]
-        public new async Task CanInteractUsingSetOptions()
-        {
-            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support DDL (CREATE TABLE via TemporaryTable)");
-            await base.CanInteractUsingSetOptions();
-        }
-
-        // Reyden does not support SHOW COLUMNS — hide the inherited test and skip it.
-        [SkippableFact]
-        public new async Task CanGetColumns()
-        {
-            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support SHOW COLUMNS");
-            await base.CanGetColumns();
-        }
-#pragma warning restore xUnit1024
-
         // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate poll time option
         protected override void ValidateCanSetOptionPollTime(string value, bool throws = false)
         {
@@ -189,7 +171,6 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task CanGetPrimaryKeysDatabricks()
         {
-            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support KEY primitive type (SHOW PRIMARY KEYS)");
             await base.CanGetPrimaryKeys(TestConfiguration.Metadata.Catalog, TestConfiguration.Metadata.Schema);
         }
 
@@ -204,7 +185,6 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task CanGetCrossReferenceFromChildTableDatabricks()
         {
-            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support KEY primitive type (SHOW CROSS REFERENCES)");
             await base.CanGetCrossReferenceFromChildTable(TestConfiguration.Metadata.Catalog, TestConfiguration.Metadata.Schema);
         }
 
@@ -290,7 +270,6 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task CanGetColumnsWithBaseTypeName()
         {
-            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support SHOW COLUMNS");
             var statement = Connection.CreateStatement();
             statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
             statement.SetOption(ApacheParameters.CatalogName, TestConfiguration.Metadata.Catalog);
@@ -654,7 +633,6 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task CanGetColumnsOnNoColumnTable()
         {
-            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support DDL (CREATE TABLE) or SHOW COLUMNS");
             string? catalogName = TestConfiguration.Metadata.Catalog;
             string? schemaName = TestConfiguration.Metadata.Schema;
             string tableName = Guid.NewGuid().ToString("N");
@@ -1022,7 +1000,6 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("false", false)] // Should only use default catalog
         public async Task EnableMultipleCatalogSupportAffectsMetadataQueries(string enableMultipleCatalogSupport, bool shouldAllowMultipleCatalogs)
         {
-            Skip.If(TestConfiguration.IsReadOnly, "Reyden does not support SHOW COLUMNS or SHOW CATALOGS");
             // Create a connection with the specified EnableMultipleCatalogSupport setting
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             testConfig.EnableMultipleCatalogSupport = enableMultipleCatalogSupport;
