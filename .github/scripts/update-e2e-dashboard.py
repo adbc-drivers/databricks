@@ -64,7 +64,7 @@ def main():
     summary = {k: record[k] for k in (
         "run_id", "run_attempt", "run_number", "timestamp", "commit", "branch",
         "protocol", "read_only", "html_url", "total", "passed", "failed",
-        "skipped", "pass_rate", "by_signature", "by_class",
+        "skipped", "pass_rate", "by_category", "by_signature", "by_class",
     ) if k in record}
     summary["detail"] = detail_name
 

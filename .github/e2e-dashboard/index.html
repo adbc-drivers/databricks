@@ -55,6 +55,12 @@
   .muted { color:var(--muted); } .small { font-size:12px; }
   .group-h { margin:12px 0 4px; font-size:13px; font-weight:700; }
   canvas { max-height:340px; }
+  .catbadge { display:inline-block; font-size:12px; font-weight:600; padding:2px 8px; border-radius:6px; }
+  .cat-gap  { background:#e8eefc; color:#2949b8; }
+  .cat-env  { background:#fdf3dc; color:#9a7400; }
+  .cat-real { background:#fbe7e7; color:#d83b3b; }
+  .legend { list-style:none; margin:10px 0 4px; padding:0; font-size:12px; color:var(--muted); }
+  .legend li { margin:5px 0; line-height:1.5; }
 </style>
 </head>
 <body>
@@ -97,6 +103,21 @@
 const DATA = "data/runs.json";
 const fmtDate = ts => { if (!ts) return "—"; const d = new Date(ts); return isNaN(d) ? ts : d.toISOString().slice(0,16).replace("T"," "); };
 const esc = s => (s||"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// Root-cause categories emitted by parse-trx-to-json.py. A low raw pass-rate is
+// usually dominated by expected Reyden gaps; the "Real issue" bucket is the
+// actual backlog. A test with a CREATE step that Reyden can't run fails AT that
+// step (an "Unsupported …" gap); a value mismatch means setup succeeded and the
+// round-trip returned wrong data — a genuine bug.
+const CATEGORIES = {
+  "Reyden capability gap (expected)": { cls:"cat-gap",
+    blurb:"The backend doesn't support the operation or protocol — unsupported DDL/statement/type (e.g. CREATE TABLE/SCHEMA), no Thrift endpoint on a SEA/REST-only warehouse, or CloudFetch. Expected: gate/skip these; they shouldn't count against the driver." },
+  "Environment / infra": { cls:"cat-env",
+    blurb:"Missing/misconfigured warehouse, read-only rejection, auth, timeout, or transport error. Not a driver bug — fix the environment or retry." },
+  "Real issue / to investigate": { cls:"cat-real",
+    blurb:"A genuine driver bug. A value/cast mismatch on an INSERT→SELECT→DELETE round-trip means setup succeeded but the data came back wrong (e.g. a SEA-path serialization difference); also covers SQL/syntax errors and anything unclassified." },
+};
+const catBadge = name => `<span class="catbadge ${(CATEGORIES[name]||{}).cls||""}">${esc(name)}</span>`;
 
 function bar(p, f, s) {
   const t = p+f+s || 1;
@@ -142,6 +163,18 @@ function renderTrend(runs) {
 function renderAnalysis(latest) {
   const el = document.getElementById("analysis");
   if (!latest || !latest.failed) { el.innerHTML = '<p class="muted">No failures in the latest run. 🎉</p>'; return; }
+  const catEntries = Object.entries(latest.by_category||{});
+  const catRows = catEntries.map(([k,v]) =>
+    `<tr><td>${catBadge(k)}</td><td class="num">${v}</td></tr>`).join("");
+  const legend = catEntries.length
+    ? `<ul class="legend">` + catEntries.map(([k]) =>
+        `<li>${catBadge(k)} ${esc((CATEGORIES[k]||{}).blurb||"")}</li>`).join("") + `</ul>`
+    : "";
+  const catSection = catEntries.length ? `
+    <div class="group-h">By root-cause category</div>
+    <table><thead><tr><th>Category</th><th class="num">Count</th></tr></thead><tbody>${catRows}</tbody></table>
+    ${legend}` : "";
+
   const sigRows = Object.entries(latest.by_signature||{}).map(([k,v]) =>
     `<tr><td class="sig">${esc(k)}</td><td class="num">${v}</td></tr>`).join("");
   const clsRows = Object.entries(latest.by_class||{}).map(([k,v]) =>
@@ -149,6 +182,7 @@ function renderAnalysis(latest) {
   el.innerHTML = `
     <p class="muted small">Latest run <a href="${esc(latest.html_url)}">#${esc(latest.run_number||latest.run_id)}</a>
        (${esc(latest.protocol)}${latest.read_only?", read-only":""}) — ${latest.failed} failures grouped below.</p>
+    ${catSection}
     <div class="group-h">By failure signature (root cause)</div>
     <table><thead><tr><th>Signature</th><th class="num">Count</th></tr></thead><tbody>${sigRows}</tbody></table>
     <div class="group-h">By test class</div>
@@ -167,8 +201,9 @@ async function toggleDetail(tr, run) {
     const r = await fetch("data/" + run.detail);
     const full = await r.json();
     if (!full.failures || !full.failures.length) { det.firstChild.innerHTML = '<span class="muted">No failure detail recorded.</span>'; return; }
-    let html = "", curSig = null;
+    let html = "", curCat = null, curSig = null;
     for (const f of full.failures) {
+      if (f.category && f.category !== curCat) { curCat = f.category; curSig = null; html += `<div class="group-h">${catBadge(f.category)}</div>`; }
       if (f.signature !== curSig) { curSig = f.signature; html += `<div class="group-h sig">${esc(curSig)}</div>`; }
       html += `<ul class="fail-list"><li><div class="tname">${esc(f.name)}</div>` +
               (f.message ? `<div class="msg">${esc(f.message)}</div>` : "") + `</li></ul>`;
