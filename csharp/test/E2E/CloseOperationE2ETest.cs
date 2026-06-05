@@ -128,15 +128,20 @@ namespace AdbcDrivers.Databricks.Tests
         /// For Thrift wire-level assertions, see proxy-based tests in databricks-driver-test:
         /// CLOUDFETCH-013 through CLOUDFETCH-016.
         /// </summary>
-        [Theory]
+        [SkippableTheory]
         [MemberData(nameof(TestCases))]
         public async Task DisposeEmitsCloseOperationEvent(string description, string query, bool useCloudFetch, bool enableDirectResults)
         {
+            // CloseOperation is a Thrift/HiveServer2-only RPC; the SEA (REST) path has no
+            // equivalent. Run on whatever protocol the test config specifies and skip on SEA
+            // (a REST-only warehouse such as Reyden has no Thrift endpoint).
+            Skip.If(TestConfiguration.Protocol == "rest",
+                "CloseOperation is a Thrift-only RPC; not applicable on the SEA (REST) protocol.");
+
             lock (_capturedEventsLock) { _capturedEvents.Clear(); }
 
             var parameters = new Dictionary<string, string>
             {
-                [DatabricksParameters.Protocol] = "thrift",
                 [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
                 [DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString(),
             };
@@ -213,6 +218,12 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task DisposeCloseOperation_EmitsStartedAndCompletedWithDistinctTimestamps_Issue489()
         {
+            // CloseOperation is a Thrift/HiveServer2-only RPC; the SEA (REST) path has no
+            // equivalent. Run on whatever protocol the test config specifies and skip on SEA
+            // (a REST-only warehouse such as Reyden has no Thrift endpoint).
+            Skip.If(TestConfiguration.Protocol == "rest",
+                "CloseOperation is a Thrift-only RPC; not applicable on the SEA (REST) protocol.");
+
             lock (_capturedEventsLock)
             {
                 _capturedEvents.Clear();
@@ -221,7 +232,6 @@ namespace AdbcDrivers.Databricks.Tests
 
             var parameters = new Dictionary<string, string>
             {
-                [DatabricksParameters.Protocol] = "thrift",
                 [DatabricksParameters.UseCloudFetch] = "false",
                 [DatabricksParameters.EnableDirectResults] = "false",
             };
