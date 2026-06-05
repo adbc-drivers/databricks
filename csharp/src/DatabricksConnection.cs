@@ -732,10 +732,18 @@ namespace AdbcDrivers.Databricks
             // server-assigned session id string directly.
             //
             // Wrap the byte[] -> Guid conversion locally: `new Guid(byte[])` throws
-            // ArgumentException on a wrong-length array, and that would propagate to
-            // connection-open. Pre-refactor the same conversion was inside
-            // ConnectionTelemetry.Create's outer try/catch, so a malformed session GUID
-            // degraded to NoOp telemetry — preserve that fail-open contract.
+            // ArgumentException on a wrong-length array, and that must not propagate
+            // to connection-open.
+            //
+            // Behavior on conversion failure: sessionId stays empty, and
+            // ConnectionTelemetry.Create maps that to SessionId = null on a live
+            // TelemetrySessionContext (see ConnectionTelemetry.cs ~L133). Telemetry
+            // remains enabled — only the session-id field is unset. This is a small,
+            // deliberate behavior change from pre-refactor, where the same conversion
+            // sat inside Create's outer try/catch and a bad GUID returned the NoOp
+            // telemetry instance. Both paths keep the *connection* fail-open; the new
+            // path additionally keeps telemetry on so we still emit driver_connection_params,
+            // driver_system_configuration, and error events for the affected session.
             string sessionId = string.Empty;
             try
             {
@@ -746,8 +754,9 @@ namespace AdbcDrivers.Databricks
             }
             catch
             {
-                // Intentionally swallowed: malformed session GUID disables telemetry,
-                // not the connection.
+                // Intentionally swallowed. Leaves sessionId = string.Empty, which
+                // Create maps to SessionId = null on a live ConnectionTelemetry.
+                // See block comment above for the deliberate behavior choice.
             }
 
             _telemetry = Telemetry.ConnectionTelemetry.Create(
