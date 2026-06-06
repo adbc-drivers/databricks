@@ -53,6 +53,8 @@
   .fail-list .tname { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; word-break:break-word; }
   .fail-list .msg { color:var(--muted); font-size:12px; margin-top:2px; white-space:pre-wrap; word-break:break-word; }
   .muted { color:var(--muted); } .small { font-size:12px; }
+  .toggle-tests { color:#2563eb; text-decoration:none; cursor:pointer; }
+  .toggle-tests:hover { text-decoration:underline; }
   .group-h { margin:12px 0 4px; font-size:13px; font-weight:700; }
   canvas { max-height:340px; }
   .catbadge { display:inline-block; font-size:12px; font-weight:600; padding:2px 8px; border-radius:6px; }
@@ -128,6 +130,8 @@ const SIGNATURE_DESCRIPTIONS = {
   "Unsupported CREATE type: SCHEMA": "cannot create schema",
   "Unsupported feature: CREATE OR REPLACE TABLE": "cannot create / replace table",
   "Unsupported type: INTERVAL": "cannot store / read interval",
+  "Reyden rows_affected not returned (known backend bug)": "Reyden returns -1 for INSERT/UPDATE affected rows — known backend bug",
+  "Reyden does not support hive_metastore catalog": "hive_metastore catalog unavailable on Reyden — defaults to main",
   "Reyden unsupported feature (other)": "other unsupported DDL / statement / type",
   "Reyden unsupported feature (DDL / statement / type)": "unsupported DDL / statement / type",
   "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)": "warehouse missing or misconfigured",
@@ -142,6 +146,16 @@ const SIGNATURE_DESCRIPTIONS = {
   "DML/DDL rejected": "write / DDL rejected",
 };
 const sigDesc = s => SIGNATURE_DESCRIPTIONS[s] || "";
+
+// Expand/collapse the truncated test list in the per-error table.
+function toggleTests(a) {
+  const more = a.parentNode.querySelector(".more-tests");
+  if (!more) return false;
+  const collapsed = more.hasAttribute("hidden");
+  more.toggleAttribute("hidden");
+  a.textContent = collapsed ? "show fewer" : `+${a.dataset.n} more`;
+  return false;
+}
 
 // Class.Method, dropping the namespace prefix and the parameter list.
 const shortTest = name => {
@@ -162,8 +176,12 @@ function sigDetailTable(failures) {
     .sort((a, b) => a.cat < b.cat ? -1 : a.cat > b.cat ? 1 : b.items.length - a.items.length)
     .map(({ cat, sig, items }) => {
       const tests = [...new Set(items.map(f => shortTest(f.name)))].sort();
-      const shown = tests.slice(0, 8).map(esc).join("<br>") +
-        (tests.length > 8 ? `<br><span class="muted">+${tests.length - 8} more</span>` : "");
+      const head = tests.slice(0, 8).map(esc).join("<br>");
+      const rest = tests.slice(8);
+      const shown = head + (rest.length
+        ? `<span class="more-tests" hidden><br>${rest.map(esc).join("<br>")}</span>` +
+          `<br><a href="#" class="toggle-tests" data-n="${rest.length}" onclick="return toggleTests(this)">+${rest.length} more</a>`
+        : "");
       return `<tr>
         <td>${catBadge(cat)}</td>
         <td class="sig">${esc(sig)}</td>

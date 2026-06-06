@@ -15,20 +15,22 @@
   "skipped": 179,
   "pass_rate": 62.9,
   "by_category": {
-    "Real issue / to investigate": 80,
-    "Reyden capability gap (expected)": 36
+    "Reyden capability gap (expected)": 107,
+    "Real issue / to investigate": 9
   },
   "by_signature": {
-    "Assertion failed (value mismatch)": 73,
+    "Reyden rows_affected not returned (known backend bug)": 61,
     "Unsupported statement: SHOW COLUMNS": 17,
+    "Reyden does not support hive_metastore catalog": 10,
     "SQL syntax error": 5,
-    "Unsupported CREATE type: SCHEMA": 4,
-    "Reyden unsupported feature (other)": 4,
     "CloudFetch not supported on Reyden (download failed)": 4,
+    "Reyden unsupported feature (other)": 4,
+    "Unsupported CREATE type: SCHEMA": 4,
     "Thrift endpoint unavailable on SEA/Reyden warehouse": 3,
-    "Unsupported type: INTERVAL": 2,
+    "Assertion failed (value mismatch)": 2,
     "Type cast mismatch on round-trip": 2,
-    "Unsupported feature: CREATE OR REPLACE TABLE": 2
+    "Unsupported feature: CREATE OR REPLACE TABLE": 2,
+    "Unsupported type: INTERVAL": 2
   },
   "by_class": {
     "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
@@ -37,15 +39,15 @@
     "AdbcDrivers.Databricks.Tests.StatementTests": 8,
     "AdbcDrivers.Databricks.Tests.DateTimeValueTests": 7,
     "AdbcDrivers.Databricks.Tests.DriverTests": 7,
-    "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 4,
-    "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest": 4,
     "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests": 4,
+    "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest": 4,
     "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest": 4,
-    "AdbcDrivers.Databricks.Tests.IntervalValueTests": 2,
+    "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 4,
     "AdbcDrivers.Databricks.Tests.ClientTests": 2,
+    "AdbcDrivers.Databricks.Tests.IntervalValueTests": 2,
     "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1,
-    "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest": 1,
-    "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1
+    "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1,
+    "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest": 1
   },
   "failures": [
     {
@@ -54,8 +56,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -63,8 +65,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -72,8 +74,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -81,8 +83,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -90,8 +92,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -99,8 +101,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -108,8 +110,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -117,8 +119,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -126,8 +128,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest",
@@ -135,8 +137,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ\n           \u2193 (pos 0)\nExpected: \"hive_metastore\"\nActual:   \"main\"\n           \u2191 (pos 0)",
       "stack": "at AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(String inputCatalog, String inputSchema, String enableMultipleCatalogSupport, String expectedCatalogInStatement, String expectedRuntimeSchema) in /home/runner/work/databricks/databricks/csharp/test/E2E/DatabricksConnectionTest.cs:line 564\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden does not support hive_metastore catalog",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData",
@@ -144,8 +146,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.DateTimeValueTests`2.TestDateData(DateTimeOffset value, String columnType) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/DateTimeValueTests.cs:line 103\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData",
@@ -153,8 +155,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.DateTimeValueTests`2.TestDateData(DateTimeOffset value, String columnType) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/DateTimeValueTests.cs:line 103\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData",
@@ -162,8 +164,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.DateTimeValueTests`2.TestDateData(DateTimeOffset value, String columnType) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/DateTimeValueTests.cs:line 103\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks",
@@ -171,8 +173,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(DateTimeOffset value, String columnType) in /home/runner/work/databricks/databricks/csharp/test/E2E/DateTimeValueTests.cs:line 67\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks",
@@ -180,8 +182,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(DateTimeOffset value, String columnType) in /home/runner/work/databricks/databricks/csharp/test/E2E/DateTimeValueTests.cs:line 67\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks",
@@ -189,8 +191,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(DateTimeOffset value, String columnType) in /home/runner/work/databricks/databricks/csharp/test/E2E/DateTimeValueTests.cs:line 67\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks",
@@ -198,8 +200,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(DateTimeOffset value, String columnType) in /home/runner/work/databricks/databricks/csharp/test/E2E/DateTimeValueTests.cs:line 67\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverResilienceTests.StatementReuse_SequentialQueries_ReturnsCorrectResults",
@@ -216,8 +218,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at AdbcDrivers.Tests.HiveServer2.Common.DriverTests`2.CanExecuteUpdateAsync() in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/DriverTests.cs:line 578\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests.ExecuteQuery_AfterInsert_ReturnsInsertedData",
@@ -234,8 +236,8 @@
       "outcome": "Failed",
       "message": "Expected non-negative affected rows, got -1",
       "stack": "at AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests.ExecuteUpdate_InsertData_ReturnsAffectedRows() in /home/runner/work/databricks/databricks/csharp/test/E2E/StatementExecution/StatementExecutionDriverE2ETests.cs:line 242\n   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -243,8 +245,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -252,8 +254,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -261,8 +263,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -270,8 +272,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -279,8 +281,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -288,8 +290,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -297,8 +299,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -306,8 +308,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete",
@@ -315,8 +317,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 234\n   at AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(Double value) in /home/runner/work/databricks/databricks/csharp/test/E2E/NumericValueTests.cs:line 50\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerMinMax",
@@ -324,8 +326,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestIntegerMinMax(Int32 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 69\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerMinMax",
@@ -333,8 +335,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestIntegerMinMax(Int32 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 69\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity",
@@ -342,8 +344,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestIntegerSanity(Int32 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 56\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity",
@@ -351,8 +353,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestIntegerSanity(Int32 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 56\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity",
@@ -360,8 +362,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestIntegerSanity(Int32 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 56\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange",
@@ -369,8 +371,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestLargeScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 160\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange",
@@ -378,8 +380,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestLargeScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 160\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange",
@@ -387,8 +389,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestLargeScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 160\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange",
@@ -396,8 +398,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestLargeScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 160\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange",
@@ -405,8 +407,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestLargeScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 160\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLongMinMax",
@@ -414,8 +416,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestLongMinMax(Int64 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 82\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLongMinMax",
@@ -423,8 +425,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestLongMinMax(Int64 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 82\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestRoundingNumbers",
@@ -432,8 +434,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestRoundingNumbers(Decimal input, Decimal output) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 220\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestRoundingNumbers",
@@ -441,8 +443,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestRoundingNumbers(Decimal input, Decimal output) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 220\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallIntMinMax",
@@ -450,8 +452,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallIntMinMax(Int16 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 95\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallIntMinMax",
@@ -459,8 +461,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallIntMinMax(Int16 value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 95\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange",
@@ -468,8 +470,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 126\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange",
@@ -477,8 +479,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 126\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange",
@@ -486,8 +488,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 126\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange",
@@ -495,8 +497,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 126\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange",
@@ -504,8 +506,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 126\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange",
@@ -513,8 +515,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 190\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange",
@@ -522,8 +524,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 190\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange",
@@ -531,8 +533,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 190\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange",
@@ -540,8 +542,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestSmallScaleNumberRange(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 190\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestTinyIntMinMax",
@@ -549,8 +551,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestTinyIntMinMax(SByte value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 108\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestTinyIntMinMax",
@@ -558,8 +560,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.NumericValueTests`2.TestTinyIntMinMax(SByte value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/NumericValueTests.cs:line 108\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StatementTests.CanInteractUsingSetOptions",
@@ -567,8 +569,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StatementTests`2.CanInteractUsingSetOptions() in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StatementTests.cs:line 234\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData",
@@ -576,8 +578,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 107\n   at AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/test/E2E/StringValueTests.cs:line 55\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData",
@@ -585,8 +587,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 107\n   at AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/test/E2E/StringValueTests.cs:line 55\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData",
@@ -594,8 +596,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 107\n   at AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/test/E2E/StringValueTests.cs:line 55\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData",
@@ -603,8 +605,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 107\n   at AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/test/E2E/StringValueTests.cs:line 55\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharDataDatabricks",
@@ -612,8 +614,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestCharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 107\n   at AdbcDrivers.Databricks.Tests.StringValueTests.TestCharDataDatabricks(String value) in /home/runner/work/databricks/databricks/csharp/test/E2E/StringValueTests.cs:line 62\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData",
@@ -621,8 +623,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestStringData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 67\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData",
@@ -630,8 +632,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestStringData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 67\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData",
@@ -639,8 +641,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestStringData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 67\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData",
@@ -648,8 +650,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestStringData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 67\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringDataDatabricks",
@@ -657,8 +659,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestStringData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 67\n   at AdbcDrivers.Databricks.Tests.StringValueTests.TestStringDataDatabricks(String value) in /home/runner/work/databricks/databricks/csharp/test/E2E/StringValueTests.cs:line 38\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData",
@@ -666,8 +668,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestVarcharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 87\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData",
@@ -675,8 +677,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestVarcharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 87\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData",
@@ -684,8 +686,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestVarcharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 87\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData",
@@ -693,8 +695,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestVarcharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 87\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharDataDatabricks",
@@ -702,8 +704,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ\nExpected: 1\nActual:   -1",
       "stack": "at Apache.Arrow.Adbc.Tests.TestBase`2.InsertSingleValueAsync(String tableName, String columnName, String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 303\n   at Apache.Arrow.Adbc.Tests.TestBase`2.ValidateInsertSelectDeleteSingleValueAsync(String tableName, String columnName, Object value, String formattedValue) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/arrow-adbc/csharp/test/Apache.Arrow.Adbc.Tests/TestBase.cs:line 218\n   at AdbcDrivers.Tests.HiveServer2.Common.StringValueTests`2.TestVarcharData(String value) in /home/runner/work/databricks/databricks/csharp/hiveserver2/csharp/test/AdbcDrivers.Tests.HiveServer2/Common/StringValueTests.cs:line 87\n   at AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharDataDatabricks(String value) in /home/runner/work/databricks/databricks/csharp/test/E2E/StringValueTests.cs:line 45\n--- End of stack trace from previous location ---",
-      "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest.TestServerSideProperty",

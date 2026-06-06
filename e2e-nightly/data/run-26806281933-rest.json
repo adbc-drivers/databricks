@@ -15,11 +15,16 @@
   "skipped": 191,
   "pass_rate": 61.0,
   "by_signature": {
-    "Assertion failed (value mismatch)": 72,
-    "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)": 26,
-    "AdbcDrivers.Databricks.DatabricksException": 23,
-    "Apache.Arrow.Adbc.AdbcException": 4,
-    "SQL syntax error": 2
+    "Assertion failed (value mismatch)": 71,
+    "Thrift endpoint unavailable on SEA/Reyden warehouse": 26,
+    "Unsupported statement: SHOW COLUMNS": 13,
+    "Unsupported CREATE type: SCHEMA": 4,
+    "CloudFetch not supported on Reyden (download failed)": 4,
+    "Unsupported feature: CREATE OR REPLACE TABLE": 2,
+    "Type cast mismatch on round-trip": 2,
+    "Unsupported type: INTERVAL": 2,
+    "SQL syntax error": 2,
+    "Reyden rows_affected not returned (known backend bug)": 1
   },
   "by_class": {
     "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
@@ -44,7 +49,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSER_UNSUPPORTED_FEATURE] CREATE OR REPLACE TABLE SQLSTATE: 0A000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported feature: CREATE OR REPLACE TABLE",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.ClientTests.VerifyTypesAndValues",
@@ -52,7 +58,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [CAST_INVALID_INPUT] The value Jane Doe of the type string cannot be cast to long because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Type cast mismatch on round-trip",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests.TestArrayData(projection: \"ARRAY(CAST('John Doe' AS STRING), 2, 3)\", value: \"[\\\"John Doe\\\",\\\"2\\\",\\\"3\\\"]\")",
@@ -60,7 +67,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [CAST_INVALID_INPUT] The value John Doe of the type string cannot be cast to long because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Type cast mismatch on round-trip",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 0 })",
@@ -68,7 +76,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 300 })",
@@ -76,7 +85,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = null })",
@@ -84,7 +94,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = null, ExceptionType = typeof(System.TimeoutException), MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 10 })",
@@ -92,7 +103,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getObjectsAll\", AlternateExceptionType = typeof(System.TimeoutException), ExceptionType = typeof(Thrift.Transport.TTransportException), MetadataAction = Action`1 { Method = Void <.ctor>b__0(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 1 })",
@@ -100,7 +112,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 0 })",
@@ -108,7 +121,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 300 })",
@@ -116,7 +130,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = null, MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = null })",
@@ -124,7 +139,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = typeof(System.TimeoutException), MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 10 })",
@@ -132,7 +148,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.MetadataTimeoutTest(metadataWithException: MetadataWithExceptions { ActionName = \"getTableSchema\", AlternateExceptionType = null, ExceptionType = typeof(Thrift.Transport.TTransportException), MetadataAction = Action`1 { Method = Void <.ctor>b__5(AdbcDrivers.Databricks.Tests.DatabricksTestConfiguration), Target = <>c__DisplayClass0_0 { \u00b7\u00b7\u00b7 } }, QueryTimeoutSeconds = 1 })",
@@ -140,7 +157,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanExecuteUpdate",
@@ -148,7 +166,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSER_UNSUPPORTED_FEATURE] CREATE OR REPLACE TABLE SQLSTATE: 0A000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported feature: CREATE OR REPLACE TABLE",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetObjectsTablesWithSpecialCharacter(tableName: \"3rd_identifier\")",
@@ -156,7 +175,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported CREATE type: SCHEMA SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported CREATE type: SCHEMA",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetObjectsTablesWithSpecialCharacter(tableName: \"MyIdentifier\")",
@@ -164,7 +184,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported CREATE type: SCHEMA SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported CREATE type: SCHEMA",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetObjectsTablesWithSpecialCharacter(tableName: \"ONE\")",
@@ -172,7 +193,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported CREATE type: SCHEMA SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported CREATE type: SCHEMA",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetObjectsTablesWithSpecialCharacter(tableName: \"mYiDentifier\")",
@@ -180,7 +202,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported CREATE type: SCHEMA SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported CREATE type: SCHEMA",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanGetTableSchema",
@@ -188,7 +211,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.SEA_GetColumnsExtended_FallbackAndDescTable_SameResults",
@@ -196,7 +220,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.SEA_GetColumnsExtended_Returns20Columns",
@@ -204,7 +229,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [DELTA_MALFORMED_JSON] Delta error: Malformed JSON: Unsupported Delta table type: 'interval year to month' at line 1 column 962 SQLSTATE: XXKDS",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported type: INTERVAL",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.SEA_GetPrimaryKeys_ReturnsPKColumns",
@@ -212,7 +238,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [DELTA_MALFORMED_JSON] Delta error: Malformed JSON: Unsupported Delta table type: 'interval year to month' at line 1 column 962 SQLSTATE: XXKDS",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported type: INTERVAL",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.SEA_GetTableSchema_ReturnsFields",
@@ -220,7 +247,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [USER_ERROR] Unsupported statement: SHOW COLUMNS SQLSTATE: 42000",
       "stack": "",
-      "signature": "AdbcDrivers.Databricks.DatabricksException"
+      "signature": "Unsupported statement: SHOW COLUMNS",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: False, enableDirectResults: False, protocol: \"rest\")",
@@ -228,7 +256,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : Error in download process",
       "stack": "",
-      "signature": "Apache.Arrow.Adbc.AdbcException"
+      "signature": "CloudFetch not supported on Reyden (download failed)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: False, enableDirectResults: True, protocol: \"rest\")",
@@ -236,7 +265,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : Error in download process",
       "stack": "",
-      "signature": "Apache.Arrow.Adbc.AdbcException"
+      "signature": "CloudFetch not supported on Reyden (download failed)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: True, enableDirectResults: False, protocol: \"rest\")",
@@ -244,7 +274,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : Error in download process",
       "stack": "",
-      "signature": "Apache.Arrow.Adbc.AdbcException"
+      "signature": "CloudFetch not supported on Reyden (download failed)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: True, enableDirectResults: True, protocol: \"rest\")",
@@ -252,7 +283,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : Error in download process",
       "stack": "",
-      "signature": "Apache.Arrow.Adbc.AdbcException"
+      "signature": "CloudFetch not supported on Reyden (download failed)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"information_schema\")",
@@ -260,7 +292,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"information_schema\")",
@@ -268,7 +301,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
@@ -276,7 +310,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: null, enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"default\")",
@@ -284,7 +319,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"main\", inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"information_schema\")",
@@ -292,7 +328,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"main\", inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
@@ -300,7 +337,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"information_schema\")",
@@ -308,7 +346,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"information_schema\")",
@@ -316,7 +355,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
@@ -324,7 +364,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: null, enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"default\")",
@@ -332,7 +373,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 1970-01-01T00:00:00.0000000+00:00, columnType: \"DATE\")",
@@ -340,7 +382,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 2026-06-02T07:54:38.5079158+00:00, columnType: \"DATE\")",
@@ -348,7 +391,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 9999-12-31T23:59:59.9999999+00:00, columnType: \"DATE\")",
@@ -356,7 +400,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 1970-01-01T00:00:00.0000000+00:00, columnType: \"TIMESTAMP_NTZ\")",
@@ -364,7 +409,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 2026-06-02T07:54:38.5079158+00:00, columnType: \"TIMESTAMP_NTZ\")",
@@ -372,7 +418,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 2026-06-02T11:54:38.5079167+04:00, columnType: \"TIMESTAMP_NTZ\")",
@@ -380,7 +427,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 9999-12-31T23:59:59.9999999+00:00, columnType: \"TIMESTAMP_NTZ\")",
@@ -388,7 +436,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverResilienceTests.StatementReuse_SequentialQueries_ReturnsCorrectResults",
@@ -396,7 +445,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanExecuteUpdateAsync",
@@ -404,7 +454,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests.ExecuteQuery_AfterInsert_ReturnsInsertedData",
@@ -412,7 +463,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests.ExecuteUpdate_InsertData_ReturnsAffectedRows",
@@ -420,7 +472,8 @@
       "outcome": "Failed",
       "message": "Expected non-negative affected rows, got -1",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Reyden rows_affected not returned (known backend bug)",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: -1.7976931348623157E+308)",
@@ -428,7 +481,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: -Infinity)",
@@ -436,7 +490,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0)",
@@ -444,7 +499,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0.014999999999999999)",
@@ -452,7 +508,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0.20000000000000001)",
@@ -460,7 +517,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 1.7976931348623157E+308)",
@@ -468,7 +526,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 123.40000000000001)",
@@ -476,7 +535,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: Infinity)",
@@ -484,7 +544,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: NaN)",
@@ -492,7 +553,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerMinMax(value: -2147483648)",
@@ -500,7 +562,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerMinMax(value: 2147483647)",
@@ -508,7 +571,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: -1)",
@@ -516,7 +580,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: 0)",
@@ -524,7 +589,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: 1)",
@@ -532,7 +598,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"-2.0030000000000000000000000000000000000\")",
@@ -540,7 +607,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"0E-37\")",
@@ -548,7 +616,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"1E-37\")",
@@ -556,7 +625,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"4.8500000000000000000000000000000000000\")",
@@ -564,7 +634,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"9.5545204502636499875576383003668916798\")",
@@ -572,7 +643,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLongMinMax(value: -9223372036854775808)",
@@ -580,7 +652,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLongMinMax(value: 9223372036854775807)",
@@ -588,7 +661,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestRoundingNumbers(input: -672.613, output: -672.61)",
@@ -596,7 +670,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestRoundingNumbers(input: 2.467, output: 2.47)",
@@ -604,7 +679,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallIntMinMax(value: -32768)",
@@ -612,7 +688,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallIntMinMax(value: 32767)",
@@ -620,7 +697,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"-1\")",
@@ -628,7 +706,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"-99\")",
@@ -636,7 +715,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"0\")",
@@ -644,7 +724,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"1\")",
@@ -652,7 +733,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"99\")",
@@ -660,7 +742,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"-999999999999999999999999999999999999.99\")",
@@ -668,7 +751,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"0.00\")",
@@ -676,7 +760,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"4.85\")",
@@ -684,7 +769,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"999999999999999999999999999999999999.99\")",
@@ -692,7 +778,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestTinyIntMinMax(value: -128)",
@@ -700,7 +787,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestTinyIntMinMax(value: 127)",
@@ -708,7 +796,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \" Leading and trailing spaces \")",
@@ -716,7 +805,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \"\")",
@@ -724,7 +814,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \"\u4f60\u597d\")",
@@ -732,7 +823,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: null)",
@@ -740,7 +832,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
@@ -748,7 +841,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \" Leading and trailing spaces \")",
@@ -756,7 +850,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \"\")",
@@ -764,7 +859,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \"\u4f60\u597d\")",
@@ -772,7 +868,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: null)",
@@ -780,7 +877,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
@@ -788,7 +886,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \" Leading and trailing spaces \")",
@@ -796,7 +895,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \"\")",
@@ -804,7 +904,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \"\u4f60\u597d\")",
@@ -812,7 +913,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: null)",
@@ -820,7 +922,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
@@ -828,7 +931,8 @@
       "outcome": "Failed",
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
-      "signature": "Assertion failed (value mismatch)"
+      "signature": "Assertion failed (value mismatch)",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest.TestServerSideProperty(applyWithQueries: False)",
@@ -836,7 +940,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSE_SYNTAX_ERROR] Syntax error at or near end of input. Expected identifier but got end of input. SQLSTATE: 42601",
       "stack": "",
-      "signature": "SQL syntax error"
+      "signature": "SQL syntax error",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest.TestServerSideProperty(applyWithQueries: True)",
@@ -844,7 +949,8 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSE_SYNTAX_ERROR] Syntax error at or near end of input. Expected identifier but got end of input. SQLSTATE: 42601",
       "stack": "",
-      "signature": "SQL syntax error"
+      "signature": "SQL syntax error",
+      "category": "Real issue / to investigate"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest.DisposeCloseOperation_EmitsStartedAndCompletedWithDistinctTimestamps_Issue489",
@@ -852,7 +958,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest.DisposeEmitsCloseOperationEvent(description: \"CloudFetch\", query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, useCloudFetch: True, enableDirectResults: True)",
@@ -860,7 +967,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest.DisposeEmitsCloseOperationEvent(description: \"Inline+DirectResults\", query: \"SELECT 1 AS val\", useCloudFetch: False, enableDirectResults: True)",
@@ -868,7 +976,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest.DisposeEmitsCloseOperationEvent(description: \"Inline+NoDirectResults\", query: \"SELECT * FROM range(1, 100)\", useCloudFetch: False, enableDirectResults: False)",
@@ -876,7 +985,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: False, enableDirectResults: False, protocol: \"thrift\")",
@@ -884,7 +994,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: False, enableDirectResults: True, protocol: \"thrift\")",
@@ -892,7 +1003,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: True, enableDirectResults: False, protocol: \"thrift\")",
@@ -900,7 +1012,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM main.tpcds_sf100_delta.store_sales L\"\u00b7\u00b7\u00b7, rowCount: 1000000, useCloudFetch: True, enableDirectResults: True, protocol: \"thrift\")",
@@ -908,7 +1021,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000) LIMIT 0\", rowCount: 0, useCloudFetch: False, enableDirectResults: True, protocol: \"thrift\")",
@@ -916,7 +1030,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000) LIMIT 0\", rowCount: 0, useCloudFetch: True, enableDirectResults: True, protocol: \"thrift\")",
@@ -924,7 +1039,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000)\", rowCount: 1000, useCloudFetch: False, enableDirectResults: False, protocol: \"thrift\")",
@@ -932,7 +1048,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000)\", rowCount: 1000, useCloudFetch: False, enableDirectResults: True, protocol: \"thrift\")",
@@ -940,7 +1057,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000)\", rowCount: 1000, useCloudFetch: True, enableDirectResults: False, protocol: \"thrift\")",
@@ -948,7 +1066,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest.TestCloudFetch(query: \"SELECT * FROM range(1000)\", rowCount: 1000, useCloudFetch: True, enableDirectResults: True, protocol: \"thrift\")",
@@ -956,7 +1075,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetCatalogs_ThriftAndSEA_SameRowCount",
@@ -964,7 +1084,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetColumnsExtended_ThriftAndSEA_32ColumnSchema",
@@ -972,7 +1093,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetColumnsExtended_ThriftAndSEA_SameColumnNames",
@@ -980,7 +1102,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetTableSchema_ThriftAndSEA_SameFieldNames",
@@ -988,7 +1111,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.GetTables_ThriftAndSEA_SameCount",
@@ -996,7 +1120,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetCatalogs_ContainsMain",
@@ -1004,7 +1129,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetColumnsExtended_Returns20Columns",
@@ -1012,7 +1138,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetPrimaryKeys_ReturnsPKColumns",
@@ -1020,7 +1147,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetTableSchema_Returns20Fields",
@@ -1028,7 +1156,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests.Thrift_GetTables_ReturnsAllColumnTypes",
@@ -1036,7 +1165,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.IntervalValueTests.INTERVAL009_YearMonthInterval_ThriftAndSEAReturnSameData",
@@ -1044,7 +1174,8 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.IntervalValueTests.INTERVAL010_DayToSecondInterval_ThriftAndSEAReturnSameData",
@@ -1052,7 +1183,12 @@
       "outcome": "Failed",
       "message": "Apache.Arrow.Adbc.AdbcException : An unexpected error occurred while opening the session. 'Couldn't connect to server: System.Net.Http.HttpRequestException: Thrift server error: ENDPOINT_NOT_FOUND: SQL warehouse (6436897454825492, 000000000000000d) does not exist at all in the database (HTTP 404 Not Found)",
       "stack": "",
-      "signature": "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)"
+      "signature": "Thrift endpoint unavailable on SEA/Reyden warehouse",
+      "category": "Reyden capability gap (expected)"
     }
-  ]
+  ],
+  "by_category": {
+    "Real issue / to investigate": 75,
+    "Reyden capability gap (expected)": 52
+  }
 }

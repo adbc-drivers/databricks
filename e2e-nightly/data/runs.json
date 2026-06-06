@@ -14,12 +14,21 @@
     "failed": 127,
     "skipped": 191,
     "pass_rate": 61.0,
+    "by_category": {
+      "Real issue / to investigate": 75,
+      "Reyden capability gap (expected)": 52
+    },
     "by_signature": {
-      "Assertion failed (value mismatch)": 72,
-      "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)": 26,
-      "AdbcDrivers.Databricks.DatabricksException": 23,
-      "Apache.Arrow.Adbc.AdbcException": 4,
-      "SQL syntax error": 2
+      "Assertion failed (value mismatch)": 71,
+      "Thrift endpoint unavailable on SEA/Reyden warehouse": 26,
+      "Unsupported statement: SHOW COLUMNS": 13,
+      "Unsupported CREATE type: SCHEMA": 4,
+      "CloudFetch not supported on Reyden (download failed)": 4,
+      "Unsupported feature: CREATE OR REPLACE TABLE": 2,
+      "Type cast mismatch on round-trip": 2,
+      "Unsupported type: INTERVAL": 2,
+      "SQL syntax error": 2,
+      "Reyden rows_affected not returned (known backend bug)": 1
     },
     "by_class": {
       "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
@@ -55,32 +64,37 @@
     "skipped": 191,
     "pass_rate": 61.0,
     "by_category": {
-      "Real issue / to investigate": 76,
-      "Reyden capability gap (expected)": 51
+      "Reyden capability gap (expected)": 121,
+      "Real issue / to investigate": 6
     },
     "by_signature": {
-      "Assertion failed (value mismatch)": 72,
+      "Reyden rows_affected not returned (known backend bug)": 60,
       "Thrift endpoint unavailable on SEA/Reyden warehouse": 26,
-      "Reyden unsupported feature (DDL / statement / type)": 21,
+      "Unsupported statement: SHOW COLUMNS": 13,
+      "Reyden does not support hive_metastore catalog": 10,
       "CloudFetch not supported on Reyden (download failed)": 4,
+      "Unsupported CREATE type: SCHEMA": 4,
+      "Assertion failed (value mismatch)": 2,
+      "SQL syntax error": 2,
       "Type cast mismatch on round-trip": 2,
-      "SQL syntax error": 2
+      "Unsupported feature: CREATE OR REPLACE TABLE": 2,
+      "Unsupported type: INTERVAL": 2
     },
     "by_class": {
       "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
       "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest": 20,
       "AdbcDrivers.Databricks.Tests.StringValueTests": 15,
-      "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 14,
       "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest": 14,
-      "AdbcDrivers.Databricks.Tests.DriverTests": 7,
+      "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 14,
       "AdbcDrivers.Databricks.Tests.DateTimeValueTests": 7,
+      "AdbcDrivers.Databricks.Tests.DriverTests": 7,
       "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest": 4,
-      "AdbcDrivers.Databricks.Tests.ClientTests": 2,
       "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests": 2,
       "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest": 2,
+      "AdbcDrivers.Databricks.Tests.ClientTests": 2,
       "AdbcDrivers.Databricks.Tests.IntervalValueTests": 2,
-      "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1,
-      "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1
+      "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1,
+      "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1
     },
     "detail": "run-27001243914-rest.json"
   },
@@ -100,20 +114,22 @@
     "skipped": 179,
     "pass_rate": 62.9,
     "by_category": {
-      "Real issue / to investigate": 80,
-      "Reyden capability gap (expected)": 36
+      "Reyden capability gap (expected)": 107,
+      "Real issue / to investigate": 9
     },
     "by_signature": {
-      "Assertion failed (value mismatch)": 73,
+      "Reyden rows_affected not returned (known backend bug)": 61,
       "Unsupported statement: SHOW COLUMNS": 17,
+      "Reyden does not support hive_metastore catalog": 10,
       "SQL syntax error": 5,
-      "Unsupported CREATE type: SCHEMA": 4,
-      "Reyden unsupported feature (other)": 4,
       "CloudFetch not supported on Reyden (download failed)": 4,
+      "Reyden unsupported feature (other)": 4,
+      "Unsupported CREATE type: SCHEMA": 4,
       "Thrift endpoint unavailable on SEA/Reyden warehouse": 3,
-      "Unsupported type: INTERVAL": 2,
+      "Assertion failed (value mismatch)": 2,
       "Type cast mismatch on round-trip": 2,
-      "Unsupported feature: CREATE OR REPLACE TABLE": 2
+      "Unsupported feature: CREATE OR REPLACE TABLE": 2,
+      "Unsupported type: INTERVAL": 2
     },
     "by_class": {
       "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
@@ -122,15 +138,15 @@
       "AdbcDrivers.Databricks.Tests.StatementTests": 8,
       "AdbcDrivers.Databricks.Tests.DateTimeValueTests": 7,
       "AdbcDrivers.Databricks.Tests.DriverTests": 7,
-      "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 4,
-      "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest": 4,
       "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests": 4,
+      "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest": 4,
       "AdbcDrivers.Databricks.Tests.CloudFetchE2ETest": 4,
-      "AdbcDrivers.Databricks.Tests.IntervalValueTests": 2,
+      "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.SeaMetadataE2ETests": 4,
       "AdbcDrivers.Databricks.Tests.ClientTests": 2,
+      "AdbcDrivers.Databricks.Tests.IntervalValueTests": 2,
       "AdbcDrivers.Databricks.Tests.DriverResilienceTests": 1,
-      "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest": 1,
-      "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1
+      "AdbcDrivers.Databricks.Tests.ComplexTypesValueTests": 1,
+      "AdbcDrivers.Databricks.Tests.CloseOperationE2ETest": 1
     },
     "detail": "run-27043719780-rest.json"
   }
