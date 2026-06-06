@@ -92,21 +92,27 @@ def signature_for(message):
         (r"PERMISSION_DENIED|not authorized|Forbidden|HTTP 403", "Permission denied (403)"),
         (r"timeout|timed out|TimeoutException", "Timeout"),
         (r"Couldn't connect|connection refused|HttpRequestException", "Connection / transport error"),
+        # --- Confirmed Reyden SEA backend bugs (filed under Epic SC-222102) -
+        # Reproduced against Reyden vs DBSQL / raw SEA API and filed as [M4]
+        # tickets. Matched ahead of the generic syntax/assertion buckets so each
+        # gets its own row and lands in CAT_REAL (the real, tracked-bug bucket)
+        # rather than the catch-alls. Everything NOT matched here is a known
+        # Reyden limitation (CAT_REYDEN_GAP) — see the category map below.
+        (r"at or near 'CATALOGS'", "Reyden SEA rejects SHOW SCHEMAS/TABLES IN ALL CATALOGS"),
+        (r"Expected identifier but got end of input", "Reyden SEA rejects bare SET statement"),
+        (r"Actual:\s*\"?col_0\"?", "Reyden SEA omits column aliases (returns col_0)"),
         # --- Genuine SQL errors with specific codes ------------------------
         # Checked before the broad assertion bucket below, whose "expected"
         # token also appears in "Expected identifier ..." syntax-error text.
         (r"PARSE_SYNTAX_ERROR|SYNTAX_ERROR", "SQL syntax error"),
-        # --- Genuine driver bugs --------------------------------------------
-        # A value/cast mismatch means the test got PAST any setup (a rejected
-        # CREATE TABLE would have failed earlier with an "Unsupported …" message
-        # in the Reyden-gap bucket above). So a wrong value on an
-        # INSERT→SELECT→DELETE round-trip is a real driver bug, e.g. a SEA-path
-        # result-serialization difference — not expected Reyden behaviour.
-        # EXCEPTION: the two best-known Reyden value mismatches (rows_affected=-1
-        # and the missing hive_metastore catalog) are matched above as expected
-        # gaps; only the remaining mismatches reach this bucket.
+        # --- Confirmed Reyden bug: ANSI strict-cast (filed SC-233355) -------
+        # Heterogeneous ARRAY/MAP literals fail to coerce on Reyden under ANSI.
         (r"CAST_INVALID_INPUT", "Type cast mismatch on round-trip"),
         (r"TABLE_OR_VIEW_NOT_FOUND|cannot be found|does not exist", "Object not found"),
+        # Generic value mismatch — after the specific tracked-bug signatures
+        # above are extracted, the remaining value mismatches on Reyden are
+        # known limitations (e.g. write-not-persisted), so this is mapped to
+        # CAT_REYDEN_GAP, not the real-bug bucket.
         (r"Assert\.|Equal\(|Xunit|expected", "Assertion failed (value mismatch)"),
         # --- Generic DML/DDL rejection (catch-all, lowest priority) --------
         (r"INSERT|UPDATE|DELETE|MERGE|CREATE TABLE|DROP TABLE|ALTER TABLE", "DML/DDL rejected"),
@@ -128,10 +134,12 @@ def signature_for(message):
 # Classification hinges on WHICH step failed, which the message already encodes:
 #   - A test with a CREATE TABLE/SCHEMA step that Reyden can't run fails AT that
 #     step with an "Unsupported …" message -> CAT_REYDEN_GAP (expected).
-#   - A value/cast mismatch means setup succeeded and the INSERT→SELECT→DELETE
-#     round-trip returned wrong data -> CAT_REAL (a genuine driver bug), EXCEPT
-#     the two known Reyden backend mismatches (rows_affected=-1, missing
-#     hive_metastore) which signature_for buckets as CAT_REYDEN_GAP.
+#   - CAT_REAL is now the set of CONFIRMED + tracked Reyden SEA bugs: each was
+#     reproduced (Reyden vs DBSQL / raw SEA API) and filed under Epic SC-222102.
+#     Only the four specific signatures above (IN ALL CATALOGS, bare SET, col_0
+#     aliases, ANSI cast) land here. Every other failure on this Reyden-only
+#     nightly is a known limitation -> CAT_REYDEN_GAP, including the generic
+#     value-mismatch / DML-rejected buckets.
 CAT_REYDEN_GAP = "Reyden capability gap (expected)"
 CAT_ENVIRONMENT = "Environment / infra"
 CAT_REAL = "Real issue / to investigate"
@@ -157,9 +165,14 @@ _SIGNATURE_CATEGORY = {
     "Permission denied (403)": CAT_ENVIRONMENT,
     "Timeout": CAT_ENVIRONMENT,
     "Connection / transport error": CAT_ENVIRONMENT,
-    # "Assertion failed (value mismatch)", "Type cast mismatch on round-trip",
-    # "Object not found", "DML/DDL rejected", "SQL syntax error", "Other",
-    # "Unknown / no message" and any "<ExceptionType>" fall through to CAT_REAL.
+    # Generic value-mismatch and DML/DDL-rejected on this Reyden-only nightly are
+    # known limitations (the specific real bugs have their own signatures above).
+    "Assertion failed (value mismatch)": CAT_REYDEN_GAP,
+    "DML/DDL rejected": CAT_REYDEN_GAP,
+    # The four tracked Reyden SEA bugs ("Reyden SEA rejects …", "Reyden SEA omits
+    # column aliases (returns col_0)", "Type cast mismatch on round-trip") and any
+    # unclassified "<ExceptionType>" / "SQL syntax error" / "Object not found" /
+    # "Other" fall through to CAT_REAL so genuine new issues still surface.
 }
 
 
