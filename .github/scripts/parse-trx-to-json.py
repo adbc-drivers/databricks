@@ -67,6 +67,21 @@ def signature_for(message):
         (r"Unsupported CREATE type:\s*SCHEMA", "Unsupported CREATE type: SCHEMA"),
         (r"CREATE OR REPLACE TABLE", "Unsupported feature: CREATE OR REPLACE TABLE"),
         (r"interval year to month|interval day to second", "Unsupported type: INTERVAL"),
+        # Known Reyden backend bug: the Statement Execution API does not return a
+        # correct num_affected_rows for INSERT/UPDATE, so the driver surfaces -1.
+        # Surfaces as an xUnit "Expected: 1 / Actual: -1" assertion or an explicit
+        # "non-negative affected rows, got -1" — the root cause is the Reyden
+        # backend, not the driver, so it belongs in the expected-gap bucket. Must
+        # precede the generic assertion bucket below. Matched on "Actual: -1"
+        # (anchored with \b so -10/-100 don't match), which only the affected-rows
+        # count produces (ADBC's "unknown/not applicable" sentinel).
+        (r"non-negative affected rows|Actual:\s*-1\b",
+         "Reyden rows_affected not returned (known backend bug)"),
+        # Reyden does not expose the hive_metastore catalog, so a test asserting
+        # the default catalog is "hive_metastore" sees "main" instead. Placed
+        # after the SHOW COLUMNS bucket (whose messages can also mention
+        # hive_metastore) so only the catalog-default assertion lands here.
+        (r"hive_metastore", "Reyden does not support hive_metastore catalog"),
         # Any other unsupported DDL/statement/type Reyden rejects.
         (r"PARSER_UNSUPPORTED_FEATURE|UNSUPPORTED_FEATURE|DELTA_UNSUPPORTED|Unsupported statement|"
          r"Unsupported CREATE type|Unsupported Delta table type|Unsupported .*type",
@@ -87,6 +102,9 @@ def signature_for(message):
         # in the Reyden-gap bucket above). So a wrong value on an
         # INSERT→SELECT→DELETE round-trip is a real driver bug, e.g. a SEA-path
         # result-serialization difference — not expected Reyden behaviour.
+        # EXCEPTION: the two best-known Reyden value mismatches (rows_affected=-1
+        # and the missing hive_metastore catalog) are matched above as expected
+        # gaps; only the remaining mismatches reach this bucket.
         (r"CAST_INVALID_INPUT", "Type cast mismatch on round-trip"),
         (r"TABLE_OR_VIEW_NOT_FOUND|cannot be found|does not exist", "Object not found"),
         (r"Assert\.|Equal\(|Xunit|expected", "Assertion failed (value mismatch)"),
@@ -111,7 +129,9 @@ def signature_for(message):
 #   - A test with a CREATE TABLE/SCHEMA step that Reyden can't run fails AT that
 #     step with an "Unsupported …" message -> CAT_REYDEN_GAP (expected).
 #   - A value/cast mismatch means setup succeeded and the INSERT→SELECT→DELETE
-#     round-trip returned wrong data -> CAT_REAL (a genuine driver bug).
+#     round-trip returned wrong data -> CAT_REAL (a genuine driver bug), EXCEPT
+#     the two known Reyden backend mismatches (rows_affected=-1, missing
+#     hive_metastore) which signature_for buckets as CAT_REYDEN_GAP.
 CAT_REYDEN_GAP = "Reyden capability gap (expected)"
 CAT_ENVIRONMENT = "Environment / infra"
 CAT_REAL = "Real issue / to investigate"
@@ -127,6 +147,8 @@ _SIGNATURE_CATEGORY = {
     "Unsupported CREATE type: SCHEMA": CAT_REYDEN_GAP,
     "Unsupported feature: CREATE OR REPLACE TABLE": CAT_REYDEN_GAP,
     "Unsupported type: INTERVAL": CAT_REYDEN_GAP,
+    "Reyden rows_affected not returned (known backend bug)": CAT_REYDEN_GAP,
+    "Reyden does not support hive_metastore catalog": CAT_REYDEN_GAP,
     "Reyden unsupported feature (other)": CAT_REYDEN_GAP,
     # Back-compat: older runs used one combined signature.
     "Reyden unsupported feature (DDL / statement / type)": CAT_REYDEN_GAP,
