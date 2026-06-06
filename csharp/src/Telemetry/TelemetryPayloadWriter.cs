@@ -37,7 +37,9 @@ namespace AdbcDrivers.Databricks.Telemetry
     ///
     /// <para>
     /// Output matches the reflection serializer configured by <see cref="TelemetryJsonOptions"/>:
-    /// the default encoder, explicit snake_case property names, and null properties omitted.
+    /// the default encoder, explicit snake_case property names, and null properties omitted. The
+    /// snake_case names come from [JsonPropertyName] attrivutes on the proto-generated models,
+    /// not from a global naming policy.
     /// </para>
     /// </summary>
     internal static class TelemetryPayloadWriter
