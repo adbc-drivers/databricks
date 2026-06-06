@@ -15,8 +15,8 @@
     "skipped": 191,
     "pass_rate": 61.0,
     "by_category": {
-      "Real issue / to investigate": 75,
-      "Reyden capability gap (expected)": 52
+      "Reyden capability gap (expected)": 123,
+      "Real issue / to investigate": 4
     },
     "by_signature": {
       "Assertion failed (value mismatch)": 71,
@@ -27,7 +27,7 @@
       "Unsupported feature: CREATE OR REPLACE TABLE": 2,
       "Type cast mismatch on round-trip": 2,
       "Unsupported type: INTERVAL": 2,
-      "SQL syntax error": 2,
+      "Reyden SEA rejects bare SET statement": 2,
       "Reyden rows_affected not returned (known backend bug)": 1
     },
     "by_class": {
@@ -64,8 +64,8 @@
     "skipped": 191,
     "pass_rate": 61.0,
     "by_category": {
-      "Reyden capability gap (expected)": 121,
-      "Real issue / to investigate": 6
+      "Reyden capability gap (expected)": 122,
+      "Real issue / to investigate": 5
     },
     "by_signature": {
       "Reyden rows_affected not returned (known backend bug)": 60,
@@ -74,11 +74,12 @@
       "Reyden does not support hive_metastore catalog": 10,
       "CloudFetch not supported on Reyden (download failed)": 4,
       "Unsupported CREATE type: SCHEMA": 4,
-      "Assertion failed (value mismatch)": 2,
-      "SQL syntax error": 2,
+      "Reyden SEA rejects bare SET statement": 2,
       "Type cast mismatch on round-trip": 2,
       "Unsupported feature: CREATE OR REPLACE TABLE": 2,
-      "Unsupported type: INTERVAL": 2
+      "Unsupported type: INTERVAL": 2,
+      "Reyden SEA omits column aliases (returns col_0)": 1,
+      "Assertion failed (value mismatch)": 1
     },
     "by_class": {
       "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,
@@ -114,22 +115,24 @@
     "skipped": 179,
     "pass_rate": 62.9,
     "by_category": {
-      "Reyden capability gap (expected)": 107,
-      "Real issue / to investigate": 9
+      "Reyden capability gap (expected)": 108,
+      "Real issue / to investigate": 8
     },
     "by_signature": {
       "Reyden rows_affected not returned (known backend bug)": 61,
       "Unsupported statement: SHOW COLUMNS": 17,
       "Reyden does not support hive_metastore catalog": 10,
-      "SQL syntax error": 5,
+      "Reyden SEA rejects bare SET statement": 4,
       "CloudFetch not supported on Reyden (download failed)": 4,
       "Reyden unsupported feature (other)": 4,
       "Unsupported CREATE type: SCHEMA": 4,
       "Thrift endpoint unavailable on SEA/Reyden warehouse": 3,
-      "Assertion failed (value mismatch)": 2,
       "Type cast mismatch on round-trip": 2,
       "Unsupported feature: CREATE OR REPLACE TABLE": 2,
-      "Unsupported type: INTERVAL": 2
+      "Unsupported type: INTERVAL": 2,
+      "Reyden SEA omits column aliases (returns col_0)": 1,
+      "Assertion failed (value mismatch)": 1,
+      "Reyden SEA rejects SHOW SCHEMAS/TABLES IN ALL CATALOGS": 1
     },
     "by_class": {
       "AdbcDrivers.Databricks.Tests.NumericValueTests": 36,

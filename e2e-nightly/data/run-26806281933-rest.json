@@ -23,7 +23,7 @@
     "Unsupported feature: CREATE OR REPLACE TABLE": 2,
     "Type cast mismatch on round-trip": 2,
     "Unsupported type: INTERVAL": 2,
-    "SQL syntax error": 2,
+    "Reyden SEA rejects bare SET statement": 2,
     "Reyden rows_affected not returned (known backend bug)": 1
   },
   "by_class": {
@@ -293,7 +293,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"information_schema\")",
@@ -302,7 +302,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
@@ -311,7 +311,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"SPARK\", inputSchema: null, enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"default\")",
@@ -320,7 +320,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"main\", inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"information_schema\")",
@@ -329,7 +329,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: \"main\", inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
@@ -338,7 +338,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"information_schema\")",
@@ -347,7 +347,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: \"information_schema\", enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"information_schema\")",
@@ -356,7 +356,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: null, enableMultipleCatalogSupport: \"false\", expectedCatalogInStatement: null, expectedRuntimeSchema: \"default\")",
@@ -365,7 +365,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DatabricksConnectionTest.SetDefaultCatalogAndSchemaOptionsTest(inputCatalog: null, inputSchema: null, enableMultipleCatalogSupport: \"true\", expectedCatalogInStatement: \"hive_metastore\", expectedRuntimeSchema: \"default\")",
@@ -374,7 +374,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 1970-01-01T00:00:00.0000000+00:00, columnType: \"DATE\")",
@@ -383,7 +383,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 2026-06-02T07:54:38.5079158+00:00, columnType: \"DATE\")",
@@ -392,7 +392,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestDateData(value: 9999-12-31T23:59:59.9999999+00:00, columnType: \"DATE\")",
@@ -401,7 +401,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 1970-01-01T00:00:00.0000000+00:00, columnType: \"TIMESTAMP_NTZ\")",
@@ -410,7 +410,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 2026-06-02T07:54:38.5079158+00:00, columnType: \"TIMESTAMP_NTZ\")",
@@ -419,7 +419,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 2026-06-02T11:54:38.5079167+04:00, columnType: \"TIMESTAMP_NTZ\")",
@@ -428,7 +428,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DateTimeValueTests.TestTimestampNoTimezoneDataDatabricks(value: 9999-12-31T23:59:59.9999999+00:00, columnType: \"TIMESTAMP_NTZ\")",
@@ -437,7 +437,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverResilienceTests.StatementReuse_SequentialQueries_ReturnsCorrectResults",
@@ -446,7 +446,7 @@
       "message": "Assert.Equal() Failure: Strings differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.DriverTests.CanExecuteUpdateAsync",
@@ -455,7 +455,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests.ExecuteQuery_AfterInsert_ReturnsInsertedData",
@@ -464,7 +464,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.E2E.StatementExecution.StatementExecutionDriverE2ETests.ExecuteUpdate_InsertData_ReturnsAffectedRows",
@@ -482,7 +482,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: -Infinity)",
@@ -491,7 +491,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0)",
@@ -500,7 +500,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0.014999999999999999)",
@@ -509,7 +509,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 0.20000000000000001)",
@@ -518,7 +518,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 1.7976931348623157E+308)",
@@ -527,7 +527,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: 123.40000000000001)",
@@ -536,7 +536,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: Infinity)",
@@ -545,7 +545,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestDoubleValuesInsertSelectDelete(value: NaN)",
@@ -554,7 +554,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerMinMax(value: -2147483648)",
@@ -563,7 +563,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerMinMax(value: 2147483647)",
@@ -572,7 +572,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: -1)",
@@ -581,7 +581,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: 0)",
@@ -590,7 +590,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestIntegerSanity(value: 1)",
@@ -599,7 +599,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"-2.0030000000000000000000000000000000000\")",
@@ -608,7 +608,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"0E-37\")",
@@ -617,7 +617,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"1E-37\")",
@@ -626,7 +626,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"4.8500000000000000000000000000000000000\")",
@@ -635,7 +635,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLargeScaleNumberRange(value: \"9.5545204502636499875576383003668916798\")",
@@ -644,7 +644,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLongMinMax(value: -9223372036854775808)",
@@ -653,7 +653,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestLongMinMax(value: 9223372036854775807)",
@@ -662,7 +662,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestRoundingNumbers(input: -672.613, output: -672.61)",
@@ -671,7 +671,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestRoundingNumbers(input: 2.467, output: 2.47)",
@@ -680,7 +680,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallIntMinMax(value: -32768)",
@@ -689,7 +689,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallIntMinMax(value: 32767)",
@@ -698,7 +698,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"-1\")",
@@ -707,7 +707,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"-99\")",
@@ -716,7 +716,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"0\")",
@@ -725,7 +725,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"1\")",
@@ -734,7 +734,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallNumberRange(value: \"99\")",
@@ -743,7 +743,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"-999999999999999999999999999999999999.99\")",
@@ -752,7 +752,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"0.00\")",
@@ -761,7 +761,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"4.85\")",
@@ -770,7 +770,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestSmallScaleNumberRange(value: \"999999999999999999999999999999999999.99\")",
@@ -779,7 +779,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestTinyIntMinMax(value: -128)",
@@ -788,7 +788,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.NumericValueTests.TestTinyIntMinMax(value: 127)",
@@ -797,7 +797,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \" Leading and trailing spaces \")",
@@ -806,7 +806,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \"\")",
@@ -815,7 +815,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: \"\u4f60\u597d\")",
@@ -824,7 +824,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharData(value: null)",
@@ -833,7 +833,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestCharDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
@@ -842,7 +842,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \" Leading and trailing spaces \")",
@@ -851,7 +851,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \"\")",
@@ -860,7 +860,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: \"\u4f60\u597d\")",
@@ -869,7 +869,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringData(value: null)",
@@ -878,7 +878,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestStringDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
@@ -887,7 +887,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \" Leading and trailing spaces \")",
@@ -896,7 +896,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \"\")",
@@ -905,7 +905,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: \"\u4f60\u597d\")",
@@ -914,7 +914,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharData(value: null)",
@@ -923,7 +923,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.StringValueTests.TestVarcharDataDatabricks(value: \"String contains formatting characters tab\\t, newli\"\u00b7\u00b7\u00b7)",
@@ -932,7 +932,7 @@
       "message": "Assert.Equal() Failure: Values differ",
       "stack": "",
       "signature": "Assertion failed (value mismatch)",
-      "category": "Real issue / to investigate"
+      "category": "Reyden capability gap (expected)"
     },
     {
       "name": "AdbcDrivers.Databricks.Tests.ServerSidePropertyE2ETest.TestServerSideProperty(applyWithQueries: False)",
@@ -940,7 +940,7 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSE_SYNTAX_ERROR] Syntax error at or near end of input. Expected identifier but got end of input. SQLSTATE: 42601",
       "stack": "",
-      "signature": "SQL syntax error",
+      "signature": "Reyden SEA rejects bare SET statement",
       "category": "Real issue / to investigate"
     },
     {
@@ -949,7 +949,7 @@
       "outcome": "Failed",
       "message": "AdbcDrivers.Databricks.DatabricksException : Statement execution failed. State: FAILED. Error Code: INTERNAL_ERROR, Message: [PARSE_SYNTAX_ERROR] Syntax error at or near end of input. Expected identifier but got end of input. SQLSTATE: 42601",
       "stack": "",
-      "signature": "SQL syntax error",
+      "signature": "Reyden SEA rejects bare SET statement",
       "category": "Real issue / to investigate"
     },
     {
@@ -1188,7 +1188,7 @@
     }
   ],
   "by_category": {
-    "Real issue / to investigate": 75,
-    "Reyden capability gap (expected)": 52
+    "Reyden capability gap (expected)": 123,
+    "Real issue / to investigate": 4
   }
 }

@@ -107,17 +107,16 @@ const fmtDate = ts => { if (!ts) return "—"; const d = new Date(ts); return is
 const esc = s => (s||"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 // Root-cause categories emitted by parse-trx-to-json.py. A low raw pass-rate is
-// usually dominated by expected Reyden gaps; the "Real issue" bucket is the
-// actual backlog. A test with a CREATE step that Reyden can't run fails AT that
-// step (an "Unsupported …" gap); a value mismatch means setup succeeded and the
-// round-trip returned wrong data — a genuine bug.
+// dominated by expected Reyden capability gaps; the "Real issue" bucket is the
+// small set of confirmed, tracked Reyden SEA bugs. Everything else on this
+// Reyden-only nightly is a known limitation.
 const CATEGORIES = {
   "Reyden capability gap (expected)": { cls:"cat-gap",
-    blurb:"The backend doesn't support the operation or protocol — unsupported DDL/statement/type (e.g. CREATE TABLE/SCHEMA), no Thrift endpoint on a SEA/REST-only warehouse, or CloudFetch. Expected: gate/skip these; they shouldn't count against the driver." },
+    blurb:"A known Reyden limitation — unsupported DDL/statement/type (CREATE TABLE/SCHEMA, SHOW COLUMNS, INTERVAL, …), no Thrift endpoint, no CloudFetch, no hive_metastore, rows_affected=-1, write-not-persisted value mismatches. Expected: gate/skip; not a driver bug." },
   "Environment / infra": { cls:"cat-env",
     blurb:"Missing/misconfigured warehouse, read-only rejection, auth, timeout, or transport error. Not a driver bug — fix the environment or retry." },
   "Real issue / to investigate": { cls:"cat-real",
-    blurb:"A genuine driver bug. A value/cast mismatch on an INSERT→SELECT→DELETE round-trip means setup succeeded but the data came back wrong (e.g. a SEA-path serialization difference); also covers SQL/syntax errors and anything unclassified." },
+    blurb:"Confirmed Reyden SEA backend bugs, each reproduced (Reyden vs DBSQL / raw SEA API) and filed under Epic SC-222102: SHOW SCHEMAS/TABLES IN ALL CATALOGS (SC-233357), bare SET (SC-233354), col_0 aliases (SC-233356), ANSI heterogeneous cast (SC-233355). Any unclassified failure also surfaces here." },
 };
 const catBadge = name => `<span class="catbadge ${(CATEGORIES[name]||{}).cls||""}">${esc(name)}</span>`;
 
@@ -134,16 +133,19 @@ const SIGNATURE_DESCRIPTIONS = {
   "Reyden does not support hive_metastore catalog": "hive_metastore catalog unavailable on Reyden — defaults to main",
   "Reyden unsupported feature (other)": "other unsupported DDL / statement / type",
   "Reyden unsupported feature (DDL / statement / type)": "unsupported DDL / statement / type",
+  "Reyden SEA rejects SHOW SCHEMAS/TABLES IN ALL CATALOGS": "SEA API parser rejects IN ALL CATALOGS (accepted in SQL editor) — tracked SC-233357",
+  "Reyden SEA rejects bare SET statement": "SEA API rejects a bare SET — tracked SC-233354",
+  "Reyden SEA omits column aliases (returns col_0)": "SEA result schema returns col_0 instead of the column alias — tracked SC-233356",
+  "Type cast mismatch on round-trip": "ANSI strict-cast rejects heterogeneous ARRAY/MAP — tracked SC-233355",
   "Warehouse not found (ENDPOINT_NOT_FOUND / HTTP 404)": "warehouse missing or misconfigured",
   "Read-only warehouse rejected write/DDL": "warehouse is read-only",
   "Permission denied (403)": "auth / permission issue",
   "Timeout": "operation timed out",
   "Connection / transport error": "could not connect to the server",
-  "SQL syntax error": "malformed statement emitted by the driver",
-  "Type cast mismatch on round-trip": "value came back wrong-typed — driver bug",
+  "SQL syntax error": "malformed statement (unclassified) — surfaced for review",
   "Object not found": "metadata resolved a missing object",
-  "Assertion failed (value mismatch)": "round-trip returned wrong data — driver bug",
-  "DML/DDL rejected": "write / DDL rejected",
+  "Assertion failed (value mismatch)": "known Reyden value mismatch (e.g. write not persisted) — expected limitation",
+  "DML/DDL rejected": "write / DDL not supported on Reyden — expected limitation",
 };
 const sigDesc = s => SIGNATURE_DESCRIPTIONS[s] || "";
 
