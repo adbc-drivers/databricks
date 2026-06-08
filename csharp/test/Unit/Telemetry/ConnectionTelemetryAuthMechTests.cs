@@ -19,6 +19,7 @@ using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2.Spark;
 using DriverAuthFlowType = AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthFlow.Types.Type;
 using DriverAuthMechType = AdbcDrivers.Databricks.Telemetry.Proto.DriverAuthMech.Types.Type;
+using DriverModeType = AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
@@ -47,7 +48,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             properties[SparkParameters.Token] = "dapi-redacted";
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Pat, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.TokenPassthrough, connParams.AuthFlow);
@@ -64,7 +66,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             properties[DatabricksParameters.OAuthClientSecret] = "client-secret";
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.ClientCredentials, connParams.AuthFlow);
@@ -83,7 +86,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             properties[SparkParameters.AccessToken] = "oauth-access-token-redacted";
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.TokenPassthrough, connParams.AuthFlow);
@@ -103,7 +107,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             properties[SparkParameters.AccessToken] = "oauth-access-token-redacted";
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.TokenPassthrough, connParams.AuthFlow);
@@ -115,7 +120,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var properties = BaseProperties();
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Pat, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.TokenPassthrough, connParams.AuthFlow);

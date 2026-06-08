@@ -29,7 +29,6 @@ using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
-using Apache.Hive.Service.Rpc.Thrift;
 
 namespace AdbcDrivers.Databricks.Telemetry
 {
@@ -62,12 +61,22 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// Returns <see cref="NoOpConnectionTelemetry"/> if telemetry is disabled, misconfigured, or fails to initialize.
         /// Never throws.
         /// </summary>
+        /// <param name="sessionId">
+        /// The transport-agnostic session id (a GUID string for Thrift, server-assigned id for SEA).
+        /// Callers convert at the boundary so this method has no transport-specific dependency.
+        /// </param>
+        /// <param name="mode">
+        /// Driver transport mode (<c>THRIFT</c> or <c>SEA</c>) stamped onto
+        /// <c>driver_connection_params.mode</c>. Threaded through from the caller so the
+        /// telemetry payload reflects the real transport.
+        /// </param>
         public static IConnectionTelemetry Create(
             IReadOnlyDictionary<string, string> properties,
             string host,
             string assemblyVersion,
             OAuthClientCredentialsProvider? oauthTokenProvider,
-            TSessionHandle? sessionHandle,
+            string sessionId,
+            Proto.DriverMode.Types.Type mode,
             bool enableDirectResults,
             bool useDescTableExtended,
             int connectTimeoutMilliseconds,
@@ -115,15 +124,13 @@ namespace AdbcDrivers.Databricks.Telemetry
                     SafeBuildSystemConfiguration(assemblyVersion, activity);
                 Proto.DriverConnectionParameters driverConnectionParams =
                     SafeBuildDriverConnectionParams(
-                        properties, host, enableDirectResults, useDescTableExtended,
+                        properties, host, mode, enableDirectResults, useDescTableExtended,
                         connectTimeoutMilliseconds, activity);
                 string authType = SafeDetermineAuthType(properties, activity);
 
                 var session = new TelemetrySessionContext
                 {
-                    SessionId = sessionHandle?.SessionId?.Guid != null
-                        ? new System.Guid(sessionHandle.SessionId.Guid).ToString()
-                        : null,
+                    SessionId = !string.IsNullOrEmpty(sessionId) ? sessionId : null,
                     TelemetryClient = telemetryClient,
                     SystemConfiguration = systemConfiguration,
                     DriverConnectionParams = driverConnectionParams,
@@ -430,6 +437,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         internal static Proto.DriverConnectionParameters SafeBuildDriverConnectionParams(
             IReadOnlyDictionary<string, string> properties,
             string host,
+            Proto.DriverMode.Types.Type mode,
             bool enableDirectResults,
             bool useDescTableExtended,
             int connectTimeoutMilliseconds,
@@ -438,7 +446,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             try
             {
                 return BuildDriverConnectionParams(
-                    properties, host, enableDirectResults, useDescTableExtended,
+                    properties, host, mode, enableDirectResults, useDescTableExtended,
                     connectTimeoutMilliseconds);
             }
             catch (Exception ex)
@@ -455,7 +463,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 return new Proto.DriverConnectionParameters
                 {
                     HttpPath = string.Empty,
-                    Mode = Proto.DriverMode.Types.Type.Thrift,
+                    Mode = mode,
                     HostInfo = new Proto.HostDetails
                     {
                         HostUrl = host ?? string.Empty,
@@ -624,6 +632,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         internal static Proto.DriverConnectionParameters BuildDriverConnectionParams(
             IReadOnlyDictionary<string, string> properties,
             string host,
+            Proto.DriverMode.Types.Type mode,
             bool enableDirectResults,
             bool useDescTableExtended,
             int connectTimeoutMilliseconds)
@@ -639,7 +648,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             var connectionParams = new Proto.DriverConnectionParameters
             {
                 HttpPath = httpPath ?? "",
-                Mode = Proto.DriverMode.Types.Type.Thrift,
+                Mode = mode,
                 HostInfo = new Proto.HostDetails
                 {
                     // Bare hostname, matching JDBC. Scheme is implicit (always https) and

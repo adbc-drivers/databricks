@@ -145,11 +145,24 @@ namespace AdbcDrivers.Databricks
                     endpointFormat,
                     cancellationToken).ConfigureAwait(false);
 
-                // Set cache options with sliding expiration
-                // Using sliding expiration so that reads extend the expiration window
-                var cacheOptions = new MemoryCacheEntryOptions()
-                    .SetSlidingExpiration(effectiveCacheTtl)
-                    .RegisterPostEvictionCallback(OnCacheEntryEvicted);
+                // Choose cache expiration based on the fetch outcome:
+                // - Healthy: sliding TTL so active use keeps flags warm.
+                // - Failed: short fixed ABSOLUTE negative TTL so a slow/erroring
+                //   connector-service is retried soon via recreation instead of on every
+                //   connection, and a transient failure is not pinned for the full positive TTL.
+                MemoryCacheEntryOptions cacheOptions;
+                if (context.LastFetchStatus == FeatureFlagFetchStatus.Failed)
+                {
+                    cacheOptions = new MemoryCacheEntryOptions()
+                        .SetAbsoluteExpiration(FeatureFlagContext.DefaultNegativeTtl)
+                        .RegisterPostEvictionCallback(OnCacheEntryEvicted);
+                }
+                else
+                {
+                    cacheOptions = new MemoryCacheEntryOptions()
+                        .SetSlidingExpiration(effectiveCacheTtl)
+                        .RegisterPostEvictionCallback(OnCacheEntryEvicted);
+                }
 
                 _cache.Set(cacheKey, context, cacheOptions);
 
@@ -307,10 +320,17 @@ namespace AdbcDrivers.Databricks
 
             try
             {
-                // Check if feature flag cache is enabled (default: false)
-                if (!localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) ||
-                    !bool.TryParse(enabledStr, out bool enabled) ||
-                    !enabled)
+                // Check if feature flag cache is enabled (default: true).
+                // Only an explicit, parseable "false" disables it; an absent or
+                // unparsable value keeps the default.
+                bool enabled = true;
+                if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) &&
+                    bool.TryParse(enabledStr, out bool parsedEnabled))
+                {
+                    enabled = parsedEnabled;
+                }
+
+                if (!enabled)
                 {
                     activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
                         tags: new ActivityTagsCollection { { "reason", "disabled_by_config" } }));
@@ -391,6 +411,7 @@ namespace AdbcDrivers.Databricks
                 .GetAwaiter()
                 .GetResult();
         }
+
 
         /// <summary>
         /// Tries to extract the host from properties without throwing.
