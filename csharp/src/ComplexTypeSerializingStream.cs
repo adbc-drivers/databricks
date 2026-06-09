@@ -256,8 +256,8 @@ namespace AdbcDrivers.Databricks
                 case ArrowTypeId.String: writer.WriteStringValue(((StringArray)array).GetString(index)); break;
                 case ArrowTypeId.LargeString: writer.WriteStringValue(((LargeStringArray)array).GetString(index)); break;
 #if NET6_0_OR_GREATER
-                case ArrowTypeId.Time32: writer.WriteRawValue(((Time32Array)array).GetTime(index)!.Value.ToString("HH:mm:ss.ffffff")); break;
-                case ArrowTypeId.Time64: writer.WriteRawValue(((Time64Array)array).GetTime(index)!.Value.ToString("HH:mm:ss.ffffff")); break;
+                case ArrowTypeId.Time32: writer.WriteStringValue(((Time32Array)array).GetTime(index)!.Value.ToString("HH:mm:ss.ffffff")); break;
+                case ArrowTypeId.Time64: writer.WriteStringValue(((Time64Array)array).GetTime(index)!.Value.ToString("HH:mm:ss.ffffff")); break;
 #else
                 case ArrowTypeId.Time32:
                     Time32Array time32Array = (Time32Array)array;
