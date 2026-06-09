@@ -760,29 +760,37 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             if (_currentStatementId != null)
             {
-                try
+                // Start a dedicated span instead of annotating Activity.Current: Dispose is
+                // typically called outside any ambient activity (e.g. connection pooling),
+                // so Activity.Current is usually null here and the event would be dropped.
+                // Mirrors DatabricksCompositeReader.Dispose on the Thrift path, which owns
+                // its own span so the close is always traced regardless of caller context.
+                this.TraceActivity(activity =>
                 {
-                    // Close statement synchronously during dispose
-                    Activity.Current?.AddEvent(new ActivityEvent("statement.dispose",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "statement_id", _currentStatementId }
-                        }));
-                    _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    // Best effort - ignore errors during dispose
-                    Activity.Current?.AddEvent(new ActivityEvent("statement.dispose.error",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "error", ex.Message }
-                        }));
-                }
-                finally
-                {
-                    _currentStatementId = null;
-                }
+                    try
+                    {
+                        // Close statement synchronously during dispose
+                        activity?.AddEvent(new ActivityEvent("statement.dispose",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "statement_id", _currentStatementId }
+                            }));
+                        _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Best effort - ignore errors during dispose
+                        activity?.AddEvent(new ActivityEvent("statement.dispose.error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error", ex.Message }
+                            }));
+                    }
+                    finally
+                    {
+                        _currentStatementId = null;
+                    }
+                }, activityName: nameof(StatementExecutionStatement) + "." + nameof(Dispose));
             }
         }
 

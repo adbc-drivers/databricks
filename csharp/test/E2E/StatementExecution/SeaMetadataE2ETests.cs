@@ -16,6 +16,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -39,6 +41,18 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         private const string TestSchema = DatabricksTestEnvironment.FixtureSchema;
         private const string TestTable = "all_column_types";
 
+        // Golden GetColumnsExtended result for main.adbc_testing.all_column_types
+        // (shared with StatementTests.CanGetColumnsExtended).
+        private const string ExpectedColumnsResource = "Resources/result_get_column_extended_all_types.json";
+
+        // Per-column metadata that must be identical on any protocol. BUFFER_LENGTH is
+        // deliberately excluded: it differs between Thrift (Int8) and SEA (Int32) — see
+        // PECO-3008 — so it is not protocol-invariant.
+        private static readonly string[] ProtocolInvariantColumns =
+        {
+            "COLUMN_NAME", "DATA_TYPE", "BASE_TYPE_NAME", "COLUMN_SIZE", "DECIMAL_DIGITS",
+        };
+
         public SeaMetadataE2ETests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
@@ -49,19 +63,15 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
         }
 
-        private AdbcConnection CreateThriftConnection()
+        // Connection on whatever protocol the test suite was configured with (driver
+        // parameters / config file). Tests never pick the protocol themselves — the run
+        // argument decides it, so the SEA/Reyden nightly runs them over REST and the
+        // Thrift CI over Thrift. Each test asserts a fixed expected result, which must
+        // hold for any protocol; running across the CI matrix gives cross-protocol parity
+        // without comparing protocols inside a test.
+        private AdbcConnection CreateConnection(Dictionary<string, string>? extraParams = null)
         {
             var parameters = GetDriverParameters(TestConfiguration);
-            parameters[DatabricksParameters.Protocol] = "thrift";
-            var driver = new DatabricksDriver();
-            var db = driver.Open(parameters);
-            return db.Connect(new Dictionary<string, string>());
-        }
-
-        private AdbcConnection CreateSeaConnection(Dictionary<string, string>? extraParams = null)
-        {
-            var parameters = GetDriverParameters(TestConfiguration);
-            parameters[DatabricksParameters.Protocol] = "rest";
             if (extraParams != null)
             {
                 foreach (var kvp in extraParams)
@@ -126,43 +136,22 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // --- GetCatalogs ---
 
         [SkippableFact]
-        public async Task Thrift_GetCatalogs_ContainsMain()
+        public async Task GetCatalogs_ContainsMain()
         {
             SkipIfNotConfigured();
-            using var conn = CreateThriftConnection();
+            using var conn = CreateConnection();
             var rows = await ReadMetadata(conn, "GetCatalogs");
             Assert.True(rows.Count > 0, "GetCatalogs should return at least one catalog");
             Assert.Contains(rows, r => r["TABLE_CAT"] == "main");
-        }
-
-        [SkippableFact]
-        public async Task SEA_GetCatalogs_ContainsMain()
-        {
-            SkipIfNotConfigured();
-            using var conn = CreateSeaConnection();
-            var rows = await ReadMetadata(conn, "GetCatalogs");
-            Assert.True(rows.Count > 0, "GetCatalogs should return at least one catalog");
-            Assert.Contains(rows, r => r["TABLE_CAT"] == "main");
-        }
-
-        [SkippableFact]
-        public async Task GetCatalogs_ThriftAndSEA_SameRowCount()
-        {
-            SkipIfNotConfigured();
-            using var thrift = CreateThriftConnection();
-            using var sea = CreateSeaConnection();
-            var thriftRows = await ReadMetadata(thrift, "GetCatalogs");
-            var seaRows = await ReadMetadata(sea, "GetCatalogs");
-            Assert.Equal(thriftRows.Count, seaRows.Count);
         }
 
         // --- GetTables ---
 
         [SkippableFact]
-        public async Task Thrift_GetTables_ReturnsAllColumnTypes()
+        public async Task GetTables_ReturnsAllColumnTypes()
         {
             SkipIfNotConfigured();
-            using var conn = CreateThriftConnection();
+            using var conn = CreateConnection();
             var rows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema);
             Assert.Contains(rows, r => r["TABLE_NAME"] == TestTable);
             // Verify 10-column schema
@@ -174,98 +163,51 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.True(row.ContainsKey("REF_GENERATION"), "Should have REF_GENERATION column");
         }
 
-        [SkippableFact]
-        public async Task SEA_GetTables_ReturnsAllColumnTypes()
-        {
-            SkipIfNotConfigured();
-            using var conn = CreateSeaConnection();
-            var rows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema);
-            Assert.Contains(rows, r => r["TABLE_NAME"] == TestTable);
-            var row = rows.Find(r => r["TABLE_NAME"] == TestTable);
-            Assert.NotNull(row);
-            Assert.Equal(TestCatalog, row!["TABLE_CAT"]);
-            Assert.Equal(TestSchema, row["TABLE_SCHEM"]);
-            Assert.True(row.ContainsKey("TYPE_CAT"), "Should have TYPE_CAT column");
-            Assert.True(row.ContainsKey("REF_GENERATION"), "Should have REF_GENERATION column");
-        }
-
-        [SkippableFact]
-        public async Task GetTables_ThriftAndSEA_SameCount()
-        {
-            SkipIfNotConfigured();
-            using var thrift = CreateThriftConnection();
-            using var sea = CreateSeaConnection();
-            var thriftRows = await ReadMetadata(thrift, "GetTables", TestCatalog, TestSchema);
-            var seaRows = await ReadMetadata(sea, "GetTables", TestCatalog, TestSchema);
-            Assert.Equal(thriftRows.Count, seaRows.Count);
-        }
-
         // --- GetColumnsExtended ---
 
         [SkippableFact]
-        public async Task Thrift_GetColumnsExtended_Returns20Columns()
+        public async Task GetColumnsExtended_ReturnsExpectedColumns()
         {
             SkipIfNotConfigured();
-            using var conn = CreateThriftConnection();
+            using var conn = CreateConnection();
             var rows = await ReadMetadata(conn, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
-            Assert.Equal(20, rows.Count);
-        }
 
-        [SkippableFact]
-        public async Task SEA_GetColumnsExtended_Returns20Columns()
-        {
-            SkipIfNotConfigured();
-            using var conn = CreateSeaConnection();
-            var rows = await ReadMetadata(conn, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
-            Assert.Equal(20, rows.Count);
-        }
+            var expected = JsonSerializer.Deserialize<List<Dictionary<string, JsonElement>>>(
+                File.ReadAllText(ExpectedColumnsResource))!;
 
-        [SkippableFact]
-        public async Task GetColumnsExtended_ThriftAndSEA_SameColumnNames()
-        {
-            SkipIfNotConfigured();
-            using var thrift = CreateThriftConnection();
-            using var sea = CreateSeaConnection();
-            var thriftRows = await ReadMetadata(thrift, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
-            var seaRows = await ReadMetadata(sea, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
-            Assert.Equal(thriftRows.Count, seaRows.Count);
-            for (int i = 0; i < thriftRows.Count; i++)
+            // One row per table column, in ordinal order, with the 32-column metadata
+            // schema (24 base + 8 PK/FK fields).
+            Assert.Equal(expected.Count, rows.Count);
+            Assert.Equal(32, rows[0].Count);
+
+            // Assert the protocol-invariant column metadata against the golden result, so
+            // any protocol (Thrift or SEA) is checked against the same expected values.
+            for (int i = 0; i < expected.Count; i++)
             {
-                Assert.Equal(thriftRows[i]["COLUMN_NAME"], seaRows[i]["COLUMN_NAME"]);
-                Assert.Equal(thriftRows[i]["DATA_TYPE"], seaRows[i]["DATA_TYPE"]);
-                Assert.Equal(thriftRows[i]["BASE_TYPE_NAME"], seaRows[i]["BASE_TYPE_NAME"]);
-                Assert.Equal(thriftRows[i]["COLUMN_SIZE"], seaRows[i]["COLUMN_SIZE"]);
-                Assert.Equal(thriftRows[i]["DECIMAL_DIGITS"], seaRows[i]["DECIMAL_DIGITS"]);
+                foreach (var col in ProtocolInvariantColumns)
+                {
+                    Assert.Equal(expected[i][col].ToString(), rows[i][col]);
+                }
             }
         }
 
         [SkippableFact]
-        public async Task GetColumnsExtended_ThriftAndSEA_32ColumnSchema()
+        public async Task GetColumnsExtended_FallbackAndDescTable_SameResults()
         {
             SkipIfNotConfigured();
-            using var thrift = CreateThriftConnection();
-            using var sea = CreateSeaConnection();
-            var thriftRows = await ReadMetadata(thrift, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
-            var seaRows = await ReadMetadata(sea, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
-            // Both should have 32 columns (24 base + 8 PK/FK)
-            Assert.Equal(32, thriftRows[0].Count);
-            Assert.Equal(32, seaRows[0].Count);
-        }
-
-        [SkippableFact]
-        public async Task SEA_GetColumnsExtended_FallbackAndDescTable_SameResults()
-        {
-            SkipIfNotConfigured();
-            using var seaFallback = CreateSeaConnection(new Dictionary<string, string>
+            // adbc.databricks.use_desc_table_extended is honored on both protocols
+            // (DatabricksConnection.CanUseDescTableExtended for Thrift, StatementExecution
+            // for SEA), so the two paths must agree on whatever protocol the run uses.
+            using var fallbackConn = CreateConnection(new Dictionary<string, string>
             {
                 { DatabricksParameters.UseDescTableExtended, "false" }
             });
-            using var seaDescTable = CreateSeaConnection(new Dictionary<string, string>
+            using var descTableConn = CreateConnection(new Dictionary<string, string>
             {
                 { DatabricksParameters.UseDescTableExtended, "true" }
             });
-            var fallbackRows = await ReadMetadata(seaFallback, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
-            var descTableRows = await ReadMetadata(seaDescTable, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
+            var fallbackRows = await ReadMetadata(fallbackConn, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
+            var descTableRows = await ReadMetadata(descTableConn, "GetColumnsExtended", TestCatalog, TestSchema, TestTable);
 
             Assert.Equal(fallbackRows.Count, descTableRows.Count);
             Assert.True(fallbackRows.Count > 0, "Should return at least one row");
@@ -309,21 +251,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // --- GetPrimaryKeys ---
 
         [SkippableFact]
-        public async Task Thrift_GetPrimaryKeys_ReturnsPKColumns()
+        public async Task GetPrimaryKeys_ReturnsPKColumns()
         {
             SkipIfNotConfigured();
-            using var conn = CreateThriftConnection();
-            var rows = await ReadMetadata(conn, "GetPrimaryKeys", TestCatalog, TestSchema, TestTable);
-            Assert.Equal(2, rows.Count);
-            Assert.Equal("c_string", rows[0]["COLUMN_NAME"]);
-            Assert.Equal("c_int", rows[1]["COLUMN_NAME"]);
-        }
-
-        [SkippableFact]
-        public async Task SEA_GetPrimaryKeys_ReturnsPKColumns()
-        {
-            SkipIfNotConfigured();
-            using var conn = CreateSeaConnection();
+            using var conn = CreateConnection();
             var rows = await ReadMetadata(conn, "GetPrimaryKeys", TestCatalog, TestSchema, TestTable);
             Assert.Equal(2, rows.Count);
             Assert.Equal("c_string", rows[0]["COLUMN_NAME"]);
@@ -333,49 +264,23 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // --- GetTableSchema ---
 
         [SkippableFact]
-        public void Thrift_GetTableSchema_Returns20Fields()
+        public void GetTableSchema_ReturnsFields()
         {
             SkipIfNotConfigured();
-            using var conn = CreateThriftConnection();
-            // Use cross_ref_customers to avoid Thrift NotImplementedException on complex types
-            var schema = conn.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
-            Assert.True(schema.FieldsList.Count > 0);
-        }
-
-        [SkippableFact]
-        public void SEA_GetTableSchema_ReturnsFields()
-        {
-            SkipIfNotConfigured();
-            using var conn = CreateSeaConnection();
+            using var conn = CreateConnection();
             // Use cross_ref_customers to avoid NotImplementedException on complex types (INTERVAL, MAP, etc.)
             var schema = conn.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
             Assert.True(schema.FieldsList.Count > 0);
             Assert.Equal("customer_id", schema.FieldsList[0].Name);
         }
 
-        [SkippableFact]
-        public void GetTableSchema_ThriftAndSEA_SameFieldNames()
-        {
-            SkipIfNotConfigured();
-            using var thrift = CreateThriftConnection();
-            using var sea = CreateSeaConnection();
-            var thriftSchema = thrift.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
-            var seaSchema = sea.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
-            Assert.Equal(thriftSchema.FieldsList.Count, seaSchema.FieldsList.Count);
-            for (int i = 0; i < thriftSchema.FieldsList.Count; i++)
-            {
-                Assert.Equal(thriftSchema.FieldsList[i].Name, seaSchema.FieldsList[i].Name);
-                Assert.Equal(thriftSchema.FieldsList[i].DataType.TypeId, seaSchema.FieldsList[i].DataType.TypeId);
-            }
-        }
-
         // --- GetTableTypes ---
 
         [SkippableFact]
-        public void SEA_GetTableTypes_ReturnsTableAndView()
+        public void GetTableTypes_ReturnsTableAndView()
         {
             SkipIfNotConfigured();
-            using var conn = CreateSeaConnection();
+            using var conn = CreateConnection();
             using var stream = conn.GetTableTypes();
             var batch = stream.ReadNextRecordBatchAsync().AsTask().GetAwaiter().GetResult();
             Assert.NotNull(batch);
@@ -392,10 +297,10 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // --- GetInfo ---
 
         [SkippableFact]
-        public void SEA_GetInfo_ReturnsDriverInfo()
+        public void GetInfo_ReturnsDriverInfo()
         {
             SkipIfNotConfigured();
-            using var conn = CreateSeaConnection();
+            using var conn = CreateConnection();
             using var stream = conn.GetInfo(new List<AdbcInfoCode>());
             var batch = stream.ReadNextRecordBatchAsync().AsTask().GetAwaiter().GetResult();
             Assert.NotNull(batch);
