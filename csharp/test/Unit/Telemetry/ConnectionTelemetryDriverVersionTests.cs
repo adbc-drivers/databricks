@@ -73,7 +73,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             // must NOT collapse to the bare numeric version. This is the discriminating regression
             // guard: before the fix, driver_version was GetAssemblyVersion (numeric), so it would
             // have equalled `numeric` and this assertion would fail.
-            bool hasMetadata = telemetry.Contains('-') || telemetry.Contains('+');
+            // Use string overloads of Contains: the driver multi-targets net472/netstandard2.0,
+            // where string.Contains(char) does not exist (only string.Contains(string)).
+            bool hasMetadata = telemetry.Contains("-") || telemetry.Contains("+");
             if (hasMetadata)
             {
                 Assert.NotEqual(numeric, telemetry);
