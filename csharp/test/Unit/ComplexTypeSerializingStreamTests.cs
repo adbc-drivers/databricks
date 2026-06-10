@@ -371,6 +371,190 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Same(plainColumn, result.Column(1));
         }
 
+        // --- Time32 / Time64 (regression: these formerly used WriteRawValue, producing invalid JSON) ---
+
+        [Fact]
+        public async Task Array_Time32_Seconds_IsQuotedString()
+        {
+            // 12:30:45 = 45045 seconds since midnight.
+            // Must serialize as a quoted JSON string, not a raw value.
+            ListArray.Builder b = new ListArray.Builder(new Time32Type(TimeUnit.Second));
+            Time32Array.Builder vb = (Time32Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(45045); // 12*3600 + 30*60 + 45
+#if NETFRAMEWORK
+            Assert.Equal("[\"12:30:45\"]", await Serialize("ARRAY<TIME>", b.Build()));
+#else
+            Assert.Equal("[\"12:30:45.000000\"]", await Serialize("ARRAY<TIME>", b.Build()));
+#endif
+        }
+
+        [Fact]
+        public async Task Array_Time32_Milliseconds_IsQuotedString()
+        {
+            // 12:30:45.123 = 45045123 milliseconds since midnight.
+            ListArray.Builder b = new ListArray.Builder(new Time32Type(TimeUnit.Millisecond));
+            Time32Array.Builder vb = (Time32Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(45045123);
+#if NETFRAMEWORK
+            Assert.Equal("[\"12:30:45.1230000\"]", await Serialize("ARRAY<TIME>", b.Build()));
+#else
+            Assert.Equal("[\"12:30:45.123000\"]", await Serialize("ARRAY<TIME>", b.Build()));
+#endif
+        }
+
+        [Fact]
+        public async Task Array_Time64_Microseconds_IsQuotedString()
+        {
+            // 12:30:45.123456 = 45045123456 microseconds since midnight.
+            ListArray.Builder b = new ListArray.Builder(new Time64Type(TimeUnit.Microsecond));
+            Time64Array.Builder vb = (Time64Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(45045123456L);
+#if NETFRAMEWORK
+            Assert.Equal("[\"12:30:45.1234560\"]", await Serialize("ARRAY<TIME>", b.Build()));
+#else
+            Assert.Equal("[\"12:30:45.123456\"]", await Serialize("ARRAY<TIME>", b.Build()));
+#endif
+        }
+
+        [Fact]
+        public async Task Array_Time64_Nanoseconds_IsQuotedString()
+        {
+            // 12:30:45.123456789 = 45045123456789 nanoseconds since midnight.
+            // Nanosecond precision → ticks = 45045123456789/100 = 450451234567 (truncated).
+            ListArray.Builder b = new ListArray.Builder(new Time64Type(TimeUnit.Nanosecond));
+            Time64Array.Builder vb = (Time64Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(45045123456700L); // exact tick boundary to avoid rounding differences
+#if NETFRAMEWORK
+            Assert.Equal("[\"12:30:45.1234567\"]", await Serialize("ARRAY<TIME>", b.Build()));
+#else
+            Assert.Equal("[\"12:30:45.123456\"]", await Serialize("ARRAY<TIME>", b.Build()));
+#endif
+        }
+
+        // --- Other scalar types not yet covered ---
+
+        [Fact]
+        public async Task Array_Float_IsBareNumber()
+        {
+            ListArray.Builder b = new ListArray.Builder(FloatType.Default);
+            FloatArray.Builder vb = (FloatArray.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(1.5f);
+            vb.Append(2.0f);
+            Assert.Equal("[1.5,2]", await Serialize("ARRAY<FLOAT>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_Int8_IsBareNumber()
+        {
+            ListArray.Builder b = new ListArray.Builder(Int8Type.Default);
+            Int8Array.Builder vb = (Int8Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(42);
+            vb.Append(-1);
+            Assert.Equal("[42,-1]", await Serialize("ARRAY<TINYINT>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_Int16_IsBareNumber()
+        {
+            ListArray.Builder b = new ListArray.Builder(Int16Type.Default);
+            Int16Array.Builder vb = (Int16Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(1000);
+            vb.Append(-500);
+            Assert.Equal("[1000,-500]", await Serialize("ARRAY<SMALLINT>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_UInt8_IsBareNumber()
+        {
+            ListArray.Builder b = new ListArray.Builder(UInt8Type.Default);
+            UInt8Array.Builder vb = (UInt8Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(255);
+            Assert.Equal("[255]", await Serialize("ARRAY<TINYINT_UNSIGNED>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_UInt16_IsBareNumber()
+        {
+            ListArray.Builder b = new ListArray.Builder(UInt16Type.Default);
+            UInt16Array.Builder vb = (UInt16Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(65535);
+            Assert.Equal("[65535]", await Serialize("ARRAY<SMALLINT_UNSIGNED>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_UInt32_IsBareNumber()
+        {
+            ListArray.Builder b = new ListArray.Builder(UInt32Type.Default);
+            UInt32Array.Builder vb = (UInt32Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(4294967295U);
+            Assert.Equal("[4294967295]", await Serialize("ARRAY<INT_UNSIGNED>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_UInt64_IsBareNumber()
+        {
+            ListArray.Builder b = new ListArray.Builder(UInt64Type.Default);
+            UInt64Array.Builder vb = (UInt64Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(18446744073709551615UL);
+            Assert.Equal("[18446744073709551615]", await Serialize("ARRAY<BIGINT_UNSIGNED>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_Date64_IsQuoted()
+        {
+            ListArray.Builder b = new ListArray.Builder(Date64Type.Default);
+            Date64Array.Builder vb = (Date64Array.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Unspecified));
+            Assert.Equal("[\"2024-06-15\"]", await Serialize("ARRAY<DATE>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_Binary_IsBase64()
+        {
+            ListArray.Builder b = new ListArray.Builder(BinaryType.Default);
+            BinaryArray.Builder vb = (BinaryArray.Builder)b.ValueBuilder;
+            b.Append();
+            vb.Append(new byte[] { 0x48, 0x65, 0x6C, 0x6C, 0x6F }); // "Hello"
+            Assert.Equal("[\"SGVsbG8=\"]", await Serialize("ARRAY<BINARY>", b.Build()));
+        }
+
+        [Fact]
+        public async Task Array_DayTimeInterval_Format()
+        {
+            ListArray.Builder b = new ListArray.Builder(new IntervalType(IntervalUnit.DayTime));
+            DayTimeIntervalArray.Builder vb = (DayTimeIntervalArray.Builder)b.ValueBuilder;
+            b.Append();
+            // 3 days, 45045123 ms = 3 days 12:30:45.123
+            vb.Append(new DayTimeInterval(3, 45045123));
+            string? json = await Serialize("ARRAY<INTERVAL DAY TO SECOND>", b.Build());
+            Assert.Equal("[\"3.12:30:45.1230000\"]", json);
+        }
+
+        [Fact]
+        public async Task Array_MonthDayNanosecondInterval_Format()
+        {
+            ListArray.Builder b = new ListArray.Builder(new IntervalType(IntervalUnit.MonthDayNanosecond));
+            MonthDayNanosecondIntervalArray.Builder vb = (MonthDayNanosecondIntervalArray.Builder)b.ValueBuilder;
+            b.Append();
+            // 14 months (1 year 2 months), 3 days, 45045123456789 ns
+            vb.Append(new MonthDayNanosecondInterval(14, 3, 45045123456789L));
+            string? json = await Serialize("ARRAY<INTERVAL>", b.Build());
+            Assert.Contains("1-2", json); // year-month portion
+            Assert.Contains("3.", json);  // day portion
+        }
+
         // ----- helpers -----------------------------------------------------
 
         private static async Task<string?> Serialize(string sqlName, IArrowArray nativeArray) =>
