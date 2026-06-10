@@ -55,6 +55,14 @@ namespace AdbcDrivers.Databricks
         internal static new readonly string s_assemblyVersion = ApacheUtility.GetAssemblyVersion(typeof(DatabricksConnection));
         internal static readonly string DriverVersion = s_assemblyVersion;
 
+        // Version reported in the telemetry payload's driver_version. Uses the assembly's
+        // AssemblyInformationalVersion (e.g. "1.1.4-SNAPSHOT+<sha>") rather than the numeric
+        // AssemblyVersion in s_assemblyVersion (e.g. "1.1.4"), so telemetry can pinpoint the
+        // exact build/commit and matches the JDBC driver's version format. Falls back to the
+        // numeric version if the assembly carries no AssemblyInformationalVersionAttribute.
+        internal static readonly string s_telemetryDriverVersion =
+            ApacheUtility.GetAssemblyProductVersion(typeof(DatabricksConnection), s_assemblyVersion);
+
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
         /// Takes precedence over <see cref="DefaultConfigEnvironmentVariable"/> when both are set.
@@ -768,7 +776,7 @@ namespace AdbcDrivers.Databricks
             _telemetry = Telemetry.ConnectionTelemetry.Create(
                 properties: Properties,
                 host: GetHost(),
-                assemblyVersion: s_assemblyVersion,
+                assemblyVersion: s_telemetryDriverVersion,
                 oauthTokenProvider: _oauthTokenProvider,
                 sessionId: sessionId,
                 mode: Telemetry.Proto.DriverMode.Types.Type.Thrift,
