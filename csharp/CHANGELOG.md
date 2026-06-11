@@ -18,7 +18,33 @@
 
 All notable changes to the C# Databricks ADBC driver are documented in this file.
 
-## [1.1.4] - Unreleased
+## [1.1.5] - 2026-06-11
+
+### Added
+
+- Emit telemetry for session/cancel/close operations (PECO-2991) (#437)
+- Support `ADBC_DATABRICKS_CONFIG_FILE` environment variable (#454)
+- Honor `adbc.spark.connect_timeout_ms` on SEA path (PECO-3059) (#466)
+- Honor `adbc.databricks.apply_ssp_with_queries` on SEA path (PECO-3062) (#468)
+- Enable feature flag cache by default (#500)
+
+### Fixed
+
+- Fix concurrent Dispose deadlock (#385)
+- Honor `EnableComplexDatatypeSupport` on SEA path (PECO-3047) (#457)
+- Emit valid JSON for Thrift MAP values containing quotes (#458)
+- Consolidate SEA polling interval onto `polltime_ms` (PECO-3064) (#470)
+- Bracket `close_operation` event for measurable latency (#492)
+- Tag `download_slot_acquired` with `wait_duration_ms` (#495)
+- Correct `enable_complex_datatype_support` telemetry and map more connection params (#517)
+
+### Changed
+
+- Reduce allocations and copies in result transfer (#474)
+- Unify user-agent on `UserAgentHelper` with capital-ADBC prefix (#503)
+- Make `ConnectionTelemetry.Create` protocol-agnostic (PECO-3022) (#460)
+
+## [1.1.4] - 2026-05-08
 
 ### Changed
 
