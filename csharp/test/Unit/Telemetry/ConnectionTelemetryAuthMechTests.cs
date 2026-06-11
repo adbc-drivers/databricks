@@ -49,7 +49,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Pat, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.TokenPassthrough, connParams.AuthFlow);
@@ -67,7 +67,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.ClientCredentials, connParams.AuthFlow);
@@ -87,7 +87,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.TokenPassthrough, connParams.AuthFlow);
@@ -108,7 +108,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.TokenPassthrough, connParams.AuthFlow);
@@ -121,7 +121,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.Equal(DriverAuthMechType.Pat, connParams.AuthMech);
             Assert.Equal(DriverAuthFlowType.TokenPassthrough, connParams.AuthFlow);

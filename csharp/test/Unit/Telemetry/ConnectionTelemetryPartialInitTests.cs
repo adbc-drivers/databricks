@@ -62,7 +62,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
@@ -82,7 +82,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
@@ -105,7 +105,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
@@ -124,7 +124,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Pat, connParams.AuthMech);
@@ -139,7 +139,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Pat, connParams.AuthMech);
@@ -193,7 +193,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.EnableArrow);
             Assert.True(connParams.EnableDirectResults);
@@ -222,7 +222,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.SafeBuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: false,
+                enableDirectResults: true, enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs, activity: null);
 
             Assert.NotNull(connParams);
@@ -260,7 +260,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 "1.2.3", activity: null);
             var connParams = ConnectionTelemetry.SafeBuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true,
+                enableDirectResults: true, enableComplexDatatypeSupport: true,
                 connectTimeoutMilliseconds: DefaultTimeoutMs, activity: null);
             string authType = ConnectionTelemetry.SafeDetermineAuthType(properties, activity: null);
 

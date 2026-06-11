@@ -773,7 +773,7 @@ namespace AdbcDrivers.Databricks
                 sessionId: sessionId,
                 mode: Telemetry.Proto.DriverMode.Types.Type.Thrift,
                 enableDirectResults: _enableDirectResults,
-                useDescTableExtended: _useDescTableExtended,
+                enableComplexDatatypeSupport: _enableComplexDatatypeSupport,
                 connectTimeoutMilliseconds: ConnectTimeoutMilliseconds,
                 activity: activity);
         }
