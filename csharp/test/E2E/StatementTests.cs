@@ -481,9 +481,9 @@ namespace AdbcDrivers.Databricks.Tests
 
         // TODO: PECO-3008 - CanGetColumnsExtended fails for SEA; investigate catalog/schema metadata path in StatementExecutionConnection
         [SkippableTheory]
-        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true, new[] { "PK_IS_NULLABLE:NO" })]
-        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false, new[] { "PK_IS_NULLABLE:YES" })]
-        public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended, string[]? extraPlaceholdsInResult = null)
+        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true)]
+        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false)]
+        public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended)
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA CanGetColumnsExtended returns different BUFFER_LENGTH values (PECO-3008)");
             var connectionParams = new Dictionary<string, string> { ["adbc.databricks.use_desc_table_extended"] = $"{useDescTableExtended}" };
@@ -613,21 +613,6 @@ namespace AdbcDrivers.Databricks.Tests
                 .Replace("{SCHEMA_NAME}", schema)
                 .Replace("{TABLE_NAME}", tableName)
                 .Replace("{REF_TABLE_NAME}", refTableName);
-
-            // Apply extra placeholder replacements if provided
-            if (extraPlaceholdsInResult != null)
-            {
-                foreach (var placeholderReplacement in extraPlaceholdsInResult)
-                {
-                    var parts = placeholderReplacement.Split(':');
-                    if (parts.Length == 2)
-                    {
-                        var placeholder = parts[0];
-                        var replacement = parts[1];
-                        resultString = resultString.Replace("{" + placeholder + "}", replacement);
-                    }
-                }
-            }
 
             var expectedResult = JsonSerializer.Deserialize<List<Dictionary<string, object?>>>(resultString);
 

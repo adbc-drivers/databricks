@@ -420,13 +420,13 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Whether to enable the feature flag cache for fetching remote configuration from the server.
         /// When enabled, the driver fetches feature flags from the Databricks server and merges them with local properties.
-        /// Default value is false if not specified.
+        /// Default value is true if not specified; set to "false" to disable.
         /// </summary>
         public const string FeatureFlagCacheEnabled = "adbc.databricks.feature_flag_cache_enabled";
 
         /// <summary>
         /// Timeout in seconds for feature flag API requests.
-        /// Default value is 10 seconds if not specified.
+        /// Default value is 5 seconds if not specified.
         /// </summary>
         public const string FeatureFlagTimeoutSeconds = "adbc.databricks.feature_flag_timeout_seconds";
 
