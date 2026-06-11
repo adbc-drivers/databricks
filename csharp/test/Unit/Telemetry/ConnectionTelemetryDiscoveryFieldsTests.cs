@@ -59,7 +59,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasDiscoveryModeEnabled);
             Assert.False(connParams.DiscoveryModeEnabled);
@@ -77,7 +77,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasDiscoveryModeEnabled);
             Assert.False(connParams.DiscoveryModeEnabled);
@@ -93,7 +93,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             // The C# driver hardcodes the OIDC token endpoint and never performs
             // .well-known discovery, so there is no URL to report. Leaving the
@@ -110,7 +110,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasEnableTokenCache);
             Assert.False(connParams.EnableTokenCache);
@@ -128,7 +128,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasEnableTokenCache);
             Assert.False(connParams.EnableTokenCache);
