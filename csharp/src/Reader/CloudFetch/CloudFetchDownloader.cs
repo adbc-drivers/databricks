@@ -394,8 +394,24 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             }
                         }
 
-                        // Acquire a download slot
+                        // Acquire a download slot.
+                        //
+                        // Issue #483: time the semaphore wait so the
+                        // cloudfetch.download_slot_acquired event below can
+                        // surface "the call blocked waiting for another
+                        // download to finish" vs "acquired immediately."
+                        // Without this tag, slot contention is invisible in
+                        // traces — under high parallelism this is exactly
+                        // the diagnostic operators need ("downloads are slow
+                        // because they're queued").
+                        var slotWaitStopwatch = Stopwatch.StartNew();
+                        // Snapshot the queue depth at the moment of acquisition
+                        // (pending items still sitting in the download queue).
+                        // It's free to compute and gives the event a second
+                        // contention signal alongside wait_duration_ms.
+                        int queueDepthAtAcquisition = _downloadQueue.Count;
                         await _downloadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                        slotWaitStopwatch.Stop();
 
                         // Acquire memory for this download (FIFO - acquired in sequential loop)
                         long size = downloadResult.Size;
@@ -411,7 +427,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                         activity?.AddEvent("cloudfetch.download_slot_acquired", [
                             new("chunk_index", downloadResult.ChunkIndex),
-                            new("is_sequential_mode", sequentialPermit != null && sequentialPermit != SequentialDownloadPermit.NoOp)
+                            new("is_sequential_mode", sequentialPermit != null && sequentialPermit != SequentialDownloadPermit.NoOp),
+                            // Long, milliseconds — matches the existing convention used by
+                            // cleanup_duration_ms / duration_ms on other CloudFetch events
+                            // (see StragglerDownloadDetector).
+                            new("wait_duration_ms", slotWaitStopwatch.ElapsedMilliseconds),
+                            new("queue_depth", queueDepthAtAcquisition)
                         ]);
 
                         Task downloadTask;
@@ -678,15 +699,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             bodyTimeoutCts.CancelAfter(TimeSpan.FromMinutes(_timeoutMinutes));
                             using (var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                             {
-                                // Pre-allocate with Content-Length when available (CloudFetch always provides it).
-                                int capacity = contentLength.HasValue && contentLength.Value > 0
-                                    ? (int)contentLength.Value
-                                    : 0;
-                                using (var memoryStream = new MemoryStream(capacity))
-                                {
-                                    await contentStream.CopyToAsync(memoryStream, 81920, bodyTimeoutCts.Token).ConfigureAwait(false);
-                                    fileData = memoryStream.ToArray();
-                                }
+                                // Read the body into a single right-sized buffer. When Content-Length is
+                                // known (CloudFetch presigned-URL responses always provide it) this avoids the
+                                // previous MemoryStream-grow + ToArray approach, which allocated and copied the
+                                // whole payload twice.
+                                fileData = await ReadResponseBodyAsync(contentStream, contentLength, bodyTimeoutCts.Token).ConfigureAwait(false);
                             }
                         }
                         break; // Success, exit retry loop
@@ -878,6 +895,75 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 downloadResult.SetCompleted(dataStream, size);
                 _stragglerDetector?.MarkCompleted(fileOffset, activity);
             }, activityName: "DownloadFile");
+        }
+
+        /// <summary>
+        /// Reads an HTTP response body into a byte array.
+        /// <para>
+        /// When the body length is known up front (CloudFetch presigned-URL responses always
+        /// include <c>Content-Length</c>), the body is read into a single exactly-sized buffer.
+        /// This avoids the previous <see cref="MemoryStream"/>-plus-<see cref="MemoryStream.ToArray"/>
+        /// pattern, which allocated and copied the entire payload twice — once into the stream's
+        /// internal (possibly over-sized) buffer and again into the array returned by <c>ToArray()</c>.
+        /// </para>
+        /// <para>
+        /// Falls back to a growable <see cref="MemoryStream"/> when the length is unknown, and also
+        /// handles the abnormal cases where the server sends fewer or more bytes than declared, so the
+        /// returned array always contains exactly the bytes received (matching the prior behavior).
+        /// </para>
+        /// </summary>
+        internal static async Task<byte[]> ReadResponseBodyAsync(
+            Stream contentStream,
+            long? contentLength,
+            CancellationToken cancellationToken)
+        {
+            const int CopyBufferSize = 81920;
+
+            if (contentLength.HasValue && contentLength.Value > 0 && contentLength.Value <= int.MaxValue)
+            {
+                int length = (int)contentLength.Value;
+                byte[] buffer = new byte[length];
+                int offset = 0;
+                int read;
+                while (offset < length &&
+                       (read = await contentStream.ReadAsync(buffer, offset, length - offset, cancellationToken).ConfigureAwait(false)) > 0)
+                {
+                    offset += read;
+                }
+
+                // Probe for any bytes beyond the declared Content-Length. For a well-formed response
+                // of exactly Content-Length bytes this returns 0 (EOF) and we take the fast path.
+                byte[] probe = new byte[1];
+                int extra = await contentStream.ReadAsync(probe, 0, 1, cancellationToken).ConfigureAwait(false);
+
+                if (offset == length && extra == 0)
+                {
+                    // Common case: body matched Content-Length exactly. Single allocation, no extra copy.
+                    return buffer;
+                }
+
+                // Abnormal: short read (truncated body) or more data than declared. Size the stream to
+                // what was actually read so far (offset + extra) rather than the declared Content-Length,
+                // so a truncated body doesn't over-allocate; it grows only if the drain below adds more.
+                // For the over-read case offset == length and extra == 1, so this equals length + 1.
+                using (var ms = new MemoryStream(offset + extra))
+                {
+                    ms.Write(buffer, 0, offset);
+                    if (extra > 0)
+                    {
+                        ms.Write(probe, 0, extra);
+                        await contentStream.CopyToAsync(ms, CopyBufferSize, cancellationToken).ConfigureAwait(false);
+                    }
+                    return ms.ToArray();
+                }
+            }
+
+            // Unknown length: grow as needed (original behavior).
+            using (var memoryStream = new MemoryStream())
+            {
+                await contentStream.CopyToAsync(memoryStream, CopyBufferSize, cancellationToken).ConfigureAwait(false);
+                return memoryStream.ToArray();
+            }
         }
 
         private void SetError(Exception ex, Activity? activity = null)

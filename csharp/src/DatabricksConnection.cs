@@ -57,6 +57,12 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
+        /// Takes precedence over <see cref="DefaultConfigEnvironmentVariable"/> when both are set.
+        /// </summary>
+        public const string AdbcConfigEnvironmentVariable = "ADBC_DATABRICKS_CONFIG_FILE";
+
+        /// <summary>
+        /// The environment variable name that contains the path to the default Databricks configuration file.
         /// </summary>
         public const string DefaultConfigEnvironmentVariable = "DATABRICKS_CONFIG_FILE";
 
@@ -727,14 +733,47 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private void InitializeTelemetry(Activity? activity = null)
         {
+            // Convert TSessionHandle -> string at the transport boundary so
+            // ConnectionTelemetry.Create stays transport-agnostic. SEA will pass its
+            // server-assigned session id string directly.
+            //
+            // Wrap the byte[] -> Guid conversion locally: `new Guid(byte[])` throws
+            // ArgumentException on a wrong-length array, and that must not propagate
+            // to connection-open.
+            //
+            // Behavior on conversion failure: sessionId stays empty, and
+            // ConnectionTelemetry.Create maps that to SessionId = null on a live
+            // TelemetrySessionContext (see ConnectionTelemetry.cs ~L133). Telemetry
+            // remains enabled — only the session-id field is unset. This is a small,
+            // deliberate behavior change from pre-refactor, where the same conversion
+            // sat inside Create's outer try/catch and a bad GUID returned the NoOp
+            // telemetry instance. Both paths keep the *connection* fail-open; the new
+            // path additionally keeps telemetry on so we still emit driver_connection_params,
+            // driver_system_configuration, and error events for the affected session.
+            string sessionId = string.Empty;
+            try
+            {
+                if (SessionHandle?.SessionId?.Guid != null)
+                {
+                    sessionId = new Guid(SessionHandle.SessionId.Guid).ToString();
+                }
+            }
+            catch
+            {
+                // Intentionally swallowed. Leaves sessionId = string.Empty, which
+                // Create maps to SessionId = null on a live ConnectionTelemetry.
+                // See block comment above for the deliberate behavior choice.
+            }
+
             _telemetry = Telemetry.ConnectionTelemetry.Create(
                 properties: Properties,
                 host: GetHost(),
                 assemblyVersion: s_assemblyVersion,
                 oauthTokenProvider: _oauthTokenProvider,
-                sessionHandle: SessionHandle,
+                sessionId: sessionId,
+                mode: Telemetry.Proto.DriverMode.Types.Type.Thrift,
                 enableDirectResults: _enableDirectResults,
-                useDescTableExtended: _useDescTableExtended,
+                enableComplexDatatypeSupport: _enableComplexDatatypeSupport,
                 connectTimeoutMilliseconds: ConnectTimeoutMilliseconds,
                 activity: activity);
         }

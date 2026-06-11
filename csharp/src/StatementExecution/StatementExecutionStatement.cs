@@ -525,7 +525,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // keeping inline consistent with CloudFetch (which also uses the manifest schema).
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
-                    isLz4Compressed, totalChunks, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest));
+                    isLz4Compressed, totalChunks, _recyclableMemoryStreamManager, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest));
             }
             else
             {
@@ -760,29 +760,37 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             if (_currentStatementId != null)
             {
-                try
+                // Start a dedicated span instead of annotating Activity.Current: Dispose is
+                // typically called outside any ambient activity (e.g. connection pooling),
+                // so Activity.Current is usually null here and the event would be dropped.
+                // Mirrors DatabricksCompositeReader.Dispose on the Thrift path, which owns
+                // its own span so the close is always traced regardless of caller context.
+                this.TraceActivity(activity =>
                 {
-                    // Close statement synchronously during dispose
-                    Activity.Current?.AddEvent(new ActivityEvent("statement.dispose",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "statement_id", _currentStatementId }
-                        }));
-                    _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    // Best effort - ignore errors during dispose
-                    Activity.Current?.AddEvent(new ActivityEvent("statement.dispose.error",
-                        tags: new ActivityTagsCollection
-                        {
-                            { "error", ex.Message }
-                        }));
-                }
-                finally
-                {
-                    _currentStatementId = null;
-                }
+                    try
+                    {
+                        // Close statement synchronously during dispose
+                        activity?.AddEvent(new ActivityEvent("statement.dispose",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "statement_id", _currentStatementId }
+                            }));
+                        _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Best effort - ignore errors during dispose
+                        activity?.AddEvent(new ActivityEvent("statement.dispose.error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error", ex.Message }
+                            }));
+                    }
+                    finally
+                    {
+                        _currentStatementId = null;
+                    }
+                }, activityName: nameof(StatementExecutionStatement) + "." + nameof(Dispose));
             }
         }
 
@@ -835,7 +843,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private class InlineArrowStreamReader : IArrowArrayStream
         {
             private readonly ArrowStreamReader _streamReader;
-            private readonly System.IO.MemoryStream _memoryStream;
+            private readonly System.IO.Stream _dataStream;
             private readonly Schema _schema;
             private bool _disposed;
 
@@ -845,6 +853,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 byte[] firstChunkData,
                 bool isLz4Compressed,
                 int totalChunks,
+                Microsoft.IO.RecyclableMemoryStreamManager memoryStreamManager,
                 System.Buffers.ArrayPool<byte> bufferPool,
                 CancellationToken cancellationToken,
                 Schema manifestSchema)
@@ -854,11 +863,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     throw new ArgumentException("First chunk data cannot be null or empty", nameof(firstChunkData));
                 }
 
-                // Fetch and concatenate all chunks
-                var allData = FetchAllChunksAsync(client, statementId, firstChunkData, isLz4Compressed, totalChunks, bufferPool, cancellationToken).GetAwaiter().GetResult();
+                // Fetch all chunks as a list of segments and present them as one continuous stream.
+                // The SEA server splits a single Arrow IPC stream across N attachment chunks, so reading
+                // the segments back-to-back is byte-equivalent to concatenating them — but avoids both the
+                // per-chunk ToArray copy and the whole-result concatenation buffer (fix: PECO perf).
+                var segments = FetchAllChunkSegmentsAsync(client, statementId, firstChunkData, isLz4Compressed, totalChunks, memoryStreamManager, bufferPool, cancellationToken).GetAwaiter().GetResult();
 
-                _memoryStream = new System.IO.MemoryStream(allData);
-                _streamReader = new ArrowStreamReader(_memoryStream);
+                _dataStream = new ConcatenatedReadOnlyMemoryStream(segments);
+                _streamReader = new ArrowStreamReader(_dataStream);
                 // Validate that the IPC schema column count matches the manifest schema.
                 // Type mismatches are expected (manifest uses StringType for interval/complex columns),
                 // but a count mismatch indicates a server bug or version skew and should fail loudly.
@@ -898,32 +910,34 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (!_disposed)
                 {
                     _streamReader?.Dispose();
-                    _memoryStream?.Dispose();
+                    _dataStream?.Dispose();
                     _disposed = true;
                 }
             }
 
-            private static async Task<byte[]> FetchAllChunksAsync(
+            private static async Task<List<ReadOnlyMemory<byte>>> FetchAllChunkSegmentsAsync(
                 IStatementExecutionClient client,
                 string statementId,
                 byte[] firstChunkData,
                 bool isLz4Compressed,
                 int totalChunks,
+                Microsoft.IO.RecyclableMemoryStreamManager memoryStreamManager,
                 System.Buffers.ArrayPool<byte> bufferPool,
                 CancellationToken cancellationToken)
             {
-                // Start with the first chunk (already have it inline)
-                var chunks = new List<byte[]>();
+                // Collect the chunks as segments rather than concatenating them into one buffer.
+                // For LZ4 we keep the ReadOnlyMemory returned by decompression directly (no ToArray
+                // copy); for uncompressed chunks we wrap the attachment array as-is.
+                var segments = new List<ReadOnlyMemory<byte>>(totalChunks);
 
-                // Decompress first chunk if needed
+                // Start with the first chunk (already have it inline)
                 if (isLz4Compressed)
                 {
-                    var decompressed = Lz4Utilities.DecompressLz4(firstChunkData, bufferPool);
-                    chunks.Add(decompressed.ToArray());
+                    segments.Add(Lz4Utilities.DecompressLz4(firstChunkData, memoryStreamManager, bufferPool));
                 }
                 else
                 {
-                    chunks.Add(firstChunkData);
+                    segments.Add(firstChunkData);
                 }
 
                 // Fetch remaining chunks (chunks are 0-indexed, chunk 0 is already inline)
@@ -935,27 +949,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     {
                         if (isLz4Compressed)
                         {
-                            var decompressed = Lz4Utilities.DecompressLz4(chunkResult.Attachment, bufferPool);
-                            chunks.Add(decompressed.ToArray());
+                            segments.Add(Lz4Utilities.DecompressLz4(chunkResult.Attachment, memoryStreamManager, bufferPool));
                         }
                         else
                         {
-                            chunks.Add(chunkResult.Attachment);
+                            segments.Add(chunkResult.Attachment);
                         }
                     }
                 }
 
-                // Concatenate all chunks
-                int totalLength = chunks.Sum(c => c.Length);
-                byte[] result = new byte[totalLength];
-                int offset = 0;
-                foreach (var chunk in chunks)
-                {
-                    Buffer.BlockCopy(chunk, 0, result, offset, chunk.Length);
-                    offset += chunk.Length;
-                }
-
-                return result;
+                return segments;
             }
         }
 

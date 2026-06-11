@@ -17,6 +17,7 @@
 using System.Collections.Generic;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2.Spark;
+using DriverModeType = AdbcDrivers.Databricks.Telemetry.Proto.DriverMode.Types.Type;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
@@ -57,7 +58,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             properties[SparkParameters.Token] = "dapi-redacted";
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasDiscoveryModeEnabled);
             Assert.False(connParams.DiscoveryModeEnabled);
@@ -74,7 +76,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             properties[DatabricksParameters.OAuthClientSecret] = "client-secret";
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasDiscoveryModeEnabled);
             Assert.False(connParams.DiscoveryModeEnabled);
@@ -89,7 +92,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 DatabricksConstants.OAuthGrantTypes.ClientCredentials;
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             // The C# driver hardcodes the OIDC token endpoint and never performs
             // .well-known discovery, so there is no URL to report. Leaving the
@@ -105,7 +109,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             properties[SparkParameters.Token] = "dapi-redacted";
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasEnableTokenCache);
             Assert.False(connParams.EnableTokenCache);
@@ -122,7 +127,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             properties[DatabricksParameters.OAuthClientSecret] = "client-secret";
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
-                properties, Host, enableDirectResults: true, useDescTableExtended: true, DefaultTimeoutMs);
+                properties, Host, DriverModeType.Thrift,
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
 
             Assert.True(connParams.HasEnableTokenCache);
             Assert.False(connParams.EnableTokenCache);

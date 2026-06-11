@@ -26,7 +26,7 @@ namespace AdbcDrivers.Databricks.Telemetry.Models
     {
         /// <summary>
         /// User agent string identifying the driver.
-        /// Example: "AdbcDatabricksDriver/1.0.0 (.NET 8.0; Windows 10)"
+        /// Example: "ADBCDatabricksDriver/1.0.0 (.NET 8.0; Windows 10)"
         /// </summary>
         [JsonPropertyName("user_agent")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
