@@ -627,6 +627,18 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             HttpCompletionOption.ResponseHeadersRead,
                             effectiveToken).ConfigureAwait(false);
 
+                        // Issue #480: stamp the OTel HTTP semantic attribute
+                        // http.response.status_code on the DownloadFile span
+                        // so 200 / 403 (expired URL) / 503 (throttle) /
+                        // other-server-error traces are distinguishable.
+                        // Set unconditionally — both success and error
+                        // responses (after retries) should carry the last
+                        // observed status code. The exception path (no
+                        // response received) intentionally leaves the tag
+                        // absent; the span's exception event already
+                        // captures the failure mode.
+                        activity?.SetTag("http.response.status_code", (int)response.StatusCode);
+
                         // Check if the response indicates an expired URL (typically 403 or 401)
                         if (response.StatusCode == System.Net.HttpStatusCode.Forbidden ||
                             response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
