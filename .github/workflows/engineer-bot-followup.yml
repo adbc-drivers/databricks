@@ -4,7 +4,7 @@
 # this workflow makes the engineer address them.
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see .bot/SETUP.md):
-#   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY, MODEL_ENDPOINT/TOKEN
+#   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
 #   - the engineer-bot App's login must match `peco-engineer-bot` (the loop-guard
 #     below + .bot/config.yaml `bot_login_prefix`); rename both if your App differs
 #   - the `engineer-bot` label: PRs the bot may take over carry it (the bug-fix
@@ -167,6 +167,9 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           TEST_REPO_ROOT: ${{ github.workspace }}              # single-repo: agent edits THIS checkout
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          MODEL_ENDPOINT:   ${{ secrets.MODEL_ENDPOINT }}      # VERIFY: your endpoint + var name
-          DATABRICKS_TOKEN: ${{ secrets.MODEL_TOKEN }}         # VERIFY: the token your endpoint needs
+          # Model serving on the same Databricks workspace as adbc's CI: DATABRICKS_HOST is
+          # the bare hostname hosting the databricks-claude-opus-4-8 serving endpoint;
+          # DATABRICKS_TOKEN authenticates it (Bearer). Both already exist as adbc CI secrets.
+          MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: python -m databricks_bot_engine.engineer_bot.run --phase followup

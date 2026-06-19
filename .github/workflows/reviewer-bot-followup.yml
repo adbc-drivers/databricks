@@ -4,7 +4,7 @@
 # replies/fixes -> this re-checks and resolves.
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see .bot/SETUP.md):
-#   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY, MODEL_ENDPOINT/TOKEN
+#   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
 #   - the reviewer-bot App needs Contents: READ & WRITE (not just Read): the
 #     resolveReviewThread mutation is gated behind Contents:write, NOT
 #     Pull-requests:write (GitHub gotcha). Pull requests: Read & write too.
@@ -163,8 +163,11 @@ jobs:
           # (allowlist for the reviewer's SHA-diff verification).
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MODEL_ENDPOINT:   ${{ secrets.MODEL_ENDPOINT }}   # VERIFY: your endpoint + var name
-          DATABRICKS_TOKEN: ${{ secrets.MODEL_TOKEN }}      # VERIFY: the token your endpoint needs
+          # Model serving on the same Databricks workspace as adbc's CI: DATABRICKS_HOST is
+          # the bare hostname hosting the databricks-claude-opus-4-8 serving endpoint;
+          # DATABRICKS_TOKEN authenticates it (Bearer). Both already exist as adbc CI secrets.
+          MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DRY_RUN: 'false'
           RUNNER_TEMP: ${{ runner.temp }}
         run: python -m databricks_bot_engine.reviewer_bot.followup

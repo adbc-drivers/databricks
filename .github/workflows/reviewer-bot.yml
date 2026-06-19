@@ -1,7 +1,7 @@
 # Reviewer-bot — reviews PRs in this repo and posts inline findings.
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
-#   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY, MODEL_ENDPOINT/TOKEN
+#   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
 #   - engine ref (pinned below to eric-wang-1990/databricks-bot-engine@main — the
 #     dedicated engine repo; PRIVATE for now, so BOT_ENGINE_PAT is scoped to it);
 #     when that repo goes public, drop the PAT (anonymous install); repin to a tag later
@@ -73,8 +73,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          MODEL_ENDPOINT:   ${{ secrets.MODEL_ENDPOINT }}   # VERIFY: your endpoint + var name
-          DATABRICKS_TOKEN: ${{ secrets.MODEL_TOKEN }}      # VERIFY: the token your endpoint needs
+          # Model serving on the same Databricks workspace as adbc's CI: DATABRICKS_HOST is
+          # the bare hostname hosting the databricks-claude-opus-4-8 serving endpoint;
+          # DATABRICKS_TOKEN authenticates it (Bearer). Both already exist as adbc CI secrets.
+          MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DRY_RUN: 'false'
           RUNNER_TEMP: ${{ runner.temp }}
         run: python -m databricks_bot_engine.reviewer_bot.run_review

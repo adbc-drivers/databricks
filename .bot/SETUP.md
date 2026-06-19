@@ -27,29 +27,34 @@ For each App, generate a private key and store the App ID + key as secrets (belo
 | `ENGINEER_BOT_APP_ID` / `ENGINEER_BOT_APP_PRIVATE_KEY` | the engineer-bot App's id + private key |
 | `REVIEW_BOT_APP_ID` / `REVIEW_BOT_APP_PRIVATE_KEY` | the reviewer-bot App's id + private key |
 | `BOT_ENGINE_PAT` | a **fine-grained PAT** with **Contents: Read-only** scoped to **just `eric-wang-1990/databricks-bot-engine`** (private for now). Set an expiry + rotation. **Drop it entirely once that repo is public** (the install goes anonymous). |
-| `MODEL_ENDPOINT` / `MODEL_TOKEN` | your LLM serving endpoint + token. **⚠️ This is a Databricks credential in a public repo** — prefer one of the alternatives below over a stored token. |
+| `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | **already present** in adbc CI (the e2e/benchmark workflows use them). The bots reuse them — **no new model secrets needed**: the endpoint is built as `https://$DATABRICKS_HOST/serving-endpoints/databricks-claude-opus-4-8/invocations` and `DATABRICKS_TOKEN` authenticates it (Bearer). |
 
-**Model credential — prefer not to store it.** Two cleaner options than a repo secret:
-- Run the jobs on the protected **`peco-driver`** self-hosted runner and source the
-  model creds from the runner environment (change `runs-on:` in both workflows).
-- Use **OIDC / workload-identity federation** (both workflows already request
-  `id-token: write`) if your endpoint accepts a federated short-lived token.
+**Model credential.** The bots reuse the `DATABRICKS_HOST` + `DATABRICKS_TOKEN` adbc
+already stores for CI — no new model secret is introduced, and the model serving
+endpoint lives on the same workspace. If you'd rather the token not be reachable from
+workflow runs at all, run the jobs on the protected **`peco-driver`** self-hosted
+runner (source creds from the runner env; change `runs-on:`) or use **OIDC** (the
+workflows already request `id-token: write`).
 
 `BOT_ENGINE_PAT` is interim — once `eric-wang-1990/databricks-bot-engine` is made
 public (or published to PyPI), drop it and switch the install lines to anonymous git / PyPI.
 
-## 3. Labels (`bot-fix` and `engineer-bot`)
+## 3. The `engineer-bot` label
 
-Create **two** labels:
+Create **one** label, **`engineer-bot`**, and keep it **maintainer-only** (applying a
+label already requires triage/write). It does double duty:
 
-- **`bot-fix`** — applied to an **issue**, triggers the bug-fix bot. Must be
-  **applied only by maintainers** (label application already requires triage/write).
-  The issue body is untrusted input; the label is the authorization.
-- **`engineer-bot`** — applied to a **PR**, opts that PR into the engineer-bot
-  **follow-up** ("engineer-bot may take over this PR": respond to review comments,
-  push fix commits). The bug-fix bot's own fix PRs should carry it (so the loop is
-  automatic); a maintainer applies it to a human PR to invite the bot in. Without
-  it, no review comment triggers the engineer follow-up.
+- On an **issue** → triggers the bug-fix bot (`engineer-bot.yaml` runs, opens a fix
+  PR). The issue body is untrusted input; the label is the authorization — which is
+  why it must stay maintainer-only.
+- On a **PR** → opts that PR into the engineer-bot **follow-up** (respond to review
+  comments, push fix commits). The bug-fix bot's own fix PRs get it automatically
+  (publish applies it); a maintainer applies it to a human PR to invite the bot in.
+
+The two never cross-fire: issue-labels fire `issues` events (only the fixer listens),
+PR-labels fire `pull_request` events (only the follow-up listens), and publish's
+auto-label is a Bot-sender event the follow-up gate skips — so the shared label can't
+cause a fix→PR→fix loop.
 
 ## 4. Engine ref
 
@@ -61,14 +66,14 @@ once the engine repo cuts one.
 
 1. Mark this PR **ready for review** and merge it.
 2. **Reviewer-bot** then runs on every new PR automatically — confirm it posts findings on a test PR.
-3. **Bug-fix bot**: open an issue with a small, reproducible bug (clear symptom + expected vs actual), add the **`bot-fix`** label, and confirm it opens a fix PR.
+3. **Bug-fix bot**: open an issue with a small, reproducible bug (clear symptom + expected vs actual), add the **`engineer-bot`** label, and confirm it opens a fix PR.
 4. **The loop**: confirm the fix PR carries the **`engineer-bot`** label, that reviewer-bot reviews it, that engineer-bot-followup addresses the findings (a fix commit + thread replies), and that reviewer-bot-followup then re-checks and resolves the threads.
 
 ## How they compose — the four workflows
 
 | Workflow | Trigger | Identity | What it does |
 |---|---|---|---|
-| `engineer-bot-fix.yml` | issue labeled `bot-fix` | engineer-bot | opens a fix PR for the bug |
+| `engineer-bot.yaml` | issue labeled `engineer-bot` | engineer-bot | opens a fix PR for the bug |
 | `reviewer-bot.yml` | any PR (opened/synchronize/…) | reviewer-bot | posts inline review findings — incl. on the bug-fix bot's own PRs |
 | `engineer-bot-followup.yml` | review comment on / `engineer-bot`-labeled PR | engineer-bot | pushes fix commits + replies, addressing the findings |
 | `reviewer-bot-followup.yml` | reply on a reviewer thread / PR synchronize | reviewer-bot | verifies the fix against the diff, then resolves or pushes back |
