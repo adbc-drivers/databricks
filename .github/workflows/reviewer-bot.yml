@@ -52,7 +52,7 @@ jobs:
         uses: actions/create-github-app-token@v2   # VERIFY: pin to a SHA
         with:
           app-id: ${{ secrets.REVIEW_BOT_APP_ID }}
-          private-key: ${{ secrets.REVIEW_BOT_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
 
       - name: Checkout PR (merge ref)
         uses: actions/checkout@v4   # VERIFY: pin to a SHA

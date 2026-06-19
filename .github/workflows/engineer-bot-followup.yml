@@ -108,7 +108,7 @@ jobs:
         uses: actions/create-github-app-token@v2   # VERIFY: pin to a SHA
         with:
           app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
-          private-key: ${{ secrets.ENGINEER_BOT_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.ENGINEER_BOT_PRIVATE_KEY }}
 
       - name: Checkout PR branch
         if: steps.filter.outputs.skip != 'true'

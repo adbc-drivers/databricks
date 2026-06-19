@@ -53,7 +53,7 @@ jobs:
         uses: actions/create-github-app-token@v2   # VERIFY: pin to a SHA
         with:
           app-id: ${{ secrets.REVIEW_BOT_APP_ID }}
-          private-key: ${{ secrets.REVIEW_BOT_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
 
       # Cheap pre-checkout filter — skip the heavy checkout/install when the event
       # is provably a no-op. followup.py re-checks everything (source of truth), so
