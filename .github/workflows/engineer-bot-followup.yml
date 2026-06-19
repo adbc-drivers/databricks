@@ -42,8 +42,11 @@ jobs:
     # over this PR"). Two event paths, gated on event_name:
     #   1. review_comment (created): a new inline comment. Gate on the COMMENTER —
     #      humans must be OWNER/MEMBER/COLLABORATOR (any GitHub user can comment on
-    #      a public repo, and this job runs the build with secrets); trusted bots
-    #      (reviewer-bot, Copilot — author_association NONE by design) are allowed;
+    #      a public repo, and this job runs the build with secrets); bots are
+    #      allowed ONLY by an explicit login allowlist (reviewer-bot, Copilot —
+    #      author_association NONE by design, so we can't gate them on association).
+    #      A bare `user.type == 'Bot'` check would let ANY installed App (Dependabot,
+    #      a third-party App) trigger a privileged run, so we match by login prefix.
     #      engineer-bot's own comments + reviewer reconcile replies are filtered
     #      (loop prevention).
     #   2. pull_request (labeled): the `engineer-bot` label was applied — wake
@@ -60,7 +63,14 @@ jobs:
           && !contains(github.event.comment.body, '<!-- pr-review-bot:v1 reconcile -->')
           && (
             contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-            || github.event.comment.user.type == 'Bot'
+            || (
+              github.event.comment.user.type == 'Bot'
+              && (
+                startsWith(github.event.comment.user.login, 'peco-review-bot')
+                || startsWith(github.event.comment.user.login, 'copilot-pull-request-reviewer')
+                || startsWith(github.event.comment.user.login, 'Copilot')
+              )
+            )
           )
         )
         || (
