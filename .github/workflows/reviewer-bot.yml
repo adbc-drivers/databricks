@@ -52,13 +52,13 @@ jobs:
     steps:
       - name: Mint review-bot App token
         id: token
-        uses: actions/create-github-app-token@v2   # VERIFY: pin to a SHA
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
         with:
           app-id: ${{ secrets.REVIEW_BOT_APP_ID }}
           private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
 
       - name: Checkout PR (merge ref)
-        uses: actions/checkout@v4   # VERIFY: pin to a SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0   # reviewer diffs head against base
           # The reviewer reads this checkout (diff/grep/read) while the LLM runs
@@ -68,7 +68,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6   # VERIFY: pin
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.11'
 
