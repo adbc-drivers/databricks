@@ -1,0 +1,121 @@
+# Engineer-bot — issue-triggered bug-fix bot for this repo.
+#
+# ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
+#   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY, MODEL_ENDPOINT/TOKEN
+#   - <ENGINE_TAG> below pinned to a databricks-driver-test ref that includes the
+#     issue-driven publish change (PR #583)
+#   - a `bot-fix` label that only maintainers can apply
+#
+# Issue-triggered, self-contained bug-fix bot. A maintainer labels an issue
+# `bot-fix`; this installs the engine (interim: PAT git-install of the internal
+# hub) + the Claude SDK from public registries, runs the bug-fix flow against
+# THIS repo, and opens a fix PR. Self-contained on purpose: a cross-org `uses:`
+# of the hub's internal composite action does NOT work, so the run steps are
+# inline. When the engine goes public, switch the install to anonymous/PyPI (and
+# optionally to `uses: .../engineer-run@<tag>`).
+name: Engineer Bot — Fix (issue-triggered)
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write        # push the fix branch
+  pull-requests: write   # open the fix PR
+  issues: write          # comment back on the issue
+  id-token: write        # if your model endpoint uses OIDC; drop otherwise
+
+concurrency:
+  # One run per issue; queue (don't cancel) so a re-label can't race.
+  group: engineer-bot-fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    # Label IS the authorization: only maintainers (triage/write) can apply it,
+    # and issue bodies are untrusted input. The ai/bugfix- guard prevents a
+    # bot-fix label on the bot's OWN fix PR's issue from recursing.
+    if: github.event.label.name == 'bot-fix'
+    runs-on: ubuntu-latest   # VERIFY: a protected/self-hosted runner if E2E tests need a warehouse
+    timeout-minutes: 45
+    steps:
+      - name: Mint engineer-bot App token
+        id: token
+        uses: actions/create-github-app-token@v2   # VERIFY: pin to a SHA
+        with:
+          app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          private-key: ${{ secrets.ENGINEER_BOT_APP_PRIVATE_KEY }}
+
+      - name: Checkout (the PR will be opened against this repo)
+        uses: actions/checkout@v4   # VERIFY: pin to a SHA
+        with:
+          token: ${{ steps.token.outputs.token }}   # so the fix-branch push authenticates as the bot
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Configure bot git identity
+        env:
+          APP_ID: ${{ secrets.ENGINEER_BOT_APP_ID }}
+        run: |
+          git config user.name "peco-engineer-bot[bot]"
+          git config user.email "${APP_ID}+peco-engineer-bot[bot]@users.noreply.github.com"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6   # VERIFY: pin
+        with:
+          python-version: '3.11'
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4   # VERIFY: pin
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+        env:
+          # Fine-grained PAT, read-only Contents on databricks/databricks-driver-test.
+          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Pin <ENGINE_TAG> to a release tag/SHA of databricks-driver-test.
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-driver-test@<ENGINE_TAG>"
+          # The engine drives the Claude Agent SDK + Claude Code CLI — from PUBLIC
+          # registries here (the hub uses an internal mirror; that's hub-only).
+          pip install claude-agent-sdk            # VERIFY: exact package/version the engine imports
+          npm install -g @anthropic-ai/claude-code # VERIFY: the CLI the SDK spawns
+
+      - name: Run bug-fix author
+        id: author
+        env:
+          TEST_REPO_ROOT: ${{ github.workspace }}          # single-repo: agent edits THIS checkout
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE:  ${{ github.event.issue.title }}
+          ISSUE_BODY:   ${{ github.event.issue.body }}
+          ISSUE_URL:    ${{ github.event.issue.html_url }}
+          GH_TOKEN:     ${{ steps.token.outputs.token }}
+          MODEL_ENDPOINT:   ${{ secrets.MODEL_ENDPOINT }}   # VERIFY: your endpoint + var name
+          DATABRICKS_TOKEN: ${{ secrets.MODEL_TOKEN }}      # VERIFY: the token your endpoint needs
+        run: python -m databricks_bot_engine.engineer_bot.run --phase author --bot .bot
+
+      - name: Open fix PR
+        # The agent SELF-REPORTS change_made|no_change_needed|blocked
+        # (protocol.AUTHOR_OUTCOMES); run_author MAPS that to the EMITTED step
+        # output: change_made -> success, no_change_needed -> no_change,
+        # blocked|invalid -> failed. So gate publish on the emitted "success".
+        if: steps.author.outputs.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ENGINEER_BOT_APP_ID: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          TEST_REPO_ROOT: ${{ github.workspace }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE:  ${{ github.event.issue.title }}
+          ISSUE_URL:    ${{ github.event.issue.html_url }}
+        run: python -m databricks_bot_engine.engineer_bot.publish
+
+      - name: Comment outcome on the issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+            --body "engineer-bot bug-fix: outcome=\`${{ steps.author.outputs.outcome }}\`. ${{ steps.author.outputs.reason }}"
