@@ -8,13 +8,18 @@ branch_prefix: ai/bugfix-                 # fix branches: ai/bugfix-<issue-numbe
 bot_login_prefix: peco-engineer-bot       # <-- your engineer-bot App's login prefix
 
 # safe_path denylist (relative to repo root). .git + the secret-scanner allowlist
-# at minimum. NOTE (security): csharp/src + .github are deliberately NOT denied,
-# so the agent can edit the code it must fix (and, in principle, its own config).
-# The safeguard is the human PR-review gate — every run lands as a PR a human
-# approves. Reviewers: scrutinize diffs to .bot/ and .github/ in bot PRs.
+# at minimum. NOTE (security): csharp/src is NOT denied — the agent must edit the
+# code it fixes. But .github + .bot ARE denied as defense-in-depth: a bug fix
+# never needs to write the bot's own CI/workflows or config/prompts, and both the
+# author and follow-up system prompts already forbid it. Enforcing it in-sandbox
+# means a prompt-injected issue/review body cannot induce such edits at all,
+# rather than relying solely on a reviewer spotting them. The human PR-review gate
+# remains the backstop — reviewers should still scrutinize any .bot/.github diffs.
 denied_subpaths:
   - .git
   - .gitleaksignore
+  - .github
+  - .bot
 
 # The opened fix PR. publish is issue-driven, so {issue_number}/{issue_title}/{issue_url}
 # are the TRIGGERING ISSUE's number/title/url (NOT a PR). "Fixes #" auto-closes
