@@ -195,4 +195,4 @@ jobs:
           # DATABRICKS_TOKEN authenticates it (Bearer). Both already exist as adbc CI secrets.
           MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: python -m databricks_bot_engine.engineer_bot.run --phase followup
+        run: python -m databricks_bot_engine.engineer_bot.run --phase followup --bot .bot
