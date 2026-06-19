@@ -1,0 +1,77 @@
+# Reviewer-bot — reviews PRs in this repo and posts inline findings.
+#
+# ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
+#   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY, MODEL_ENDPOINT/TOKEN
+#   - <ENGINE_TAG> below pinned to a databricks-driver-test ref (the reviewer
+#     only needs the packaged engine, already on that repo's main)
+#
+# Self-contained (a cross-org `uses:` of the hub's internal composite action does
+# NOT work, so the run steps are inline). Posts findings under the review-bot App
+# identity; it never merges. It also reviews the bug-fix bot's OWN fix PRs, which
+# closes the reviewer -> engineer loop.
+#
+# When the engine is published publicly: drop the PAT (anonymous git / PyPI).
+name: Reviewer Bot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write   # post inline review findings
+  id-token: write        # model OIDC, if your endpoint uses it
+
+concurrency:
+  # Re-review on each push; only the latest matters, so cancel stale runs.
+  group: reviewer-bot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Non-fork, non-draft PRs only (fork PRs must never see the LLM/engine
+    # secrets; drafts aren't ready for review).
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest   # VERIFY: a protected runner if model creds come from the runner env
+    timeout-minutes: 30
+    steps:
+      - name: Mint review-bot App token
+        id: token
+        uses: actions/create-github-app-token@v2   # VERIFY: pin to a SHA
+        with:
+          app-id: ${{ secrets.REVIEW_BOT_APP_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_APP_PRIVATE_KEY }}
+
+      - name: Checkout PR (merge ref)
+        uses: actions/checkout@v4   # VERIFY: pin to a SHA
+        with:
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0   # reviewer diffs head against base
+
+      - name: Setup Python
+        uses: actions/setup-python@v6   # VERIFY: pin
+        with:
+          python-version: '3.11'
+
+      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+        env:
+          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-driver-test@<ENGINE_TAG>"
+          pip install claude-agent-sdk             # VERIFY: exact package the engine imports
+          npm install -g @anthropic-ai/claude-code # VERIFY: the CLI the SDK spawns
+
+      - name: Run reviewer
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          MODEL_ENDPOINT:   ${{ secrets.MODEL_ENDPOINT }}   # VERIFY: your endpoint + var name
+          DATABRICKS_TOKEN: ${{ secrets.MODEL_TOKEN }}      # VERIFY: the token your endpoint needs
+          DRY_RUN: 'false'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: python -m databricks_bot_engine.reviewer_bot.run_review
