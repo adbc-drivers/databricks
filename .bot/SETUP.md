@@ -16,7 +16,7 @@ for API calls — no webhook subscriptions are needed.
 | App | Repository permissions | Used for |
 |---|---|---|
 | **engineer-bot** | Contents: **Read & write**, Pull requests: **Read & write**, Issues: **Read & write**, Metadata: Read | push the fix branch, open the fix PR, comment the outcome on the issue |
-| **reviewer-bot** | Pull requests: **Read & write**, Contents: **Read**, Metadata: Read | post inline review findings |
+| **reviewer-bot** | Pull requests: **Read & write**, Contents: **Read & write**, Metadata: Read | post inline review findings + thread replies, and **resolve threads** — the `resolveReviewThread` mutation is gated behind **Contents:write**, NOT Pull-requests:write (GitHub gotcha; only needed because the reviewer *follow-up* resolves threads) |
 
 For each App, generate a private key and store the App ID + key as secrets (below).
 
@@ -38,12 +38,18 @@ For each App, generate a private key and store the App ID + key as secrets (belo
 `BOT_ENGINE_PAT` is interim — once `eric-wang-1990/databricks-bot-engine` is made
 public (or published to PyPI), drop it and switch the install lines to anonymous git / PyPI.
 
-## 3. The `bot-fix` label
+## 3. Labels (`bot-fix` and `engineer-bot`)
 
-Create a label named **`bot-fix`**. Applying it to an issue is what triggers the
-bug-fix bot — so it must be **applied only by maintainers** (label application
-already requires triage/write permission). The issue body is untrusted input; the
-label is the authorization.
+Create **two** labels:
+
+- **`bot-fix`** — applied to an **issue**, triggers the bug-fix bot. Must be
+  **applied only by maintainers** (label application already requires triage/write).
+  The issue body is untrusted input; the label is the authorization.
+- **`engineer-bot`** — applied to a **PR**, opts that PR into the engineer-bot
+  **follow-up** ("engineer-bot may take over this PR": respond to review comments,
+  push fix commits). The bug-fix bot's own fix PRs should carry it (so the loop is
+  automatic); a maintainer applies it to a human PR to invite the bot in. Without
+  it, no review comment triggers the engineer follow-up.
 
 ## 4. Engine ref
 
@@ -55,10 +61,19 @@ once the engine repo cuts one.
 
 1. Mark this PR **ready for review** and merge it.
 2. **Reviewer-bot** then runs on every new PR automatically — confirm it posts findings on a test PR.
-3. **Bug-fix bot**: open an issue with a small, reproducible bug (clear symptom + expected vs actual), add the **`bot-fix`** label, and confirm it opens a fix PR that the reviewer-bot then reviews (the closed loop).
+3. **Bug-fix bot**: open an issue with a small, reproducible bug (clear symptom + expected vs actual), add the **`bot-fix`** label, and confirm it opens a fix PR.
+4. **The loop**: confirm the fix PR carries the **`engineer-bot`** label, that reviewer-bot reviews it, that engineer-bot-followup addresses the findings (a fix commit + thread replies), and that reviewer-bot-followup then re-checks and resolves the threads.
 
-## How they compose
-- Reviewer-bot reviews every PR — including the bug-fix bot's own fix PRs.
-- (Not yet wired) an `engineer-bot-followup` workflow would let the engineer-bot
-  *respond* to the reviewer's findings on its fix PRs, fully closing the loop. Add
-  it as a follow-on once these two are working.
+## How they compose — the four workflows
+
+| Workflow | Trigger | Identity | What it does |
+|---|---|---|---|
+| `engineer-bot-fix.yml` | issue labeled `bot-fix` | engineer-bot | opens a fix PR for the bug |
+| `reviewer-bot.yml` | any PR (opened/synchronize/…) | reviewer-bot | posts inline review findings — incl. on the bug-fix bot's own PRs |
+| `engineer-bot-followup.yml` | review comment on / `engineer-bot`-labeled PR | engineer-bot | pushes fix commits + replies, addressing the findings |
+| `reviewer-bot-followup.yml` | reply on a reviewer thread / PR synchronize | reviewer-bot | verifies the fix against the diff, then resolves or pushes back |
+
+Together: **issue → fix PR → review → engineer addresses → reviewer verifies/resolves** —
+the fully closed reviewer ⇄ engineer loop. Loop-prevention is marker-based
+(`<!-- engineer-bot-csharp-bugfix:v1 …>` / `<!-- pr-review-bot:v1 …>`), so the bots
+never react to their own comments.

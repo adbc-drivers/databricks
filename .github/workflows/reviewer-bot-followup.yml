@@ -1,0 +1,170 @@
+# Reviewer-bot — follow-up: responds to replies on the reviewer's own threads
+# (verifies the fix against the PR diff, then resolves or pushes back). Completes
+# the conversation half of the loop: reviewer-bot posts findings -> engineer-bot
+# replies/fixes -> this re-checks and resolves.
+#
+# ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see .bot/SETUP.md):
+#   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY, MODEL_ENDPOINT/TOKEN
+#   - the reviewer-bot App needs Contents: READ & WRITE (not just Read): the
+#     resolveReviewThread mutation is gated behind Contents:write, NOT
+#     Pull-requests:write (GitHub gotcha). Pull requests: Read & write too.
+#
+# Self-contained (a cross-org `uses:` of the hub's internal composite action does
+# NOT work) — installs the engine via the PAT + the Claude SDK/CLI inline.
+# When the engine repo goes public, drop the PAT (anonymous install); repin @main to a tag.
+name: Reviewer Bot — Follow-up
+
+on:
+  # Fast path: a new inline reply on a thread.
+  pull_request_review_comment:
+    types: [created]
+  # Reliable fallback: GitHub does NOT guarantee a workflow run for every
+  # automation-generated review_comment, so the comment event alone silently
+  # drops threads. The engineer-bot's fix always pushes -> synchronize -> the
+  # catch-up sweep re-checks ALL open threads and self-heals the missed event.
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read         # the App token (Contents R/W) does the resolve mutation
+  pull-requests: write   # the App token posts inline replies
+  id-token: write        # model OIDC, if your endpoint uses it; drop otherwise
+
+concurrency:
+  # One followup per PR; queue (don't cancel). Catch-up mode means the survivor
+  # sweeps ALL open threads, so cancelled queued runs are harmless.
+  group: reviewer-bot-followup-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  followup:
+    # SECURITY: skip fork PRs — keep model/LLM secrets out of untrusted code's reach.
+    if: github.event.pull_request.head.repo.fork == false && github.event.pull_request.state == 'open'
+    runs-on: ubuntu-latest   # VERIFY: a protected runner if model creds come from the runner env
+    timeout-minutes: 15
+    steps:
+      - name: Mint review-bot App token
+        id: app-token
+        uses: actions/create-github-app-token@v2   # VERIFY: pin to a SHA
+        with:
+          app-id: ${{ secrets.REVIEW_BOT_APP_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_APP_PRIVATE_KEY }}
+
+      # Cheap pre-checkout filter — skip the heavy checkout/install when the event
+      # is provably a no-op. followup.py re-checks everything (source of truth), so
+      # this is purely a cost filter + defense in depth.
+      - name: Cheap pre-checkout filter
+        id: filter
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IN_REPLY_TO: ${{ github.event.comment.in_reply_to_id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          # synchronize fallback: no trigger comment — its job is the catch-up
+          # sweep. The sweep only acts on OPEN threads that already have a reply,
+          # so a push to a PR the bot never touched no-ops after an expensive
+          # setup. One GraphQL call counts reply-bearing open threads; skip iff a
+          # confident, complete count of 0 (truncated page -> "more" -> run).
+          if [ "${{ github.event_name }}" != "pull_request_review_comment" ]; then
+            reply_threads=$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$pr:Int!){
+                repository(owner:$owner,name:$repo){
+                  pullRequest(number:$pr){
+                    reviewThreads(first:100){
+                      pageInfo{ hasNextPage }
+                      nodes{ isResolved comments(last:1){ nodes{ replyTo{ id } } } }
+                    }
+                  }
+                }
+              }' \
+              -f owner="${REPO%/*}" -f repo="${REPO#*/}" -F pr="$PR_NUMBER" \
+              --jq '.data.repository.pullRequest.reviewThreads as $t
+                    | ([$t.nodes[]
+                        | select(.isResolved == false)
+                        | select(.comments.nodes[0].replyTo != null)] | length) as $n
+                    | if $t.pageInfo.hasNextPage and $n == 0 then "more" else ($n | tostring) end' \
+              2>/dev/null) || reply_threads=""
+            if [ "$reply_threads" = "0" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "reason=synchronize fallback: no open review thread has a reply — sweep would no-op" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # review_comment path:
+          # Filter 1: must be a reply to another inline comment (a thread reply).
+          if [ -z "$IN_REPLY_TO" ] || [ "$IN_REPLY_TO" = "null" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=no in_reply_to_id (top-level review comment, not a thread reply)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Filter 2: skip our own followup / reconcile replies (loop prevention, MARKER-based).
+          if printf '%s' "$COMMENT_BODY" | grep -q '<!-- pr-review-bot:v1 followup'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=trigger comment is itself a bot follow-up (loop prevention)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if printf '%s' "$COMMENT_BODY" | grep -q '<!-- pr-review-bot:v1 reconcile -->'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=trigger comment is itself a bot reconcile reply (loop prevention)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Announce skip in step summary
+        if: steps.filter.outputs.skip == 'true'
+        run: |
+          {
+            echo "## Reviewer Bot — Follow-up"
+            echo ""
+            echo "**Skipped:** ${{ steps.filter.outputs.reason }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/checkout@v4   # VERIFY: pin to a SHA
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          # The followup reads this checkout (grep/read); keep the GITHUB_TOKEN
+          # OUT of .git/config so it can't be read+leaked. The followup only POSTS
+          # via the minted App token; it never uses the checkout's git creds.
+          persist-credentials: false
+
+      - name: Setup Python
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/setup-python@v6   # VERIFY: pin
+        with:
+          python-version: '3.11'
+
+      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+        if: steps.filter.outputs.skip != 'true'
+        env:
+          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Drop the `x-access-token:${ENGINE_PAT}@` prefix once the engine repo is public; repin @main to a tag.
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/eric-wang-1990/databricks-bot-engine@main"
+          pip install claude-agent-sdk             # VERIFY: exact package the engine imports
+          npm install -g @anthropic-ai/claude-code # VERIFY: the CLI the SDK spawns
+
+      - name: Run follow-up agent
+        if: steps.filter.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+          # SHA range for the PR — restricts `git show` to commits in this PR
+          # (allowlist for the reviewer's SHA-diff verification).
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MODEL_ENDPOINT:   ${{ secrets.MODEL_ENDPOINT }}   # VERIFY: your endpoint + var name
+          DATABRICKS_TOKEN: ${{ secrets.MODEL_TOKEN }}      # VERIFY: the token your endpoint needs
+          DRY_RUN: 'false'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: python -m databricks_bot_engine.reviewer_bot.followup
