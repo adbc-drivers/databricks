@@ -109,10 +109,13 @@ jobs:
         run: python -m databricks_bot_engine.engineer_bot.run --phase author --bot .bot
 
       - name: Open fix PR
+        id: publish
         # The agent SELF-REPORTS change_made|no_change_needed|blocked
         # (protocol.AUTHOR_OUTCOMES); run_author MAPS that to the EMITTED step
         # output: change_made -> success, no_change_needed -> no_change,
         # blocked|invalid -> failed. So gate publish on the emitted "success".
+        # publish opens the PR with the `engineer-bot` label (engineer-followup
+        # opt-in) and emits the PR url as `coverage_pr_url`.
         if: steps.author.outputs.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -122,6 +125,17 @@ jobs:
           ISSUE_TITLE:  ${{ github.event.issue.title }}
           ISSUE_URL:    ${{ github.event.issue.html_url }}
         run: python -m databricks_bot_engine.engineer_bot.publish
+
+      - name: Label the fix PR for review
+        # publish applies `engineer-bot` (engineer opt-in) but the reviewer gates
+        # strictly on `review-bot`, so add that label here too — otherwise the fix
+        # PR would never be reviewed and the loop wouldn't close. Keeps the labels
+        # single-purpose (engineer-bot ⇒ engineer, review-bot ⇒ reviewer); the fix
+        # PR simply opts into both. The `labeled` event fires reviewer-bot.yml.
+        if: steps.author.outputs.outcome == 'success' && steps.publish.outputs.coverage_pr_url != ''
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: gh pr edit "${{ steps.publish.outputs.coverage_pr_url }}" --add-label review-bot
 
       - name: Comment outcome on the issue
         if: always()

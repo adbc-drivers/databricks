@@ -32,20 +32,18 @@ concurrency:
 
 jobs:
   review:
-    # Non-fork, non-draft, OPTED-IN PRs only:
+    # Non-fork, non-draft, `review-bot`-labeled PRs only:
     #  - fork PRs must never see the LLM/engine secrets; drafts aren't ready.
-    #  - label gate: review only PRs carrying `review-bot` (a maintainer opts a
-    #    PR in) OR `engineer-bot`. The OR keeps the loop automatic — the bug-fix
-    #    bot's own fix PRs carry `engineer-bot` (publish auto-applies it), so they
-    #    are reviewed without anyone hand-labeling each one. Without a label the
-    #    reviewer stays silent, so it doesn't comment on every PR in the repo.
+    #  - label gate: review ONLY PRs carrying `review-bot`. `review-bot` guards the
+    #    reviewer; `engineer-bot` guards the engineer — strictly separate, never
+    #    mixed. A maintainer opts a PR in with `review-bot`; the bug-fix bot's own
+    #    fix PRs get `review-bot` applied by engineer-bot.yaml after publish, so
+    #    they're reviewed and the loop still closes. Without the label the reviewer
+    #    stays silent, so it doesn't comment on every PR in the repo.
     if: >-
       github.event.pull_request.draft == false
       && github.event.pull_request.head.repo.fork == false
-      && (
-        contains(github.event.pull_request.labels.*.name, 'review-bot')
-        || contains(github.event.pull_request.labels.*.name, 'engineer-bot')
-      )
+      && contains(github.event.pull_request.labels.*.name, 'review-bot')
     runs-on: ubuntu-latest   # VERIFY: a protected runner if model creds come from the runner env
     timeout-minutes: 30
     steps:

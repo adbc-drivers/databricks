@@ -55,13 +55,13 @@ requires triage/write). Nothing the bots do happens on an unlabeled PR.
 - On a **PR** → reviewer-bot reviews it (and its follow-up resolves threads). Without
   it the reviewer stays silent, so the bot doesn't comment on every PR in the repo.
 
-**How they interact:** the reviewer runs on a PR labeled **`review-bot` _or_
-`engineer-bot`**. The OR is deliberate — the bug-fix bot's fix PRs only carry
-`engineer-bot`, so this keeps them auto-reviewed and the loop closed without anyone
-hand-labeling each fix PR. So: `engineer-bot` → both bots engage; `review-bot` →
-reviewer only. No cross-fire: issue-labels fire `issues` events (only the fixer
-listens), PR-labels fire `pull_request` events, and publish's auto-label is a
-Bot-sender event the engineer follow-up gate skips — so no fix→PR→fix loop.
+**Strictly separate:** `engineer-bot` guards the engineer only; `review-bot` guards the
+reviewer only — neither label triggers the other bot. The bug-fix bot's fix PR ends up
+with **both** labels (publish applies `engineer-bot`; `engineer-bot.yaml` adds
+`review-bot` right after publish), so both bots engage on it and the loop closes — but
+each label still controls exactly one bot. No cross-fire: issue-labels fire `issues`
+events (only the fixer listens), PR-labels fire `pull_request` events, and publish's
+auto-label is a Bot-sender event the engineer follow-up gate skips.
 
 ## 4. Engine ref
 
@@ -81,9 +81,9 @@ once the engine repo cuts one.
 | Workflow | Trigger | Identity | What it does |
 |---|---|---|---|
 | `engineer-bot.yaml` | issue labeled `engineer-bot` | engineer-bot | opens a fix PR for the bug |
-| `reviewer-bot.yml` | `review-bot`- or `engineer-bot`-labeled PR (opened/synchronize/labeled/…) | reviewer-bot | posts inline review findings — incl. on the bug-fix bot's own PRs |
+| `reviewer-bot.yml` | `review-bot`-labeled PR (opened/synchronize/labeled/…) | reviewer-bot | posts inline review findings — incl. on the bug-fix bot's own fix PRs (which get `review-bot`) |
 | `engineer-bot-followup.yml` | review comment on / `engineer-bot`-labeled PR | engineer-bot | pushes fix commits + replies, addressing the findings |
-| `reviewer-bot-followup.yml` | reply on a reviewer thread / synchronize, on a `review-bot`/`engineer-bot` PR | reviewer-bot | verifies the fix against the diff, then resolves or pushes back |
+| `reviewer-bot-followup.yml` | reply on a reviewer thread / synchronize, on a `review-bot` PR | reviewer-bot | verifies the fix against the diff, then resolves or pushes back |
 
 Together: **issue → fix PR → review → engineer addresses → reviewer verifies/resolves** —
 the fully closed reviewer ⇄ engineer loop. Loop-prevention is marker-based

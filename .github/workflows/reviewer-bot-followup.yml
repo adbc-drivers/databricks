@@ -39,15 +39,12 @@ concurrency:
 jobs:
   followup:
     # SECURITY: skip fork PRs — keep model/LLM secrets out of untrusted code's reach.
-    # Same opt-in label gate as reviewer-bot.yml (`review-bot` OR `engineer-bot`) so
-    # the follow-up only acts on PRs the reviewer was allowed to review.
+    # Same `review-bot` label gate as reviewer-bot.yml — the follow-up only acts on
+    # PRs the reviewer was allowed to review.
     if: >-
       github.event.pull_request.head.repo.fork == false
       && github.event.pull_request.state == 'open'
-      && (
-        contains(github.event.pull_request.labels.*.name, 'review-bot')
-        || contains(github.event.pull_request.labels.*.name, 'engineer-bot')
-      )
+      && contains(github.event.pull_request.labels.*.name, 'review-bot')
     runs-on: ubuntu-latest   # VERIFY: a protected runner if model creds come from the runner env
     timeout-minutes: 15
     steps:
