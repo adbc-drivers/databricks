@@ -145,10 +145,17 @@ jobs:
       - name: Configure bot git identity
         if: steps.filter.outputs.skip != 'true'
         env:
-          APP_ID: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          # NOTE: the noreply attribution format is <USER_ID>+<login>@users.noreply.github.com
+          # where USER_ID is the NUMERIC user id of the bot account (peco-engineer-bot[bot]),
+          # NOT the App's app-id (those are different numbers). Resolve it at runtime so
+          # commits link to the bot's profile and show as verified.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config user.name "peco-engineer-bot[bot]"
-          git config user.email "${APP_ID}+peco-engineer-bot[bot]@users.noreply.github.com"
+          set -euo pipefail
+          bot_login="peco-engineer-bot[bot]"
+          bot_id="$(gh api "/users/${bot_login}" --jq .id)"
+          git config user.name "${bot_login}"
+          git config user.email "${bot_id}+${bot_login}@users.noreply.github.com"
 
       - name: Setup Python
         if: steps.filter.outputs.skip != 'true'

@@ -60,10 +60,17 @@ jobs:
 
       - name: Configure bot git identity
         env:
-          APP_ID: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          # NOTE: the noreply attribution format is <USER_ID>+<login>@users.noreply.github.com
+          # where USER_ID is the NUMERIC user id of the bot account (peco-engineer-bot[bot]),
+          # NOT the App's app-id (those are different numbers). Resolve it at runtime so
+          # commits link to the bot's profile and show as verified.
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          git config user.name "peco-engineer-bot[bot]"
-          git config user.email "${APP_ID}+peco-engineer-bot[bot]@users.noreply.github.com"
+          set -euo pipefail
+          bot_login="peco-engineer-bot[bot]"
+          bot_id="$(gh api "/users/${bot_login}" --jq .id)"
+          git config user.name "${bot_login}"
+          git config user.email "${bot_id}+${bot_login}@users.noreply.github.com"
 
       - name: Setup Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
@@ -135,7 +142,11 @@ jobs:
         if: steps.author.outputs.outcome == 'success' && steps.publish.outputs.coverage_pr_url != ''
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: gh pr edit "${{ steps.publish.outputs.coverage_pr_url }}" --add-label review-bot
+          # Bind the engine-produced URL to an env var rather than interpolating
+          # ${{ }} into the run-script, mirroring the "Comment outcome" step — the
+          # runner shell never parses it as command syntax (defense-in-depth).
+          COVERAGE_PR_URL: ${{ steps.publish.outputs.coverage_pr_url }}
+        run: gh pr edit "$COVERAGE_PR_URL" --add-label review-bot
 
       - name: Comment outcome on the issue
         if: always()
