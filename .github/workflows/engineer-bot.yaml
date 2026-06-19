@@ -139,8 +139,17 @@ jobs:
 
       - name: Comment outcome on the issue
         if: always()
+        # `reason` is free text produced by the bug-fix agent (LLM-derived, from
+        # untrusted issue title/body), so it must NOT be interpolated into the
+        # command text — backticks/$(...)/"; ..." would be executed by the runner
+        # shell (which holds GH_TOKEN with contents+PR+issues write). Pass both
+        # values via env and reference them as shell variables so the shell never
+        # parses them as command syntax. (`outcome` is a controlled enum, but it's
+        # routed through env too for consistency.)
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
+          OUTCOME: ${{ steps.author.outputs.outcome }}
+          REASON: ${{ steps.author.outputs.reason }}
         run: |
           gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
-            --body "engineer-bot bug-fix: outcome=\`${{ steps.author.outputs.outcome }}\`. ${{ steps.author.outputs.reason }}"
+            --body "engineer-bot bug-fix: outcome=\`${OUTCOME}\`. ${REASON}"

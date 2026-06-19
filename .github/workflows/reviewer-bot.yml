@@ -16,8 +16,11 @@ name: Reviewer Bot
 
 on:
   pull_request:
-    # `labeled` is included so adding `review-bot` (or `engineer-bot`) to an
-    # already-open PR triggers a review immediately, not just on the next push.
+    # `labeled` is included so adding `review-bot` to an already-open PR triggers
+    # a review immediately, not just on the next push. (The `if:` gate below only
+    # honors `review-bot`; applying `engineer-bot` alone fires this event but the
+    # job is skipped. Engineer-bot fix PRs are reviewed because engineer-bot.yaml
+    # separately adds the `review-bot` label after publish.)
     types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 permissions:
@@ -57,8 +60,12 @@ jobs:
       - name: Checkout PR (merge ref)
         uses: actions/checkout@v4   # VERIFY: pin to a SHA
         with:
-          token: ${{ steps.token.outputs.token }}
           fetch-depth: 0   # reviewer diffs head against base
+          # The reviewer reads this checkout (diff/grep/read) while the LLM runs
+          # over untrusted PR content; keep the App token OUT of .git/config so a
+          # prompt-injection can't read+leak it. The reviewer only POSTS via the
+          # minted App token in GH_TOKEN; it never uses the checkout's git creds.
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v6   # VERIFY: pin
