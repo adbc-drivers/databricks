@@ -2,8 +2,8 @@
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
 #   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY, MODEL_ENDPOINT/TOKEN
-#   - <ENGINE_TAG> below pinned to a databricks-driver-test ref that includes the
-#     issue-driven publish change (PR #583)
+#   - engine ref (pinned below to databricks-driver-test@c1c5e36b — the #581+#583
+#     merge, which has the issue-driven publish change); repin to a release tag later
 #   - a `bot-fix` label that only maintainers can apply
 #
 # Issue-triggered, self-contained bug-fix bot. A maintainer labels an issue
@@ -77,8 +77,9 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # Pin <ENGINE_TAG> to a release tag/SHA of databricks-driver-test.
-          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-driver-test@<ENGINE_TAG>"
+          # Pinned to the #581+#583 merge on databricks-driver-test main (packaging
+          # + issue-driven publish). Replace with a release tag once one is cut.
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-driver-test@c1c5e36b"
           # The engine drives the Claude Agent SDK + Claude Code CLI — from PUBLIC
           # registries here (the hub uses an internal mirror; that's hub-only).
           pip install claude-agent-sdk            # VERIFY: exact package/version the engine imports
