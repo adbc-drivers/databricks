@@ -4,7 +4,7 @@ How to activate the two bots added by this PR. Until these are done they stay
 inert (the workflows are present but every run no-ops / the PR is draft).
 
 The bots run the generic **`databricks-bot-engine`** (hosted in
-`databricks/databricks-driver-test`, internal for now). Both workflows are
+`eric-wang-1990/databricks-bot-engine`, **private for now**). Both workflows are
 **self-contained**: they `pip install` the engine and run it inline.
 
 ## 1. Two GitHub Apps (the bot identities)
@@ -26,7 +26,7 @@ For each App, generate a private key and store the App ID + key as secrets (belo
 |---|---|
 | `ENGINEER_BOT_APP_ID` / `ENGINEER_BOT_APP_PRIVATE_KEY` | the engineer-bot App's id + private key |
 | `REVIEW_BOT_APP_ID` / `REVIEW_BOT_APP_PRIVATE_KEY` | the reviewer-bot App's id + private key |
-| `BOT_ENGINE_PAT` | a **fine-grained PAT** with **Contents: Read-only** scoped to **just `databricks/databricks-driver-test`** (the engine is internal for now). Created by a Databricks-org member; set an expiry + rotation. |
+| `BOT_ENGINE_PAT` | a **fine-grained PAT** with **Contents: Read-only** scoped to **just `eric-wang-1990/databricks-bot-engine`** (private for now). Set an expiry + rotation. **Drop it entirely once that repo is public** (the install goes anonymous). |
 | `MODEL_ENDPOINT` / `MODEL_TOKEN` | your LLM serving endpoint + token. **⚠️ This is a Databricks credential in a public repo** — prefer one of the alternatives below over a stored token. |
 
 **Model credential — prefer not to store it.** Two cleaner options than a repo secret:
@@ -35,8 +35,8 @@ For each App, generate a private key and store the App ID + key as secrets (belo
 - Use **OIDC / workload-identity federation** (both workflows already request
   `id-token: write`) if your endpoint accepts a federated short-lived token.
 
-`BOT_ENGINE_PAT` is interim — once the engine is published publicly (PyPI or a
-public repo), drop it and switch the install lines to anonymous git / PyPI.
+`BOT_ENGINE_PAT` is interim — once `eric-wang-1990/databricks-bot-engine` is made
+public (or published to PyPI), drop it and switch the install lines to anonymous git / PyPI.
 
 ## 3. The `bot-fix` label
 
@@ -47,8 +47,8 @@ label is the authorization.
 
 ## 4. Engine ref
 
-Both workflows pin the engine to **`databricks/databricks-driver-test@c1c5e36b`**
-(the #581 + #583 merge — packaging + issue-driven publish). Repin to a release tag
+Both workflows pin the engine to **`eric-wang-1990/databricks-bot-engine@main`**
+(the dedicated engine repo, currently private). Repin to a release tag
 once the engine repo cuts one.
 
 ## 5. Activate + test

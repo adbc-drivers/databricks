@@ -2,8 +2,9 @@
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
 #   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY, MODEL_ENDPOINT/TOKEN
-#   - engine ref (pinned below to databricks-driver-test@c1c5e36b — the packaged
-#     engine on main; the reviewer doesn't need #583); repin to a release tag later
+#   - engine ref (pinned below to eric-wang-1990/databricks-bot-engine@main — the
+#     dedicated engine repo; PRIVATE for now, so BOT_ENGINE_PAT is scoped to it);
+#     when that repo goes public, drop the PAT (anonymous install); repin to a tag later
 #
 # Self-contained (a cross-org `uses:` of the hub's internal composite action does
 # NOT work, so the run steps are inline). Posts findings under the review-bot App
@@ -59,8 +60,9 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # Pinned to the databricks-driver-test main ref (#581+#583); repin to a release tag once cut.
-          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-driver-test@c1c5e36b"
+          # The dedicated engine repo (PRIVATE for now → install via the PAT). Drop the
+          # `x-access-token:${ENGINE_PAT}@` prefix once it's public; repin @main to a tag later.
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/eric-wang-1990/databricks-bot-engine@main"
           pip install claude-agent-sdk             # VERIFY: exact package the engine imports
           npm install -g @anthropic-ai/claude-code # VERIFY: the CLI the SDK spawns
 
