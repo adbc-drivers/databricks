@@ -127,6 +127,19 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}   # so the fix push authenticates as the bot
+          # SECURITY — deliberate asymmetry with the reviewer workflows (they set
+          # persist-credentials: false, keeping their token out of .git/config so a
+          # prompt-injected PR can't read it). Here the App token is Contents+PR
+          # WRITE and the engine pushes the fix branch via git's persisted creds (same
+          # as the author phase), so persisting is inherent — pushing env-only would
+          # require engine support we don't rely on. The exposure (a writable token in
+          # .git/config while the agent runs over untrusted PR diff/comments) is
+          # mitigated by the engine's tool sandbox, NOT by hiding the token:
+          #   - .bot/config.yaml denied_subpaths includes `.git`, so the engine's
+          #     safe_path-enforced read_file/grep/glob cannot read .git/config;
+          #   - bash_allowlist pins git to `diff HEAD` / `diff --cached` / `status`
+          #     (no `cat`/`ls`, no `git config`), so no in-sandbox path dumps the token.
+          # If those sandbox guarantees ever loosen, revisit (push env-only at run end).
           persist-credentials: true
 
       - name: Configure bot git identity

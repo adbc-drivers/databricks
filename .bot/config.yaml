@@ -59,6 +59,23 @@ author:
     issue_title:  ISSUE_TITLE
     issue_body:   ISSUE_BODY
 
+# Follow-up phase: woken by engineer-bot-followup.yml (a review comment on, or
+# the `engineer-bot` label applied to, one of the bot's fix PRs). The prompt is
+# rendered from followup_user.md; tokens are the PR being followed up on. The
+# engine reads followup_system.md (no longer the "phase unused" placeholder) as
+# the system prompt. TRIGGER_COMMENT_ID is empty on the labeled path (catch-up
+# mode) — followup_user.md handles that case.
+followup:
+  max_turns: 60
+  user_prompt_template: prompts/followup_user.md
+  env_tokens:                 # {{...}} in followup_user.md  <-  env vars (set by the workflow)
+    pr_number:          PR_NUMBER
+    trigger_comment_id: TRIGGER_COMMENT_ID
+    head_branch:        HEAD_BRANCH
+  # VERIFY: confirm the engine's followup phase expects exactly these keys
+  # (max_turns / user_prompt_template / env_tokens, same shape as `author:`) and
+  # that the bug-fix flow drives `--phase followup`; adjust to match the engine.
+
 # The bug-fix flow (engine: flows/bug_fix.py): the engine appends the
 # "write a failing test → fix the CODE → re-run until green; don't weaken the
 # test" instruction and forces a {outcome, reason, red_green_tests} result.
