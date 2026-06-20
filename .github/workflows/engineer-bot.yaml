@@ -161,7 +161,7 @@ jobs:
             "catalog": "main",
             "db_schema": "default",
             "isCITesting": true,
-            "metadata": { "catalog": "main", "schema": "default" }
+            "metadata": { "catalog": "main", "schema": "pqtest", "table": "alltypes" }
           }
           EOF
           echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> "$GITHUB_ENV"
