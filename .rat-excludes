@@ -39,3 +39,9 @@ rust/license.tpl
 rust/pixi.lock
 # htpasswd is a data file (username:password_hash) that cannot contain license headers
 rust/ci/proxy/htpasswd
+# engineer-bot's config + workflow use the .yaml extension (the engine requires the
+# exact name .bot/config.yaml; the workflow is intentionally engineer-bot.yaml), which
+# RAT's built-in .yml handling doesn't cover. The sibling reviewer/followup workflows
+# (.yml) carry no header either; exclude these for parity.
+.bot/config.yaml
+.github/workflows/engineer-bot.yaml
