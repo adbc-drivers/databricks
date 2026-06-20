@@ -1,0 +1,215 @@
+# Engineer-bot — follow-up: responds to inline review comments on the bot's
+# (or any `engineer-bot`-labeled) PRs — pushes fix commits + replies on threads.
+# This is what closes the reviewer -> engineer loop: reviewer-bot posts findings,
+# this workflow makes the engineer address them.
+#
+# ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see .bot/SETUP.md):
+#   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
+#   - the engineer-bot App's login must match `peco-engineer-bot` (the loop-guard
+#     below + .bot/config.yaml `bot_login_prefix`); rename both if your App differs
+#   - the `engineer-bot` label: PRs the bot may take over carry it (the bug-fix
+#     bot's own fix PRs, or a maintainer applies it to a human PR)
+#
+# Self-contained (a cross-org `uses:` of the hub's internal composite action does
+# NOT work) — installs the engine via the PAT + the Claude SDK/CLI inline.
+# Supply-chain pin: ENGINE_REF in the install step is pinned to an immutable commit SHA
+# (never @main); claude-agent-sdk / @anthropic-ai/claude-code are unpinned to match the hub.
+# When the engine repo goes public, drop the PAT (anonymous install) but keep ENGINE_REF pinned.
+name: Engineer Bot — Follow-up
+
+on:
+  pull_request_review_comment:
+    types: [created]
+  # Fire when the `engineer-bot` label is applied, so the bot picks up inline
+  # comments posted BEFORE the label. followup.py's catch-up mode then scans the
+  # PR for ALL unaddressed threads regardless of which event woke it.
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write        # the App token pushes fix commits to the PR branch
+  pull-requests: write   # post inline replies on review threads
+  id-token: write        # model OIDC, if your endpoint uses it; drop otherwise
+
+concurrency:
+  # One followup per PR; queue (don't cancel) — catch-up mode means the survivor
+  # sweeps ALL open threads, so cancelled queued runs are harmless.
+  group: engineer-bot-followup-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  followup:
+    # SECURITY: skip forks (LLM/model secrets). Operate only on non-fork, open
+    # PRs that carry the `engineer-bot` label (opt-in: "engineer-bot may take
+    # over this PR"). Two event paths, gated on event_name:
+    #   1. review_comment (created): a new inline comment. Gate on the COMMENTER —
+    #      humans must be OWNER/MEMBER/COLLABORATOR (any GitHub user can comment on
+    #      a public repo, and this job runs the build with secrets); bots are
+    #      allowed ONLY by an explicit login allowlist (reviewer-bot, Copilot —
+    #      author_association NONE by design, so we can't gate them on association).
+    #      A bare `user.type == 'Bot'` check would let ANY installed App (Dependabot,
+    #      a third-party App) trigger a privileged run, so we match by login prefix.
+    #      engineer-bot's own comments + reviewer reconcile replies are filtered
+    #      (loop prevention).
+    #   2. pull_request (labeled): the `engineer-bot` label was applied — wake
+    #      catch-up mode. Gated on the label name AND a non-Bot human labeler
+    #      (applying a label needs triage+; forecloses an auto-labeller looping).
+    if: >-
+      github.event.pull_request.head.repo.fork == false
+      && github.event.pull_request.state == 'open'
+      && (
+        (
+          github.event_name == 'pull_request_review_comment'
+          && contains(github.event.pull_request.labels.*.name, 'engineer-bot')
+          && !startsWith(github.event.comment.user.login, 'peco-engineer-bot')
+          && !contains(github.event.comment.body, '<!-- pr-review-bot:v1 reconcile -->')
+          && (
+            contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+            || (
+              github.event.comment.user.type == 'Bot'
+              && (
+                startsWith(github.event.comment.user.login, 'peco-review-bot')
+                || startsWith(github.event.comment.user.login, 'copilot-pull-request-reviewer')
+                || startsWith(github.event.comment.user.login, 'Copilot')
+              )
+            )
+          )
+        )
+        || (
+          github.event_name == 'pull_request'
+          && github.event.action == 'labeled'
+          && github.event.label.name == 'engineer-bot'
+          && github.event.sender.type != 'Bot'
+          && !startsWith(github.event.sender.login, 'peco-engineer-bot')
+        )
+      )
+    runs-on: ubuntu-latest   # VERIFY: a protected/self-hosted runner if the fix-verification tests need a warehouse
+    # 55 min: the App installation token expires at 60; PRs with many threads need headroom
+    # (the agent pushes fixes + posts replies at the END of the run).
+    timeout-minutes: 55
+    steps:
+      # Cheap pre-checkout filter — bail before minting a token / checkout if the
+      # trigger comment is our own marker-bearing loopback. Only meaningful on the
+      # review_comment path (the labeled path has no comment). followup.py re-checks
+      # per thread, so this is purely a cost short-circuit + defense in depth.
+      - name: Cheap pre-checkout filter
+        if: github.event_name == 'pull_request_review_comment'
+        id: filter
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          if printf '%s' "$COMMENT_BODY" | grep -q '<!-- engineer-bot-csharp-bugfix:v1'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=trigger carries our marker (loop)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Announce skip in step summary
+        if: steps.filter.outputs.skip == 'true'
+        run: |
+          {
+            echo "## Engineer Bot — Follow-up"
+            echo ""
+            echo "**Skipped:** ${{ steps.filter.outputs.reason }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Mint engineer-bot App token
+        if: steps.filter.outputs.skip != 'true'
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          private-key: ${{ secrets.ENGINEER_BOT_PRIVATE_KEY }}
+
+      - name: Checkout PR branch
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}   # so the fix push authenticates as the bot
+          # SECURITY — deliberate asymmetry with the reviewer workflows (they set
+          # persist-credentials: false, keeping their token out of .git/config so a
+          # prompt-injected PR can't read it). Here the App token is Contents+PR
+          # WRITE and the engine pushes the fix branch via git's persisted creds (same
+          # as the author phase), so persisting is inherent — pushing env-only would
+          # require engine support we don't rely on. The exposure (a writable token in
+          # .git/config while the agent runs over untrusted PR diff/comments) is
+          # mitigated by the engine's tool sandbox, NOT by hiding the token:
+          #   - .bot/config.yaml denied_subpaths includes `.git`, so the engine's
+          #     safe_path-enforced read_file/grep/glob cannot read .git/config;
+          #   - bash_allowlist pins git to `diff HEAD` / `diff --cached` / `status`
+          #     (no `cat`/`ls`, no `git config`), so no in-sandbox path dumps the token.
+          # If those sandbox guarantees ever loosen, revisit (push env-only at run end).
+          persist-credentials: true
+
+      - name: Configure bot git identity
+        if: steps.filter.outputs.skip != 'true'
+        env:
+          # NOTE: the noreply attribution format is <USER_ID>+<login>@users.noreply.github.com
+          # where USER_ID is the NUMERIC user id of the bot account (peco-engineer-bot[bot]),
+          # NOT the App's app-id (those are different numbers). Resolve it at runtime so
+          # commits link to the bot's profile and show as verified.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          bot_login="peco-engineer-bot[bot]"
+          bot_id="$(gh api "/users/${bot_login}" --jq .id)"
+          git config user.name "${bot_login}"
+          git config user.email "${bot_id}+${bot_login}@users.noreply.github.com"
+
+      - name: Setup Python
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Setup .NET
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4.3.1
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+        if: steps.filter.outputs.skip != 'true'
+        env:
+          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+          # SUPPLY-CHAIN PIN: the engine is pinned to an immutable commit SHA — never
+          # install from the force-pushable `@main` ref in a secret-bearing job. Bump
+          # ENGINE_REF to adopt engine changes (prefer a release tag once the engine
+          # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
+          # unpinned to match the hub (databricks-driver-test); pin them to exact
+          # versions here if you want full reproducibility.
+          ENGINE_REF: 28c44e388790d61c18acb43d27547e540199c5e7
+        run: |
+          set -euo pipefail
+          : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
+          python -m pip install --upgrade pip
+          # Drop the `x-access-token:${ENGINE_PAT}@` prefix once the engine repo is public; ENGINE_REF stays pinned.
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/eric-wang-1990/databricks-bot-engine@${ENGINE_REF}"
+          pip install claude-agent-sdk
+          npm install -g @anthropic-ai/claude-code
+
+      # WORKFLOW -> followup.py env contract: all required vars come from
+      # github.event.pull_request.* / github.repository (populated on BOTH event
+      # paths). TRIGGER_COMMENT_ID is the only comment-derived var — empty on the
+      # labeled path, which is intentional (followup.py treats it as logging-only;
+      # it always runs catch-up mode and re-scans the PR for unaddressed threads).
+      - name: Run engineer-bot follow-up
+        if: steps.filter.outputs.skip != 'true'
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          TEST_REPO_ROOT: ${{ github.workspace }}              # single-repo: agent edits THIS checkout
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Model serving on the same Databricks workspace as adbc's CI: DATABRICKS_HOST is
+          # the bare hostname hosting the databricks-claude-opus-4-8 serving endpoint;
+          # DATABRICKS_TOKEN authenticates it (Bearer). Both already exist as adbc CI secrets.
+          MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: python -m databricks_bot_engine.engineer_bot.run --phase followup --bot .bot
