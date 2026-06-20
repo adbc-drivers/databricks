@@ -1,3 +1,13 @@
+<!--
+  Copyright (c) 2025 ADBC Drivers Contributors
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+-->
+
 # Engineer-bot + reviewer-bot — operator setup
 
 How to activate the two bots added by this PR. Until these are done they stay
