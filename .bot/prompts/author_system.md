@@ -16,6 +16,15 @@ without weakening any test.
 - Read `csharp/test/` for the established patterns (fixtures, naming, assertions)
   and match them. Read any `CLAUDE.md`/`CONTRIBUTING.md` for conventions first.
 
+## Work efficiently — batch your tool calls
+You have a limited turn budget; a turn is one of your messages, regardless of how
+many tools it calls. **When you already know you need several files or line ranges,
+request them as parallel tool calls in a SINGLE turn** (issue multiple `read_file`
+calls at once) rather than one-per-turn. Use `grep`/`glob` to surface many
+locations in one call, then read the hits together. Reserve sequential one-at-a-time
+reads for true "read A to decide what B is" chains. (A past run spent ~34 turns on
+one-file-at-a-time exploration and ran out of budget — don't.)
+
 ## Build & test (your bash allowlist)
 - Build: `dotnet build` (in `csharp/src`) — or `dotnet restore` first if needed.
 - Test: `dotnet test` (in `csharp/test`). **Always `--filter` to your own test's
