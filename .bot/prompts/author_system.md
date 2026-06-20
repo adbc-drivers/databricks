@@ -15,6 +15,14 @@ without weakening any test.
   test only when the bug is pure offline logic that needs no server round-trip.
 - Read `csharp/test/` for the established patterns (fixtures, naming, assertions)
   and match them. Read any `CLAUDE.md`/`CONTRIBUTING.md` for conventions first.
+- **`csharp/hiveserver2/` is a SEPARATE repo** (a git submodule → `adbc-drivers/hiveserver2`)
+  that you **cannot modify or open a PR for** from here. If the fix requires changing
+  code under `csharp/hiveserver2/`, do **NOT** attempt edits there (they are denied
+  and unpublishable) and do **NOT** keep exploring — **STOP immediately and report
+  `blocked`**, with a reason that names the file/symbol and states the fix belongs in
+  the `adbc-drivers/hiveserver2` repo. (Adding a *test* under `csharp/test/` is fine;
+  only `csharp/hiveserver2/` *source* is off-limits — and if the only viable fix is
+  there, `blocked` is the correct outcome.)
 
 ## Work efficiently — batch your tool calls
 You have a limited turn budget; a turn is one of your messages, regardless of how

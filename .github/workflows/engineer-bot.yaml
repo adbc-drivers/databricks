@@ -218,6 +218,13 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE:  ${{ github.event.issue.title }}
           ISSUE_URL:    ${{ github.event.issue.html_url }}
+          # publish.py reads the agent's edit set from these author-step outputs
+          # (run_author emits touched_files/touched_count/summary). Without them
+          # publish sees TOUCHED_FILES="" and refuses with "empty but outcome was
+          # success". GITHUB_REPOSITORY / RUNNER_TEMP are GHA defaults (auto-set).
+          TOUCHED_FILES: ${{ steps.author.outputs.touched_files }}
+          TOUCHED_COUNT: ${{ steps.author.outputs.touched_count }}
+          SUMMARY:       ${{ steps.author.outputs.summary }}
         run: python -m databricks_bot_engine.engineer_bot.publish
 
       - name: Label the fix PR for review
