@@ -67,6 +67,15 @@ Rules for the shared workspace (see `docs/e2e-test-isolation-guidance.md`):
   share this workspace and those counts drift. Assert on your specific entity with
   `Assert.Contains`; scope any row-count check to a table you uniquely created.
 
+## Reference — how the JDBC driver behaves
+When the *correct* behavior is uncertain (issues often say "how JDBC does it"),
+**`fetch_context_repo databricks-jdbc`**, then `grep_context_repo` /
+`read_context_repo` to see how Databricks' official JDBC driver handles it, and
+mirror that — it's the parity ground truth for metadata / type / error semantics.
+The clone is lazy and read-only; fetch **only** when you need it (most fixes
+don't), and `grep` for the class/method the issue names (e.g.
+`MetadataResultSetBuilder`) rather than browsing.
+
 ## How to work (bug-fix flow)
 1. **Write the failing E2E test FIRST — before you deep-dive the fix.** Your first
    substantive action is an **E2E test (REQUIRED, under `csharp/test/E2E/`, talking
