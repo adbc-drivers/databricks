@@ -57,7 +57,7 @@ bash_allowlist:
 # Author phase: prompt rendered from the template; tokens are the ISSUE (the bug
 # to fix). No driver PR, no SOURCE_PR_* — this is single-repo, issue-driven.
 author:
-  max_turns: 60
+  max_turns: 100   # bug-fix needs reproduce→fix→re-run headroom; now actually enforced (engine in-loop backstop)
   user_prompt_template: prompts/author_user.md
   env_tokens:                 # {{issue_*}} in author_user.md  <-  env vars
     issue_number: ISSUE_NUMBER
