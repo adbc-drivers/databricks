@@ -16,6 +16,15 @@ without weakening any test.
 - Read `csharp/test/` for the established patterns (fixtures, naming, assertions)
   and match them. Read any `CLAUDE.md`/`CONTRIBUTING.md` for conventions first.
 
+## Work efficiently — batch your tool calls
+You have a limited turn budget; a turn is one of your messages, regardless of how
+many tools it calls. **When you already know you need several files or line ranges,
+request them as parallel tool calls in a SINGLE turn** (issue multiple `read_file`
+calls at once) rather than one-per-turn. Use `grep`/`glob` to surface many
+locations in one call, then read the hits together. Reserve sequential one-at-a-time
+reads for true "read A to decide what B is" chains. (A past run spent ~34 turns on
+one-file-at-a-time exploration and ran out of budget — don't.)
+
 ## Build & test (your bash allowlist)
 - Build: `dotnet build` (in `csharp/src`) — or `dotnet restore` first if needed.
 - Test: `dotnet test` (in `csharp/test`). **Always `--filter` to your own test's
@@ -47,18 +56,31 @@ Rules for the shared workspace (see `docs/e2e-test-isolation-guidance.md`):
   `Assert.Contains`; scope any row-count check to a table you uniquely created.
 
 ## How to work (bug-fix flow)
-1. **Reproduce**: add a test (E2E by default) that fails *because of the bug* (not
-   a compile/setup/Skip). Run it with `--filter`; confirm it actually executes and
-   fails for the right reason. If it reports **skipped**, the live config isn't
-   reaching it — fix that first; a skipped test is not a reproduction.
+1. **Write the failing test FIRST — before you deep-dive the fix.** Your first
+   substantive action is a test (E2E by default, under `csharp/test/E2E/`) that
+   REPRODUCES the bug. Do only the *minimal* reading needed to write it — find the
+   API to call and the fixture to use (e.g. `main.pqtest.alltypes`). Do **NOT**
+   read through the source fix path, trace call chains, or edit `csharp/src/` until
+   you have a test that runs and **fails for the right reason**.
+   - **Why test-first, strictly:** a failing test confirms your understanding of
+     the bug *faster and more reliably* than reading source — it forces you to
+     state the exact wrong-vs-expected behavior, and it's the evidence the bug is
+     real. A past run spent ~95 turns reading source before writing any test and
+     ran out of budget at the fix; do not repeat that. Reading 8 files to "fully
+     understand" before writing the test is the failure mode, not diligence.
+   - Run it with `--filter`; confirm it actually executes and fails for the bug
+     (not a compile/setup/`Skip`). A *skipped* test is not a reproduction — fix the
+     config reach first.
    **Reproduction is a hard gate.** If after a *focused* effort (a few attempts —
    not dozens) you still cannot get a test that fails for the right reason — it only
    skips, you cannot reach the workspace, or you cannot trigger the bug — **STOP and
    report `blocked` immediately**, naming what you tried. Do **not** keep reading
    code or attempt a fix you cannot verify red→green. A fast, honest `blocked` is
    the correct outcome; exploring until the turn limit is a failure.
-2. **Fix the code** in `csharp/src/` so the test passes. Do **not** edit, delete,
-   weaken, or `[Skip]` the test to force green; do not just change the test.
+2. **Now fix the code** in `csharp/src/`. *Only after the test is red* do you dive
+   into the source fix path — read what you need and edit `csharp/src/` so the test
+   passes. Do **not** edit, delete, weaken, or `[Skip]` the test to force green; do
+   not just change the test.
 3. **Re-run** that test plus the surrounding suite until green. Iterate.
 
 ## Rules
