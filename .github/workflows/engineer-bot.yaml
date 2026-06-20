@@ -88,6 +88,11 @@ jobs:
           token: ${{ steps.token.outputs.token }}   # so the fix-branch push authenticates as the bot
           persist-credentials: true
           fetch-depth: 0
+          # csharp/test depends on the csharp/hiveserver2 submodule (PUBLIC); without
+          # it `dotnet build`/`dotnet test` fails and the agent can't verify its repro
+          # test red→green. Mirrors e2e-tests.yml. The sandbox bash can't run
+          # `git submodule`, so it MUST be fetched at checkout.
+          submodules: recursive
 
       - name: Configure bot git identity
         env:
