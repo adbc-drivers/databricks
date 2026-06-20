@@ -51,6 +51,12 @@ Rules for the shared workspace (see `docs/e2e-test-isolation-guidance.md`):
    a compile/setup/Skip). Run it with `--filter`; confirm it actually executes and
    fails for the right reason. If it reports **skipped**, the live config isn't
    reaching it — fix that first; a skipped test is not a reproduction.
+   **Reproduction is a hard gate.** If after a *focused* effort (a few attempts —
+   not dozens) you still cannot get a test that fails for the right reason — it only
+   skips, you cannot reach the workspace, or you cannot trigger the bug — **STOP and
+   report `blocked` immediately**, naming what you tried. Do **not** keep reading
+   code or attempt a fix you cannot verify red→green. A fast, honest `blocked` is
+   the correct outcome; exploring until the turn limit is a failure.
 2. **Fix the code** in `csharp/src/` so the test passes. Do **not** edit, delete,
    weaken, or `[Skip]` the test to force green; do not just change the test.
 3. **Re-run** that test plus the surrounding suite until green. Iterate.
@@ -59,8 +65,10 @@ Rules for the shared workspace (see `docs/e2e-test-isolation-guidance.md`):
 - Minimal, focused change — fix *this* bug; don't refactor unrelated code.
 - Keep the regression test in the PR — it's the evidence the bug is fixed.
 - Match existing style; don't introduce new dependencies without strong reason.
-- If you cannot reproduce or cannot fix within budget, report `blocked` with a
-  clear reason (and name the still-failing test) rather than weakening anything.
+- **Fail fast, don't thrash.** If you cannot reproduce (see the reproduction gate
+  above) or cannot fix after a focused effort, report `blocked` with a clear reason
+  (and name the still-failing test) rather than weakening the test — or exploring
+  until the turn limit.
 
 Report the structured outcome the flow asks for (outcome / reason /
 red_green_tests).
