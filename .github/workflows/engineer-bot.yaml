@@ -2,9 +2,9 @@
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
 #   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
-#   - install pins (HARD GATE): set ENGINE_REF (engine tag/SHA), CLAUDE_SDK_VERSION,
-#     and CLAUDE_CODE_VERSION in the install step — they're empty and `:?`-guarded, so
-#     the job refuses to run while unpinned. The engine repo (eric-wang-1990/databricks-bot-engine)
+#   - ENGINE_REF in the install step is pinned to an immutable commit SHA (never @main);
+#     bump it to adopt engine changes. claude-agent-sdk / @anthropic-ai/claude-code are
+#     unpinned to match the hub. The engine repo (eric-wang-1990/databricks-bot-engine)
 #     is PRIVATE for now, so BOT_ENGINE_PAT is scoped to it; when it goes public, drop
 #     the PAT (anonymous install) but keep ENGINE_REF pinned to a tag/SHA (never @main)
 #   - an `engineer-bot` label that only maintainers can apply (one label does both:
@@ -88,30 +88,24 @@ jobs:
         env:
           # Fine-grained PAT, read-only Contents on eric-wang-1990/databricks-bot-engine.
           ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
-          # SUPPLY-CHAIN PIN GATE: this job runs with Contents+PR write and DATABRICKS_TOKEN,
-          # so every install ref MUST be immutable before the secrets are wired up. These
-          # are intentionally empty: the `:?` guards below abort the run while any is unset
-          # — a hard gate, not a TODO. Fill all three at activation:
-          #   ENGINE_REF          → a release tag or 40-char commit SHA (NOT a branch)
-          #   CLAUDE_SDK_VERSION  → exact claude-agent-sdk version
-          #   CLAUDE_CODE_VERSION → exact @anthropic-ai/claude-code version
-          ENGINE_REF: ''
-          CLAUDE_SDK_VERSION: ''
-          CLAUDE_CODE_VERSION: ''
+          # SUPPLY-CHAIN PIN: the engine is pinned to an immutable commit SHA — never
+          # install from the force-pushable `@main` ref in a secret-bearing job. Bump
+          # ENGINE_REF to adopt engine changes (prefer a release tag once the engine
+          # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
+          # unpinned to match the hub (databricks-driver-test); pin them to exact
+          # versions here if you want full reproducibility.
+          ENGINE_REF: 28c44e388790d61c18acb43d27547e540199c5e7
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
-          : "${CLAUDE_SDK_VERSION:?pin claude-agent-sdk to an exact version before activation}"
-          : "${CLAUDE_CODE_VERSION:?pin @anthropic-ai/claude-code to an exact version before activation}"
           python -m pip install --upgrade pip
           # The dedicated engine repo (PRIVATE for now → install via the PAT). Once
           # it's public, drop the `x-access-token:${ENGINE_PAT}@` prefix (anonymous);
-          # ENGINE_REF stays pinned to a release tag/SHA for reproducibility.
+          # ENGINE_REF stays pinned to a commit SHA / release tag for reproducibility.
           pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/eric-wang-1990/databricks-bot-engine@${ENGINE_REF}"
-          # The engine drives the Claude Agent SDK + Claude Code CLI — from PUBLIC
-          # registries here (the hub uses an internal mirror; that's hub-only).
-          pip install "claude-agent-sdk==${CLAUDE_SDK_VERSION}"
-          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          # The engine drives the Claude Agent SDK + Claude Code CLI (public registries).
+          pip install claude-agent-sdk
+          npm install -g @anthropic-ai/claude-code
 
       - name: Run bug-fix author
         id: author
