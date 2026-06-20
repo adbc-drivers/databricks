@@ -27,7 +27,7 @@ For each App, generate a private key and store the App ID + key as secrets (belo
 | `ENGINEER_BOT_APP_ID` / `ENGINEER_BOT_PRIVATE_KEY` | the engineer-bot App's id + private key |
 | `REVIEW_BOT_APP_ID` / `REVIEW_BOT_PRIVATE_KEY` | the reviewer-bot App's id + private key |
 | `BOT_ENGINE_PAT` | a **fine-grained PAT** with **Contents: Read-only** scoped to **just `eric-wang-1990/databricks-bot-engine`** (private for now). Set an expiry + rotation. **Drop it entirely once that repo is public** (the install goes anonymous). |
-| `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | **already present** in adbc CI (the e2e/benchmark workflows use them). The bots reuse them — **no new model secrets needed**: the endpoint is built as `https://$DATABRICKS_HOST/serving-endpoints/databricks-claude-opus-4-8/invocations` and `DATABRICKS_TOKEN` authenticates it (Bearer). |
+| `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | **already present** in adbc CI (the e2e/benchmark workflows use them). The bots reuse them — **no new model secrets needed**: the endpoint is built as `https://$DATABRICKS_HOST/serving-endpoints/databricks-claude-opus-4-8/invocations` and `DATABRICKS_TOKEN` authenticates it (Bearer). **`DATABRICKS_HOST` must be a *bare* hostname** (e.g. `adb-<id>.<n>.azuredatabricks.net`) with **no `https://` scheme and no trailing slash** — the workflows prepend `https://` themselves, so a stored scheme produces the malformed `https://https://…/invocations` and every bot run fails at model-call time. This matches the other adbc workflows that consume the secret raw (e.g. `rust-e2e.yml`). |
 
 **Model credential.** The bots reuse the `DATABRICKS_HOST` + `DATABRICKS_TOKEN` adbc
 already stores for CI — no new model secret is introduced, and the model serving

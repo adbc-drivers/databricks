@@ -49,7 +49,12 @@ jobs:
       github.event.pull_request.draft == false
       && github.event.pull_request.head.repo.fork == false
       && contains(github.event.pull_request.labels.*.name, 'review-bot')
-    runs-on: ubuntu-latest   # VERIFY: a protected runner if model creds come from the runner env
+    # ACTIVATION BLOCKER: before taking this workflow out of DRAFT, switch this to
+    # the protected `peco-driver` self-hosted runner (or adopt OIDC + a scoped,
+    # short-lived model credential distinct from the CI DATABRICKS_TOKEN). As long
+    # as the live workspace token is reachable in env, an LLM run over untrusted PR
+    # content must NOT execute on a shared GitHub-hosted runner. See .bot/SETUP.md.
+    runs-on: ubuntu-latest   # DRAFT default only — replace per the note above before activation
     timeout-minutes: 30
     steps:
       - name: Mint review-bot App token
