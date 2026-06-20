@@ -8,11 +8,15 @@ without weakening any test.
 ## Repository layout
 - Driver source: `csharp/src/` (project `AdbcDrivers.Databricks.csproj`).
 - Tests: `csharp/test/` — **xUnit**, split into `Unit/` (offline) and `E2E/`
-  (runs against a live Databricks workspace). **Prefer an E2E integration test in
-  `csharp/test/E2E/`**: most driver bugs (metadata like GetColumns/GetTables, type
-  mapping, CloudFetch, server-side behavior) only reproduce faithfully against a
-  real workspace, and the CI job provides a live connection for you. Use a `Unit/`
-  test only when the bug is pure offline logic that needs no server round-trip.
+  (runs against a live Databricks workspace). **An E2E test in `csharp/test/E2E/`
+  that exercises the fix against the REAL Databricks endpoint is REQUIRED for every
+  fix** — the CI job provides a live connection. A unit test alone is **not**
+  sufficient: it can only check offline artifacts (e.g. a generated query string),
+  not that the real server actually behaves correctly end-to-end. You MAY add a
+  `Unit/` test in addition, but the bug must be reproduced (red) and the fix
+  verified (green) through an E2E test that talks to the live endpoint. If the
+  behavior genuinely cannot be observed end-to-end through the driver against the
+  live endpoint, report `blocked` and explain why — do not substitute a unit test.
 - Read `csharp/test/` for the established patterns (fixtures, naming, assertions)
   and match them. Read any `CLAUDE.md`/`CONTRIBUTING.md` for conventions first.
 - **`csharp/hiveserver2/` is a SEPARATE repo** (a git submodule → `adbc-drivers/hiveserver2`)
@@ -63,13 +67,24 @@ Rules for the shared workspace (see `docs/e2e-test-isolation-guidance.md`):
   share this workspace and those counts drift. Assert on your specific entity with
   `Assert.Contains`; scope any row-count check to a table you uniquely created.
 
+## Reference — how the JDBC driver behaves
+When the *correct* behavior is uncertain (issues often say "how JDBC does it"),
+**`fetch_context_repo databricks-jdbc`**, then `grep_context_repo` /
+`read_context_repo` to see how Databricks' official JDBC driver handles it, and
+mirror that — it's the parity ground truth for metadata / type / error semantics.
+The clone is lazy and read-only; fetch **only** when you need it (most fixes
+don't), and `grep` for the class/method the issue names (e.g.
+`MetadataResultSetBuilder`) rather than browsing.
+
 ## How to work (bug-fix flow)
-1. **Write the failing test FIRST — before you deep-dive the fix.** Your first
-   substantive action is a test (E2E by default, under `csharp/test/E2E/`) that
-   REPRODUCES the bug. Do only the *minimal* reading needed to write it — find the
-   API to call and the fixture to use (e.g. `main.pqtest.alltypes`). Do **NOT**
-   read through the source fix path, trace call chains, or edit `csharp/src/` until
-   you have a test that runs and **fails for the right reason**.
+1. **Write the failing E2E test FIRST — before you deep-dive the fix.** Your first
+   substantive action is an **E2E test (REQUIRED, under `csharp/test/E2E/`, talking
+   to the live endpoint)** that REPRODUCES the bug. Do only the *minimal* reading
+   needed to write it — find the API to call and the fixture to use (e.g.
+   `main.pqtest.alltypes`). Do **NOT** read through the source fix path, trace call
+   chains, or edit `csharp/src/` until you have an E2E test that runs and **fails
+   for the right reason** against the real endpoint. (A unit test does not satisfy
+   this — see Repository layout; it can't prove the live server behaves correctly.)
    - **Why test-first, strictly:** a failing test confirms your understanding of
      the bug *faster and more reliably* than reading source — it forces you to
      state the exact wrong-vs-expected behavior, and it's the evidence the bug is
