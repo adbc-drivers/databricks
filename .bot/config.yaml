@@ -34,6 +34,12 @@ denied_subpaths:
   - .gitleaksignore
   - .github
   - .bot
+  # csharp/hiveserver2 is a SEPARATE repo (git submodule -> adbc-drivers/hiveserver2).
+  # Edits there cannot be committed to a parent-repo PR, so deny them. The author
+  # prompt instructs the agent to STOP and report `blocked` (naming the hiveserver2
+  # file/symbol) when a fix would require changing it — the issue-comment step then
+  # posts that reason back to the issue.
+  - csharp/hiveserver2
 
 # The opened fix PR. publish is issue-driven, so {issue_number}/{issue_title}/{issue_url}
 # are the TRIGGERING ISSUE's number/title/url (NOT a PR). "Fixes #" auto-closes
