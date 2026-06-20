@@ -27,21 +27,20 @@ without weakening any test.
   (already set in your env). Your E2E test picks it up through the normal
   `TestBase`/`TestConfiguration` plumbing — never hard-code endpoints or tokens.
 
-## Workspace test data (read these; don't reseed)
-The shared CI workspace already has stable, **read-only** fixture tables in
-`main.adbc_testing` — reference that schema via
-`DatabricksTestEnvironment.FixtureSchema` (never hard-code `"adbc_testing"`):
-- **`all_column_types`** — one column of every Databricks type (tinyint…variant,
-  array/map/struct) plus a PRIMARY KEY and a FOREIGN KEY. Ideal for metadata/type
-  tests — GetColumns ordinal position, type mapping, GetCrossReference.
-- **`cross_ref_customers`, `cross_ref_orders`, `fk_test_ref_table`** — related
-  tables for foreign-key / cross-reference metadata tests.
+## Workspace test data (read-only — don't write these)
+- **`main.pqtest.alltypes`** — the canonical **all-types** table: one column of
+  every Databricks type. It's wired as `TestConfiguration.Metadata`
+  (`.Catalog` = `main`, `.Schema` = `pqtest`, `.Table` = `alltypes`), so read it
+  through the Metadata triple (or its fully-qualified name) for type/metadata
+  tests — GetColumns ordinal position, type mapping, schema inspection.
+- **`main.adbc_testing`** (the `DatabricksTestEnvironment.FixtureSchema` constant) —
+  other read-only fixtures: `cross_ref_customers`, `cross_ref_orders`,
+  `fk_test_ref_table` for foreign-key / cross-reference metadata tests.
 
 Rules for the shared workspace (see `docs/e2e-test-isolation-guidance.md`):
-- **Most bug repros only need to READ a fixture or call a metadata API** — no table
-  creation required. Read fixtures; never write to `adbc_testing`.
-- If you genuinely must create state, give the table a unique name, target the
-  writable schema via `TestConfiguration.Metadata.Schema` (not the fixture schema),
+- **Most bug repros only need to READ one of the above or call a metadata API** —
+  no table creation required. Never write to `pqtest` or `adbc_testing`.
+- If you genuinely must create state, use a uniquely-named table in `main.default`
   and `DROP TABLE IF EXISTS` it (idempotent cleanup).
 - **No schema-wide assertions** (total table/row/schema counts) — concurrent jobs
   share this workspace and those counts drift. Assert on your specific entity with
