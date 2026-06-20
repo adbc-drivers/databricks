@@ -1,3 +1,17 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Bug-fix task for adbc-drivers/databricks (C#). Copy to .bot/config.yaml.
 # The engine (databricks-bot-engine) is INSTALLED by the workflow; this file is
 # pure DATA. Single-repo: the agent edits THIS repo (TEST_REPO_ROOT = checkout)
@@ -57,7 +71,7 @@ bash_allowlist:
 # Author phase: prompt rendered from the template; tokens are the ISSUE (the bug
 # to fix). No driver PR, no SOURCE_PR_* — this is single-repo, issue-driven.
 author:
-  max_turns: 60
+  max_turns: 100   # bug-fix needs reproduce→fix→re-run headroom; now actually enforced (engine in-loop backstop)
   user_prompt_template: prompts/author_user.md
   env_tokens:                 # {{issue_*}} in author_user.md  <-  env vars
     issue_number: ISSUE_NUMBER

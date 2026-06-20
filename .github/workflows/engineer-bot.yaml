@@ -1,3 +1,17 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Engineer-bot — issue-triggered bug-fix bot for this repo.
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
@@ -109,7 +123,7 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: 28c44e388790d61c18acb43d27547e540199c5e7
+          ENGINE_REF: 5c179e26791afeb0c3be7b8639d71440a60ba7ee
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
@@ -121,6 +135,50 @@ jobs:
           # The engine drives the Claude Agent SDK + Claude Code CLI (public registries).
           pip install claude-agent-sdk
           npm install -g @anthropic-ai/claude-code
+
+      # Give the agent a LIVE workspace connection so its E2E tests
+      # (csharp/test/E2E/) actually run instead of silently Skip-ing — they gate on
+      # DATABRICKS_TEST_CONFIG_FILE. LIGHTER setup (adbc's choice): reuse the shared
+      # warehouse with OAuth client-credentials (the same SP creds e2e-tests.yml uses
+      # for SQL), with NO per-run schema provisioning or fixture seeding. Read-only
+      # fixtures already live in main.adbc_testing (see the author prompt); the
+      # writable target is main.default (tests should rarely write). Runs on
+      # ubuntu-latest like every other adbc E2E workflow. Values pass via env (no
+      # ${{ }} in the script) so nothing user-controlled is interpolated.
+      - name: Create E2E test config (shared warehouse, no seeding)
+        env:
+          DATABRICKS_SERVER_HOSTNAME:    ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HTTP_PATH:          ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+          DATABRICKS_TEST_CLIENT_ID:     ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+          DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          OAUTH_TOKEN=$(curl -s -X POST "https://${DATABRICKS_SERVER_HOSTNAME}/oidc/v1/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${DATABRICKS_TEST_CLIENT_ID}" \
+            -d "client_secret=${DATABRICKS_TEST_CLIENT_SECRET}" \
+            -d "scope=sql" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          if [ -z "${OAUTH_TOKEN}" ]; then echo "::error::failed to mint workspace OAuth token"; exit 1; fi
+          echo "::add-mask::${OAUTH_TOKEN}"
+          mkdir -p ~/.databricks
+          cat > ~/.databricks/connection.json << EOF
+          {
+            "uri": "https://${DATABRICKS_SERVER_HOSTNAME}${DATABRICKS_HTTP_PATH}",
+            "auth_type": "oauth",
+            "grant_type": "client_credentials",
+            "client_id": "${DATABRICKS_TEST_CLIENT_ID}",
+            "client_secret": "${DATABRICKS_TEST_CLIENT_SECRET}",
+            "scope": "sql",
+            "access_token": "${OAUTH_TOKEN}",
+            "type": "databricks",
+            "catalog": "main",
+            "db_schema": "default",
+            "isCITesting": true,
+            "metadata": { "catalog": "main", "schema": "pqtest", "table": "alltypes" }
+          }
+          EOF
+          echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> "$GITHUB_ENV"
 
       - name: Run bug-fix author
         id: author

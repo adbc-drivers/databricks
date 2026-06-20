@@ -39,3 +39,8 @@ rust/license.tpl
 rust/pixi.lock
 # htpasswd is a data file (username:password_hash) that cannot contain license headers
 rust/ci/proxy/htpasswd
+# engineer-bot prompt files are read VERBATIM as the LLM prompt — a license header
+# would be prepended into the model's instructions. The workflows, .bot/config.yaml,
+# and .bot/SETUP.md all carry the standard Apache header instead; only the prompts
+# are excluded.
+.bot/prompts/*.md
