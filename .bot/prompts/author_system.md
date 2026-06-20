@@ -33,13 +33,13 @@ without weakening any test.
   (`.Catalog` = `main`, `.Schema` = `pqtest`, `.Table` = `alltypes`), so read it
   through the Metadata triple (or its fully-qualified name) for type/metadata
   tests — GetColumns ordinal position, type mapping, schema inspection.
-- **`main.adbc_testing`** (the `DatabricksTestEnvironment.FixtureSchema` constant) —
-  other read-only fixtures: `cross_ref_customers`, `cross_ref_orders`,
-  `fk_test_ref_table` for foreign-key / cross-reference metadata tests.
+- **`main.tpcds_sf1_delta.catalog_sales`** — a large TPC-DS (scale factor 1) fact
+  table. Use it for **CloudFetch / large-result** scenarios: multi-chunk Arrow
+  result fetch, large row counts, pagination, and download/refetch paths.
 
 Rules for the shared workspace (see `docs/e2e-test-isolation-guidance.md`):
 - **Most bug repros only need to READ one of the above or call a metadata API** —
-  no table creation required. Never write to `pqtest` or `adbc_testing`.
+  no table creation required. Never write to `pqtest` or `tpcds_sf1_delta`.
 - If you genuinely must create state, use a uniquely-named table in `main.default`
   and `DROP TABLE IF EXISTS` it (idempotent cleanup).
 - **No schema-wide assertions** (total table/row/schema counts) — concurrent jobs
