@@ -143,6 +143,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}   # so the fix push authenticates as the bot
+          # csharp/test depends on the csharp/hiveserver2 submodule (PUBLIC) to build;
+          # the followup re-runs dotnet test to verify fixes. Mirrors e2e-tests.yml.
+          submodules: recursive
           # SECURITY — deliberate asymmetry with the reviewer workflows (they set
           # persist-credentials: false, keeping their token out of .git/config so a
           # prompt-injected PR can't read it). Here the App token is Contents+PR
