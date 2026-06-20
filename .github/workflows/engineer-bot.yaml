@@ -53,6 +53,21 @@ jobs:
           app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
           private-key: ${{ secrets.ENGINEER_BOT_PRIVATE_KEY }}
 
+      # Post an early "I've started" comment with a link to this run, so the issue
+      # shows the bot is working before the (multi-minute) author phase finishes.
+      # The final "Comment outcome on the issue" step reports success/no_change/
+      # failed at the end. Values go via env (never interpolated into the script) so
+      # an untrusted issue title can't inject shell — the run URL is GHA-derived.
+      - name: Comment that the bot has started
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+            --body "🤖 engineer-bot is on it — working on a fix. Progress: [run log](${RUN_URL}). I'll comment again with the outcome (and open a fix PR if I make changes)."
+
       - name: Checkout (the PR will be opened against this repo)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
