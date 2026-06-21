@@ -144,7 +144,13 @@ jobs:
           pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
           # The engine drives the Claude Agent SDK + Claude Code CLI (public registries).
           pip install claude-agent-sdk
+          # Global npm dir (/usr/local/lib) is root-owned on the self-hosted
+          # runner; install to a per-job prefix the runner user owns and put
+          # it on PATH so later steps find the `claude` CLI the SDK shells to.
+          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-global"
+          mkdir -p "$NPM_CONFIG_PREFIX/bin"
           npm install -g @anthropic-ai/claude-code
+          echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
 
       # Give the agent a LIVE workspace connection so its E2E tests
       # (csharp/test/E2E/) actually run instead of silently Skip-ing — they gate on
