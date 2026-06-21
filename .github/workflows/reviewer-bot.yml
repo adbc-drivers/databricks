@@ -68,7 +68,7 @@ jobs:
     # short-lived model credential distinct from the CI DATABRICKS_TOKEN). As long
     # as the live workspace token is reachable in env, an LLM run over untrusted PR
     # content must NOT execute on a shared GitHub-hosted runner. See .bot/SETUP.md.
-    runs-on: ubuntu-latest   # DRAFT default only — replace per the note above before activation
+    runs-on: [self-hosted, Linux, X64, peco-driver]
     timeout-minutes: 30
     steps:
       - name: Mint review-bot App token

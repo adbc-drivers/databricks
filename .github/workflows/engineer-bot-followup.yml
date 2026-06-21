@@ -97,7 +97,7 @@ jobs:
           && !startsWith(github.event.sender.login, 'peco-engineer-bot')
         )
       )
-    runs-on: ubuntu-latest   # VERIFY: a protected/self-hosted runner if the fix-verification tests need a warehouse
+    runs-on: [self-hosted, Linux, X64, peco-driver]
     # 55 min: the App installation token expires at 60; PRs with many threads need headroom
     # (the agent pushes fixes + posts replies at the END of the run).
     timeout-minutes: 55

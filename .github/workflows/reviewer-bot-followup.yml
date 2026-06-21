@@ -61,7 +61,7 @@ jobs:
       github.event.pull_request.head.repo.fork == false
       && github.event.pull_request.state == 'open'
       && contains(github.event.pull_request.labels.*.name, 'review-bot')
-    runs-on: ubuntu-latest   # VERIFY: a protected runner if model creds come from the runner env
+    runs-on: [self-hosted, Linux, X64, peco-driver]
     timeout-minutes: 15
     steps:
       - name: Mint review-bot App token

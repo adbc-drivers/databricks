@@ -57,7 +57,7 @@ jobs:
     # auto-label on the fix PR) is a `pull_request` event and never re-triggers
     # this job, so the single shared label can't cause a fix→PR→fix loop.
     if: github.event.label.name == 'engineer-bot'
-    runs-on: ubuntu-latest   # VERIFY: a protected/self-hosted runner if E2E tests need a warehouse
+    runs-on: [self-hosted, Linux, X64, peco-driver]
     timeout-minutes: 45
     steps:
       - name: Mint engineer-bot App token
