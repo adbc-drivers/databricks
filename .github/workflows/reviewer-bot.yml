@@ -116,7 +116,13 @@ jobs:
           # `x-access-token:${ENGINE_PAT}@` prefix once it's public; ENGINE_REF stays pinned.
           pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
           pip install claude-agent-sdk
+          # Global npm dir (/usr/local/lib) is root-owned on the self-hosted
+          # runner; install to a per-job prefix the runner user owns and put
+          # it on PATH so later steps find the `claude` CLI the SDK shells to.
+          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-global"
+          mkdir -p "$NPM_CONFIG_PREFIX/bin"
           npm install -g @anthropic-ai/claude-code
+          echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
 
       - name: Run reviewer
         env:
