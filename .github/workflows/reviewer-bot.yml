@@ -18,7 +18,7 @@
 #   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
 #   - ENGINE_REF in the install step is pinned to an immutable commit SHA (never @main);
 #     bump it to adopt engine changes. claude-agent-sdk / @anthropic-ai/claude-code are
-#     unpinned to match the hub. The engine repo (eric-wang-1990/databricks-bot-engine)
+#     unpinned to match the hub. The engine repo (databricks/databricks-bot-engine)
 #     is PRIVATE for now, so BOT_ENGINE_PAT is scoped to it; when it goes public, drop
 #     the PAT (anonymous install) but keep ENGINE_REF pinned to a tag/SHA (never @main)
 #
@@ -68,7 +68,7 @@ jobs:
     # short-lived model credential distinct from the CI DATABRICKS_TOKEN). As long
     # as the live workspace token is reachable in env, an LLM run over untrusted PR
     # content must NOT execute on a shared GitHub-hosted runner. See .bot/SETUP.md.
-    runs-on: ubuntu-latest   # DRAFT default only — replace per the note above before activation
+    runs-on: [self-hosted, Linux, X64, peco-driver]
     timeout-minutes: 30
     steps:
       - name: Mint review-bot App token
@@ -102,14 +102,14 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: 7e36703f5cae56a3db12fd25620735315fc4c506
+          ENGINE_REF: 76a6e5902b217606b72a9476636df0d761260846
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
           python -m pip install --upgrade pip
           # The dedicated engine repo (PRIVATE for now → install via the PAT). Drop the
           # `x-access-token:${ENGINE_PAT}@` prefix once it's public; ENGINE_REF stays pinned.
-          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/eric-wang-1990/databricks-bot-engine@${ENGINE_REF}"
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
           pip install claude-agent-sdk
           npm install -g @anthropic-ai/claude-code
 

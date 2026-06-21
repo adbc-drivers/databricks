@@ -61,7 +61,7 @@ jobs:
       github.event.pull_request.head.repo.fork == false
       && github.event.pull_request.state == 'open'
       && contains(github.event.pull_request.labels.*.name, 'review-bot')
-    runs-on: ubuntu-latest   # VERIFY: a protected runner if model creds come from the runner env
+    runs-on: [self-hosted, Linux, X64, peco-driver]
     timeout-minutes: 15
     steps:
       - name: Mint review-bot App token
@@ -171,13 +171,13 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: 7e36703f5cae56a3db12fd25620735315fc4c506
+          ENGINE_REF: 76a6e5902b217606b72a9476636df0d761260846
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
           python -m pip install --upgrade pip
           # Drop the `x-access-token:${ENGINE_PAT}@` prefix once the engine repo is public; ENGINE_REF stays pinned.
-          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/eric-wang-1990/databricks-bot-engine@${ENGINE_REF}"
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
           pip install claude-agent-sdk
           npm install -g @anthropic-ai/claude-code
 
