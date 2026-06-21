@@ -89,9 +89,14 @@ jobs:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: '3.11'
+        shell: bash
+        # actions/setup-python can't provision on this self-hosted runner
+        # (no hosted tool-cache). The runner is provisioned with system
+        # python3.11; use it via a venv so pip installs stay isolated and
+        # `pip` / `python -m` resolve to 3.11 for the later steps.
+        run: |
+          python3.11 -m venv "$RUNNER_TEMP/bot-venv"
+          echo "$RUNNER_TEMP/bot-venv/bin" >> "$GITHUB_PATH"
 
       - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
         env:
