@@ -163,6 +163,40 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.True(row.ContainsKey("REF_GENERATION"), "Should have REF_GENERATION column");
         }
 
+        // Regression test for #527 (Thrift vs SEA GetTables value parity).
+        //
+        // The legacy hive_metastore catalog's Thrift TGetTablesResp returns
+        // placeholder values that SEA/JDBC do not:
+        //   - REMARKS    = "UNKNOWN"  (should normalize to "")
+        //   - TABLE_TYPE = ""         (should normalize to "TABLE")
+        // The Databricks Thrift GetTables path must normalize these so the
+        // values match SEA. hive_metastore is a built-in catalog on every
+        // Databricks workspace, so no fixture setup is required.
+        [SkippableFact]
+        public async Task GetTables_NormalizesRemarksAndTableType_Thrift()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(new Dictionary<string, string>
+            {
+                { DatabricksParameters.Protocol, "thrift" },
+                // hive_metastore is a non-default catalog; multi-catalog support
+                // must be enabled for GetTables to query it.
+                { DatabricksParameters.EnableMultipleCatalogSupport, "true" }
+            });
+            var rows = await ReadMetadata(conn, "GetTables", "hive_metastore", "default");
+            Assert.True(rows.Count > 0, "hive_metastore.default should expose at least one table");
+
+            // REMARKS must default to "" (matching SEA/JDBC), never the legacy
+            // Thrift placeholder "UNKNOWN".
+            Assert.DoesNotContain(rows, r => r["REMARKS"] == "UNKNOWN");
+
+            // TABLE_TYPE must always be a canonical, non-empty classification.
+            // The server returns "" for hive_metastore managed tables; it must
+            // be normalized to "TABLE".
+            Assert.DoesNotContain(rows, r => r["TABLE_TYPE"] == "");
+            Assert.Contains(rows, r => r["TABLE_TYPE"] == "TABLE");
+        }
+
         // --- GetColumnsExtended ---
 
         [SkippableFact]

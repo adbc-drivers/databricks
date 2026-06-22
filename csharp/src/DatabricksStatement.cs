@@ -37,6 +37,7 @@ using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionRe
 using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
+using Apache.Arrow.Ipc;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
@@ -814,10 +815,153 @@ namespace AdbcDrivers.Databricks
                 // Call the base implementation with the potentially modified catalog name
                 activity?.AddEvent("statement.get_tables.calling_base_implementation");
                 QueryResult result = await base.GetTablesAsync(cancellationToken);
+
+                // Normalize TABLE_TYPE/REMARKS so the Thrift path matches SEA/JDBC (issue #527).
+                // The legacy hive_metastore Thrift response returns REMARKS="UNKNOWN" and an empty
+                // TABLE_TYPE for tables with no comment; SEA and the official JDBC driver instead
+                // return REMARKS="" and TABLE_TYPE="TABLE".
+                result = await NormalizeTablesResultAsync(result, cancellationToken);
+
                 activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
                 activity?.AddEvent("statement.get_tables.complete");
                 return result;
             }, activityName: "GetTables");
+        }
+
+        // Canonical TABLE_TYPE used when the server returns a null/empty classification,
+        // matching the JDBC driver's MetadataResultSetBuilder default.
+        private const string DefaultTableType = "TABLE";
+
+        // Legacy placeholder some Thrift servers (e.g. hive_metastore) emit for REMARKS
+        // when a table has no comment. SEA/JDBC use "" instead.
+        private const string UnknownRemarksPlaceholder = "UNKNOWN";
+
+        /// <summary>
+        /// Normalizes the TABLE_TYPE and REMARKS columns of a GetTables result so the Thrift
+        /// path produces the same values as SEA/JDBC (issue #527):
+        ///   - TABLE_TYPE: null/empty defaults to "TABLE".
+        ///   - REMARKS: null/empty or the legacy "UNKNOWN" placeholder defaults to "".
+        /// Returns the original result unchanged when there is nothing to normalize.
+        /// </summary>
+        private static async Task<QueryResult> NormalizeTablesResultAsync(QueryResult result, CancellationToken cancellationToken)
+        {
+            if (result.Stream == null)
+            {
+                return result;
+            }
+
+            var stream = result.Stream;
+            Schema schema = stream.Schema;
+            int tableTypeIndex = schema.GetFieldIndex("TABLE_TYPE");
+            int remarksIndex = schema.GetFieldIndex("REMARKS");
+
+            // Nothing to normalize if neither column is present.
+            if (tableTypeIndex < 0 && remarksIndex < 0)
+            {
+                return result;
+            }
+
+            var batches = new List<RecordBatch>();
+            try
+            {
+                while (true)
+                {
+                    RecordBatch? batch = await stream.ReadNextRecordBatchAsync(cancellationToken);
+                    if (batch == null)
+                    {
+                        break;
+                    }
+                    batches.Add(NormalizeTablesBatch(batch, schema, tableTypeIndex, remarksIndex));
+                }
+            }
+            finally
+            {
+                stream.Dispose();
+            }
+
+            int rowCount = 0;
+            foreach (var batch in batches)
+            {
+                rowCount += batch.Length;
+            }
+
+            return new QueryResult(rowCount, new InMemoryArrowStream(schema, batches));
+        }
+
+        private static RecordBatch NormalizeTablesBatch(RecordBatch batch, Schema schema, int tableTypeIndex, int remarksIndex)
+        {
+            var columns = new IArrowArray[batch.ColumnCount];
+            for (int i = 0; i < batch.ColumnCount; i++)
+            {
+                if (i == tableTypeIndex && batch.Column(i) is StringArray tableTypeArray)
+                {
+                    columns[i] = NormalizeStringColumn(tableTypeArray, DefaultTableType, normalizeUnknown: false);
+                }
+                else if (i == remarksIndex && batch.Column(i) is StringArray remarksArray)
+                {
+                    columns[i] = NormalizeStringColumn(remarksArray, string.Empty, normalizeUnknown: true);
+                }
+                else
+                {
+                    columns[i] = batch.Column(i);
+                }
+            }
+
+            return new RecordBatch(schema, columns, batch.Length);
+        }
+
+        /// <summary>
+        /// Builds a normalized copy of a string column. Null/empty values are replaced with
+        /// <paramref name="defaultValue"/>; when <paramref name="normalizeUnknown"/> is true the
+        /// legacy "UNKNOWN" placeholder is also replaced with <paramref name="defaultValue"/>.
+        /// </summary>
+        private static StringArray NormalizeStringColumn(StringArray source, string defaultValue, bool normalizeUnknown)
+        {
+            var builder = new StringArray.Builder();
+            for (int i = 0; i < source.Length; i++)
+            {
+                string value = source.IsNull(i) ? string.Empty : source.GetString(i);
+                if (string.IsNullOrEmpty(value)
+                    || (normalizeUnknown && string.Equals(value, UnknownRemarksPlaceholder, StringComparison.OrdinalIgnoreCase)))
+                {
+                    value = defaultValue;
+                }
+                builder.Append(value);
+            }
+            return builder.Build();
+        }
+
+        /// <summary>
+        /// Minimal in-memory <see cref="IArrowArrayStream"/> that replays a fixed set of record batches.
+        /// Used to return a normalized GetTables result without re-querying the server.
+        /// </summary>
+        private sealed class InMemoryArrowStream : IArrowArrayStream
+        {
+            private readonly Schema _schema;
+            private readonly Queue<RecordBatch> _batches;
+
+            public InMemoryArrowStream(Schema schema, IEnumerable<RecordBatch> batches)
+            {
+                _schema = schema;
+                _batches = new Queue<RecordBatch>(batches);
+            }
+
+            public Schema Schema => _schema;
+
+            public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                RecordBatch? batch = _batches.Count > 0 ? _batches.Dequeue() : null;
+                return new ValueTask<RecordBatch?>(batch);
+            }
+
+            public void Dispose()
+            {
+                while (_batches.Count > 0)
+                {
+                    _batches.Dequeue().Dispose();
+                }
+            }
         }
 
         /// <summary>
