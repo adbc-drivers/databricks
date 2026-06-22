@@ -69,7 +69,10 @@ impl Default for CloudFetchConfig {
             chunk_ready_timeout: Some(Duration::from_secs(30)),
             speed_threshold_mbps: 0.1,
             enabled: true,
-            batch_merge_target_rows: 0,
+            // Coalesce small per-IPC-message batches into ~128k-row batches before
+            // serving them to consumers. Reduces per-batch overhead at language
+            // bindings (PyO3, etc.) without buffering the whole result set.
+            batch_merge_target_rows: 128_000,
         }
     }
 }
@@ -208,7 +211,7 @@ mod tests {
         assert_eq!(config.max_chunks_in_memory, 16); // Matches JDBC cloudFetchThreadPoolSize
         assert_eq!(config.max_retries, 5);
         assert!(config.enabled);
-        assert_eq!(config.batch_merge_target_rows, 0); // Disabled by default
+        assert_eq!(config.batch_merge_target_rows, 128_000);
     }
 
     #[test]
