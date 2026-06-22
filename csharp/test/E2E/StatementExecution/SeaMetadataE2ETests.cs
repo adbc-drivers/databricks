@@ -175,6 +175,16 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // skips (rather than fails) where legacy access is disabled or the
         // default schema is empty.
         //
+        // AUTHORITATIVE REGRESSION GUARD: the unit tests
+        // NormalizeStringColumn_Remarks_NormalizesNullEmptyAndUnknownCaseSensitively
+        // and NormalizeStringColumn_TableType_DefaultsNullEmptyButLeavesUnknown
+        // (DatabricksStatementUnitTests) are the real red→green coverage: they
+        // feed known placeholder inputs and assert the rewritten output. This
+        // E2E case only asserts negative invariants against live workspace
+        // state, so if hive_metastore.default happens to contain only tables
+        // that never carried the placeholders, it can pass green even with the
+        // fix reverted. Treat it as a live-parity smoke check, not the guard.
+        //
         // NOTE: This test deliberately overrides the run-selected protocol and
         // pins Protocol = "thrift", which is an intentional exception to the
         // class-level convention documented above CreateConnection ("Tests
