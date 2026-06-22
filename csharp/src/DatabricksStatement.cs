@@ -932,9 +932,9 @@ namespace AdbcDrivers.Databricks
                     // so they arrive as StringArray. If a future schema change makes either column a
                     // different string layout (e.g. LargeStringArray), the `is StringArray` checks below
                     // fail and the column falls through to the unnormalized `else` branch — silently
-                    // reopening issue #527. The two index conditions are kept separate from the type
-                    // check so that mismatch is visible here in review rather than at runtime; add a
-                    // LargeStringArray branch (or generalize NormalizeStringColumn) if that ever changes.
+                    // reopening issue #527. The Debug.Assert below makes that mismatch observable in
+                    // debug builds instead of failing silently; add a LargeStringArray branch (or
+                    // generalize NormalizeStringColumn) if the schema ever changes.
                     if (i == _tableTypeIndex && batch.Column(i) is StringArray tableTypeArray)
                     {
                         columns[i] = NormalizeStringColumn(tableTypeArray, DefaultTableType, normalizeUnknown: false);
@@ -950,6 +950,13 @@ namespace AdbcDrivers.Databricks
                     }
                     else
                     {
+                        // Guardrail: if this is a column we intended to normalize but its array type is
+                        // not StringArray, the type guards above fell through and #527 is silently
+                        // reopened. Surface that as an assertion failure in debug builds rather than
+                        // leaving it invisible at runtime.
+                        Debug.Assert(
+                            i != _tableTypeIndex && i != _remarksIndex,
+                            $"Expected TABLE_TYPE/REMARKS column at index {i} to be a StringArray but got {batch.Column(i).GetType().Name}; normalization (issue #527) was skipped.");
                         columns[i] = batch.Column(i);
                     }
                 }
