@@ -119,10 +119,6 @@ jobs:
           echo "$RUNNER_TEMP/bot-venv/bin" >> "$GITHUB_PATH"
 
       - name: Setup .NET
-        # Self-hosted peco-driver runs as non-root; setup-dotnet's default
-        # /usr/share/dotnet is root-owned (EACCES). Install to a writable dir.
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4.3.1
         with:
           dotnet-version: '8.0.x'
