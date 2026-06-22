@@ -816,10 +816,11 @@ namespace AdbcDrivers.Databricks
                 activity?.AddEvent("statement.get_tables.calling_base_implementation");
                 QueryResult result = await base.GetTablesAsync(cancellationToken);
 
-                // Normalize TABLE_TYPE/REMARKS so the Thrift path matches SEA/JDBC (issue #527).
+                // Normalize TABLE_TYPE/REMARKS so the Thrift path matches SEA (issue #527).
                 // The legacy hive_metastore Thrift response returns REMARKS="UNKNOWN" and an empty
-                // TABLE_TYPE for tables with no comment; SEA and the official JDBC driver instead
-                // return REMARKS="" and TABLE_TYPE="TABLE".
+                // TABLE_TYPE for tables with no comment. SEA returns REMARKS="" and TABLE_TYPE="TABLE";
+                // the empty-TABLE_TYPE -> "TABLE" default also matches the official JDBC driver's
+                // MetadataResultSetBuilder (the REMARKS="" parity is with SEA, not a JDBC rule).
                 result = await NormalizeTablesResultAsync(result, cancellationToken);
 
                 activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
@@ -832,8 +833,9 @@ namespace AdbcDrivers.Databricks
         // matching the JDBC driver's MetadataResultSetBuilder default.
         private const string DefaultTableType = "TABLE";
 
-        // Legacy placeholder some Thrift servers (e.g. hive_metastore) emit for REMARKS
-        // when a table has no comment. SEA/JDBC use "" instead.
+        // Exact sentinel some legacy Thrift servers (e.g. hive_metastore) emit for REMARKS
+        // when a table has no comment; SEA returns "" instead. Matched case-sensitively so a
+        // genuine user comment of "Unknown"/"unknown" is preserved rather than erased.
         private const string UnknownRemarksPlaceholder = "UNKNOWN";
 
         /// <summary>
@@ -896,10 +898,15 @@ namespace AdbcDrivers.Databricks
                 if (i == tableTypeIndex && batch.Column(i) is StringArray tableTypeArray)
                 {
                     columns[i] = NormalizeStringColumn(tableTypeArray, DefaultTableType, normalizeUnknown: false);
+                    // The source array is replaced and no longer referenced by the new batch; dispose
+                    // it now rather than leaving its Arrow buffers to the finalizer. Untouched columns
+                    // are reused by reference, so they must NOT be disposed here.
+                    tableTypeArray.Dispose();
                 }
                 else if (i == remarksIndex && batch.Column(i) is StringArray remarksArray)
                 {
                     columns[i] = NormalizeStringColumn(remarksArray, string.Empty, normalizeUnknown: true);
+                    remarksArray.Dispose();
                 }
                 else
                 {
@@ -913,7 +920,8 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Builds a normalized copy of a string column. Null/empty values are replaced with
         /// <paramref name="defaultValue"/>; when <paramref name="normalizeUnknown"/> is true the
-        /// legacy "UNKNOWN" placeholder is also replaced with <paramref name="defaultValue"/>.
+        /// exact (case-sensitive) legacy "UNKNOWN" sentinel is also replaced with
+        /// <paramref name="defaultValue"/>, leaving genuine comments like "Unknown" untouched.
         /// </summary>
         private static StringArray NormalizeStringColumn(StringArray source, string defaultValue, bool normalizeUnknown)
         {
@@ -922,7 +930,7 @@ namespace AdbcDrivers.Databricks
             {
                 string value = source.IsNull(i) ? string.Empty : source.GetString(i);
                 if (string.IsNullOrEmpty(value)
-                    || (normalizeUnknown && string.Equals(value, UnknownRemarksPlaceholder, StringComparison.OrdinalIgnoreCase)))
+                    || (normalizeUnknown && string.Equals(value, UnknownRemarksPlaceholder, StringComparison.Ordinal)))
                 {
                     value = defaultValue;
                 }
