@@ -122,6 +122,29 @@ namespace AdbcDrivers.Databricks
 
         // Telemetry
         private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
+
+        // Issue #477: long-lived "lifetime" Activity that wraps every per-call activity
+        // emitted on this connection. Opened at the end of the constructor (after
+        // ValidateProperties succeeds) so it becomes Activity.Current for the synchronous
+        // Database.Connect caller — that way OpenAsync().Wait(), ApplyServerSidePropertiesAsync().Wait(),
+        // and every subsequent call (executes, metadata, dispose) automatically chains
+        // underneath via Activity.Current. Stopped in Dispose AFTER base.Dispose runs
+        // DisposeClient so the close-session RPC also lands under this root.
+        //
+        // Without this wrapper every top-level driver call is its own root TraceId — the
+        // MemoryStress baseline in #477 shows 12,958 TraceIds across one run, 95% of which
+        // are single-span throwaway ReadNextRecordBatchAsync roots, breaking trace-tree
+        // visualization on fleet dashboards.
+        //
+        // STATIC ActivitySource is intentional: the per-instance source held by
+        // <see cref="ActivityTrace"/> is disposed inside <c>TracingConnection.Dispose</c>
+        // BEFORE <see cref="Dispose(bool)"/> returns, which would silently drop the
+        // <c>Stop()</c> for our lifetime Activity (no listener notification once the
+        // source is disposed). A process-wide source survives connection disposal and
+        // keeps notifying listeners.
+        private static readonly ActivitySource s_lifetimeActivitySource = new ActivitySource("AdbcDrivers.Databricks");
+        private Activity? _lifetimeActivity;
+        private bool _lifetimeActivityStopped;
         // Stopwatch covering the connection lifetime; started at construction and used to
         // measure session-open latency for the CREATE_SESSION telemetry event. The wall-clock
         // time between construction and HandleOpenSessionResponse encompasses transport setup
@@ -163,7 +186,29 @@ namespace AdbcDrivers.Databricks
             Lz4BufferPool = lz4BufferPool ?? System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
 
             ValidateProperties();
+
+            // Issue #477: open the connection-lifetime Activity now, AFTER ValidateProperties
+            // succeeds, so a throw from validation doesn't leak a half-open Activity. The
+            // call site (DatabricksDatabase.Connect) runs synchronously, so starting the
+            // Activity here makes it Activity.Current for the same async context that
+            // immediately invokes OpenAsync().Wait() and ApplyServerSidePropertiesAsync().Wait();
+            // those per-call activities therefore chain underneath via Activity.Current with
+            // no extra plumbing. Kind=Internal because this is a self-traced scope, not an RPC.
+            _lifetimeActivity = s_lifetimeActivitySource.StartActivity(
+                "DatabricksConnection.Lifetime",
+                ActivityKind.Internal);
         }
+
+        /// <summary>
+        /// The long-lived <see cref="Activity"/> opened in the constructor that wraps
+        /// every per-call activity emitted on this connection. Exposed (internal) so
+        /// <see cref="DatabricksStatement"/> can pass <see cref="Activity.Context"/>
+        /// explicitly as the parent context to its own lifetime Activity — that guards
+        /// against the case where the Statement is constructed on a different async
+        /// context than where the Connection was opened (so <see cref="Activity.Current"/>
+        /// would not see this Activity).
+        /// </summary>
+        internal Activity? LifetimeActivity => _lifetimeActivity;
 
         private void LogConnectionProperties(Activity? activity)
         {
@@ -1139,11 +1184,34 @@ namespace AdbcDrivers.Databricks
                     // This is synchronous because Dispose() cannot be async; we block on
                     // GetAwaiter().GetResult(), which is acceptable in Dispose.
                     DisposeTelemetryAsync().GetAwaiter().GetResult();
+
+                    // Issue #477: stop the connection-lifetime Activity LAST, after
+                    // base.Dispose has already run the TCloseSessionReq RPC (which emits
+                    // HiveServer2Connection.DisposeClient as a child of this Activity) and
+                    // after DELETE_SESSION telemetry has flushed. Stopping it earlier would
+                    // re-orphan DisposeClient back to a root span — exactly the case
+                    // ConcurrentDisposeTests flags in #477. Stop is idempotent across
+                    // repeated Dispose() calls.
+                    StopLifetimeActivity();
                 }
                 return;
             }
 
             base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Idempotently stops the connection-lifetime Activity (#477). Called from
+        /// <see cref="Dispose(bool)"/>; calling it from a finalizer / unmanaged-only path
+        /// is intentionally a no-op because Activity stop is not async-signal-safe and we
+        /// already accept that GC'd Activity objects leak (their state is GC-tracked).
+        /// </summary>
+        private void StopLifetimeActivity()
+        {
+            if (_lifetimeActivityStopped) return;
+            _lifetimeActivityStopped = true;
+            _lifetimeActivity?.Stop();
+            _lifetimeActivity = null;
         }
 
         /// <summary>
