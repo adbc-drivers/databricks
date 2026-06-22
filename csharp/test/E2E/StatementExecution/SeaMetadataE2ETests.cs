@@ -192,9 +192,16 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 
             // TABLE_TYPE must always be a canonical, non-empty classification.
             // The server returns "" for hive_metastore managed tables; it must
-            // be normalized to "TABLE".
-            Assert.DoesNotContain(rows, r => r["TABLE_TYPE"] == "");
-            Assert.Contains(rows, r => r["TABLE_TYPE"] == "TABLE");
+            // be normalized to "TABLE". We don't assert that a "TABLE" row is
+            // present, because hive_metastore.default holds live, mutable state
+            // and could legitimately contain only views at test time. Instead we
+            // assert the normalization invariant: every TABLE_TYPE is a known
+            // canonical value (in particular, never "" — see above).
+            var canonicalTableTypes = new HashSet<string>
+            {
+                "TABLE", "VIEW", "SYSTEM TABLE", "GLOBAL TEMPORARY", "LOCAL TEMPORARY"
+            };
+            Assert.All(rows, r => Assert.Contains(r["TABLE_TYPE"], canonicalTableTypes));
         }
 
         // --- GetColumnsExtended ---

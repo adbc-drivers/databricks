@@ -821,6 +821,10 @@ namespace AdbcDrivers.Databricks
                 // TABLE_TYPE for tables with no comment. SEA returns REMARKS="" and TABLE_TYPE="TABLE";
                 // the empty-TABLE_TYPE -> "TABLE" default also matches the official JDBC driver's
                 // MetadataResultSetBuilder (the REMARKS="" parity is with SEA, not a JDBC rule).
+                // Scope note (issue #527): only TABLE_TYPE/REMARKS carry placeholder values that
+                // diverge between Thrift and SEA. TABLE_NAME is the server-supplied table identifier
+                // and is returned identically by both paths, so it is intentionally not normalized
+                // here (rewriting it would risk corrupting a real name).
                 result = NormalizeTablesResult(result);
 
                 activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
