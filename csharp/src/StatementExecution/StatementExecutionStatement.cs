@@ -1354,7 +1354,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
                 catalogForTableName, _metadataSchemaName, _metadataTableName);
 
-            string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+            // Fast metadata: STATIC ONLY (runtime PR #198486) skips Delta log / Mesa RPCs.
+            // SEA's ExecuteMetadataSqlAsync already sends the x-databricks-sea-can-run-fully-sync
+            // header — the SEA equivalent of Thrift's RunAsync=false — so the flag alone is enough
+            // here to enable the fast-metadata path end-to-end.
+            bool useFastMetadataQuery = _connection.EnableFastMetadataQuery;
+            string query = useFastMetadataQuery
+                ? $"DESC TABLE EXTENDED {fullTableName} AS JSON STATIC ONLY"
+                : $"DESC TABLE EXTENDED {fullTableName} AS JSON";
 
             List<RecordBatch> batches;
             try
