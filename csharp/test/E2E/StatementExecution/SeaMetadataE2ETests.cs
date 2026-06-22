@@ -261,6 +261,31 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.Equal("c_int", rows[1]["COLUMN_NAME"]);
         }
 
+        // PECO-3045 — SEA echoed input case in result columns; JDBC spec says columns
+        // should be canonical (lowercase). Call get_primary_keys with uppercase
+        // catalog/schema/table and assert the returned TABLE_CAT / TABLE_SCHEM / TABLE_NAME
+        // columns are the canonical lowercase form.
+        [SkippableFact]
+        public async Task SEA_GetPrimaryKeys_ReturnsCanonicalCase_InResultColumns()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateSeaConnection();
+            // Pass non-canonical (uppercase) input — server-side identifiers are lowercase.
+            var rows = await ReadMetadata(
+                conn,
+                "GetPrimaryKeys",
+                TestCatalog.ToUpperInvariant(),
+                TestSchema.ToUpperInvariant(),
+                TestTable.ToUpperInvariant());
+            Assert.Equal(2, rows.Count);
+            foreach (var row in rows)
+            {
+                Assert.Equal(TestCatalog, row["TABLE_CAT"]);
+                Assert.Equal(TestSchema, row["TABLE_SCHEM"]);
+                Assert.Equal(TestTable, row["TABLE_NAME"]);
+            }
+        }
+
         // --- GetTableSchema ---
 
         [SkippableFact]
