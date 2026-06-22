@@ -170,8 +170,20 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         //   - REMARKS    = "UNKNOWN"  (should normalize to "")
         //   - TABLE_TYPE = ""         (should normalize to "TABLE")
         // The Databricks Thrift GetTables path must normalize these so the
-        // values match SEA. hive_metastore is a built-in catalog on every
-        // Databricks workspace, so no fixture setup is required.
+        // values match SEA. hive_metastore is a built-in catalog on most
+        // Databricks workspaces, so no fixture setup is required; the test
+        // skips (rather than fails) where legacy access is disabled or the
+        // default schema is empty.
+        //
+        // NOTE: This test deliberately overrides the run-selected protocol and
+        // pins Protocol = "thrift", which is an intentional exception to the
+        // class-level convention documented above CreateConnection ("Tests
+        // never pick the protocol themselves"). The placeholder values being
+        // normalized (REMARKS = "UNKNOWN", TABLE_TYPE = "") only ever appear on
+        // the legacy Thrift hive_metastore path; SEA never returns them, so a
+        // protocol-agnostic assertion would silently pass on the SEA/Reyden
+        // nightly run without exercising the fix. The pin is required to cover
+        // the regression — please don't "fix" it back to the convention.
         [SkippableFact]
         public async Task GetTables_NormalizesRemarksAndTableType_Thrift()
         {
@@ -184,7 +196,15 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 { DatabricksParameters.EnableMultipleCatalogSupport, "true" }
             });
             var rows = await ReadMetadata(conn, "GetTables", "hive_metastore", "default");
-            Assert.True(rows.Count > 0, "hive_metastore.default should expose at least one table");
+            // hive_metastore is present on most Databricks workspaces, but
+            // Unity-Catalog-only / governance-locked workspaces can have legacy
+            // access disabled, and the `default` schema can legitimately be
+            // empty. In those cases there is nothing to normalize, so skip
+            // rather than hard-fail — coupling this value-parity check to
+            // mutable live workspace state would produce failures unrelated to
+            // the fix. When rows are present the normalization invariants below
+            // still exercise the regression.
+            Skip.If(rows.Count == 0, "hive_metastore.default exposes no tables on this workspace; nothing to normalize");
 
             // REMARKS must default to "" (matching SEA/JDBC), never the legacy
             // Thrift placeholder "UNKNOWN". We don't assert every row is "",
