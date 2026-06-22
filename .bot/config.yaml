@@ -53,9 +53,11 @@ pr_body_template: |-
 
   {summary}
 
+  ## Files changed
+  {files_changed}
+
   ## Test plan
-  - [x] Added a regression test that reproduces the bug; it fails before the fix
-        and passes after. Full suite run on the runner before this PR was opened.
+  {test_plan}
 
   Fixes #{issue_number}
 

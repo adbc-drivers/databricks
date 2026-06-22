@@ -133,7 +133,7 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: 8260576f8eb1d3d54e592faceedea66676ed768d
+          ENGINE_REF: d37985b5f68b2259f62acd9dca2be709afb3e8f3
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
@@ -236,6 +236,11 @@ jobs:
           TOUCHED_FILES: ${{ steps.author.outputs.touched_files }}
           TOUCHED_COUNT: ${{ steps.author.outputs.touched_count }}
           SUMMARY:       ${{ steps.author.outputs.summary }}
+          # Bug-fix flow's structured test lists → build_pr_body renders the
+          # {test_plan} token (each added test, red→green vs regression). Absent
+          # for non-bug-fix flows → publish falls back to a generic line.
+          RED_GREEN_TESTS: ${{ steps.author.outputs.red_green_tests }}
+          TESTS_ADDED:     ${{ steps.author.outputs.tests_added }}
         run: python -m databricks_bot_engine.engineer_bot.publish
 
       - name: Label the fix PR for review
