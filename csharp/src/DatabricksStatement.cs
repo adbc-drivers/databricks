@@ -211,60 +211,118 @@ namespace AdbcDrivers.Databricks
             CaptureRetryCount(ctx);
         }
 
+        /// <summary>
+        /// Tier 2 fast-fail: if the connection's server-side session is already known to be
+        /// closed/expired, throw immediately instead of issuing an RPC that would reuse the
+        /// stale handle and return the same opaque error.
+        /// </summary>
+        private void ThrowIfSessionInvalid()
+        {
+            if (((DatabricksConnection)Connection).IsSessionInvalid)
+            {
+                throw new DatabricksSessionExpiredException(DatabricksSessionExpiredException.FastFailMessage);
+            }
+        }
+
+        /// <summary>
+        /// Tier 1: when an execution failure indicates a closed/expired server-side session,
+        /// mark the connection invalid and rethrow as a clear <see cref="DatabricksSessionExpiredException"/>.
+        /// Otherwise returns so the caller can rethrow the original exception (preserving its stack).
+        /// </summary>
+        private void ThrowIfSessionExpired(Exception ex)
+        {
+            if (!DatabricksSessionExpiredException.IsSessionExpired(ex))
+            {
+                return;
+            }
+
+            ((DatabricksConnection)Connection).MarkSessionInvalid();
+
+            // Already the clean typed exception (e.g. surfaced by a nested statement) — preserve it.
+            if (ex is DatabricksSessionExpiredException sessionEx)
+            {
+                throw sessionEx;
+            }
+
+            throw new DatabricksSessionExpiredException(
+                "The Databricks session has expired or was closed by the server " +
+                "(e.g. due to an inactivity timeout). The connection can no longer be used; " +
+                "open a new connection to continue. Server error: " + ex.Message,
+                ex);
+        }
+
         public override QueryResult ExecuteQuery()
         {
-            var ctx = IsMetadataCommand
-                ? CreateMetadataTelemetryContext()
-                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return MaybeWrapComplexTypes(base.ExecuteQuery());
-
-            // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
-            PendingTelemetryContext = ctx;
+            ThrowIfSessionInvalid();
             try
             {
-                QueryResult result = base.ExecuteQuery();
-                // Store the UNWRAPPED result for telemetry: EmitTelemetry inspects
-                // _lastQueryResult.Stream via `is CloudFetchReader/DatabricksCompositeReader`
-                // to read chunk metrics and IsCompressed/ResultFormat. ComplexTypeSerializingStream
-                // would mask those types, so keep the real reader here and wrap only on return.
-                _lastQueryResult = result;
-                RecordSuccess(ctx);
-                return MaybeWrapComplexTypes(result);
+                var ctx = IsMetadataCommand
+                    ? CreateMetadataTelemetryContext()
+                    : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
+                if (ctx == null) return MaybeWrapComplexTypes(base.ExecuteQuery());
+
+                // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
+                PendingTelemetryContext = ctx;
+                try
+                {
+                    QueryResult result = base.ExecuteQuery();
+                    // Store the UNWRAPPED result for telemetry: EmitTelemetry inspects
+                    // _lastQueryResult.Stream via `is CloudFetchReader/DatabricksCompositeReader`
+                    // to read chunk metrics and IsCompressed/ResultFormat. ComplexTypeSerializingStream
+                    // would mask those types, so keep the real reader here and wrap only on return.
+                    _lastQueryResult = result;
+                    RecordSuccess(ctx);
+                    return MaybeWrapComplexTypes(result);
+                }
+                catch (Exception ex)
+                {
+                    RecordError(ctx, ex);
+                    // Emit telemetry immediately on error (won't reach Dispose)
+                    EmitTelemetry(ctx);
+                    PendingTelemetryContext = null; // Clear to avoid double emission
+                    throw;
+                }
             }
             catch (Exception ex)
             {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
+                ThrowIfSessionExpired(ex); // Tier 1: reclassify a closed/expired session; else rethrow as-is.
                 throw;
             }
         }
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
-            var ctx = IsMetadataCommand
-                ? CreateMetadataTelemetryContext()
-                : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
-
-            // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
-            PendingTelemetryContext = ctx;
+            ThrowIfSessionInvalid();
             try
             {
-                QueryResult result = await base.ExecuteQueryAsync();
-                // Store the UNWRAPPED result for telemetry (see ExecuteQuery for rationale):
-                // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
-                _lastQueryResult = result;
-                RecordSuccess(ctx);
-                return MaybeWrapComplexTypes(result);
+                var ctx = IsMetadataCommand
+                    ? CreateMetadataTelemetryContext()
+                    : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
+                if (ctx == null) return MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
+
+                // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
+                PendingTelemetryContext = ctx;
+                try
+                {
+                    QueryResult result = await base.ExecuteQueryAsync();
+                    // Store the UNWRAPPED result for telemetry (see ExecuteQuery for rationale):
+                    // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
+                    _lastQueryResult = result;
+                    RecordSuccess(ctx);
+                    return MaybeWrapComplexTypes(result);
+                }
+                catch (Exception ex)
+                {
+                    RecordError(ctx, ex);
+                    // Emit telemetry immediately on error (won't reach Dispose)
+                    EmitTelemetry(ctx);
+                    PendingTelemetryContext = null; // Clear to avoid double emission
+                    throw;
+                }
             }
             catch (Exception ex)
             {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
+                ThrowIfSessionExpired(ex); // Tier 1: reclassify a closed/expired session; else rethrow as-is.
                 throw;
             }
         }
@@ -286,44 +344,62 @@ namespace AdbcDrivers.Databricks
 
         public override UpdateResult ExecuteUpdate()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
-            if (ctx == null) return base.ExecuteUpdate();
-
-            PendingTelemetryContext = ctx;
+            ThrowIfSessionInvalid();
             try
             {
-                UpdateResult result = base.ExecuteUpdate();
-                RecordSuccess(ctx);
-                return result;
+                var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
+                if (ctx == null) return base.ExecuteUpdate();
+
+                PendingTelemetryContext = ctx;
+                try
+                {
+                    UpdateResult result = base.ExecuteUpdate();
+                    RecordSuccess(ctx);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    RecordError(ctx, ex);
+                    // Emit telemetry immediately on error (won't reach Dispose)
+                    EmitTelemetry(ctx);
+                    PendingTelemetryContext = null; // Clear to avoid double emission
+                    throw;
+                }
             }
             catch (Exception ex)
             {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
+                ThrowIfSessionExpired(ex); // Tier 1: reclassify a closed/expired session; else rethrow as-is.
                 throw;
             }
         }
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
         {
-            var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
-            if (ctx == null) return await base.ExecuteUpdateAsync();
-
-            PendingTelemetryContext = ctx;
+            ThrowIfSessionInvalid();
             try
             {
-                UpdateResult result = await base.ExecuteUpdateAsync();
-                RecordSuccess(ctx);
-                return result;
+                var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
+                if (ctx == null) return await base.ExecuteUpdateAsync();
+
+                PendingTelemetryContext = ctx;
+                try
+                {
+                    UpdateResult result = await base.ExecuteUpdateAsync();
+                    RecordSuccess(ctx);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    RecordError(ctx, ex);
+                    // Emit telemetry immediately on error (won't reach Dispose)
+                    EmitTelemetry(ctx);
+                    PendingTelemetryContext = null; // Clear to avoid double emission
+                    throw;
+                }
             }
             catch (Exception ex)
             {
-                RecordError(ctx, ex);
-                // Emit telemetry immediately on error (won't reach Dispose)
-                EmitTelemetry(ctx);
-                PendingTelemetryContext = null; // Clear to avoid double emission
+                ThrowIfSessionExpired(ex); // Tier 1: reclassify a closed/expired session; else rethrow as-is.
                 throw;
             }
         }
