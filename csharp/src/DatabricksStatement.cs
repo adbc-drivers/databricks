@@ -906,6 +906,10 @@ namespace AdbcDrivers.Databricks
             private readonly int _tableTypeIndex;
             private readonly int _remarksIndex;
 
+            // Set once if a column we intended to normalize arrives as a non-StringArray layout, so
+            // the Release-safe warning below is emitted a single time per stream rather than per batch.
+            private bool _warnedUnexpectedColumnType;
+
             public NormalizingTablesStream(IArrowArrayStream inner, int tableTypeIndex, int remarksIndex)
             {
                 _inner = inner ?? throw new ArgumentNullException(nameof(inner));
@@ -931,10 +935,11 @@ namespace AdbcDrivers.Databricks
                     // ASSUMPTION: the metadata schema declares TABLE_TYPE/REMARKS as StringType.Default,
                     // so they arrive as StringArray. If a future schema change makes either column a
                     // different string layout (e.g. LargeStringArray), the `is StringArray` checks below
-                    // fail and the column falls through to the unnormalized `else` branch — silently
-                    // reopening issue #527. The Debug.Assert below makes that mismatch observable in
-                    // debug builds instead of failing silently; add a LargeStringArray branch (or
-                    // generalize NormalizeStringColumn) if the schema ever changes.
+                    // fail and the column falls through to the unnormalized `else` branch, reopening
+                    // issue #527. The `else` branch makes that mismatch observable in BOTH builds (a
+                    // Debug.Assert plus a Release-safe Trace.TraceWarning) instead of failing silently;
+                    // add a LargeStringArray branch (or generalize NormalizeStringColumn) if the schema
+                    // ever changes.
                     if (i == _tableTypeIndex && batch.Column(i) is StringArray tableTypeArray)
                     {
                         columns[i] = NormalizeStringColumn(tableTypeArray, DefaultTableType, normalizeUnknown: false);
@@ -952,11 +957,26 @@ namespace AdbcDrivers.Databricks
                     {
                         // Guardrail: if this is a column we intended to normalize but its array type is
                         // not StringArray, the type guards above fell through and #527 is silently
-                        // reopened. Surface that as an assertion failure in debug builds rather than
-                        // leaving it invisible at runtime.
-                        Debug.Assert(
-                            i != _tableTypeIndex && i != _remarksIndex,
-                            $"Expected TABLE_TYPE/REMARKS column at index {i} to be a StringArray but got {batch.Column(i).GetType().Name}; normalization (issue #527) was skipped.");
+                        // reopened. The metadata schema layout is server-controlled and could change
+                        // without a code change here, so signal in BOTH builds: a Debug.Assert that
+                        // fails loudly in debug, and a Trace.TraceWarning (compiled in under the TRACE
+                        // constant) that remains observable in Release. The warning is emitted at most
+                        // once per stream to avoid per-batch log spam.
+                        if (i == _tableTypeIndex || i == _remarksIndex)
+                        {
+                            string columnName = i == _tableTypeIndex ? "TABLE_TYPE" : "REMARKS";
+                            string actualType = batch.Column(i).GetType().Name;
+                            Debug.Assert(
+                                false,
+                                $"Expected {columnName} column at index {i} to be a StringArray but got {actualType}; normalization (issue #527) was skipped.");
+                            if (!_warnedUnexpectedColumnType)
+                            {
+                                _warnedUnexpectedColumnType = true;
+                                Trace.TraceWarning(
+                                    $"GetTables metadata column {columnName} at index {i} is {actualType}, not StringArray; " +
+                                    "TABLE_TYPE/REMARKS normalization (issue #527) was skipped. Add a branch for this array type if the schema changed.");
+                            }
+                        }
                         columns[i] = batch.Column(i);
                     }
                 }
