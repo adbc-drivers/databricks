@@ -116,9 +116,61 @@ impl Statement {
             )
             .map_err(|e| e.to_adbc())?;
 
-        self.current_statement_id = Some(result.statement_id);
+        // Only track the statement_id for cleanup (cancel / Drop's close_statement)
+        // when the server hasn't already closed it. Inline-result statements come
+        // back with status=Closed, and DELETE-ing them would be a wasted round-trip.
+        self.current_statement_id = if result.server_side_closed {
+            None
+        } else {
+            Some(result.statement_id)
+        };
 
         ResultReaderAdapter::new(result.reader, result.manifest.as_ref()).map_err(|e| e.to_adbc())
+    }
+
+    /// Execute the current query and return an *owned* RecordBatchReader.
+    ///
+    /// Unlike the [`adbc_core::Statement::execute`] trait method (which returns
+    /// `impl RecordBatchReader + Send` and inherits a borrow from `&mut self`),
+    /// this method returns a `Box<dyn RecordBatchReader + Send + 'static>` so
+    /// callers across an FFI boundary (e.g. PyO3 bindings) can hold the reader
+    /// independently of the `Statement`.
+    ///
+    /// Parameter binding via `bind_stream` is intentionally not supported here
+    /// because that path is inherently buffered (it issues one server execution
+    /// per row); use [`adbc_core::Statement::execute`] in that case. Single-row
+    /// `bind` is supported.
+    pub fn execute_owned(&mut self) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
+        let query = self
+            .query
+            .as_ref()
+            .ok_or_else(|| {
+                DatabricksErrorHelper::invalid_state()
+                    .message("No query set")
+                    .to_adbc()
+            })?
+            .clone();
+
+        if self.bound_stream.is_some() {
+            return Err(DatabricksErrorHelper::not_implemented()
+                .message(
+                    "execute_owned with bind_stream (use adbc_core::Statement::execute instead)",
+                )
+                .to_adbc());
+        }
+
+        let parameters = match self.bound_params.take() {
+            Some(batch) => record_batch_to_sea_parameters(&batch).map_err(|e| e.to_adbc())?,
+            None => vec![],
+        };
+
+        let exec_params = ExecuteParams {
+            parameters,
+            ..ExecuteParams::default()
+        };
+
+        let reader = self.execute_single(&query, &exec_params)?;
+        Ok(Box::new(reader) as Box<dyn RecordBatchReader + Send + 'static>)
     }
 
     /// Execute a parameterized query once per row in the bound stream.
@@ -414,11 +466,14 @@ impl adbc_core::Statement for Statement {
 
 impl Drop for Statement {
     fn drop(&mut self) {
-        // Clean up statement resources
-        if let Some(ref statement_id) = self.current_statement_id {
-            let _ = self
-                .runtime_handle
-                .block_on(self.client.close_statement(statement_id));
+        // Cleanup is best-effort and the caller must not pay a synchronous
+        // round-trip for it. Spawn the DELETE on the runtime and let it
+        // complete in the background — Drop returns immediately.
+        if let Some(statement_id) = self.current_statement_id.take() {
+            let client = self.client.clone();
+            self.runtime_handle.spawn(async move {
+                let _ = client.close_statement(&statement_id).await;
+            });
         }
     }
 }
