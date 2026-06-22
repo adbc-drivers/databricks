@@ -821,7 +821,7 @@ namespace AdbcDrivers.Databricks
                 // TABLE_TYPE for tables with no comment. SEA returns REMARKS="" and TABLE_TYPE="TABLE";
                 // the empty-TABLE_TYPE -> "TABLE" default also matches the official JDBC driver's
                 // MetadataResultSetBuilder (the REMARKS="" parity is with SEA, not a JDBC rule).
-                result = await NormalizeTablesResultAsync(result, cancellationToken);
+                result = NormalizeTablesResult(result);
 
                 activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
                 activity?.AddEvent("statement.get_tables.complete");
@@ -839,21 +839,24 @@ namespace AdbcDrivers.Databricks
         private const string UnknownRemarksPlaceholder = "UNKNOWN";
 
         /// <summary>
-        /// Normalizes the TABLE_TYPE and REMARKS columns of a GetTables result so the Thrift
-        /// path produces the same values as SEA/JDBC (issue #527):
+        /// Wraps a GetTables result so the TABLE_TYPE and REMARKS columns are normalized to match
+        /// SEA/JDBC values (issue #527):
         ///   - TABLE_TYPE: null/empty defaults to "TABLE".
         ///   - REMARKS: null/empty or the legacy "UNKNOWN" placeholder defaults to "".
-        /// Returns the original result unchanged when there is nothing to normalize.
+        /// The normalization is applied lazily, one batch at a time, via
+        /// <see cref="NormalizingTablesStream"/> so a large (and potentially CloudFetch-backed)
+        /// result is not buffered into memory. Returns the original result unchanged when there
+        /// is nothing to normalize. Row count is preserved because normalization only rewrites
+        /// values in place and never adds or drops rows.
         /// </summary>
-        private static async Task<QueryResult> NormalizeTablesResultAsync(QueryResult result, CancellationToken cancellationToken)
+        private static QueryResult NormalizeTablesResult(QueryResult result)
         {
             if (result.Stream == null)
             {
                 return result;
             }
 
-            var stream = result.Stream;
-            Schema schema = stream.Schema;
+            Schema schema = result.Stream.Schema;
             int tableTypeIndex = schema.GetFieldIndex("TABLE_TYPE");
             int remarksIndex = schema.GetFieldIndex("REMARKS");
 
@@ -863,58 +866,7 @@ namespace AdbcDrivers.Databricks
                 return result;
             }
 
-            var batches = new List<RecordBatch>();
-            try
-            {
-                while (true)
-                {
-                    RecordBatch? batch = await stream.ReadNextRecordBatchAsync(cancellationToken);
-                    if (batch == null)
-                    {
-                        break;
-                    }
-                    batches.Add(NormalizeTablesBatch(batch, schema, tableTypeIndex, remarksIndex));
-                }
-            }
-            finally
-            {
-                stream.Dispose();
-            }
-
-            int rowCount = 0;
-            foreach (var batch in batches)
-            {
-                rowCount += batch.Length;
-            }
-
-            return new QueryResult(rowCount, new InMemoryArrowStream(schema, batches));
-        }
-
-        private static RecordBatch NormalizeTablesBatch(RecordBatch batch, Schema schema, int tableTypeIndex, int remarksIndex)
-        {
-            var columns = new IArrowArray[batch.ColumnCount];
-            for (int i = 0; i < batch.ColumnCount; i++)
-            {
-                if (i == tableTypeIndex && batch.Column(i) is StringArray tableTypeArray)
-                {
-                    columns[i] = NormalizeStringColumn(tableTypeArray, DefaultTableType, normalizeUnknown: false);
-                    // The source array is replaced and no longer referenced by the new batch; dispose
-                    // it now rather than leaving its Arrow buffers to the finalizer. Untouched columns
-                    // are reused by reference, so they must NOT be disposed here.
-                    tableTypeArray.Dispose();
-                }
-                else if (i == remarksIndex && batch.Column(i) is StringArray remarksArray)
-                {
-                    columns[i] = NormalizeStringColumn(remarksArray, string.Empty, normalizeUnknown: true);
-                    remarksArray.Dispose();
-                }
-                else
-                {
-                    columns[i] = batch.Column(i);
-                }
-            }
-
-            return new RecordBatch(schema, columns, batch.Length);
+            return new QueryResult(result.RowCount, new NormalizingTablesStream(result.Stream, tableTypeIndex, remarksIndex));
         }
 
         /// <summary>
@@ -940,35 +892,65 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Minimal in-memory <see cref="IArrowArrayStream"/> that replays a fixed set of record batches.
-        /// Used to return a normalized GetTables result without re-querying the server.
+        /// Lazy <see cref="IArrowArrayStream"/> wrapper that normalizes the TABLE_TYPE and REMARKS
+        /// columns of each batch as it is read from the underlying stream, preserving the
+        /// incremental/streaming consumption of the wrapped result instead of buffering it.
         /// </summary>
-        private sealed class InMemoryArrowStream : IArrowArrayStream
+        private sealed class NormalizingTablesStream : IArrowArrayStream
         {
-            private readonly Schema _schema;
-            private readonly Queue<RecordBatch> _batches;
+            private readonly IArrowArrayStream _inner;
+            private readonly int _tableTypeIndex;
+            private readonly int _remarksIndex;
 
-            public InMemoryArrowStream(Schema schema, IEnumerable<RecordBatch> batches)
+            public NormalizingTablesStream(IArrowArrayStream inner, int tableTypeIndex, int remarksIndex)
             {
-                _schema = schema;
-                _batches = new Queue<RecordBatch>(batches);
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+                _tableTypeIndex = tableTypeIndex;
+                _remarksIndex = remarksIndex;
             }
 
-            public Schema Schema => _schema;
+            public Schema Schema => _inner.Schema;
 
-            public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+            public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                RecordBatch? batch = _batches.Count > 0 ? _batches.Dequeue() : null;
-                return new ValueTask<RecordBatch?>(batch);
+                RecordBatch? batch = await _inner.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                return batch == null ? null : NormalizeBatch(batch);
             }
 
-            public void Dispose()
+            public void Dispose() => _inner.Dispose();
+
+            private RecordBatch NormalizeBatch(RecordBatch batch)
             {
-                while (_batches.Count > 0)
+                var columns = new IArrowArray[batch.ColumnCount];
+                for (int i = 0; i < batch.ColumnCount; i++)
                 {
-                    _batches.Dequeue().Dispose();
+                    // ASSUMPTION: the metadata schema declares TABLE_TYPE/REMARKS as StringType.Default,
+                    // so they arrive as StringArray. If a future schema change makes either column a
+                    // different string layout (e.g. LargeStringArray), the `is StringArray` checks below
+                    // fail and the column falls through to the unnormalized `else` branch — silently
+                    // reopening issue #527. The two index conditions are kept separate from the type
+                    // check so that mismatch is visible here in review rather than at runtime; add a
+                    // LargeStringArray branch (or generalize NormalizeStringColumn) if that ever changes.
+                    if (i == _tableTypeIndex && batch.Column(i) is StringArray tableTypeArray)
+                    {
+                        columns[i] = NormalizeStringColumn(tableTypeArray, DefaultTableType, normalizeUnknown: false);
+                        // The source array is replaced and no longer referenced by the new batch; dispose
+                        // it now rather than leaving its Arrow buffers to the finalizer. Untouched columns
+                        // are reused by reference, so they must NOT be disposed here.
+                        tableTypeArray.Dispose();
+                    }
+                    else if (i == _remarksIndex && batch.Column(i) is StringArray remarksArray)
+                    {
+                        columns[i] = NormalizeStringColumn(remarksArray, string.Empty, normalizeUnknown: true);
+                        remarksArray.Dispose();
+                    }
+                    else
+                    {
+                        columns[i] = batch.Column(i);
+                    }
                 }
+
+                return new RecordBatch(Schema, columns, batch.Length);
             }
         }
 
