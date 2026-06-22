@@ -77,7 +77,6 @@ bash_allowlist:
 # Author phase: prompt rendered from the template; tokens are the ISSUE (the bug
 # to fix). No driver PR, no SOURCE_PR_* — this is single-repo, issue-driven.
 author:
-  max_turns: 200   # bug-fix needs reproduce→fix→re-run headroom (incl. discovery on a blind start); enforced by the engine in-loop backstop
   user_prompt_template: prompts/author_user.md
   env_tokens:                 # {{issue_*}} in author_user.md  <-  env vars
     issue_number: ISSUE_NUMBER
@@ -91,7 +90,6 @@ author:
 # the system prompt. TRIGGER_COMMENT_ID is empty on the labeled path (catch-up
 # mode) — followup_user.md handles that case.
 followup:
-  max_turns: 60
   user_prompt_template: prompts/followup_user.md
   env_tokens:                 # {{...}} in followup_user.md  <-  env vars (set by the workflow)
     pr_number:          PR_NUMBER
