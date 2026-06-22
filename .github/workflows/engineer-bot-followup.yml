@@ -203,7 +203,7 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: 8260576f8eb1d3d54e592faceedea66676ed768d
+          ENGINE_REF: d37985b5f68b2259f62acd9dca2be709afb3e8f3
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
