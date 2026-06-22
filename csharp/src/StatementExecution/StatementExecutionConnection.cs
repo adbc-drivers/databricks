@@ -326,9 +326,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             properties.TryGetValue(AdbcOptions.Connection.CurrentDbSchema, out _schema);
 
             // Result configuration.
+            // The driver only implements LZ4_FRAME decompression; gzip is not supported (PECO-3056).
+            // cloudfetch.lz4.enabled=true (default) → request LZ4_FRAME compression.
+            // cloudfetch.lz4.enabled=false → null (server treats as no compression).
             _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
-            properties.TryGetValue(DatabricksParameters.ResultCompression, out _resultCompression);
+            bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
+            _resultCompression = canDecompressLz4 ? "LZ4_FRAME" : null;
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&

@@ -76,6 +76,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _currentStatementId;
         private string? _sqlQuery;
 
+        // Internal test seam: captures the last request built by this statement so
+        // E2E tests can assert the exact field values sent on the wire without HTTP
+        // interception. There is no behavioral substitute — a query succeeding does
+        // not prove a specific compression or disposition value was requested.
+        private ExecuteStatementRequest? _lastExecuteRequest;
+        internal ExecuteStatementRequest? LastExecuteRequest => _lastExecuteRequest;
+
         // Cancel support
         private readonly object _cancelLock = new();
         private CancellationTokenSource? _executeCts;
@@ -340,6 +347,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 IsMetadata = isMetadataExecution,
                 QueryTags = ParseQueryTags(_queryTags)
             };
+            _lastExecuteRequest = request;
 
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
@@ -680,6 +688,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 IsMetadata = false,
                 QueryTags = ParseQueryTags(_queryTags)
             };
+            _lastExecuteRequest = request;
 
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
