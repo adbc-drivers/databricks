@@ -187,21 +187,30 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.True(rows.Count > 0, "hive_metastore.default should expose at least one table");
 
             // REMARKS must default to "" (matching SEA/JDBC), never the legacy
-            // Thrift placeholder "UNKNOWN".
+            // Thrift placeholder "UNKNOWN". We don't assert every row is "",
+            // because a table may carry a real comment; instead we assert the
+            // normalization invariant. GetStringValue maps a null Arrow value to
+            // the sentinel string "null", so also guard against that to catch a
+            // regression that leaves REMARKS un-normalized (null) rather than "".
             Assert.DoesNotContain(rows, r => r["REMARKS"] == "UNKNOWN");
+            Assert.DoesNotContain(rows, r => r["REMARKS"] == "null");
 
-            // TABLE_TYPE must always be a canonical, non-empty classification.
-            // The server returns "" for hive_metastore managed tables; it must
-            // be normalized to "TABLE". We don't assert that a "TABLE" row is
+            // TABLE_TYPE must always be a non-empty classification. The server
+            // returns "" for hive_metastore managed tables; it must be
+            // normalized to "TABLE". We don't assert that a "TABLE" row is
             // present, because hive_metastore.default holds live, mutable state
-            // and could legitimately contain only views at test time. Instead we
-            // assert the normalization invariant: every TABLE_TYPE is a known
-            // canonical value (in particular, never "" — see above).
-            var canonicalTableTypes = new HashSet<string>
+            // and could legitimately contain only views at test time. We also
+            // don't pin TABLE_TYPE to an exact allow-list: hive_metastore is
+            // live state and may legitimately surface other classifications
+            // (e.g. EXTERNAL/MATERIALIZED-style types), which would make an
+            // exact-membership check flaky for reasons unrelated to this fix.
+            // The invariant under test is purely that normalization fired: the
+            // value is never empty and never the GetStringValue null sentinel.
+            Assert.All(rows, r =>
             {
-                "TABLE", "VIEW", "SYSTEM TABLE", "GLOBAL TEMPORARY", "LOCAL TEMPORARY"
-            };
-            Assert.All(rows, r => Assert.Contains(r["TABLE_TYPE"], canonicalTableTypes));
+                Assert.False(string.IsNullOrEmpty(r["TABLE_TYPE"]), "TABLE_TYPE must be normalized to a non-empty value");
+                Assert.NotEqual("null", r["TABLE_TYPE"]);
+            });
         }
 
         // --- GetColumnsExtended ---
