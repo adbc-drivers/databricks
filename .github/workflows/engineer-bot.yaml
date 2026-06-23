@@ -133,7 +133,7 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: d37985b5f68b2259f62acd9dca2be709afb3e8f3
+          ENGINE_REF: 1f9969eb1a26b12d78ebb7af9786ff884abd1f88
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
@@ -267,10 +267,33 @@ jobs:
         # values via env and reference them as shell variables so the shell never
         # parses them as command syntax. (`outcome` is a controlled enum, but it's
         # routed through env too for consistency.)
+        #
+        # The author outcome alone is NOT the run outcome: a `success` author
+        # (it made a change) is followed by a separate `publish` step that opens
+        # the PR, and publish can fail on its own (adbc #526: `git add` aborted
+        # on a stale touched-files path). The SOURCE OF TRUTH for "did this run
+        # succeed" is therefore whether publish produced a fix-PR URL
+        # (`steps.publish.outputs.coverage_pr_url`), NOT the publish step's exit
+        # status: a success result is reported ONLY when that URL is present.
+        # A `success` author with no PR URL means publish failed → report a
+        # failure and keep the issue open. A non-success author (no_change /
+        # blocked / failed) never ran publish, so it falls through to the author
+        # outcome + reason, which carries the real story.
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           OUTCOME: ${{ steps.author.outputs.outcome }}
           REASON: ${{ steps.author.outputs.reason }}
+          PR_URL: ${{ steps.publish.outputs.coverage_pr_url }}
         run: |
-          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
-            --body "engineer-bot bug-fix: outcome=\`${OUTCOME}\`. ${REASON}"
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -n "$PR_URL" ]; then
+              gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+                --body "engineer-bot bug-fix: outcome=\`success\`. Fix PR: ${PR_URL}. ${REASON}"
+            else
+              gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+                --body "engineer-bot bug-fix: outcome=\`failed\` — authored a fix but no PR was opened (publish produced no PR URL). See the run log; this issue stays open for re-trigger."
+            fi
+          else
+            gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+              --body "engineer-bot bug-fix: outcome=\`${OUTCOME}\`. ${REASON}"
+          fi
