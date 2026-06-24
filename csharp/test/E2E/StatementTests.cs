@@ -479,13 +479,11 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(TestConfiguration.Metadata.ExpectedColumnCount, actualBatchLength);
         }
 
-        // TODO: PECO-3008 - CanGetColumnsExtended fails for SEA; investigate catalog/schema metadata path in StatementExecutionConnection
         [SkippableTheory]
         [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true)]
         [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false)]
         public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended)
         {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA CanGetColumnsExtended returns different BUFFER_LENGTH values (PECO-3008)");
             var connectionParams = new Dictionary<string, string> { ["adbc.databricks.use_desc_table_extended"] = $"{useDescTableExtended}" };
 
             using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
