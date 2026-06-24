@@ -83,6 +83,58 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return new HttpClient(handler.Object);
         }
 
+        // Like HttpClientWithFailedExecuteStatement, but also records the `statement`
+        // body of every ExecuteStatement call into <paramref name="captured"/> before
+        // returning the FAILED body. Using an object-not-found error keeps the metadata
+        // path from throwing (the catch returns an empty result), so the SQL the path
+        // emitted is captured deterministically without needing a live warehouse.
+        private static HttpClient HttpClientCapturingStatements(List<string> captured)
+        {
+            var failedBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-failed",
+                status = new
+                {
+                    state = "FAILED",
+                    error = new { error_code = "NO_SUCH_CATALOG_EXCEPTION", message = "Catalog not found" },
+                },
+            });
+            var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
+
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
+                {
+                    var path = req.RequestUri?.AbsolutePath ?? string.Empty;
+                    if (path.EndsWith("/api/2.0/sql/sessions"))
+                    {
+                        return new HttpResponseMessage(HttpStatusCode.OK)
+                        {
+                            Content = new StringContent(sessionBody),
+                        };
+                    }
+
+                    var requestBody = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+                    if (requestBody != null)
+                    {
+                        using var doc = JsonDocument.Parse(requestBody);
+                        if (doc.RootElement.TryGetProperty("statement", out var stmt))
+                            captured.Add(stmt.GetString() ?? string.Empty);
+                    }
+
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(failedBody),
+                    };
+                });
+
+            return new HttpClient(handler.Object);
+        }
+
         // Returns a 400 Bad Request with the supplied error body — this makes
         // EnsureSuccessStatusCodeAsync throw a DatabricksException with SqlState
         // unset but the message containing the body content.
@@ -387,6 +439,69 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 "PKTABLE_CAT", "PKTABLE_SCHEM", "PKTABLE_NAME", "PKCOLUMN_NAME",
                 "FKTABLE_CAT", "FKTABLE_SCHEM", "FKTABLE_NAME", "FKCOLUMN_NAME",
                 "KEQ_SEQ", "UPDATE_RULE", "DELETE_RULE", "FK_NAME", "PK_NAME", "DEFERRABILITY");
+        }
+
+        // ─── Issue #525: `%` match-all catalog wildcard ──────────────────────────────
+        // The `%` SQL-LIKE wildcard must mean "all catalogs" on the SEA path, exactly as
+        // Thrift treats it, rather than being passed through as a literal backtick-quoted
+        // identifier. These tests capture the emitted SHOW SQL at the HttpMessageHandler
+        // seam and assert that CatalogName="%" produces "IN ALL CATALOGS" (never a literal
+        // `%` identifier), guarding IsMatchAllCatalogPattern in CI where the E2E test is
+        // skipped for lack of warehouse credentials.
+
+        [Fact]
+        public async Task GetSchemas_CatalogPercentWildcard_EmitsInAllCatalogs()
+        {
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SqlQuery = "getschemas";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Contains("SHOW SCHEMAS IN ALL CATALOGS", captured);
+            Assert.DoesNotContain(captured, sql => sql.Contains("`%`"));
+        }
+
+        [Fact]
+        public async Task GetTables_CatalogPercentWildcard_EmitsInAllCatalogs()
+        {
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SqlQuery = "gettables";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Contains("SHOW TABLES IN ALL CATALOGS", captured);
+            Assert.DoesNotContain(captured, sql => sql.Contains("`%`"));
+        }
+
+        [Fact]
+        public async Task GetColumns_CatalogPercentWildcard_DoesNotEmitLiteralWildcardIdentifier()
+        {
+            // SHOW COLUMNS IN ALL CATALOGS is not yet supported by the backend, so the
+            // null/match-all catalog fans out to SHOW CATALOGS + per-catalog SHOW COLUMNS.
+            // The key regression guard is that the literal `%` identifier is never emitted
+            // (which is what the pre-fix code did via SHOW COLUMNS IN CATALOG `%`).
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumns";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // `%` expands to "all catalogs", which begins by enumerating catalogs.
+            Assert.Contains("SHOW CATALOGS", captured);
+            Assert.DoesNotContain(captured, sql => sql.Contains("`%`"));
         }
     }
 }
