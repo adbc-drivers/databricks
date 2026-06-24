@@ -163,6 +163,86 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.True(row.ContainsKey("REF_GENERATION"), "Should have REF_GENERATION column");
         }
 
+        // Regression test for #527 (Thrift vs SEA GetTables value parity).
+        //
+        // The legacy hive_metastore catalog's Thrift TGetTablesResp returns
+        // placeholder values that SEA/JDBC do not:
+        //   - REMARKS    = "UNKNOWN"  (should normalize to "")
+        //   - TABLE_TYPE = ""         (should normalize to "TABLE")
+        // The Databricks Thrift GetTables path must normalize these so the
+        // values match SEA. hive_metastore is a built-in catalog on most
+        // Databricks workspaces, so no fixture setup is required; the test
+        // skips (rather than fails) where legacy access is disabled or the
+        // default schema is empty.
+        //
+        // AUTHORITATIVE REGRESSION GUARD: the unit tests
+        // NormalizeStringColumn_Remarks_NormalizesNullEmptyAndUnknownCaseSensitively
+        // and NormalizeStringColumn_TableType_DefaultsNullEmptyButLeavesUnknown
+        // (DatabricksStatementUnitTests) are the real red→green coverage: they
+        // feed known placeholder inputs and assert the rewritten output. This
+        // E2E case only asserts negative invariants against live workspace
+        // state, so if hive_metastore.default happens to contain only tables
+        // that never carried the placeholders, it can pass green even with the
+        // fix reverted. Treat it as a live-parity smoke check, not the guard.
+        //
+        // NOTE: This test deliberately overrides the run-selected protocol and
+        // pins Protocol = "thrift", which is an intentional exception to the
+        // class-level convention documented above CreateConnection ("Tests
+        // never pick the protocol themselves"). The placeholder values being
+        // normalized (REMARKS = "UNKNOWN", TABLE_TYPE = "") only ever appear on
+        // the legacy Thrift hive_metastore path; SEA never returns them, so a
+        // protocol-agnostic assertion would silently pass on the SEA/Reyden
+        // nightly run without exercising the fix. The pin is required to cover
+        // the regression — please don't "fix" it back to the convention.
+        [SkippableFact]
+        public async Task GetTables_NormalizesRemarksAndTableType_Thrift()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(new Dictionary<string, string>
+            {
+                { DatabricksParameters.Protocol, "thrift" },
+                // hive_metastore is a non-default catalog; multi-catalog support
+                // must be enabled for GetTables to query it.
+                { DatabricksParameters.EnableMultipleCatalogSupport, "true" }
+            });
+            var rows = await ReadMetadata(conn, "GetTables", "hive_metastore", "default");
+            // hive_metastore is present on most Databricks workspaces, but
+            // Unity-Catalog-only / governance-locked workspaces can have legacy
+            // access disabled, and the `default` schema can legitimately be
+            // empty. In those cases there is nothing to normalize, so skip
+            // rather than hard-fail — coupling this value-parity check to
+            // mutable live workspace state would produce failures unrelated to
+            // the fix. When rows are present the normalization invariants below
+            // still exercise the regression.
+            Skip.If(rows.Count == 0, "hive_metastore.default exposes no tables on this workspace; nothing to normalize");
+
+            // REMARKS must default to "" (matching SEA/JDBC), never the legacy
+            // Thrift placeholder "UNKNOWN". We don't assert every row is "",
+            // because a table may carry a real comment; instead we assert the
+            // normalization invariant. GetStringValue maps a null Arrow value to
+            // the sentinel string "null", so also guard against that to catch a
+            // regression that leaves REMARKS un-normalized (null) rather than "".
+            Assert.DoesNotContain(rows, r => r["REMARKS"] == "UNKNOWN");
+            Assert.DoesNotContain(rows, r => r["REMARKS"] == "null");
+
+            // TABLE_TYPE must always be a non-empty classification. The server
+            // returns "" for hive_metastore managed tables; it must be
+            // normalized to "TABLE". We don't assert that a "TABLE" row is
+            // present, because hive_metastore.default holds live, mutable state
+            // and could legitimately contain only views at test time. We also
+            // don't pin TABLE_TYPE to an exact allow-list: hive_metastore is
+            // live state and may legitimately surface other classifications
+            // (e.g. EXTERNAL/MATERIALIZED-style types), which would make an
+            // exact-membership check flaky for reasons unrelated to this fix.
+            // The invariant under test is purely that normalization fired: the
+            // value is never empty and never the GetStringValue null sentinel.
+            Assert.All(rows, r =>
+            {
+                Assert.False(string.IsNullOrEmpty(r["TABLE_TYPE"]), "TABLE_TYPE must be normalized to a non-empty value");
+                Assert.NotEqual("null", r["TABLE_TYPE"]);
+            });
+        }
+
         // --- GetColumnsExtended ---
 
         [SkippableFact]
