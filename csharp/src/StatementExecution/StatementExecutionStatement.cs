@@ -983,6 +983,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Normalize SPARK → null, same as Thrift's HandleSparkCatalog
                 string? catalog = DatabricksConnection.HandleSparkCatalog(_metadataCatalogName);
 
+                // Issue #525: the catalog argument is used as a literal backtick-quoted
+                // identifier in SHOW commands (e.g. SHOW SCHEMAS IN `catalog`), not as a
+                // LIKE pattern. A bare "%" (or "*") match-all wildcard therefore must be
+                // treated as "all catalogs" — null — mirroring the Thrift path, which
+                // enumerates every catalog for catalog="%". Otherwise SEA would emit
+                // SHOW SCHEMAS IN `%`, match no catalog, and return an empty result that
+                // diverges from Thrift.
+                if (IsMatchAllCatalogPattern(catalog))
+                    catalog = null;
+
                 if (_connection.EnableMultipleCatalogSupport)
                 {
                     // null means "all catalogs" (e.g. SHOW SCHEMAS IN ALL CATALOGS)
@@ -993,6 +1003,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return catalog ?? _connection.GetSessionDefaultCatalog();
             }
         }
+
+        /// <summary>
+        /// Returns true when a catalog argument is a bare SQL-LIKE match-all wildcard
+        /// ("%" or its Databricks equivalent "*"). Such a value means "all catalogs"
+        /// rather than a literal catalog identifier, matching the Thrift path.
+        /// </summary>
+        private static bool IsMatchAllCatalogPattern(string? catalog)
+            => catalog == "%" || catalog == "*";
 
         /// <summary>
         /// Escapes wildcard characters (_ and %) in metadata name parameters when
