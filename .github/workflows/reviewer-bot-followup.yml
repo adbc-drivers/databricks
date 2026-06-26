@@ -176,7 +176,7 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: b89a5023e2a19d601313d0059db38532ebf05b7b
+          ENGINE_REF: 9d63045eb40ec3f9fc61090411f4672373c28770
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
@@ -207,6 +207,7 @@ jobs:
           # the bare hostname hosting the databricks-claude-opus-4-8 serving endpoint;
           # DATABRICKS_TOKEN authenticates it (Bearer). Both already exist as adbc CI secrets.
           MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          REPO_RULES_FILES: csharp/CLAUDE.md,rust/CLAUDE.md   # adbc keeps conventions per-language (no root CLAUDE.md)
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DRY_RUN: 'false'
           RUNNER_TEMP: ${{ runner.temp }}
