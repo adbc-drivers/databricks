@@ -1184,11 +1184,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var typeNameBuilder = new StringArray.Builder();
                 var selfRefColBuilder = new StringArray.Builder();
                 var refGenBuilder = new StringArray.Builder();
+                // Issue #526: centralized GetTables `types` filter rule (parity with JDBC
+                // MetadataResultSetBuilder and the Thrift path): empty/null types => filter not
+                // applied (all types); non-empty => case-sensitive exact match against the
+                // uppercase server types (TABLE/VIEW/...). Drop blank entries so that an empty
+                // array ([]) yields no filter rather than a filter on the empty string.
                 var tableTypeFilter = !string.IsNullOrEmpty(_metadataTableTypes)
                     ? new HashSet<string>(
-                        _metadataTableTypes!.Split(',').Select(t => t.Trim()),
-                        StringComparer.OrdinalIgnoreCase)
+                        _metadataTableTypes!.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0),
+                        StringComparer.Ordinal)
                     : null;
+                if (tableTypeFilter != null && tableTypeFilter.Count == 0) tableTypeFilter = null;
 
                 int count = 0;
                 foreach (var batch in batches)

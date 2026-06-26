@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -797,6 +798,29 @@ namespace AdbcDrivers.Databricks
                 // Handle SPARK catalog case
                 HandleSparkCatalog();
                 activity?.SetTag("statement.catalog_name_after_spark_handling", CatalogName ?? "(none)");
+
+                // Issue #526: centralized GetTables `types` filter rule (parity with JDBC
+                // MetadataResultSetBuilder and the SEA path): an empty/blank types value means
+                // "no filter => all types", not "match nothing". The Thrift server treats an
+                // empty table-type list as a server-side filter that returns no rows, so
+                // normalize it to null before building the server request. Match the SEA path's
+                // per-entry handling (split/trim/drop-blanks) so that blank-only comma inputs
+                // (e.g. "," or " , ") also normalize to "no filter" on both protocols.
+                if (TableTypes != null)
+                {
+                    string normalizedTableTypes = string.Join(
+                        ",",
+                        TableTypes.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0));
+                    if (normalizedTableTypes.Length == 0)
+                    {
+                        TableTypes = null;
+                        activity?.SetTag("statement.table_types_normalized_empty_to_null", true);
+                    }
+                    else
+                    {
+                        TableTypes = normalizedTableTypes;
+                    }
+                }
 
                 // If EnableMultipleCatalogSupport is false and catalog is not null or SPARK, return empty result without RPC call
                 if (!enableMultipleCatalogSupport && CatalogName != null)
