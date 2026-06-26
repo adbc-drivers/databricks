@@ -190,6 +190,26 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.Contains(rows, r => r["TABLE_NAME"] == TestTable);
         }
 
+        // Blank-only comma inputs (e.g. "," or " , ") represent an empty types array once the
+        // per-entry blanks are dropped, so they must also mean "all types" on BOTH protocols.
+        // Without per-entry normalization the Thrift path forwards ["", ""] to the server and
+        // gets zero rows back => the known table is missing.
+        [SkippableTheory]
+        [InlineData("thrift", ",")]
+        [InlineData("thrift", " , ")]
+        [InlineData("rest", ",")]
+        [InlineData("rest", " , ")]
+        public async Task GetTables_BlankOnlyTypesFilter_ReturnsAllTypes(string protocol, string tableTypes)
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(new Dictionary<string, string>
+            {
+                { DatabricksParameters.Protocol, protocol }
+            });
+            var rows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema, tableTypes: tableTypes);
+            Assert.Contains(rows, r => r["TABLE_NAME"] == TestTable);
+        }
+
         // The type-name comparison must be case-sensitive on BOTH protocols. Server types are
         // uppercase (TABLE), so lowercase ["table"] must match nothing while ["TABLE"] matches.
         // Today SEA filters case-insensitively (OrdinalIgnoreCase), so lowercase matches => red on SEA.
