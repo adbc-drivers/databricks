@@ -19,7 +19,6 @@ using System;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
@@ -101,12 +100,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private const string SessionsEndpoint = "/api/2.0/sql/sessions";
         private const string StatementsEndpoint = "/api/2.0/sql/statements";
 
-        // JSON serialization options - ignore null values when writing
-        private static readonly JsonSerializerOptions s_jsonOptions = new JsonSerializerOptions
-        {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        };
-
         /// <summary>
         /// Initializes a new instance of the <see cref="StatementExecutionClient"/> class.
         /// </summary>
@@ -147,7 +140,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             var url = $"{_baseUrl}{SessionsEndpoint}";
-            var jsonContent = JsonSerializer.Serialize(request, s_jsonOptions);
+            var jsonContent = JsonSerializer.Serialize(request, StatementExecutionJsonContext.Default.CreateSessionRequest);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
@@ -160,7 +153,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
             var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var sessionResponse = JsonSerializer.Deserialize<CreateSessionResponse>(responseContent, s_jsonOptions);
+            var sessionResponse = JsonSerializer.Deserialize(responseContent, StatementExecutionJsonContext.Default.CreateSessionResponse);
 
             if (sessionResponse == null)
             {
@@ -214,7 +207,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             var url = $"{_baseUrl}{StatementsEndpoint}";
-            var jsonContent = JsonSerializer.Serialize(request, s_jsonOptions);
+            var jsonContent = JsonSerializer.Serialize(request, StatementExecutionJsonContext.Default.ExecuteStatementRequest);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
@@ -232,7 +225,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
             var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var executeResponse = JsonSerializer.Deserialize<ExecuteStatementResponse>(responseContent, s_jsonOptions);
+            var executeResponse = JsonSerializer.Deserialize(responseContent, StatementExecutionJsonContext.Default.ExecuteStatementResponse);
 
             if (executeResponse == null)
             {
@@ -276,7 +269,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
             var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var getResponse = JsonSerializer.Deserialize<GetStatementResponse>(responseContent, s_jsonOptions);
+            var getResponse = JsonSerializer.Deserialize(responseContent, StatementExecutionJsonContext.Default.GetStatementResponse);
 
             if (getResponse == null)
             {
@@ -316,7 +309,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
             var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var resultData = JsonSerializer.Deserialize<ResultData>(responseContent, s_jsonOptions);
+            var resultData = JsonSerializer.Deserialize(responseContent, StatementExecutionJsonContext.Default.ResultData);
 
             if (resultData == null)
             {
@@ -388,7 +381,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Try to parse error details from JSON response
             try
             {
-                var errorResponse = JsonSerializer.Deserialize<ServiceError>(errorContent, s_jsonOptions);
+                var errorResponse = JsonSerializer.Deserialize(errorContent, StatementExecutionJsonContext.Default.ServiceError);
                 if (errorResponse?.ErrorCode != null || errorResponse?.Message != null)
                 {
                     errorMessage = $"{errorMessage}. Error Code: {errorResponse.ErrorCode ?? "Unknown"}, Message: {errorResponse.Message ?? "Unknown"}";
