@@ -83,7 +83,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         }
 
         private async Task<List<Dictionary<string, string>>> ReadMetadata(AdbcConnection connection, string command,
-            string? catalog = null, string? schema = null, string? table = null, string? column = null)
+            string? catalog = null, string? schema = null, string? table = null, string? column = null,
+            string? tableTypes = null)
         {
             var results = new List<Dictionary<string, string>>();
             using var stmt = connection.CreateStatement();
@@ -92,6 +93,9 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             if (schema != null) stmt.SetOption(ApacheParameters.SchemaName, schema);
             if (table != null) stmt.SetOption(ApacheParameters.TableName, table);
             if (column != null) stmt.SetOption(ApacheParameters.ColumnName, column);
+            // tableTypes != null sets the filter (including the empty string, which represents
+            // an empty types array). Per the centralized rule, empty/null => all types.
+            if (tableTypes != null) stmt.SetOption(ApacheParameters.TableTypes, tableTypes);
 
             stmt.SqlQuery = command;
             var result = stmt.ExecuteQuery();
@@ -161,6 +165,52 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.Equal(TestSchema, row["TABLE_SCHEM"]);
             Assert.True(row.ContainsKey("TYPE_CAT"), "Should have TYPE_CAT column");
             Assert.True(row.ContainsKey("REF_GENERATION"), "Should have REF_GENERATION column");
+        }
+
+        // Issue #526: GetTables `types` filter must behave identically across protocols.
+        // Rule (per JDBC MetadataResultSetBuilder): empty/null types => filter not applied
+        // (all types returned); non-empty types => case-sensitive exact match against the
+        // uppercase server types (TABLE/VIEW/...).
+
+        // Empty `types` array ([]) must mean "all types" on BOTH protocols. Today Thrift
+        // forwards an empty table-type list to the server and gets zero rows back, so the
+        // known table is missing => red on Thrift.
+        [SkippableTheory]
+        [InlineData("thrift")]
+        [InlineData("rest")]
+        public async Task GetTables_EmptyTypesFilter_ReturnsAllTypes(string protocol)
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(new Dictionary<string, string>
+            {
+                { DatabricksParameters.Protocol, protocol }
+            });
+            // Empty string represents an empty types array ([]).
+            var rows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema, tableTypes: "");
+            Assert.Contains(rows, r => r["TABLE_NAME"] == TestTable);
+        }
+
+        // The type-name comparison must be case-sensitive on BOTH protocols. Server types are
+        // uppercase (TABLE), so lowercase ["table"] must match nothing while ["TABLE"] matches.
+        // Today SEA filters case-insensitively (OrdinalIgnoreCase), so lowercase matches => red on SEA.
+        [SkippableTheory]
+        [InlineData("thrift")]
+        [InlineData("rest")]
+        public async Task GetTables_TypesFilter_IsCaseSensitive(string protocol)
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(new Dictionary<string, string>
+            {
+                { DatabricksParameters.Protocol, protocol }
+            });
+
+            // Uppercase "TABLE" matches the server type and returns the known table.
+            var upperRows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema, tableTypes: "TABLE");
+            Assert.Contains(upperRows, r => r["TABLE_NAME"] == TestTable);
+
+            // Lowercase "table" must NOT match the uppercase server type (case-sensitive).
+            var lowerRows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema, tableTypes: "table");
+            Assert.DoesNotContain(lowerRows, r => r["TABLE_NAME"] == TestTable);
         }
 
         // --- GetColumnsExtended ---
