@@ -83,7 +83,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         }
 
         private async Task<List<Dictionary<string, string>>> ReadMetadata(AdbcConnection connection, string command,
-            string? catalog = null, string? schema = null, string? table = null, string? column = null)
+            string? catalog = null, string? schema = null, string? table = null, string? column = null,
+            string? tableTypes = null)
         {
             var results = new List<Dictionary<string, string>>();
             using var stmt = connection.CreateStatement();
@@ -92,6 +93,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             if (schema != null) stmt.SetOption(ApacheParameters.SchemaName, schema);
             if (table != null) stmt.SetOption(ApacheParameters.TableName, table);
             if (column != null) stmt.SetOption(ApacheParameters.ColumnName, column);
+            if (tableTypes != null) stmt.SetOption(ApacheParameters.TableTypes, tableTypes);
 
             stmt.SqlQuery = command;
             var result = stmt.ExecuteQuery();
@@ -161,6 +163,30 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.Equal(TestSchema, row["TABLE_SCHEM"]);
             Assert.True(row.ContainsKey("TYPE_CAT"), "Should have TYPE_CAT column");
             Assert.True(row.ContainsKey("REF_GENERATION"), "Should have REF_GENERATION column");
+        }
+
+        // Issue #526: the GetTables `types` filter must be case-SENSITIVE (exact match
+        // against the server's uppercase type names, matching JDBC's
+        // Arrays.asList(tableTypes).contains(row.get(3)) and the Thrift path). A lowercase
+        // "table" filter must match NOTHING, while an uppercase "TABLE" filter still matches.
+        [SkippableFact]
+        public async Task GetTables_TypesFilter_IsCaseSensitive()
+        {
+            SkipIfNotConfigured();
+            // This bug is on the SEA (REST) path, so force that protocol regardless of the
+            // run's configured default — the Thrift path is already case-sensitive.
+            using var conn = CreateConnection(new Dictionary<string, string>
+            {
+                { DatabricksParameters.Protocol, "rest" }
+            });
+
+            // Uppercase "TABLE" exactly matches the server type -> the table is returned.
+            var upperRows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema, TestTable, tableTypes: "TABLE");
+            Assert.Contains(upperRows, r => r["TABLE_NAME"] == TestTable);
+
+            // Lowercase "table" does NOT match the uppercase server type -> no rows.
+            var lowerRows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema, TestTable, tableTypes: "table");
+            Assert.DoesNotContain(lowerRows, r => r["TABLE_NAME"] == TestTable);
         }
 
         // --- GetColumnsExtended ---
