@@ -45,6 +45,9 @@ type connectionImpl struct {
 
 	// Database connection
 	conn *sql.Conn
+
+	// Staging client for bulk ingest file operations
+	stagingClient *stagingClient
 }
 
 func (c *connectionImpl) Close() error {
