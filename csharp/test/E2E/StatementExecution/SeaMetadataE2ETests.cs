@@ -169,16 +169,13 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // against the server's uppercase type names, matching JDBC's
         // Arrays.asList(tableTypes).contains(row.get(3)) and the Thrift path). A lowercase
         // "table" filter must match NOTHING, while an uppercase "TABLE" filter still matches.
+        // Both Thrift and SEA paths are case-sensitive, so the behavior is identical on
+        // whatever protocol the run is configured with.
         [SkippableFact]
         public async Task GetTables_TypesFilter_IsCaseSensitive()
         {
             SkipIfNotConfigured();
-            // This bug is on the SEA (REST) path, so force that protocol regardless of the
-            // run's configured default — the Thrift path is already case-sensitive.
-            using var conn = CreateConnection(new Dictionary<string, string>
-            {
-                { DatabricksParameters.Protocol, "rest" }
-            });
+            using var conn = CreateConnection();
 
             // Uppercase "TABLE" exactly matches the server type -> the table is returned.
             var upperRows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema, TestTable, tableTypes: "TABLE");
