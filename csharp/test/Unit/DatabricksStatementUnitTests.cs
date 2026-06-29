@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using AdbcDrivers.HiveServer2.Spark;
 using AdbcDrivers.Databricks;
+using Apache.Arrow;
 using Xunit;
 using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 
@@ -169,6 +170,77 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void GetMetadataOperationType_IsCaseInsensitive(string command)
         {
             Assert.NotNull(DatabricksStatement.GetMetadataOperationType(command));
+        }
+
+        /// <summary>
+        /// Invokes the private static <c>NormalizeStringColumn</c> via reflection so the pure
+        /// GetTables value-parity logic (issue #527) can be unit-tested without a live warehouse.
+        /// </summary>
+        private static StringArray InvokeNormalizeStringColumn(StringArray source, string defaultValue, bool normalizeUnknown)
+        {
+            var method = typeof(DatabricksStatement).GetMethod("NormalizeStringColumn",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            return (StringArray)method!.Invoke(null, new object[] { source, defaultValue, normalizeUnknown })!;
+        }
+
+        private static StringArray BuildStringArray(params string?[] values)
+        {
+            var builder = new StringArray.Builder();
+            foreach (string? value in values)
+            {
+                if (value == null)
+                {
+                    builder.AppendNull();
+                }
+                else
+                {
+                    builder.Append(value);
+                }
+            }
+            return builder.Build();
+        }
+
+        private static string?[] ToStrings(StringArray array)
+        {
+            var result = new string?[array.Length];
+            for (int i = 0; i < array.Length; i++)
+            {
+                result[i] = array.IsNull(i) ? null : array.GetString(i);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// REMARKS normalization (issue #527): null/empty and the legacy case-sensitive "UNKNOWN"
+        /// placeholder default to "", while a genuine "Unknown"/"unknown" comment is preserved.
+        /// </summary>
+        [Fact]
+        public void NormalizeStringColumn_Remarks_NormalizesNullEmptyAndUnknownCaseSensitively()
+        {
+            using var source = BuildStringArray(null, "", "UNKNOWN", "Unknown", "unknown", "a real comment");
+
+            using var result = InvokeNormalizeStringColumn(source, string.Empty, normalizeUnknown: true);
+
+            Assert.Equal(
+                new string?[] { "", "", "", "Unknown", "unknown", "a real comment" },
+                ToStrings(result));
+        }
+
+        /// <summary>
+        /// TABLE_TYPE normalization (issue #527): null/empty default to "TABLE", but the "UNKNOWN"
+        /// sentinel is NOT special-cased here (normalizeUnknown: false), matching the production call.
+        /// </summary>
+        [Fact]
+        public void NormalizeStringColumn_TableType_DefaultsNullEmptyButLeavesUnknown()
+        {
+            using var source = BuildStringArray(null, "", "TABLE", "VIEW", "UNKNOWN");
+
+            using var result = InvokeNormalizeStringColumn(source, "TABLE", normalizeUnknown: false);
+
+            Assert.Equal(
+                new string?[] { "TABLE", "TABLE", "TABLE", "VIEW", "UNKNOWN" },
+                ToStrings(result));
         }
     }
 }

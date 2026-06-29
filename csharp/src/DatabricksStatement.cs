@@ -37,6 +37,7 @@ using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionRe
 using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
+using Apache.Arrow.Ipc;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
@@ -814,10 +815,174 @@ namespace AdbcDrivers.Databricks
                 // Call the base implementation with the potentially modified catalog name
                 activity?.AddEvent("statement.get_tables.calling_base_implementation");
                 QueryResult result = await base.GetTablesAsync(cancellationToken);
+
+                // Normalize TABLE_TYPE/REMARKS so the Thrift path matches SEA (issue #527).
+                // The legacy hive_metastore Thrift response returns REMARKS="UNKNOWN" and an empty
+                // TABLE_TYPE for tables with no comment. SEA returns REMARKS="" and TABLE_TYPE="TABLE";
+                // the empty-TABLE_TYPE -> "TABLE" default also matches the official JDBC driver's
+                // MetadataResultSetBuilder (the REMARKS="" parity is with SEA, not a JDBC rule).
+                // Scope note (issue #527): only TABLE_TYPE/REMARKS carry placeholder values that
+                // diverge between Thrift and SEA. TABLE_NAME is the server-supplied table identifier
+                // and is returned identically by both paths, so it is intentionally not normalized
+                // here (rewriting it would risk corrupting a real name).
+                result = NormalizeTablesResult(result);
+
                 activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
                 activity?.AddEvent("statement.get_tables.complete");
                 return result;
             }, activityName: "GetTables");
+        }
+
+        // Canonical TABLE_TYPE used when the server returns a null/empty classification,
+        // matching the JDBC driver's MetadataResultSetBuilder default.
+        private const string DefaultTableType = "TABLE";
+
+        // Exact sentinel some legacy Thrift servers (e.g. hive_metastore) emit for REMARKS
+        // when a table has no comment; SEA returns "" instead. Matched case-sensitively so a
+        // genuine user comment of "Unknown"/"unknown" is preserved rather than erased.
+        private const string UnknownRemarksPlaceholder = "UNKNOWN";
+
+        /// <summary>
+        /// Wraps a GetTables result so the TABLE_TYPE and REMARKS columns are normalized to match
+        /// SEA/JDBC values (issue #527):
+        ///   - TABLE_TYPE: null/empty defaults to "TABLE".
+        ///   - REMARKS: null/empty or the legacy "UNKNOWN" placeholder defaults to "".
+        /// The normalization is applied lazily, one batch at a time, via
+        /// <see cref="NormalizingTablesStream"/> so a large (and potentially CloudFetch-backed)
+        /// result is not buffered into memory. Returns the original result unchanged when there
+        /// is nothing to normalize. Row count is preserved because normalization only rewrites
+        /// values in place and never adds or drops rows.
+        /// </summary>
+        private static QueryResult NormalizeTablesResult(QueryResult result)
+        {
+            if (result.Stream == null)
+            {
+                return result;
+            }
+
+            Schema schema = result.Stream.Schema;
+            int tableTypeIndex = schema.GetFieldIndex("TABLE_TYPE");
+            int remarksIndex = schema.GetFieldIndex("REMARKS");
+
+            // Nothing to normalize if neither column is present.
+            if (tableTypeIndex < 0 && remarksIndex < 0)
+            {
+                return result;
+            }
+
+            return new QueryResult(result.RowCount, new NormalizingTablesStream(result.Stream, tableTypeIndex, remarksIndex));
+        }
+
+        /// <summary>
+        /// Builds a normalized copy of a string column. Null/empty values are replaced with
+        /// <paramref name="defaultValue"/>; when <paramref name="normalizeUnknown"/> is true the
+        /// exact (case-sensitive) legacy "UNKNOWN" sentinel is also replaced with
+        /// <paramref name="defaultValue"/>, leaving genuine comments like "Unknown" untouched.
+        /// </summary>
+        private static StringArray NormalizeStringColumn(StringArray source, string defaultValue, bool normalizeUnknown)
+        {
+            var builder = new StringArray.Builder();
+            for (int i = 0; i < source.Length; i++)
+            {
+                string value = source.IsNull(i) ? string.Empty : source.GetString(i);
+                if (string.IsNullOrEmpty(value)
+                    || (normalizeUnknown && string.Equals(value, UnknownRemarksPlaceholder, StringComparison.Ordinal)))
+                {
+                    value = defaultValue;
+                }
+                builder.Append(value);
+            }
+            return builder.Build();
+        }
+
+        /// <summary>
+        /// Lazy <see cref="IArrowArrayStream"/> wrapper that normalizes the TABLE_TYPE and REMARKS
+        /// columns of each batch as it is read from the underlying stream, preserving the
+        /// incremental/streaming consumption of the wrapped result instead of buffering it.
+        /// </summary>
+        private sealed class NormalizingTablesStream : IArrowArrayStream
+        {
+            private readonly IArrowArrayStream _inner;
+            private readonly int _tableTypeIndex;
+            private readonly int _remarksIndex;
+
+            // Set once if a column we intended to normalize arrives as a non-StringArray layout, so
+            // the Release-safe warning below is emitted a single time per stream rather than per batch.
+            private bool _warnedUnexpectedColumnType;
+
+            public NormalizingTablesStream(IArrowArrayStream inner, int tableTypeIndex, int remarksIndex)
+            {
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+                _tableTypeIndex = tableTypeIndex;
+                _remarksIndex = remarksIndex;
+            }
+
+            public Schema Schema => _inner.Schema;
+
+            public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+            {
+                RecordBatch? batch = await _inner.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                return batch == null ? null : NormalizeBatch(batch);
+            }
+
+            public void Dispose() => _inner.Dispose();
+
+            private RecordBatch NormalizeBatch(RecordBatch batch)
+            {
+                var columns = new IArrowArray[batch.ColumnCount];
+                for (int i = 0; i < batch.ColumnCount; i++)
+                {
+                    // ASSUMPTION: the metadata schema declares TABLE_TYPE/REMARKS as StringType.Default,
+                    // so they arrive as StringArray. If a future schema change makes either column a
+                    // different string layout (e.g. LargeStringArray), the `is StringArray` checks below
+                    // fail and the column falls through to the unnormalized `else` branch, reopening
+                    // issue #527. The `else` branch makes that mismatch observable in BOTH builds (a
+                    // Debug.Assert plus a Release-safe Trace.TraceWarning) instead of failing silently;
+                    // add a LargeStringArray branch (or generalize NormalizeStringColumn) if the schema
+                    // ever changes.
+                    if (i == _tableTypeIndex && batch.Column(i) is StringArray tableTypeArray)
+                    {
+                        columns[i] = NormalizeStringColumn(tableTypeArray, DefaultTableType, normalizeUnknown: false);
+                        // The source array is replaced and no longer referenced by the new batch; dispose
+                        // it now rather than leaving its Arrow buffers to the finalizer. Untouched columns
+                        // are reused by reference, so they must NOT be disposed here.
+                        tableTypeArray.Dispose();
+                    }
+                    else if (i == _remarksIndex && batch.Column(i) is StringArray remarksArray)
+                    {
+                        columns[i] = NormalizeStringColumn(remarksArray, string.Empty, normalizeUnknown: true);
+                        remarksArray.Dispose();
+                    }
+                    else
+                    {
+                        // Guardrail: if this is a column we intended to normalize but its array type is
+                        // not StringArray, the type guards above fell through and #527 is silently
+                        // reopened. The metadata schema layout is server-controlled and could change
+                        // without a code change here, so signal in BOTH builds: a Debug.Assert that
+                        // fails loudly in debug, and a Trace.TraceWarning (compiled in under the TRACE
+                        // constant) that remains observable in Release. The warning is emitted at most
+                        // once per stream to avoid per-batch log spam.
+                        if (i == _tableTypeIndex || i == _remarksIndex)
+                        {
+                            string columnName = i == _tableTypeIndex ? "TABLE_TYPE" : "REMARKS";
+                            string actualType = batch.Column(i).GetType().Name;
+                            Debug.Assert(
+                                false,
+                                $"Expected {columnName} column at index {i} to be a StringArray but got {actualType}; normalization (issue #527) was skipped.");
+                            if (!_warnedUnexpectedColumnType)
+                            {
+                                _warnedUnexpectedColumnType = true;
+                                Trace.TraceWarning(
+                                    $"GetTables metadata column {columnName} at index {i} is {actualType}, not StringArray; " +
+                                    "TABLE_TYPE/REMARKS normalization (issue #527) was skipped. Add a branch for this array type if the schema changed.");
+                            }
+                        }
+                        columns[i] = batch.Column(i);
+                    }
+                }
+
+                return new RecordBatch(Schema, columns, batch.Length);
+            }
         }
 
         /// <summary>
