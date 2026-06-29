@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
@@ -156,7 +157,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E
             OutputHelper?.WriteLine($"Probing runtime with: {sql}");
             DateTime startUtc = DateTime.UtcNow;
 
-            QueryResult result = await statement.ExecuteQueryAsync();
+            QueryResult result;
+            try
+            {
+                result = await statement.ExecuteQueryAsync();
+            }
+            catch (HiveServer2Exception ex) when (ex.SqlState == "42601" || ex.SqlState == "20000")
+            {
+                // Runtime is pre-rollout: it does not yet support the `AS JSON STATIC ONLY`
+                // modifier (PR #198486). 42601 is the parse-syntax error; some DBRs return
+                // 20000 (internal error) instead. This mirrors the driver's own fallback in
+                // DatabricksStatement.GetColumnsExtendedAsync, so skip rather than fail the
+                // merge queue on warehouses where the runtime feature isn't deployed yet.
+                Skip.If(true, $"Runtime does not support 'AS JSON STATIC ONLY' (SQLSTATE={ex.SqlState}); pre-PR#198486 DBR.");
+                return;
+            }
             Assert.NotNull(result.Stream);
 
             int rowCount = 0;
