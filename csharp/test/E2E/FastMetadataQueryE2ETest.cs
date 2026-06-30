@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks;
 using AdbcDrivers.HiveServer2;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -161,16 +162,19 @@ namespace AdbcDrivers.Databricks.Tests.E2E
             {
                 result = await statement.ExecuteQueryAsync();
             }
-            catch (AdbcException ex) when (ex.SqlState == "42601" || ex.SqlState == "20000")
+            catch (AdbcException ex) when (
+                ex.SqlState == "42601" || ex.SqlState == "20000"
+                || (ex is DatabricksException dbx && dbx.IsDescTableExtendedUnsupportedException()))
             {
                 // Runtime is pre-rollout: it does not yet support the `AS JSON STATIC ONLY`
                 // modifier (PR #198486). 42601 is the parse-syntax error; some DBRs return
                 // 20000 (internal error) instead. Catch the AdbcException base so this covers
-                // both protocols — Thrift surfaces HiveServer2Exception, REST/SEA surfaces
-                // DatabricksException, and both carry the SQLSTATE. This mirrors the driver's
-                // own fallback in DatabricksStatement.GetColumnsExtendedAsync, so skip rather
-                // than fail the merge queue on warehouses where the feature isn't deployed yet.
-                Skip.If(true, $"Runtime does not support 'AS JSON STATIC ONLY' (SQLSTATE={ex.SqlState}); pre-PR#198486 DBR.");
+                // both protocols — Thrift surfaces HiveServer2Exception (SqlState populated),
+                // while REST/SEA surfaces DatabricksException with a null SqlState (the SQL state
+                // is only in the message), so reuse IsDescTableExtendedUnsupportedException for
+                // that case. Mirrors the driver's own fallback, so skip rather than fail the
+                // merge queue on warehouses where the feature isn't deployed yet.
+                Skip.If(true, $"Runtime does not support 'AS JSON STATIC ONLY' (SQLSTATE={ex.SqlState ?? "in-message"}); pre-PR#198486 DBR.");
                 return;
             }
             Assert.NotNull(result.Stream);
