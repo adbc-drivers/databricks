@@ -1184,10 +1184,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var typeNameBuilder = new StringArray.Builder();
                 var selfRefColBuilder = new StringArray.Builder();
                 var refGenBuilder = new StringArray.Builder();
+                // Issue #526: match JDBC's MetadataResultSetBuilder and the Thrift path -
+                // the types filter is a case-SENSITIVE exact match against the server's
+                // uppercase type names (TABLE/VIEW/...). Use Ordinal, not OrdinalIgnoreCase.
                 var tableTypeFilter = !string.IsNullOrEmpty(_metadataTableTypes)
                     ? new HashSet<string>(
                         _metadataTableTypes!.Split(',').Select(t => t.Trim()),
-                        StringComparer.OrdinalIgnoreCase)
+                        StringComparer.Ordinal)
                     : null;
 
                 int count = 0;
