@@ -84,6 +84,13 @@ author:
     issue_number: ISSUE_NUMBER
     issue_title:  ISSUE_TITLE
     issue_body:   ISSUE_BODY
+  # Repo-root learning log: the engine reads it (newest-first) as a system-prompt
+  # section — a peer of the CLAUDE.md conventions — so past lessons inform each
+  # fix. One log for the whole repo for now; can split per-language later. The
+  # follow-up phase reads the same file. (Auto-append on merge is a separate
+  # follow-up: it needs a `retrospective:` block + a learning workflow, neither
+  # wired yet — until then grow this file by hand.)
+  knowledge_log: .claude/learning.md
 
 # Follow-up phase: woken by engineer-bot-followup.yml (a review comment on, or
 # the `engineer-bot` label applied to, one of the bot's fix PRs). The prompt is
