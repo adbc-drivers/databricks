@@ -1369,6 +1369,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
             }
+            catch (DatabricksException ex) when (ex.IsDescTableExtendedUnsupportedException())
+            {
+                // The runtime does not support `DESC TABLE EXTENDED ... AS JSON [STATIC ONLY]`
+                // (e.g. STATIC ONLY on a DBR without PR #198486 → 42601 parse error, or 20000).
+                // Fall back to the multi-call metadata path, mirroring the Thrift base
+                // (DatabricksStatement.GetColumnsExtendedAsync). This keeps the fast-metadata
+                // opt-in safe to roll out before the runtime change reaches every endpoint.
+                return await GetColumnsExtendedViaThreeCalls(cancellationToken).ConfigureAwait(false);
+            }
 
             string? resultJson = null;
             foreach (var batch in batches)

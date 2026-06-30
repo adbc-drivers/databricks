@@ -125,5 +125,56 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var ex = new DatabricksException("TABLE_OR_VIEW_NOT_FOUND occurred").SetSqlState("99999");
             Assert.True(ex.IsObjectNotFoundException());
         }
+
+        [Theory]
+        [InlineData("42601")]
+        [InlineData("20000")]
+        public void IsDescTableExtendedUnsupportedException_KnownSqlState_ReturnsTrue(string sqlState)
+        {
+            var ex = new DatabricksException("some message").SetSqlState(sqlState);
+            Assert.True(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_SqlStateInMessage_ReturnsTrue()
+        {
+            // SEA path: StatementExecutionClient builds the exception with only a message, so
+            // SqlState is null and the SQL state is carried inside the text. This is the exact
+            // shape that red-failed the REST merge-queue job for STATIC ONLY on a pre-rollout DBR.
+            var ex = new DatabricksException(
+                "Statement execution failed. State: FAILED. Error Code: BAD_REQUEST, Message: " +
+                "[PARSE_SYNTAX_ERROR] Syntax error at or near 'STATIC'. SQLSTATE: 42601 (line 1, pos 94)");
+            Assert.Null(ex.SqlState);
+            Assert.True(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_InternalErrorInMessage_ReturnsTrue()
+        {
+            var ex = new DatabricksException("Statement execution failed. ... SQLSTATE: 20000");
+            Assert.True(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_ObjectNotFound_ReturnsFalse()
+        {
+            // Not-found errors take the other fallback path (empty result), not the three-call path.
+            var ex = new DatabricksException("TABLE_OR_VIEW_NOT_FOUND occurred").SetSqlState("42704");
+            Assert.False(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_UnrelatedError_ReturnsFalse()
+        {
+            var ex = new DatabricksException("Connection timeout while executing query");
+            Assert.False(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_EmptyMessageNoSqlState_ReturnsFalse()
+        {
+            var ex = new DatabricksException("");
+            Assert.False(ex.IsDescTableExtendedUnsupportedException());
+        }
     }
 }
