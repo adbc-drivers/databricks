@@ -1,0 +1,302 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Engineer-bot — issue-triggered bug-fix bot for this repo.
+#
+# ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
+#   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
+#   - ENGINE_REF in the install step is pinned to an immutable commit SHA (never @main);
+#     bump it to adopt engine changes. claude-agent-sdk / @anthropic-ai/claude-code are
+#     unpinned to match the hub. The engine repo (databricks/databricks-bot-engine)
+#     is PRIVATE for now, so BOT_ENGINE_PAT is scoped to it; when it goes public, drop
+#     the PAT (anonymous install) but keep ENGINE_REF pinned to a tag/SHA (never @main)
+#   - an `engineer-bot` label that only maintainers can apply (one label does both:
+#     applied to an ISSUE it triggers this bug-fix; auto-applied to the fix PR it opts
+#     the PR into the follow-up loop)
+#
+# Issue-triggered, self-contained bug-fix bot. A maintainer labels an issue
+# `engineer-bot`; this installs the engine (interim: PAT git-install of the internal
+# hub) + the Claude SDK from public registries, runs the bug-fix flow against
+# THIS repo, and opens a fix PR. Self-contained on purpose: a cross-org `uses:`
+# of the hub's internal composite action does NOT work, so the run steps are
+# inline. When the engine goes public, switch the install to anonymous/PyPI (and
+# optionally to `uses: .../engineer-run@<tag>`).
+name: Engineer Bot — Fix (issue-triggered)
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write        # push the fix branch
+  pull-requests: write   # open the fix PR
+  issues: write          # comment back on the issue
+  id-token: write        # if your model endpoint uses OIDC; drop otherwise
+
+concurrency:
+  # One run per issue; queue (don't cancel) so a re-label can't race.
+  group: engineer-bot-fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    # Label IS the authorization: only maintainers (triage/write) can apply it,
+    # and issue bodies are untrusted input. This is `issues: [labeled]`, so it
+    # fires ONLY for issues — labeling a PR `engineer-bot` (incl. publish's
+    # auto-label on the fix PR) is a `pull_request` event and never re-triggers
+    # this job, so the single shared label can't cause a fix→PR→fix loop.
+    if: github.event.label.name == 'engineer-bot'
+    runs-on: [self-hosted, Linux, X64, peco-driver]
+    timeout-minutes: 45
+    steps:
+      - name: Mint engineer-bot App token
+        id: token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          private-key: ${{ secrets.ENGINEER_BOT_PRIVATE_KEY }}
+
+      # Post an early "I've started" comment with a link to this run, so the issue
+      # shows the bot is working before the (multi-minute) author phase finishes.
+      # The final "Comment outcome on the issue" step reports success/no_change/
+      # failed at the end. Values go via env (never interpolated into the script) so
+      # an untrusted issue title can't inject shell — the run URL is GHA-derived.
+      - name: Comment that the bot has started
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+            --body "🤖 engineer-bot is on it — working on a fix. Progress: [run log](${RUN_URL}). I'll comment again with the outcome (and open a fix PR if I make changes)."
+
+      - name: Checkout (the PR will be opened against this repo)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          token: ${{ steps.token.outputs.token }}   # so the fix-branch push authenticates as the bot
+          persist-credentials: true
+          fetch-depth: 0
+          # csharp/test depends on the csharp/hiveserver2 submodule (PUBLIC); without
+          # it `dotnet build`/`dotnet test` fails and the agent can't verify its repro
+          # test red→green. Mirrors e2e-tests.yml. The sandbox bash can't run
+          # `git submodule`, so it MUST be fetched at checkout.
+          submodules: recursive
+
+      - name: Configure bot git identity
+        env:
+          # NOTE: the noreply attribution format is <USER_ID>+<login>@users.noreply.github.com
+          # where USER_ID is the NUMERIC user id of the bot account (peco-engineer-bot[bot]),
+          # NOT the App's app-id (those are different numbers). Resolve it at runtime so
+          # commits link to the bot's profile and show as verified.
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          bot_login="peco-engineer-bot[bot]"
+          bot_id="$(gh api "/users/${bot_login}" --jq .id)"
+          git config user.name "${bot_login}"
+          git config user.email "${bot_id}+${bot_login}@users.noreply.github.com"
+
+      - name: Setup Python
+        shell: bash
+        # actions/setup-python can't provision on this self-hosted runner
+        # (no hosted tool-cache). The runner is provisioned with system
+        # python3.11; use it via a venv so pip installs stay isolated and
+        # `pip` / `python -m` resolve to 3.11 for the later steps.
+        run: |
+          python3.11 -m venv "$RUNNER_TEMP/bot-venv"
+          echo "$RUNNER_TEMP/bot-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4.3.1
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+        env:
+          # Fine-grained PAT, read-only Contents on databricks/databricks-bot-engine.
+          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+          # SUPPLY-CHAIN PIN: the engine is pinned to an immutable commit SHA — never
+          # install from the force-pushable `@main` ref in a secret-bearing job. Bump
+          # ENGINE_REF to adopt engine changes (prefer a release tag once the engine
+          # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
+          # unpinned to match the hub (databricks-driver-test); pin them to exact
+          # versions here if you want full reproducibility.
+          ENGINE_REF: e6994fa3ca073d2281a0bf1aa6c7d9db6251ca89
+        run: |
+          set -euo pipefail
+          : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
+          python -m pip install --upgrade pip
+          # The dedicated engine repo (PRIVATE for now → install via the PAT). Once
+          # it's public, drop the `x-access-token:${ENGINE_PAT}@` prefix (anonymous);
+          # ENGINE_REF stays pinned to a commit SHA / release tag for reproducibility.
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
+          # The engine drives the Claude Agent SDK + Claude Code CLI (public registries).
+          pip install claude-agent-sdk
+          # Global npm dir (/usr/local/lib) is root-owned on the self-hosted
+          # runner; install to a per-job prefix the runner user owns and put
+          # it on PATH so later steps find the `claude` CLI the SDK shells to.
+          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-global"
+          mkdir -p "$NPM_CONFIG_PREFIX/bin"
+          npm install -g @anthropic-ai/claude-code
+          echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
+
+      # Give the agent a LIVE workspace connection so its E2E tests
+      # (csharp/test/E2E/) actually run instead of silently Skip-ing — they gate on
+      # DATABRICKS_TEST_CONFIG_FILE. LIGHTER setup (adbc's choice): reuse the shared
+      # warehouse with OAuth client-credentials (the same SP creds e2e-tests.yml uses
+      # for SQL), with NO per-run schema provisioning or fixture seeding. Read-only
+      # fixtures already live in main.adbc_testing (see the author prompt); the
+      # writable target is main.default (tests should rarely write). Runs on
+      # ubuntu-latest like every other adbc E2E workflow. Values pass via env (no
+      # ${{ }} in the script) so nothing user-controlled is interpolated.
+      - name: Create E2E test config (shared warehouse, no seeding)
+        env:
+          DATABRICKS_SERVER_HOSTNAME:    ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HTTP_PATH:          ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+          DATABRICKS_TEST_CLIENT_ID:     ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+          DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          OAUTH_TOKEN=$(curl -s -X POST "https://${DATABRICKS_SERVER_HOSTNAME}/oidc/v1/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${DATABRICKS_TEST_CLIENT_ID}" \
+            -d "client_secret=${DATABRICKS_TEST_CLIENT_SECRET}" \
+            -d "scope=sql" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          if [ -z "${OAUTH_TOKEN}" ]; then echo "::error::failed to mint workspace OAuth token"; exit 1; fi
+          echo "::add-mask::${OAUTH_TOKEN}"
+          mkdir -p ~/.databricks
+          cat > ~/.databricks/connection.json << EOF
+          {
+            "uri": "https://${DATABRICKS_SERVER_HOSTNAME}${DATABRICKS_HTTP_PATH}",
+            "auth_type": "oauth",
+            "grant_type": "client_credentials",
+            "client_id": "${DATABRICKS_TEST_CLIENT_ID}",
+            "client_secret": "${DATABRICKS_TEST_CLIENT_SECRET}",
+            "scope": "sql",
+            "access_token": "${OAUTH_TOKEN}",
+            "type": "databricks",
+            "catalog": "main",
+            "db_schema": "default",
+            "isCITesting": true,
+            "metadata": { "catalog": "main", "schema": "pqtest", "table": "alltypes" }
+          }
+          EOF
+          echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> "$GITHUB_ENV"
+
+      - name: Run bug-fix author
+        id: author
+        env:
+          TEST_REPO_ROOT: ${{ github.workspace }}          # single-repo: agent edits THIS checkout
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE:  ${{ github.event.issue.title }}
+          ISSUE_BODY:   ${{ github.event.issue.body }}
+          ISSUE_URL:    ${{ github.event.issue.html_url }}
+          GH_TOKEN:     ${{ steps.token.outputs.token }}
+          # Model serving on the same Databricks workspace as adbc's CI: DATABRICKS_HOST is
+          # the bare hostname (e.g. adb-<id>.<n>.azuredatabricks.net) hosting the
+          # databricks-claude-opus-4-8 serving endpoint; DATABRICKS_TOKEN authenticates it
+          # (Bearer). Both already exist as adbc CI secrets — no new secrets needed.
+          MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          REPO_RULES_FILES: csharp/CLAUDE.md,rust/CLAUDE.md   # adbc keeps conventions per-language (no root CLAUDE.md)
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: python -m databricks_bot_engine.engineer_bot.run --phase author --bot .bot
+
+      - name: Open fix PR
+        id: publish
+        # The agent SELF-REPORTS change_made|no_change_needed|blocked
+        # (protocol.AUTHOR_OUTCOMES); run_author MAPS that to the EMITTED step
+        # output: change_made -> success, no_change_needed -> no_change,
+        # blocked|invalid -> failed. So gate publish on the emitted "success".
+        # publish opens the PR with the `engineer-bot` label (engineer-followup
+        # opt-in) and emits the PR url as `coverage_pr_url`.
+        if: steps.author.outputs.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ENGINEER_BOT_APP_ID: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          TEST_REPO_ROOT: ${{ github.workspace }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE:  ${{ github.event.issue.title }}
+          ISSUE_URL:    ${{ github.event.issue.html_url }}
+          # publish.py reads the agent's edit set from these author-step outputs
+          # (run_author emits touched_files/touched_count/summary). Without them
+          # publish sees TOUCHED_FILES="" and refuses with "empty but outcome was
+          # success". GITHUB_REPOSITORY / RUNNER_TEMP are GHA defaults (auto-set).
+          TOUCHED_FILES: ${{ steps.author.outputs.touched_files }}
+          TOUCHED_COUNT: ${{ steps.author.outputs.touched_count }}
+          SUMMARY:       ${{ steps.author.outputs.summary }}
+          # Bug-fix flow outputs. RED_GREEN_TESTS → build_pr_body renders the
+          # {test_plan} token (every added test is red→green; the flow no longer
+          # adds regression tests). OUT_OF_SCOPE → publish lists facets the bot
+          # couldn't fix here, with the reason, for a human to follow up. Both
+          # absent for non-bug-fix flows → publish falls back to a generic line.
+          RED_GREEN_TESTS: ${{ steps.author.outputs.red_green_tests }}
+          OUT_OF_SCOPE:    ${{ steps.author.outputs.out_of_scope }}
+        run: python -m databricks_bot_engine.engineer_bot.publish
+
+      - name: Label the fix PR for review
+        # publish applies `engineer-bot` (engineer opt-in) but the reviewer gates
+        # strictly on `review-bot`, so add that label here too — otherwise the fix
+        # PR would never be reviewed and the loop wouldn't close. Keeps the labels
+        # single-purpose (engineer-bot ⇒ engineer, review-bot ⇒ reviewer); the fix
+        # PR simply opts into both. The `labeled` event fires reviewer-bot.yml.
+        if: steps.author.outputs.outcome == 'success' && steps.publish.outputs.coverage_pr_url != ''
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          # Bind the engine-produced URL to an env var rather than interpolating
+          # ${{ }} into the run-script, mirroring the "Comment outcome" step — the
+          # runner shell never parses it as command syntax (defense-in-depth).
+          COVERAGE_PR_URL: ${{ steps.publish.outputs.coverage_pr_url }}
+        run: gh pr edit "$COVERAGE_PR_URL" --add-label review-bot
+
+      - name: Comment outcome on the issue
+        if: always()
+        # `reason` is free text produced by the bug-fix agent (LLM-derived, from
+        # untrusted issue title/body), so it must NOT be interpolated into the
+        # command text — backticks/$(...)/"; ..." would be executed by the runner
+        # shell (which holds GH_TOKEN with contents+PR+issues write). Pass both
+        # values via env and reference them as shell variables so the shell never
+        # parses them as command syntax. (`outcome` is a controlled enum, but it's
+        # routed through env too for consistency.)
+        #
+        # The author outcome alone is NOT the run outcome: a `success` author
+        # (it made a change) is followed by a separate `publish` step that opens
+        # the PR, and publish can fail on its own (adbc #526: `git add` aborted
+        # on a stale touched-files path). The SOURCE OF TRUTH for "did this run
+        # succeed" is therefore whether publish produced a fix-PR URL
+        # (`steps.publish.outputs.coverage_pr_url`), NOT the publish step's exit
+        # status: a success result is reported ONLY when that URL is present.
+        # A `success` author with no PR URL means publish failed → report a
+        # failure and keep the issue open. A non-success author (no_change /
+        # blocked / failed) never ran publish, so it falls through to the author
+        # outcome + reason, which carries the real story.
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OUTCOME: ${{ steps.author.outputs.outcome }}
+          REASON: ${{ steps.author.outputs.reason }}
+          PR_URL: ${{ steps.publish.outputs.coverage_pr_url }}
+        run: |
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -n "$PR_URL" ]; then
+              gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+                --body "engineer-bot bug-fix: outcome=\`success\`. Fix PR: ${PR_URL}. ${REASON}"
+            else
+              gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+                --body "engineer-bot bug-fix: outcome=\`failed\` — authored a fix but no PR was opened (publish produced no PR URL). See the run log; this issue stays open for re-trigger."
+            fi
+          else
+            gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+              --body "engineer-bot bug-fix: outcome=\`${OUTCOME}\`. ${REASON}"
+          fi

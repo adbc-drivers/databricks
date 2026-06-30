@@ -64,6 +64,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private bool _enablePKFK;
         private bool _enableMultipleCatalogSupport;
         private bool _useDescTableExtended;
+        private bool _enableFastMetadataQuery;
         private bool _applySSPWithQueries;
 
         // Connection bring-up timeout (PECO-3059). Mirrors the Thrift path's
@@ -305,6 +306,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
+            _enableFastMetadataQuery = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableFastMetadataQuery, false);
             // When true, SSPs (adbc.databricks.ssp_*) are applied via post-open SET statements
             // rather than CreateSession.session_confs — mirrors Thrift's behavior so callers
             // who depend on the SET-statement path (e.g., for audit visibility or for SSPs
@@ -947,6 +949,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// Default: false (falls back to GetColumns + GetPrimaryKeys + GetCrossReference).
         /// </summary>
         internal bool UseDescTableExtended => _useDescTableExtended;
+
+        /// <summary>
+        /// Whether to emit <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON STATIC ONLY</c> in place of
+        /// the base <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON</c>. SEA always targets a DBSQL
+        /// warehouse, so the flag alone is sufficient (no warehouse-path check needed). The
+        /// metadata-query header is already sent by <see cref="ExecuteMetadataSqlAsync"/>,
+        /// which provides the SEA equivalent of Thrift's RunAsync=false signal.
+        /// Default: false.
+        /// </summary>
+        internal bool EnableFastMetadataQuery => _enableFastMetadataQuery;
 
         /// <summary>
         /// Returns the session's default catalog. Used by statements when

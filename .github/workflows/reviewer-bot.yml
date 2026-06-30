@@ -1,0 +1,142 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Reviewer-bot — reviews PRs in this repo and posts inline findings.
+#
+# ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
+#   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
+#   - ENGINE_REF in the install step is pinned to an immutable commit SHA (never @main);
+#     bump it to adopt engine changes. claude-agent-sdk / @anthropic-ai/claude-code are
+#     unpinned to match the hub. The engine repo (databricks/databricks-bot-engine)
+#     is PRIVATE for now, so BOT_ENGINE_PAT is scoped to it; when it goes public, drop
+#     the PAT (anonymous install) but keep ENGINE_REF pinned to a tag/SHA (never @main)
+#
+# Self-contained (a cross-org `uses:` of the hub's internal composite action does
+# NOT work, so the run steps are inline). Posts findings under the review-bot App
+# identity; it never merges. It also reviews the bug-fix bot's OWN fix PRs, which
+# closes the reviewer -> engineer loop.
+#
+# When the engine is published publicly: drop the PAT (anonymous git / PyPI).
+name: Reviewer Bot
+
+on:
+  pull_request:
+    # `labeled` is included so adding `review-bot` to an already-open PR triggers
+    # a review immediately, not just on the next push. (The `if:` gate below only
+    # honors `review-bot`; applying `engineer-bot` alone fires this event but the
+    # job is skipped. Engineer-bot fix PRs are reviewed because engineer-bot.yaml
+    # separately adds the `review-bot` label after publish.)
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+
+permissions:
+  contents: read
+  pull-requests: write   # post inline review findings
+  id-token: write        # model OIDC, if your endpoint uses it
+
+concurrency:
+  # Re-review on each push; only the latest matters, so cancel stale runs.
+  group: reviewer-bot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Non-fork, non-draft, `review-bot`-labeled PRs only:
+    #  - fork PRs must never see the LLM/engine secrets; drafts aren't ready.
+    #  - label gate: review ONLY PRs carrying `review-bot`. `review-bot` guards the
+    #    reviewer; `engineer-bot` guards the engineer — strictly separate, never
+    #    mixed. A maintainer opts a PR in with `review-bot`; the bug-fix bot's own
+    #    fix PRs get `review-bot` applied by engineer-bot.yaml after publish, so
+    #    they're reviewed and the loop still closes. Without the label the reviewer
+    #    stays silent, so it doesn't comment on every PR in the repo.
+    if: >-
+      github.event.pull_request.draft == false
+      && github.event.pull_request.head.repo.fork == false
+      && contains(github.event.pull_request.labels.*.name, 'review-bot')
+    # ACTIVATION BLOCKER: before taking this workflow out of DRAFT, switch this to
+    # the protected `peco-driver` self-hosted runner (or adopt OIDC + a scoped,
+    # short-lived model credential distinct from the CI DATABRICKS_TOKEN). As long
+    # as the live workspace token is reachable in env, an LLM run over untrusted PR
+    # content must NOT execute on a shared GitHub-hosted runner. See .bot/SETUP.md.
+    runs-on: [self-hosted, Linux, X64, peco-driver]
+    timeout-minutes: 30
+    steps:
+      - name: Mint review-bot App token
+        id: token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.REVIEW_BOT_APP_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
+
+      - name: Checkout PR (merge ref)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0   # reviewer diffs head against base
+          # The reviewer reads this checkout (diff/grep/read) while the LLM runs
+          # over untrusted PR content; keep the App token OUT of .git/config so a
+          # prompt-injection can't read+leak it. The reviewer only POSTS via the
+          # minted App token in GH_TOKEN; it never uses the checkout's git creds.
+          persist-credentials: false
+
+      - name: Setup Python
+        shell: bash
+        # actions/setup-python can't provision on this self-hosted runner
+        # (no hosted tool-cache). The runner is provisioned with system
+        # python3.11; use it via a venv so pip installs stay isolated and
+        # `pip` / `python -m` resolve to 3.11 for the later steps.
+        run: |
+          python3.11 -m venv "$RUNNER_TEMP/bot-venv"
+          echo "$RUNNER_TEMP/bot-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+        env:
+          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+          # SUPPLY-CHAIN PIN: the engine is pinned to an immutable commit SHA — never
+          # install from the force-pushable `@main` ref in a secret-bearing job. Bump
+          # ENGINE_REF to adopt engine changes (prefer a release tag once the engine
+          # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
+          # unpinned to match the hub (databricks-driver-test); pin them to exact
+          # versions here if you want full reproducibility.
+          ENGINE_REF: e6994fa3ca073d2281a0bf1aa6c7d9db6251ca89
+        run: |
+          set -euo pipefail
+          : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
+          python -m pip install --upgrade pip
+          # The dedicated engine repo (PRIVATE for now → install via the PAT). Drop the
+          # `x-access-token:${ENGINE_PAT}@` prefix once it's public; ENGINE_REF stays pinned.
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
+          pip install claude-agent-sdk
+          # Global npm dir (/usr/local/lib) is root-owned on the self-hosted
+          # runner; install to a per-job prefix the runner user owns and put
+          # it on PATH so later steps find the `claude` CLI the SDK shells to.
+          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-global"
+          mkdir -p "$NPM_CONFIG_PREFIX/bin"
+          npm install -g @anthropic-ai/claude-code
+          echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
+
+      - name: Run reviewer
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          # Model serving on the same Databricks workspace as adbc's CI: DATABRICKS_HOST is
+          # the bare hostname hosting the databricks-claude-opus-4-8 serving endpoint;
+          # DATABRICKS_TOKEN authenticates it (Bearer). Both already exist as adbc CI secrets.
+          MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          REPO_RULES_FILES: csharp/CLAUDE.md,rust/CLAUDE.md   # adbc keeps conventions per-language (no root CLAUDE.md)
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DRY_RUN: 'false'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: python -m databricks_bot_engine.reviewer_bot.run_review

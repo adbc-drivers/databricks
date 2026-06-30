@@ -67,7 +67,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 sessionId: SessionId,
                 mode: DriverModeType.Thrift,
                 enableDirectResults: true,
-                useDescTableExtended: false,
+                enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
                 activity: null);
 
@@ -102,7 +102,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 sessionId: string.Empty,
                 mode: DriverModeType.Thrift,
                 enableDirectResults: true,
-                useDescTableExtended: false,
+                enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
                 activity: null);
 
@@ -132,7 +132,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 sessionId: "session-thrift",
                 mode: DriverModeType.Thrift,
                 enableDirectResults: true,
-                useDescTableExtended: false,
+                enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
                 activity: null);
 
@@ -163,7 +163,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 sessionId: "session-sea",
                 mode: DriverModeType.Sea,
                 enableDirectResults: true,
-                useDescTableExtended: false,
+                enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
                 activity: null);
 
@@ -205,7 +205,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 sessionId: "session-throwing-http",
                 mode: DriverModeType.Thrift,
                 enableDirectResults: true,
-                useDescTableExtended: false,
+                enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
                 activity: null);
 

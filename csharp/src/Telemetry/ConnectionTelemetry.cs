@@ -27,6 +27,7 @@ using AdbcDrivers.Databricks.Auth;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.Databricks.Telemetry.Models;
 using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
 
@@ -78,7 +79,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             string sessionId,
             Proto.DriverMode.Types.Type mode,
             bool enableDirectResults,
-            bool useDescTableExtended,
+            bool enableComplexDatatypeSupport,
             int connectTimeoutMilliseconds,
             Activity? activity)
         {
@@ -124,7 +125,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     SafeBuildSystemConfiguration(assemblyVersion, activity);
                 Proto.DriverConnectionParameters driverConnectionParams =
                     SafeBuildDriverConnectionParams(
-                        properties, host, mode, enableDirectResults, useDescTableExtended,
+                        properties, host, mode, enableDirectResults, enableComplexDatatypeSupport,
                         connectTimeoutMilliseconds, activity);
                 string authType = SafeDetermineAuthType(properties, activity);
 
@@ -439,14 +440,14 @@ namespace AdbcDrivers.Databricks.Telemetry
             string host,
             Proto.DriverMode.Types.Type mode,
             bool enableDirectResults,
-            bool useDescTableExtended,
+            bool enableComplexDatatypeSupport,
             int connectTimeoutMilliseconds,
             Activity? activity)
         {
             try
             {
                 return BuildDriverConnectionParams(
-                    properties, host, mode, enableDirectResults, useDescTableExtended,
+                    properties, host, mode, enableDirectResults, enableComplexDatatypeSupport,
                     connectTimeoutMilliseconds);
             }
             catch (Exception ex)
@@ -474,7 +475,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     EnableArrow = true,
                     EnableDirectResults = enableDirectResults,
                     SocketTimeout = connectTimeoutMilliseconds > 0 ? connectTimeoutMilliseconds / 1000 : 0,
-                    EnableComplexDatatypeSupport = useDescTableExtended,
+                    EnableComplexDatatypeSupport = enableComplexDatatypeSupport,
                     AutoCommit = true,
                 };
             }
@@ -634,7 +635,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             string host,
             Proto.DriverMode.Types.Type mode,
             bool enableDirectResults,
-            bool useDescTableExtended,
+            bool enableComplexDatatypeSupport,
             int connectTimeoutMilliseconds)
         {
             properties.TryGetValue(SparkParameters.Path, out string? httpPath);
@@ -666,7 +667,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 RowsFetchedPerBlock = batchSize,
                 SocketTimeout = connectTimeoutMilliseconds > 0 ? connectTimeoutMilliseconds / 1000 : 0,
                 EnableDirectResults = enableDirectResults,
-                EnableComplexDatatypeSupport = useDescTableExtended,
+                EnableComplexDatatypeSupport = enableComplexDatatypeSupport,
                 AutoCommit = true,
                 AsyncPollIntervalMillis = asyncPollIntervalMillis,
             };
@@ -683,6 +684,77 @@ namespace AdbcDrivers.Databricks.Telemetry
             // own try/catch so a future per-field source change cannot kill the whole payload.
             TrySetField(connectionParams, p => p.DiscoveryModeEnabled = false);
             TrySetField(connectionParams, p => p.EnableTokenCache = false);
+
+            // Map additional ADBC connection properties when present (left unset/null otherwise,
+            // matching JDBC). Each set is wrapped per-field so a parse/lookup problem on one
+            // field cannot drop the whole payload.
+            TrySetField(connectionParams, p =>
+            {
+                if (properties.TryGetValue(DatabricksParameters.QueryTags, out string? queryTags) &&
+                    !string.IsNullOrEmpty(queryTags))
+                {
+                    p.QueryTags = queryTags;
+                }
+            });
+            TrySetField(connectionParams, p =>
+            {
+                if (properties.TryGetValue(DatabricksParameters.OAuthScope, out string? authScope) &&
+                    !string.IsNullOrEmpty(authScope))
+                {
+                    p.AuthScope = authScope;
+                }
+            });
+
+            // Proxy configuration (use_proxy / proxy_host_info / non_proxy_hosts).
+            TrySetField(connectionParams, p =>
+            {
+                if (properties.TryGetValue(HttpProxyOptions.UseProxy, out string? useProxy) &&
+                    bool.TryParse(useProxy, out bool useProxyValue))
+                {
+                    p.UseProxy = useProxyValue;
+                }
+            });
+            TrySetField(connectionParams, p =>
+            {
+                if (properties.TryGetValue(HttpProxyOptions.ProxyHost, out string? proxyHost) &&
+                    !string.IsNullOrEmpty(proxyHost))
+                {
+                    var proxyInfo = new Proto.HostDetails { HostUrl = proxyHost };
+                    if (properties.TryGetValue(HttpProxyOptions.ProxyPort, out string? proxyPort) &&
+                        int.TryParse(proxyPort, out int proxyPortValue))
+                    {
+                        proxyInfo.Port = proxyPortValue;
+                    }
+                    p.ProxyHostInfo = proxyInfo;
+                }
+            });
+            TrySetField(connectionParams, p =>
+            {
+                if (properties.TryGetValue(HttpProxyOptions.ProxyIgnoreList, out string? ignoreList) &&
+                    !string.IsNullOrEmpty(ignoreList))
+                {
+                    foreach (string entry in ignoreList.Split(','))
+                    {
+                        string trimmed = entry.Trim();
+                        if (trimmed.Length > 0)
+                        {
+                            p.NonProxyHosts.Add(trimmed);
+                        }
+                    }
+                }
+            });
+
+            // TLS: only allow_self_signed_support has a C# equivalent. The other TLS proto
+            // fields (use_system_trust_store, ssl_trust_store_type, check_certificate_revocation)
+            // are JDBC-only concepts with no driver setting, so they are intentionally left unset.
+            TrySetField(connectionParams, p =>
+            {
+                if (properties.TryGetValue(HttpTlsOptions.AllowSelfSigned, out string? allowSelfSigned) &&
+                    bool.TryParse(allowSelfSigned, out bool allowSelfSignedValue))
+                {
+                    p.AllowSelfSignedSupport = allowSelfSignedValue;
+                }
+            });
 
             return connectionParams;
         }

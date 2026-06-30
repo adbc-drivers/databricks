@@ -71,6 +71,14 @@ namespace AdbcDrivers.Databricks
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
 
         /// <summary>
+        /// Optional override for the Thrift RunAsync flag on a single statement. When non-null,
+        /// takes precedence over the connection-level <see cref="DatabricksConnection.RunAsyncInThrift"/>.
+        /// Pairs with the SQL-level STATIC ONLY modifier on DESC TABLE EXTENDED: RunAsync=false
+        /// is what tells the warehouse to route the command off the WLM path.
+        /// </summary>
+        internal bool? RunAsyncOverride { get; set; }
+
+        /// <summary>
         /// Telemetry context for the current statement execution, pending emission on Dispose.
         /// Set before calling base.ExecuteQueryAsync()/ExecuteQuery() so that
         /// <see cref="DatabricksConnection.NewReader{T}"/> can forward it to the
@@ -470,7 +478,7 @@ namespace AdbcDrivers.Databricks
             statement.CanDownloadResult = useCloudFetch;
             statement.CanDecompressLZ4Result = canDecompressLz4;
             statement.MaxBytesPerFile = maxBytesPerFile;
-            statement.RunAsync = runAsyncInThrift;
+            statement.RunAsync = RunAsyncOverride ?? runAsyncInThrift;
 
             Connection.TrySetGetDirectResults(statement);
 
@@ -496,7 +504,11 @@ namespace AdbcDrivers.Databricks
             Activity.Current?.SetTag("statement.cloudfetch.can_decompress_lz4", canDecompressLz4);
             Activity.Current?.SetTag("statement.cloudfetch.max_bytes_per_file", maxBytesPerFile);
             Activity.Current?.SetTag("statement.cloudfetch.max_bytes_per_file_mb", maxBytesPerFile / 1024.0 / 1024.0);
-            Activity.Current?.SetTag("statement.property.run_async", runAsyncInThrift);
+            Activity.Current?.SetTag("statement.property.run_async", statement.RunAsync);
+            if (RunAsyncOverride.HasValue)
+            {
+                Activity.Current?.SetTag("statement.property.run_async.source", "override");
+            }
 
             Activity.Current?.AddEvent("statement.set_properties.complete");
         }
@@ -997,7 +1009,8 @@ namespace AdbcDrivers.Databricks
             {
                 activity?.AddEvent("statement.get_columns_extended.start");
                 string? fullTableName = BuildTableName();
-                var canUseDescTableExtended = ((DatabricksConnection)Connection).CanUseDescTableExtended;
+                var connection = (DatabricksConnection)Connection;
+                var canUseDescTableExtended = connection.CanUseDescTableExtended;
 
                 activity?.SetTag("statement.catalog_name", CatalogName ?? "(none)");
                 activity?.SetTag("statement.schema_name", SchemaName ?? "(none)");
@@ -1018,13 +1031,24 @@ namespace AdbcDrivers.Databricks
                     return baseResult;
                 }
 
-                string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+                // Fast metadata: STATIC ONLY (runtime PR #198486) bypasses the server's WLM
+                // path. Both the SQL keyword and RunAsync=false are required to take effect.
+                bool useFastMetadataQuery = connection.UseFastMetadataQuery;
+                string query = useFastMetadataQuery
+                    ? $"DESC TABLE EXTENDED {fullTableName} AS JSON STATIC ONLY"
+                    : $"DESC TABLE EXTENDED {fullTableName} AS JSON";
                 activity?.AddEvent("statement.desc_table_extended.executing_query", [
-                    new("query_summary", query.Length > 100 ? query.Substring(0, 100) + "..." : query)
+                    new("query_summary", query.Length > 100 ? query.Substring(0, 100) + "..." : query),
+                    new("fast_metadata_query", useFastMetadataQuery)
                 ]);
 
-                using var descStmt = Connection.CreateStatement();
+                using var descStmt = (DatabricksStatement)connection.CreateStatement();
                 descStmt.SqlQuery = query;
+
+                if (useFastMetadataQuery)
+                {
+                    descStmt.RunAsyncOverride = false;
+                }
                 QueryResult descResult;
 
                 try

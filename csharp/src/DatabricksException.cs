@@ -93,5 +93,24 @@ namespace AdbcDrivers.Databricks
                 || message.IndexOf("SCHEMA_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("INVALID_PARAMETER_VALUE", StringComparison.OrdinalIgnoreCase) >= 0;
         }
+
+        /// <summary>
+        /// Returns true if this exception indicates the server rejected
+        /// <c>DESC TABLE EXTENDED ... AS JSON [STATIC ONLY]</c>: SQL state 42601 (parse/syntax
+        /// error — e.g. STATIC ONLY on a runtime without PR #198486) or 20000 (internal error
+        /// some DBRs return when a column type cannot be converted). The driver should fall back
+        /// to the multi-call metadata path. Checks SqlState first, then the message, since the
+        /// SEA execute path surfaces the SQL state only inside the error message (SqlState is null).
+        /// </summary>
+        internal bool IsDescTableExtendedUnsupportedException()
+        {
+            if (SqlState == "42601" || SqlState == "20000")
+                return true;
+
+            var message = Message;
+            if (string.IsNullOrEmpty(message)) return false;
+            return message.IndexOf("SQLSTATE: 42601", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("SQLSTATE: 20000", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
     }
 }
