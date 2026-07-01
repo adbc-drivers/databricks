@@ -107,3 +107,16 @@ author:
 # "write a failing test → fix the CODE → re-run until green; don't weaken the
 # test" instruction and forces a {outcome, reason, red_green_tests} result.
 flow: bug-fix
+
+# ─── Reviewer bots (review / review-followup) — NOT configured here ──────────
+# Documented for completeness (this file is the whole bot setup), but the reviewer
+# reads NOTHING from .bot/config.yaml: the engine's bot_config.py parses only the
+# `author:` block + the shared top-level keys above. Reviewer prompts are
+# engine-owned; customize the reviewer via these (files/env — never config keys):
+#   - prompt overrides — optional FILES read from the checkout:
+#       .bot/prompts/review_system.md            (appended to the review prompt)
+#       .bot/prompts/review_followup_system.md   (appended to the follow-up prompt)
+#   - repo conventions — REPO_RULES_FILES env, set in reviewer-bot.yml / -followup.yml
+#   - native skills    — REPO_SKILLS env, set in those same workflows
+# Do NOT add a `review:` / `review_followup:` block here — the engine would ignore
+# it (dead config), exactly like a `followup:` block.
