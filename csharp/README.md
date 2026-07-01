@@ -292,7 +292,7 @@ These properties apply only when `adbc.databricks.protocol=rest`.
 |----------|-------------|-------------|
 | `adbc.databricks.rest.result_disposition` | Result mode: `inline`, `external_links`, or `inline_or_external_links` | `inline_or_external_links` |
 | `adbc.databricks.rest.result_format` | Format: `arrow_stream`, `json_array`, or `csv` | `arrow_stream` |
-| `adbc.databricks.rest.result_compression` | Result compression: `LZ4_FRAME` or `NONE` | Derives from `adbc.databricks.cloudfetch.lz4.enabled`: `LZ4_FRAME` when enabled (default), `NONE` when disabled. An explicit value overrides. |
+| `adbc.databricks.rest.result_compression` | Result compression: `LZ4_FRAME` or `NONE` | Derives from `adbc.databricks.cloudfetch.lz4.enabled` and the result format: `LZ4_FRAME` when enabled (default) and the format is `ARROW_STREAM`, otherwise `NONE` (non-Arrow formats such as `JSON_ARRAY`/`CSV` always default to `NONE`, and `NONE` when the flag is disabled). An explicit value overrides. |
 | `adbc.databricks.rest.wait_timeout` | Wait timeout in seconds (0=async, 5-50=sync) | `10` |
 | `adbc.databricks.rest.enable_session_management` | Enable session management | `true` |
 

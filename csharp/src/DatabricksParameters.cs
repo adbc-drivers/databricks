@@ -414,7 +414,9 @@ namespace AdbcDrivers.Databricks
         /// - "LZ4_FRAME": LZ4 frame compression
         /// - "NONE": No compression
         /// When not specified, the default follows the "adbc.databricks.cloudfetch.lz4.enabled"
-        /// capability flag: "LZ4_FRAME" when LZ4 is enabled (the default), otherwise "NONE".
+        /// capability flag and the result format: "LZ4_FRAME" when LZ4 is enabled (the default)
+        /// and the result format is "ARROW_STREAM", otherwise "NONE" (for example, "JSON_ARRAY"
+        /// and "CSV" formats always default to "NONE").
         /// The server still returns results uncompressed when it chooses to (e.g. small inline
         /// results), and the reader honors the response manifest. Set to "NONE" to opt out of
         /// requesting compression.
