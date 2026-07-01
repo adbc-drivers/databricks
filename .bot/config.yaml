@@ -76,11 +76,11 @@ bash_allowlist:
   - [git, diff, --cached]
   - [git, status]
 
-# Author phase: prompt rendered from the template; tokens are the ISSUE (the bug
-# to fix). No driver PR, no SOURCE_PR_* — this is single-repo, issue-driven.
+# Author phase: the user prompt is the convention template .bot/prompts/engineer/user.md
+# (no config path — the engine discovers it); tokens are the ISSUE (the bug to fix).
+# No driver PR, no SOURCE_PR_* — this is single-repo, issue-driven.
 author:
-  user_prompt_template: prompts/author_user.md
-  env_tokens:                 # {{issue_*}} in author_user.md  <-  env vars
+  env_tokens:                 # {{issue_*}} in engineer/user.md  <-  env vars
     issue_number: ISSUE_NUMBER
     issue_title:  ISSUE_TITLE
     issue_body:   ISSUE_BODY
@@ -98,10 +98,9 @@ author:
 
 # Follow-up phase (engineer-bot-followup.yml): NO config block. The engine reads
 # no `followup:` key — bot_config.py parses only `author:` + the shared top-level
-# keys. The follow-up phase uses .bot/prompts/followup_system.md as its system
-# prompt, builds its user prompt from the PR review thread, and reuses
-# author.knowledge_log — so a `followup:` block here would be dead config.
-# (prompts/followup_user.md is likewise unrendered by the engine.)
+# keys. The follow-up phase uses .bot/prompts/engineer-followup/system.md as its system
+# prompt, builds its user prompt from the PR review thread (no user template), and
+# reuses author.knowledge_log — so a `followup:` block here would be dead config.
 
 # The bug-fix flow (engine: flows/bug_fix.py): the engine appends the
 # "write a failing test → fix the CODE → re-run until green; don't weaken the
@@ -114,8 +113,8 @@ flow: bug-fix
 # `author:` block + the shared top-level keys above. Reviewer prompts are
 # engine-owned; customize the reviewer via these (files/env — never config keys):
 #   - prompt overrides — optional FILES read from the checkout:
-#       .bot/prompts/review_system.md            (appended to the review prompt)
-#       .bot/prompts/review_followup_system.md   (appended to the follow-up prompt)
+#       .bot/prompts/review/system.md            (appended to the review prompt)
+#       .bot/prompts/review-followup/system.md   (appended to the follow-up prompt)
 #   - repo conventions — REPO_RULES_FILES env, set in reviewer-bot.yml / -followup.yml
 #   - native skills    — REPO_SKILLS env, set in those same workflows
 # Do NOT add a `review:` / `review_followup:` block here — the engine would ignore
