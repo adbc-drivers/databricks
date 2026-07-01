@@ -411,9 +411,11 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Result compression codec for Statement Execution API.
         /// Supported values:
-        /// - "lz4": LZ4 compression (default for external_links)
-        /// - "gzip": GZIP compression
-        /// - "none": No compression (default for inline)
+        /// - "LZ4_FRAME": LZ4 frame compression
+        /// - "NONE": No compression
+        /// Default value is "LZ4_FRAME" if not specified (the server still returns results
+        /// uncompressed when it chooses to, e.g. small inline results, and the reader honors
+        /// the response manifest). Set to "NONE" to opt out of requesting compression.
         /// Only applicable when Protocol is "rest".
         /// </summary>
         public const string ResultCompression = "adbc.databricks.rest.result_compression";

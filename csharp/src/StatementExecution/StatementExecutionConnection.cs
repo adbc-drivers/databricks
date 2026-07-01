@@ -330,7 +330,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Result configuration.
             _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
-            properties.TryGetValue(DatabricksParameters.ResultCompression, out _resultCompression);
+            // Request LZ4 result compression by default, matching the Thrift/CloudFetch path
+            // (CanDecompressLz4=true) and the JDBC / databricks-sql-python defaults. The reader
+            // decompresses based on the response manifest, so an uncompressed response is still
+            // handled correctly. Set the property to "NONE" to opt out.
+            _resultCompression = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultCompression, "LZ4_FRAME");
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
