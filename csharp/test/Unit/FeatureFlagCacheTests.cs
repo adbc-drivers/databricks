@@ -25,6 +25,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks;
 using AdbcDrivers.HiveServer2.Spark;
+using Microsoft.Extensions.Caching.Memory;
 using Moq;
 using Moq.Protected;
 using Xunit;
@@ -631,6 +632,96 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
 
             // Assert - fetch fails for test host => resilient path returns local properties unchanged
+            Assert.Same(localProperties, result);
+        }
+
+        #endregion
+
+        #region MergeWarmFeatureFlags Tests
+
+        [Fact]
+        public void MergeWarmFeatureFlags_WarmCache_MergesFlags_LocalPropertiesWin()
+        {
+            // Arrange - seed a warm context (server flags) for the host under the cache key.
+            const string host = "warm-host.databricks.com";
+            var warmContext = CreateTestContext(new Dictionary<string, string>
+            {
+                [DatabricksParameters.EnableFastMetadataQuery] = "true",
+                ["adbc.databricks.some_server_flag"] = "server_value"
+            });
+            var memCache = new MemoryCache(new MemoryCacheOptions());
+            memCache.Set($"feature_flags:{host}", warmContext);
+            var cache = new FeatureFlagCache(memCache);
+
+            var localProperties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = host,
+                // A local value for a flag the server also returns must win.
+                ["adbc.databricks.some_server_flag"] = "local_value"
+            };
+
+            // Act
+            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
+
+            // Assert - server flag applied; local property overrides the server flag.
+            Assert.Equal("true", result[DatabricksParameters.EnableFastMetadataQuery]);
+            Assert.Equal("local_value", result["adbc.databricks.some_server_flag"]);
+            Assert.Equal(host, result[SparkParameters.HostName]);
+        }
+
+        [Fact]
+        public void MergeWarmFeatureFlags_ColdCache_ReturnsLocalPropertiesUnchanged()
+        {
+            // Arrange - empty (cold) cache. The method must not block; it starts a background
+            // warm-up and returns the local properties unchanged for this connection.
+            // A 1s timeout keeps the background fetch fast even when it fails for this test host.
+            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
+            var localProperties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "cold-host.databricks.com",
+                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "1",
+                ["some_property"] = "some_value"
+            };
+
+            // Act
+            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
+
+            // Assert - unchanged (same reference) since nothing was cached.
+            Assert.Same(localProperties, result);
+        }
+
+        [Fact]
+        public void MergeWarmFeatureFlags_Disabled_ReturnsLocalPropertiesUnchanged()
+        {
+            // Arrange - FeatureFlagCacheEnabled explicitly false.
+            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
+            var localProperties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = TestHost,
+                [DatabricksParameters.FeatureFlagCacheEnabled] = "false"
+            };
+
+            // Act
+            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
+
+            // Assert
+            Assert.Same(localProperties, result);
+        }
+
+        [Fact]
+        public void MergeWarmFeatureFlags_NoHost_ReturnsLocalPropertiesUnchanged()
+        {
+            // Arrange - no host present in properties.
+            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
+            var localProperties = new Dictionary<string, string>
+            {
+                ["some_property"] = "some_value"
+            };
+
+            // Act
+            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
+
+            // Assert
             Assert.Same(localProperties, result);
         }
 

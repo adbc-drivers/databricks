@@ -176,8 +176,7 @@ namespace AdbcDrivers.Databricks
             // if it is cold, a background warm-up is kicked off so a subsequent connection to the
             // same host picks them up, and this connection proceeds with the unmodified properties.
             return FeatureFlagCache.GetInstance()
-                .TryMergeWarmFeatureFlags(mergedWithEnvConfig, s_assemblyVersion)
-                ?? mergedWithEnvConfig;
+                .MergeWarmFeatureFlags(mergedWithEnvConfig, s_assemblyVersion);
         }
 
         /// <summary>
