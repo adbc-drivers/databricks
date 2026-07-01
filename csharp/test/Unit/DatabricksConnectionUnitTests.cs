@@ -177,6 +177,7 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("/sql/1.0/warehouses/abc123")]
         [InlineData("/sql/1.0/warehouses/abc123/")]
         [InlineData("/sql/1.0/warehouses/abc123?o=987654")]
+        [InlineData("/sql/1.0/warehouses/8d1707669a5ea9e2?o=6051921418418893")] // real-world hex warehouse id + numeric org id
         [InlineData("/sql/1.0/endpoints/abc123")]
         [InlineData("/sql/1.0/endpoints/abc123?o=111&foo=bar")]
         public void IsWarehousePath_WarehousePaths_ReturnsTrue(string path)
