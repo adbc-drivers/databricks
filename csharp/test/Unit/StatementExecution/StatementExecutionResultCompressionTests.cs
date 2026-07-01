@@ -154,5 +154,37 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var doc = JsonDocument.Parse(body!);
             Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
         }
+
+        [Theory]
+        [InlineData("JSON_ARRAY")]
+        [InlineData("CSV")]
+        public async Task ExecuteStatement_DerivesNoneForNonArrowFormat(string resultFormat)
+        {
+            var properties = BaseProperties();
+            // Compression is only meaningful for ARROW_STREAM; for JSON_ARRAY/CSV the LZ4 default
+            // must NOT be derived even when the capability flag is enabled (its default).
+            properties[DatabricksParameters.ResultFormat] = resultFormat;
+
+            var body = await CaptureExecuteStatementBodyAsync(properties);
+
+            Assert.NotNull(body);
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
+        }
+
+        [Fact]
+        public async Task ExecuteStatement_ExplicitCompressionHonoredForNonArrowFormat()
+        {
+            var properties = BaseProperties();
+            // An explicit override still takes precedence regardless of format.
+            properties[DatabricksParameters.ResultFormat] = "JSON_ARRAY";
+            properties[DatabricksParameters.ResultCompression] = "LZ4_FRAME";
+
+            var body = await CaptureExecuteStatementBodyAsync(properties);
+
+            Assert.NotNull(body);
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
+        }
     }
 }

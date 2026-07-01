@@ -413,9 +413,11 @@ namespace AdbcDrivers.Databricks
         /// Supported values:
         /// - "LZ4_FRAME": LZ4 frame compression
         /// - "NONE": No compression
-        /// Default value is "LZ4_FRAME" if not specified (the server still returns results
-        /// uncompressed when it chooses to, e.g. small inline results, and the reader honors
-        /// the response manifest). Set to "NONE" to opt out of requesting compression.
+        /// When not specified, the default follows the "adbc.databricks.cloudfetch.lz4.enabled"
+        /// capability flag: "LZ4_FRAME" when LZ4 is enabled (the default), otherwise "NONE".
+        /// The server still returns results uncompressed when it chooses to (e.g. small inline
+        /// results), and the reader honors the response manifest. Set to "NONE" to opt out of
+        /// requesting compression.
         /// Only applicable when Protocol is "rest".
         /// </summary>
         public const string ResultCompression = "adbc.databricks.rest.result_compression";

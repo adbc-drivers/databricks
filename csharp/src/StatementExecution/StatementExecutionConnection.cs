@@ -336,8 +336,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // flag keeps disabling LZ4 everywhere. An explicit adbc.databricks.rest.result_compression
             // takes precedence over the derived default. The reader decompresses based on the
             // response manifest, so an uncompressed response is still handled correctly.
+            //
+            // Result compression in the SEA API is only meaningful for ARROW_STREAM; for
+            // JSON_ARRAY/CSV the field was previously omitted, so only derive the LZ4 default
+            // when the format is ARROW_STREAM. This preserves the prior (working) behavior for
+            // users who explicitly select a non-Arrow format without setting a compression.
             bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
-            _resultCompression = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultCompression, canDecompressLz4 ? "LZ4_FRAME" : "NONE");
+            bool isArrowStream = _resultFormat.Equals("ARROW_STREAM", StringComparison.OrdinalIgnoreCase);
+            string defaultResultCompression = (canDecompressLz4 && isArrowStream) ? "LZ4_FRAME" : "NONE";
+            _resultCompression = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultCompression, defaultResultCompression);
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
