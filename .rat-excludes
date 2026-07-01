@@ -43,7 +43,7 @@ rust/ci/proxy/htpasswd
 # would be prepended into the model's instructions. The workflows, .bot/config.yaml,
 # and .bot/SETUP.md all carry the standard Apache header instead; only the prompts
 # are excluded.
-.bot/prompts/*.md
+.bot/prompts/**
 # .claude/knowledge/** (repo conventions + the learning log) is read VERBATIM into
 # BOTH bots' prompt context (read_repo_conventions / aggregate_repo_rules) — same
 # rationale as the prompt files above: a license header would pollute the model's
