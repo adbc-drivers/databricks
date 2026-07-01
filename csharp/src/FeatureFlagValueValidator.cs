@@ -15,6 +15,7 @@
 */
 
 using System.Collections.Generic;
+using AdbcDrivers.HiveServer2;
 
 namespace AdbcDrivers.Databricks
 {
@@ -91,6 +92,10 @@ namespace AdbcDrivers.Databricks
 
                 // Positive long (GetPositiveLongPropertyWithValidation)
                 [DatabricksParameters.MaxBytesPerFile] = ValueKind.PositiveLong,
+
+                // Base-class (Apache) parameters read via PropertyHelper on the connect path.
+                [ApacheParameters.QueryTimeoutSeconds] = ValueKind.Int,
+                [ApacheParameters.PollTimeMilliseconds] = ValueKind.PositiveInt,
             };
 
         /// <summary>

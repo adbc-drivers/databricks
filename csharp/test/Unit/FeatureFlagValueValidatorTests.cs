@@ -15,6 +15,7 @@
 */
 
 using AdbcDrivers.Databricks;
+using AdbcDrivers.HiveServer2;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit
@@ -71,6 +72,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void Int_ValidatesAsInteger(string value, bool expected)
         {
             Assert.Equal(expected, FeatureFlagValueValidator.IsAcceptable(DatabricksParameters.WaitTimeout, value));
+        }
+
+        [Fact]
+        public void BaseClassApacheParameters_AreRegistered()
+        {
+            // PollTimeMilliseconds is a positive-int; QueryTimeoutSeconds is a plain int.
+            Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "1000"));
+            Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "null"));
+            Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "0"));
+
+            Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "-5"));
+            Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "null"));
         }
 
         [Theory]
