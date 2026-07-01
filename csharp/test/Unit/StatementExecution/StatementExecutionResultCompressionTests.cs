@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -23,6 +24,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2.Spark;
+using Apache.Arrow;
+using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
+using K4os.Compression.LZ4.Streams;
 using Moq;
 using Moq.Protected;
 using Xunit;
@@ -185,6 +190,98 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.NotNull(body);
             using var doc = JsonDocument.Parse(body!);
             Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
+        }
+
+        [Fact]
+        public async Task ExecuteUpdate_ReadsLz4FramedNumAffectedRows()
+        {
+            // Regression: with LZ4 requested by default, the server returns the inline
+            // num_affected_rows result LZ4-framed. ExecuteUpdate must decode it (via the shared
+            // CreateReader route) and return the real count rather than silently falling back
+            // to -1 when the frame can't be parsed as raw Arrow IPC.
+            byte[] lz4Attachment = BuildLz4FramedNumAffectedRows(42);
+            var executeBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-1",
+                status = new { state = "SUCCEEDED" },
+                manifest = new
+                {
+                    result_compression = "LZ4_FRAME",
+                    total_row_count = 1,
+                    schema = new
+                    {
+                        column_count = 1,
+                        columns = new[]
+                        {
+                            new { name = "num_affected_rows", position = 0, type_name = "LONG", type_text = "BIGINT" },
+                        },
+                    },
+                },
+                result = new { attachment = lz4Attachment },
+            });
+
+            using var http = HttpClientReturningExecuteResponse(executeBody);
+            var connection = new StatementExecutionConnection(BaseProperties(), http);
+            using var stmt = (StatementExecutionStatement)connection.CreateStatement();
+            stmt.SqlQuery = "DELETE FROM t WHERE 1 = 1";
+
+            var result = await stmt.ExecuteUpdateAsync(CancellationToken.None);
+
+            Assert.Equal(42, result.AffectedRows);
+        }
+
+        /// <summary>
+        /// Builds an LZ4-framed Arrow IPC stream containing a single-row <c>num_affected_rows</c>
+        /// Int64 column — the exact shape the SEA server returns for a DML statement when LZ4
+        /// result compression was requested.
+        /// </summary>
+        private static byte[] BuildLz4FramedNumAffectedRows(long value)
+        {
+            var schema = new Schema(new[] { new Field("num_affected_rows", Int64Type.Default, nullable: false) }, null);
+            var column = new Int64Array.Builder().Append(value).Build();
+            var batch = new RecordBatch(schema, new IArrowArray[] { column }, 1);
+
+            byte[] rawArrow;
+            using (var raw = new MemoryStream())
+            {
+                using (var writer = new ArrowStreamWriter(raw, schema))
+                {
+                    writer.WriteRecordBatch(batch);
+                    writer.WriteEnd();
+                }
+                rawArrow = raw.ToArray();
+            }
+
+            using var framed = new MemoryStream();
+            using (var lz4 = LZ4Stream.Encode(framed, leaveOpen: true))
+            {
+                lz4.Write(rawArrow, 0, rawArrow.Length);
+            }
+            return framed.ToArray();
+        }
+
+        private static HttpClient HttpClientReturningExecuteResponse(string executeBodyJson)
+        {
+            var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
+
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
+                {
+                    var path = req.RequestUri?.AbsolutePath ?? string.Empty;
+                    if (path.EndsWith("/api/2.0/sql/sessions"))
+                    {
+                        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sessionBody) };
+                    }
+
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(executeBodyJson) };
+                });
+
+            return new HttpClient(handler.Object);
         }
     }
 }

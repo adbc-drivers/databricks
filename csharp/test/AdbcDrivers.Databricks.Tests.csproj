@@ -23,6 +23,7 @@
     <PackageReference Include="Xunit.SkippableFact" />
     <PackageReference Include="System.Net.Http" />
     <PackageReference Include="K4os.Compression.LZ4" />
+    <PackageReference Include="K4os.Compression.LZ4.Streams" />
   </ItemGroup>
 
   <ItemGroup>
