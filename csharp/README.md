@@ -245,12 +245,12 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 
 **CloudFetch Properties:**
 
-On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only.
+On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only, except `adbc.databricks.cloudfetch.lz4.enabled`, which also sets the default value of `adbc.databricks.rest.result_compression` on the SEA path (see *REST API Configuration*).
 
 | Property | Description | Thrift Default | SEA Default |
 |----------|-------------|----------------|-------------|
 | `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` | Not Supported |
-| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | Not Supported |
+| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | `true` (sets the default for `adbc.databricks.rest.result_compression`) |
 | `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` | Not Supported |
 | `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` | Not Supported |
 | `adbc.databricks.cloudfetch.prefetch_count` | Files to prefetch ahead | `2` | Not Supported |
@@ -292,7 +292,7 @@ These properties apply only when `adbc.databricks.protocol=rest`.
 |----------|-------------|-------------|
 | `adbc.databricks.rest.result_disposition` | Result mode: `inline`, `external_links`, or `inline_or_external_links` | `inline_or_external_links` |
 | `adbc.databricks.rest.result_format` | Format: `arrow_stream`, `json_array`, or `csv` | `arrow_stream` |
-| `adbc.databricks.rest.result_compression` | Compression: `lz4`, `gzip`, or `none` | (auto) |
+| `adbc.databricks.rest.result_compression` | Result compression: `LZ4_FRAME` or `NONE` | Derives from `adbc.databricks.cloudfetch.lz4.enabled`: `LZ4_FRAME` when enabled (default), `NONE` when disabled. An explicit value overrides. |
 | `adbc.databricks.rest.wait_timeout` | Wait timeout in seconds (0=async, 5-50=sync) | `10` |
 | `adbc.databricks.rest.enable_session_management` | Enable session management | `true` |
 
