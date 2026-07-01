@@ -284,6 +284,26 @@ namespace AdbcDrivers.Databricks
         public const string UseDescTableExtended = "adbc.databricks.use_desc_table_extended";
 
         /// <summary>
+        /// Whether to opt into the fast metadata query path for DESC TABLE EXTENDED.
+        /// When enabled, the driver emits <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON STATIC ONLY</c>
+        /// (runtime PR #198486), which tells the server to skip Delta log access, Mesa RPCs,
+        /// and other expensive I/O. The driver also pairs the SQL change with the matching
+        /// off-WLM signal per protocol:
+        /// <list type="bullet">
+        /// <item>Thrift: sets <c>RunAsync=false</c> on the descStmt, only when the connection
+        /// targets a DBSQL warehouse (/sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}).
+        /// On general clusters the flag is ignored entirely.</item>
+        /// <item>SEA: relies on the existing <c>x-databricks-sea-can-run-fully-sync</c>
+        /// header that <c>ExecuteMetadataSqlAsync</c> already sends. SEA always targets
+        /// a warehouse, so the flag alone gates the SQL change.</item>
+        /// </list>
+        /// Both signals (SQL keyword + off-WLM routing) are required together — STATIC ONLY
+        /// alone still goes through WLM; off-WLM routing alone still does the full scan.
+        /// Default value is false if not specified.
+        /// </summary>
+        public const string EnableFastMetadataQuery = "adbc.databricks.enable_fast_metadata_query";
+
+        /// <summary>
         /// Whether to enable RunAsync flag in Thrift operation
         /// Default value is true if not specified.
         /// </summary>

@@ -1357,7 +1357,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
                 catalogForTableName, _metadataSchemaName, _metadataTableName);
 
-            string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+            // Fast metadata: STATIC ONLY (runtime PR #198486) skips Delta log / Mesa RPCs.
+            // SEA's ExecuteMetadataSqlAsync already sends the x-databricks-sea-can-run-fully-sync
+            // header — the SEA equivalent of Thrift's RunAsync=false — so the flag alone is enough
+            // here to enable the fast-metadata path end-to-end.
+            bool useFastMetadataQuery = _connection.EnableFastMetadataQuery;
+            string query = useFastMetadataQuery
+                ? $"DESC TABLE EXTENDED {fullTableName} AS JSON STATIC ONLY"
+                : $"DESC TABLE EXTENDED {fullTableName} AS JSON";
 
             List<RecordBatch> batches;
             try
@@ -1367,6 +1374,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
                 return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
+            }
+            catch (DatabricksException ex) when (ex.IsDescTableExtendedUnsupportedException())
+            {
+                // The runtime does not support `DESC TABLE EXTENDED ... AS JSON [STATIC ONLY]`
+                // (e.g. STATIC ONLY on a DBR without PR #198486 → 42601 parse error, or 20000).
+                // Fall back to the multi-call metadata path, mirroring the Thrift base
+                // (DatabricksStatement.GetColumnsExtendedAsync). This keeps the fast-metadata
+                // opt-in safe to roll out before the runtime change reaches every endpoint.
+                return await GetColumnsExtendedViaThreeCalls(cancellationToken).ConfigureAwait(false);
             }
 
             string? resultJson = null;
