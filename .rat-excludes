@@ -44,3 +44,8 @@ rust/ci/proxy/htpasswd
 # and .bot/SETUP.md all carry the standard Apache header instead; only the prompts
 # are excluded.
 .bot/prompts/*.md
+# .claude/knowledge/** (repo conventions + the learning log) is read VERBATIM into
+# BOTH bots' prompt context (read_repo_conventions / aggregate_repo_rules) — same
+# rationale as the prompt files above: a license header would pollute the model's
+# instructions. Data/log content, not source.
+.claude/knowledge/**

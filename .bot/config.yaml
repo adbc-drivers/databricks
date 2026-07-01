@@ -84,6 +84,17 @@ author:
     issue_number: ISSUE_NUMBER
     issue_title:  ISSUE_TITLE
     issue_body:   ISSUE_BODY
+  # Learning log: .claude/knowledge/learning.md — NO config key needed. BOTH bots
+  # auto-read everything under .claude/knowledge/**/*.md via their conventions
+  # readers (the engineer's read_repo_conventions + the reviewer's
+  # aggregate_repo_rules), so past lessons inform each bot with zero wiring. One
+  # log for the whole repo for now; can split per-language later.
+  # (Trade-off vs. the author.knowledge_log key: via the glob the log is delivered
+  # oldest-first and byte-capped like other conventions, NOT newest-first — fine
+  # while the log is small; add author.knowledge_log back if it grows past the cap
+  # and recent lessons start getting truncated. Auto-append on merge is a separate
+  # follow-up: needs a `retrospective:` block + a learning workflow, neither wired
+  # yet — grow this file by hand for now.)
 
 # Follow-up phase: woken by engineer-bot-followup.yml (a review comment on, or
 # the `engineer-bot` label applied to, one of the bot's fix PRs). The prompt is
