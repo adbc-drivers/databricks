@@ -16,7 +16,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Net;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
@@ -28,24 +27,6 @@ namespace AdbcDrivers.Databricks
     /// </summary>
     internal static class PropertyHelper
     {
-        /// <summary>
-        /// Records that a property value could not be parsed and was ignored in favor of the
-        /// default. Emitted as an event on the current <see cref="Activity"/> (typically the
-        /// enclosing connection-open span), matching the driver's ActivitySource-based
-        /// diagnostics; a no-op when no activity is in scope.
-        /// </summary>
-        private static void LogInvalidValueIgnored(string key, string? value, object? defaultValue)
-        {
-            Activity.Current?.AddEvent(new ActivityEvent(
-                "property.invalid_value_ignored",
-                tags: new ActivityTagsCollection
-                {
-                    { "property.key", key },
-                    { "property.value", value },
-                    { "property.default", defaultValue?.ToString() }
-                }));
-        }
-
         /// <summary>
         /// Gets a string property value from the properties dictionary.
         /// </summary>
@@ -86,16 +67,15 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Gets a boolean property value.
-        /// Returns the default value if the property is not found, or if it exists but cannot be
-        /// parsed as a boolean. Invalid values are ignored (logged, then defaulted) rather than
-        /// throwing, so a malformed value from any source — including server feature flags merged
-        /// into the connection properties — never fails connection setup.
+        /// Gets a boolean property value with strict validation.
+        /// Returns the default value if the property is not found.
+        /// Throws an exception if the property exists but cannot be parsed.
         /// </summary>
         /// <param name="properties">The properties dictionary.</param>
         /// <param name="key">The property key.</param>
-        /// <param name="defaultValue">The default value if the property is not found or invalid.</param>
-        /// <returns>The parsed boolean value, or the default value when absent or invalid.</returns>
+        /// <param name="defaultValue">The default value if the property is not found.</param>
+        /// <returns>The parsed boolean value or the default value.</returns>
+        /// <exception cref="ArgumentException">Thrown if the property exists but cannot be parsed.</exception>
         public static bool GetBooleanPropertyWithValidation(IReadOnlyDictionary<string, string> properties, string key, bool defaultValue)
         {
             if (properties == null) throw new ArgumentNullException(nameof(properties));
@@ -107,21 +87,21 @@ namespace AdbcDrivers.Databricks
                 {
                     return result;
                 }
-                LogInvalidValueIgnored(key, value, defaultValue);
+                throw new ArgumentException($"Parameter '{key}' value '{value}' could not be parsed. Valid values are 'true', 'false'.");
             }
             return defaultValue;
         }
 
         /// <summary>
-        /// Gets an integer property value.
-        /// Returns the default value if the property is not found, or if it exists but cannot be
-        /// parsed as an integer. Invalid values are ignored (logged, then defaulted) rather than
-        /// throwing.
+        /// Gets an integer property value with strict validation.
+        /// Returns the default value if the property is not found.
+        /// Throws an exception if the property exists but cannot be parsed.
         /// </summary>
         /// <param name="properties">The properties dictionary.</param>
         /// <param name="key">The property key.</param>
-        /// <param name="defaultValue">The default value if the property is not found or invalid.</param>
-        /// <returns>The parsed integer value, or the default value when absent or invalid.</returns>
+        /// <param name="defaultValue">The default value if the property is not found.</param>
+        /// <returns>The parsed integer value or the default value.</returns>
+        /// <exception cref="ArgumentException">Thrown if the property exists but cannot be parsed.</exception>
         public static int GetIntPropertyWithValidation(IReadOnlyDictionary<string, string> properties, string key, int defaultValue)
         {
             if (properties == null) throw new ArgumentNullException(nameof(properties));
@@ -133,21 +113,21 @@ namespace AdbcDrivers.Databricks
                 {
                     return result;
                 }
-                LogInvalidValueIgnored(key, value, defaultValue);
+                throw new ArgumentException($"Parameter '{key}' value '{value}' could not be parsed. Valid values are integers.");
             }
             return defaultValue;
         }
 
         /// <summary>
-        /// Gets a positive integer property value.
-        /// Returns the default value if the property is not found, or if it exists but cannot be
-        /// parsed as an integer or is not positive. Invalid values are ignored (logged, then
-        /// defaulted) rather than throwing.
+        /// Gets a positive integer property value with strict validation.
+        /// Returns the default value if the property is not found.
+        /// Throws an exception if the property exists but cannot be parsed or is not positive.
         /// </summary>
         /// <param name="properties">The properties dictionary.</param>
         /// <param name="key">The property key.</param>
-        /// <param name="defaultValue">The default value if the property is not found or invalid.</param>
-        /// <returns>The parsed positive integer value, or the default value when absent or invalid.</returns>
+        /// <param name="defaultValue">The default value if the property is not found.</param>
+        /// <returns>The parsed integer value or the default value.</returns>
+        /// <exception cref="ArgumentException">Thrown if the property exists but cannot be parsed or is not positive.</exception>
         public static int GetPositiveIntPropertyWithValidation(IReadOnlyDictionary<string, string> properties, string key, int defaultValue)
         {
             if (properties == null) throw new ArgumentNullException(nameof(properties));
@@ -155,25 +135,29 @@ namespace AdbcDrivers.Databricks
 
             if (properties.TryGetValue(key, out string? value))
             {
-                if (int.TryParse(value, out int result) && result > 0)
+                if (!int.TryParse(value, out int result))
                 {
-                    return result;
+                    throw new ArgumentException($"Parameter '{key}' value '{value}' could not be parsed. Valid values are positive integers.");
                 }
-                LogInvalidValueIgnored(key, value, defaultValue);
+                if (result <= 0)
+                {
+                    throw new ArgumentOutOfRangeException(key, result, $"Parameter '{key}' value must be a positive integer.");
+                }
+                return result;
             }
             return defaultValue;
         }
 
         /// <summary>
-        /// Gets a long property value.
-        /// Returns the default value if the property is not found, or if it exists but cannot be
-        /// parsed as a long. Invalid values are ignored (logged, then defaulted) rather than
-        /// throwing.
+        /// Gets a long property value with strict validation.
+        /// Returns the default value if the property is not found.
+        /// Throws an exception if the property exists but cannot be parsed.
         /// </summary>
         /// <param name="properties">The properties dictionary.</param>
         /// <param name="key">The property key.</param>
-        /// <param name="defaultValue">The default value if the property is not found or invalid.</param>
-        /// <returns>The parsed long value, or the default value when absent or invalid.</returns>
+        /// <param name="defaultValue">The default value if the property is not found.</param>
+        /// <returns>The parsed long value or the default value.</returns>
+        /// <exception cref="ArgumentException">Thrown if the property exists but cannot be parsed.</exception>
         public static long GetLongPropertyWithValidation(IReadOnlyDictionary<string, string> properties, string key, long defaultValue)
         {
             if (properties == null) throw new ArgumentNullException(nameof(properties));
@@ -185,21 +169,21 @@ namespace AdbcDrivers.Databricks
                 {
                     return result;
                 }
-                LogInvalidValueIgnored(key, value, defaultValue);
+                throw new ArgumentException($"Parameter '{key}' value '{value}' could not be parsed. Valid values are integers.");
             }
             return defaultValue;
         }
 
         /// <summary>
-        /// Gets a positive long property value.
-        /// Returns the default value if the property is not found, or if it exists but cannot be
-        /// parsed as a long or is not positive. Invalid values are ignored (logged, then defaulted)
-        /// rather than throwing.
+        /// Gets a positive long property value with strict validation.
+        /// Returns the default value if the property is not found.
+        /// Throws an exception if the property exists but cannot be parsed or is not positive.
         /// </summary>
         /// <param name="properties">The properties dictionary.</param>
         /// <param name="key">The property key.</param>
-        /// <param name="defaultValue">The default value if the property is not found or invalid.</param>
-        /// <returns>The parsed positive long value, or the default value when absent or invalid.</returns>
+        /// <param name="defaultValue">The default value if the property is not found.</param>
+        /// <returns>The parsed long value or the default value.</returns>
+        /// <exception cref="ArgumentException">Thrown if the property exists but cannot be parsed or is not positive.</exception>
         public static long GetPositiveLongPropertyWithValidation(IReadOnlyDictionary<string, string> properties, string key, long defaultValue)
         {
             if (properties == null) throw new ArgumentNullException(nameof(properties));
@@ -207,11 +191,15 @@ namespace AdbcDrivers.Databricks
 
             if (properties.TryGetValue(key, out string? value))
             {
-                if (long.TryParse(value, out long result) && result > 0)
+                if (!long.TryParse(value, out long result))
                 {
-                    return result;
+                    throw new ArgumentException($"Parameter '{key}' value '{value}' could not be parsed. Valid values are positive integers.");
                 }
-                LogInvalidValueIgnored(key, value, defaultValue);
+                if (result <= 0)
+                {
+                    throw new ArgumentOutOfRangeException(key, result, $"Parameter '{key}' value must be a positive integer.");
+                }
+                return result;
             }
             return defaultValue;
         }

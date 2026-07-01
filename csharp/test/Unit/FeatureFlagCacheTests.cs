@@ -274,6 +274,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
+        public async Task FeatureFlagContext_CreateAsync_DropsInvalidTypedFlagValues()
+        {
+            // A strictly-typed flag with a value that would throw on the connect path (the "null"
+            // placeholder for a boolean) is dropped at ingestion, while a valid typed flag and an
+            // untyped flag are kept — so a bad server value never reaches the connection.
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>
+                {
+                    new FeatureFlagEntry { Name = DatabricksParameters.EnableFastMetadataQuery, Value = "null" }, // invalid bool -> dropped
+                    new FeatureFlagEntry { Name = DatabricksParameters.UseCloudFetch, Value = "true" },           // valid bool -> kept
+                    new FeatureFlagEntry { Name = "databricks.partnerplatform.clientConfigsFeatureFlags.x", Value = "whatever" }, // untyped -> kept
+                },
+                TtlSeconds = 300
+            };
+            var context = await FeatureFlagContext.CreateAsync("drop-invalid.databricks.com", CreateMockHttpClient(response), DriverVersion);
+
+            var flags = context.GetAllFlags();
+            Assert.False(flags.ContainsKey(DatabricksParameters.EnableFastMetadataQuery));
+            Assert.Equal("true", flags[DatabricksParameters.UseCloudFetch]);
+            Assert.Equal("whatever", flags["databricks.partnerplatform.clientConfigsFeatureFlags.x"]);
+
+            context.Dispose();
+        }
+
+        [Fact]
         public async Task FeatureFlagContext_CreateAsync_UpdatesTtl()
         {
             // Arrange
