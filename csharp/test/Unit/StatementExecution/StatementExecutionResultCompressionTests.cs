@@ -30,9 +30,11 @@ using Xunit;
 namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
     /// <summary>
-    /// Verifies the SEA (Statement Execution / REST) path requests LZ4 result compression
-    /// by default — matching the Thrift/CloudFetch path and the JDBC / databricks-sql-python
-    /// defaults — and that an explicit result_compression property overrides the default.
+    /// Verifies the SEA (Statement Execution / REST) path derives its result_compression
+    /// default from the client's LZ4 capability flag (adbc.databricks.cloudfetch.lz4.enabled,
+    /// default true) — LZ4_FRAME when enabled, NONE when disabled — so a single flag drives LZ4
+    /// across both the Thrift/CloudFetch and REST paths. An explicit result_compression property
+    /// always overrides the derived default.
     ///
     /// Mocks at the HttpMessageHandler level and captures the ExecuteStatement request body:
     /// CreateSession returns a session id, and the ExecuteStatement POST is captured before a
@@ -122,6 +124,35 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.NotNull(body);
             using var doc = JsonDocument.Parse(body!);
             Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
+        }
+
+        [Fact]
+        public async Task ExecuteStatement_DerivesNoneWhenLz4Disabled()
+        {
+            var properties = BaseProperties();
+            // Pre-existing capability flag disabled, no REST-specific override → derive NONE.
+            properties[DatabricksParameters.CanDecompressLz4] = "false";
+
+            var body = await CaptureExecuteStatementBodyAsync(properties);
+
+            Assert.NotNull(body);
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
+        }
+
+        [Fact]
+        public async Task ExecuteStatement_ExplicitCompressionOverridesLz4DisabledFlag()
+        {
+            var properties = BaseProperties();
+            // Explicit rest.result_compression wins even when the capability flag is disabled.
+            properties[DatabricksParameters.CanDecompressLz4] = "false";
+            properties[DatabricksParameters.ResultCompression] = "LZ4_FRAME";
+
+            var body = await CaptureExecuteStatementBodyAsync(properties);
+
+            Assert.NotNull(body);
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
         }
     }
 }

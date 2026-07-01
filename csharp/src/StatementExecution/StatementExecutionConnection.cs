@@ -330,11 +330,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Result configuration.
             _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
-            // Request LZ4 result compression by default, matching the Thrift/CloudFetch path
-            // (CanDecompressLz4=true) and the JDBC / databricks-sql-python defaults. The reader
-            // decompresses based on the response manifest, so an uncompressed response is still
-            // handled correctly. Set the property to "NONE" to opt out.
-            _resultCompression = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultCompression, "LZ4_FRAME");
+            // Default the REST result compression to the client's LZ4 capability flag
+            // (adbc.databricks.cloudfetch.lz4.enabled, default true) so a single flag drives LZ4
+            // across both the Thrift/CloudFetch and REST paths, and disabling that pre-existing
+            // flag keeps disabling LZ4 everywhere. An explicit adbc.databricks.rest.result_compression
+            // takes precedence over the derived default. The reader decompresses based on the
+            // response manifest, so an uncompressed response is still handled correctly.
+            bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
+            _resultCompression = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultCompression, canDecompressLz4 ? "LZ4_FRAME" : "NONE");
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
