@@ -384,6 +384,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // redundant CloseStatement. Matches databricks-jdbc, which treats CLOSED == SUCCEEDED.
             if (state == "CLOSED")
             {
+                // CLOSED is only equivalent to SUCCEEDED when the direct result is present in THIS
+                // response. If the manifest is absent, the result is genuinely gone (expired or
+                // already-closed statement) and there is nothing to read: surface it as an error
+                // rather than falling through to CreateReader and silently returning an empty
+                // (0-row) stream.
+                if (response.Manifest == null)
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
                 _statementClosedByServer = true;
             }
 

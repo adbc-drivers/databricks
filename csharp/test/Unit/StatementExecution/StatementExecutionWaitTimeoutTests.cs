@@ -25,6 +25,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using Moq;
@@ -155,6 +156,29 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 var batch = await reader.ReadNextRecordBatchAsync();
                 Assert.NotNull(batch);
                 Assert.Equal(1, batch!.Length);
+            }
+        }
+
+        [Fact]
+        public async Task ClosedState_WithoutManifest_Throws_NotEmptyRows()
+        {
+            // A CLOSED response carrying no manifest means the direct result is genuinely gone
+            // (expired/already-closed statement). This must surface as an error rather than falling
+            // through to an empty (0-row) stream, which would be silent truncation.
+            var closedBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "x",
+                status = new { state = "CLOSED" },
+            });
+
+            var (http, _) = CapturingHttp(closedBody);
+            using (http)
+            {
+                var connection = new StatementExecutionConnection(BaseProps(), http);
+                using var stmt = (StatementExecutionStatement)connection.CreateStatement();
+                stmt.SqlQuery = "SELECT 42 AS id";
+
+                await Assert.ThrowsAsync<AdbcException>(() => stmt.ExecuteQueryAsync(CancellationToken.None));
             }
         }
 
