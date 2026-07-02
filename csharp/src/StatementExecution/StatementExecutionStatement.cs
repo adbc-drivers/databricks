@@ -334,7 +334,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 Schema = string.IsNullOrEmpty(_sessionId) ? _schema : null,
                 Disposition = _resultDisposition,
                 Format = _resultFormat,
-                ResultCompression = _resultCompression,
+                // Metadata executions send x-databricks-sea-can-run-fully-sync (see IsMetadata),
+                // which makes the server deliver large results INLINE across multiple chunks.
+                // With LZ4 requested, that inline multi-chunk path is broken server-side: the
+                // manifest advertises N chunks but only chunk 0 is delivered (no external_links,
+                // no next_chunk pointers) and GET .../result/chunks/{n>=1} returns "out of bounds",
+                // so the client silently receives a truncated result (e.g. GetColumns -> 0 rows).
+                // Tracked as ES-2034600. Force NONE for metadata so the server falls back to
+                // external-links delivery, which returns all chunks correctly. Regular queries are
+                // unaffected (server returns external_links for large results, where LZ4 works),
+                // so they keep the requested compression.
+                ResultCompression = isMetadataExecution ? "NONE" : _resultCompression,
                 WaitTimeout = $"{_waitTimeoutSeconds}s",
                 OnWaitTimeout = "CONTINUE",
                 IsMetadata = isMetadataExecution,

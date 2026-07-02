@@ -230,6 +230,29 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal(42, result.AffectedRows);
         }
 
+        [Fact]
+        public async Task MetadataExecution_ForcesNoneCompression_EvenWhenLz4IsDefault()
+        {
+            // Metadata executions send x-databricks-sea-can-run-fully-sync, which makes the server
+            // deliver large results inline across multiple chunks -- a path where LZ4 is broken
+            // server-side (ES-2034600: chunk 1 is advertised but unfetchable -> silent truncation).
+            // So the driver must request NONE for metadata even though LZ4 is the query default.
+            var (http, getBody) = HttpClientCapturingExecuteBody();
+            using (http)
+            {
+                var connection = new StatementExecutionConnection(BaseProperties(), http);
+                // ExecuteMetadataSqlAsync runs with isMetadataExecution=true. The mocked FAILED
+                // response throws after the request is captured; we only assert on the request body.
+                await Assert.ThrowsAnyAsync<Exception>(
+                    () => connection.ExecuteMetadataSqlAsync("SHOW COLUMNS IN CATALOG main", CancellationToken.None));
+            }
+
+            var body = getBody();
+            Assert.NotNull(body);
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
+        }
+
         /// <summary>
         /// Builds an LZ4-framed Arrow IPC stream containing a single-row <c>num_affected_rows</c>
         /// Int64 column — the exact shape the SEA server returns for a DML statement when LZ4
