@@ -171,5 +171,76 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             }
             return ms.ToArray();
         }
+
+        // -------------------------------------------------------------------------------------------
+        // Close semantics (JDBC parity): the driver must NOT issue the server CloseStatement (DELETE
+        // /statements/{id}) for a statement the server already returned as CLOSED — that would be
+        // redundant and error. It MUST close a still-open (SUCCEEDED) statement on dispose. Mirrors
+        // databricks-jdbc: markAsClosed() (no DELETE) for CLOSED vs closeStatement() DELETE otherwise.
+        // -------------------------------------------------------------------------------------------
+
+        private static string ExecuteResponse(string state, byte[] arrow) => JsonSerializer.Serialize(new
+        {
+            statement_id = "stmt-close-test",
+            status = new { state },
+            manifest = new
+            {
+                total_chunk_count = 1,
+                total_row_count = 1,
+                schema = new
+                {
+                    column_count = 1,
+                    columns = new[] { new { name = "id", position = 0, type_name = "INT", type_text = "INT" } },
+                },
+            },
+            result = new { chunk_index = 0, row_count = 1, attachment = arrow },
+        });
+
+        private static HttpClient RecordingHttp(string statementsResponseJson, List<string> recorded)
+        {
+            var sessionBody = JsonSerializer.Serialize(new { session_id = "s1" });
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
+                {
+                    var path = req.RequestUri?.AbsolutePath ?? string.Empty;
+                    lock (recorded) { recorded.Add($"{req.Method} {path}"); }
+                    if (path.EndsWith("/api/2.0/sql/sessions"))
+                        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sessionBody) };
+                    if (path.EndsWith("/api/2.0/sql/statements") && req.Method == HttpMethod.Post)
+                        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(statementsResponseJson) };
+                    // DELETE close / anything else
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+                });
+            return new HttpClient(handler.Object);
+        }
+
+        private static async Task<List<string>> RunAndDisposeAsync(string state)
+        {
+            var recorded = new List<string>();
+            using var http = RecordingHttp(ExecuteResponse(state, BuildSingleRowIntArrow("id", 7)), recorded);
+            var connection = new StatementExecutionConnection(BaseProps(), http);
+            var stmt = (StatementExecutionStatement)connection.CreateStatement();
+            stmt.SqlQuery = "SELECT 7 AS id";
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            using (var reader = result.Stream) { await reader.ReadNextRecordBatchAsync(); }
+            stmt.Dispose(); // triggers CloseStatement only if the statement is still open server-side
+            return recorded;
+        }
+
+        [Fact]
+        public async Task Dispose_AfterClosedState_DoesNotCallCloseStatement()
+        {
+            var recorded = await RunAndDisposeAsync("CLOSED");
+            Assert.DoesNotContain(recorded, r => r.StartsWith("DELETE /api/2.0/sql/statements/", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task Dispose_AfterSucceededState_CallsCloseStatement()
+        {
+            var recorded = await RunAndDisposeAsync("SUCCEEDED");
+            Assert.Contains(recorded, r => r.StartsWith("DELETE /api/2.0/sql/statements/", StringComparison.Ordinal));
+        }
     }
 }
