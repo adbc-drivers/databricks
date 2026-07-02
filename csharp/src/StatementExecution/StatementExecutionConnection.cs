@@ -63,6 +63,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Never a positive value (see ValidateProperties / ES-2034600).
         private string? _waitTimeout;
         private int _pollingIntervalMs;
+        private int _metadataOperationTimeoutSeconds;
         private bool _enablePKFK;
         private bool _enableMultipleCatalogSupport;
         private bool _useDescTableExtended;
@@ -351,6 +352,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // heavier than Thrift's 100 ms default — but both protocols share the same property.
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
                 properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
+
+            // Bounds a full metadata operation (GetObjects/GetTableSchema), which can fan out into
+            // many SHOW COLUMNS / SHOW CATALOGS statements. Configurable; default 300s (5 minutes).
+            _metadataOperationTimeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(
+                properties, DatabricksParameters.MetadataOperationTimeoutSeconds,
+                DatabricksConstants.DefaultMetadataOperationTimeoutSeconds);
 
             // Tracing propagation configuration. Base class (TracingConnection) already handles ActivityTrace init.
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
@@ -992,13 +999,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         // Metadata operations (GetObjects) can legitimately take a while (full-catalog SHOW COLUMNS,
-        // etc.), so bound them with a generous fixed timeout — decoupled from the request wait_timeout
-        // (which is now unset/"0s"; FromSeconds(0) would have cancelled metadata almost immediately).
-        private const int MetadataOperationTimeoutSeconds = 300;
-
+        // etc.), so bound them with a generous timeout — decoupled from the request wait_timeout
+        // (which is derived from the direct-results flag and is never positive; FromSeconds(0) would
+        // have cancelled metadata almost immediately). Configurable via
+        // adbc.databricks.rest.metadata_operation_timeout_seconds; default 300s.
         internal CancellationTokenSource CreateMetadataTimeoutCts()
         {
-            return new CancellationTokenSource(TimeSpan.FromSeconds(MetadataOperationTimeoutSeconds));
+            return new CancellationTokenSource(TimeSpan.FromSeconds(_metadataOperationTimeoutSeconds));
         }
 
         /// <summary>
