@@ -76,32 +76,46 @@ bash_allowlist:
   - [git, diff, --cached]
   - [git, status]
 
-# Author phase: prompt rendered from the template; tokens are the ISSUE (the bug
-# to fix). No driver PR, no SOURCE_PR_* — this is single-repo, issue-driven.
+# Author phase: the user prompt is the convention template .bot/prompts/engineer/user.md
+# (no config path — the engine discovers it); tokens are the ISSUE (the bug to fix).
+# No driver PR, no SOURCE_PR_* — this is single-repo, issue-driven.
 author:
-  user_prompt_template: prompts/author_user.md
-  env_tokens:                 # {{issue_*}} in author_user.md  <-  env vars
+  env_tokens:                 # {{issue_*}} in engineer/user.md  <-  env vars
     issue_number: ISSUE_NUMBER
     issue_title:  ISSUE_TITLE
     issue_body:   ISSUE_BODY
+  # Learning log: .claude/knowledge/learning.md — NO config key needed. BOTH bots
+  # auto-read everything under .claude/knowledge/**/*.md via their conventions
+  # readers (the engineer's read_repo_conventions + the reviewer's
+  # aggregate_repo_rules), so past lessons inform each bot with zero wiring. One
+  # log for the whole repo for now; can split per-language later.
+  # (Trade-off vs. the author.knowledge_log key: via the glob the log is delivered
+  # oldest-first and byte-capped like other conventions, NOT newest-first — fine
+  # while the log is small; add author.knowledge_log back if it grows past the cap
+  # and recent lessons start getting truncated. Auto-append on merge is a separate
+  # follow-up: needs a `retrospective:` block + a learning workflow, neither wired
+  # yet — grow this file by hand for now.)
 
-# Follow-up phase: woken by engineer-bot-followup.yml (a review comment on, or
-# the `engineer-bot` label applied to, one of the bot's fix PRs). The prompt is
-# rendered from followup_user.md; tokens are the PR being followed up on. The
-# engine reads followup_system.md (no longer the "phase unused" placeholder) as
-# the system prompt. TRIGGER_COMMENT_ID is empty on the labeled path (catch-up
-# mode) — followup_user.md handles that case.
-followup:
-  user_prompt_template: prompts/followup_user.md
-  env_tokens:                 # {{...}} in followup_user.md  <-  env vars (set by the workflow)
-    pr_number:          PR_NUMBER
-    trigger_comment_id: TRIGGER_COMMENT_ID
-    head_branch:        HEAD_BRANCH
-  # VERIFY: confirm the engine's followup phase expects exactly these keys
-  # (max_turns / user_prompt_template / env_tokens, same shape as `author:`) and
-  # that the bug-fix flow drives `--phase followup`; adjust to match the engine.
+# Follow-up phase (engineer-bot-followup.yml): NO config block. The engine reads
+# no `followup:` key — bot_config.py parses only `author:` + the shared top-level
+# keys. The follow-up phase uses .bot/prompts/engineer-followup/system.md as its system
+# prompt, builds its user prompt from the PR review thread (no user template), and
+# reuses author.knowledge_log — so a `followup:` block here would be dead config.
 
 # The bug-fix flow (engine: flows/bug_fix.py): the engine appends the
 # "write a failing test → fix the CODE → re-run until green; don't weaken the
 # test" instruction and forces a {outcome, reason, red_green_tests} result.
 flow: bug-fix
+
+# ─── Reviewer bots (review / review-followup) — NOT configured here ──────────
+# Documented for completeness (this file is the whole bot setup), but the reviewer
+# reads NOTHING from .bot/config.yaml: the engine's bot_config.py parses only the
+# `author:` block + the shared top-level keys above. Reviewer prompts are
+# engine-owned; customize the reviewer via these (files/env — never config keys):
+#   - prompt overrides — optional FILES read from the checkout:
+#       .bot/prompts/review/system.md            (appended to the review prompt)
+#       .bot/prompts/review-followup/system.md   (appended to the follow-up prompt)
+#   - repo conventions — REPO_RULES_FILES env, set in reviewer-bot.yml / -followup.yml
+#   - native skills    — REPO_SKILLS env, set in those same workflows
+# Do NOT add a `review:` / `review_followup:` block here — the engine would ignore
+# it (dead config), exactly like a `followup:` block.
