@@ -14,11 +14,43 @@
 * limitations under the License.
 */
 
+using System;
 using System.Collections.Generic;
+using System.Reflection;
 using AdbcDrivers.HiveServer2;
 
 namespace AdbcDrivers.Databricks
 {
+    /// <summary>
+    /// How a strictly-typed connection parameter is parsed on the connect path. Mirrors the
+    /// corresponding <c>PropertyHelper.Get*PropertyWithValidation</c> getter.
+    /// </summary>
+    internal enum FeatureFlagValueKind
+    {
+        Boolean,
+        Int,
+        PositiveInt,
+        Long,
+        PositiveLong,
+    }
+
+    /// <summary>
+    /// Declares, at the parameter's definition site, how its value is parsed on the connect path.
+    /// A parameter carrying this attribute is auto-registered with
+    /// <see cref="FeatureFlagValueValidator"/>, so adding a new strictly-typed parameter also
+    /// registers its server-flag validation — no separate list to keep in sync.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Field, AllowMultiple = false, Inherited = false)]
+    internal sealed class FeatureFlagTypeAttribute : Attribute
+    {
+        public FeatureFlagTypeAttribute(FeatureFlagValueKind kind)
+        {
+            Kind = kind;
+        }
+
+        public FeatureFlagValueKind Kind { get; }
+    }
+
     /// <summary>
     /// Validates server-sourced feature-flag values before they are applied as connection
     /// properties.
@@ -33,70 +65,49 @@ namespace AdbcDrivers.Databricks
     /// to fail fast.
     /// </para>
     /// <para>
-    /// The parse rules below intentionally mirror the corresponding
-    /// <c>PropertyHelper.Get*PropertyWithValidation</c> getter for each parameter, so a value is
-    /// dropped here exactly when the getter would have thrown. Keys not listed (untyped/string
-    /// parameters, or values the connection never strictly parses) pass through unchanged.
+    /// The typed-parameter registry is built by reflecting over the <see cref="FeatureFlagTypeAttribute"/>
+    /// declared on each <see cref="DatabricksParameters"/> constant, so it stays in sync with the
+    /// parameter definitions automatically. Base-class parameters that live in a separate assembly
+    /// and cannot carry the attribute are registered explicitly. Keys not registered pass through
+    /// unchanged (untyped/string parameters the connection never strictly parses).
     /// </para>
     /// </summary>
     internal static class FeatureFlagValueValidator
     {
-        private enum ValueKind
+        private static readonly IReadOnlyDictionary<string, FeatureFlagValueKind> s_typedParameters = BuildRegistry();
+
+        private static IReadOnlyDictionary<string, FeatureFlagValueKind> BuildRegistry()
         {
-            Boolean,
-            Int,
-            PositiveInt,
-            Long,
-            PositiveLong,
-        }
+            var map = new Dictionary<string, FeatureFlagValueKind>();
 
-        // Strictly-typed connection parameters, keyed by their property name (== the flag name the
-        // service returns). Mirrors the PropertyHelper.Get*PropertyWithValidation call sites.
-        private static readonly IReadOnlyDictionary<string, ValueKind> s_typedParameters =
-            new Dictionary<string, ValueKind>
+            // Auto-register every DatabricksParameters constant annotated with [FeatureFlagType].
+            foreach (var field in typeof(DatabricksParameters).GetFields(BindingFlags.Public | BindingFlags.Static))
             {
-                // Boolean (GetBooleanPropertyWithValidation)
-                [DatabricksParameters.ApplySSPWithQueries] = ValueKind.Boolean,
-                [DatabricksParameters.CanDecompressLz4] = ValueKind.Boolean,
-                [DatabricksParameters.EnableComplexDatatypeSupport] = ValueKind.Boolean,
-                [DatabricksParameters.EnableDirectResults] = ValueKind.Boolean,
-                [DatabricksParameters.EnableFastMetadataQuery] = ValueKind.Boolean,
-                [DatabricksParameters.EnableMultipleCatalogSupport] = ValueKind.Boolean,
-                [DatabricksParameters.EnablePKFK] = ValueKind.Boolean,
-                [DatabricksParameters.EnableRunAsyncInThriftOp] = ValueKind.Boolean,
-                [DatabricksParameters.RateLimitRetry] = ValueKind.Boolean,
-                [DatabricksParameters.TemporarilyUnavailableRetry] = ValueKind.Boolean,
-                [DatabricksParameters.TracePropagationEnabled] = ValueKind.Boolean,
-                [DatabricksParameters.TraceStateEnabled] = ValueKind.Boolean,
-                [DatabricksParameters.TransportErrorRetry] = ValueKind.Boolean,
-                [DatabricksParameters.UseCloudFetch] = ValueKind.Boolean,
-                [DatabricksParameters.UseDescTableExtended] = ValueKind.Boolean,
+                if (!field.IsLiteral || field.FieldType != typeof(string))
+                {
+                    continue;
+                }
 
-                // Int (GetIntPropertyWithValidation)
-                [DatabricksParameters.RateLimitRetryTimeout] = ValueKind.Int,
-                [DatabricksParameters.TemporarilyUnavailableRetryTimeout] = ValueKind.Int,
-                [DatabricksParameters.WaitTimeout] = ValueKind.Int,
+                var attr = field.GetCustomAttribute<FeatureFlagTypeAttribute>();
+                if (attr == null)
+                {
+                    continue;
+                }
 
-                // Positive int (GetPositiveIntPropertyWithValidation)
-                [DatabricksParameters.CloudFetchMaxUrlRefreshAttempts] = ValueKind.PositiveInt,
-                [DatabricksParameters.CloudFetchMemoryBufferSize] = ValueKind.PositiveInt,
-                [DatabricksParameters.CloudFetchParallelDownloads] = ValueKind.PositiveInt,
-                [DatabricksParameters.CloudFetchPrefetchCount] = ValueKind.PositiveInt,
-                [DatabricksParameters.CloudFetchRetryDelayMs] = ValueKind.PositiveInt,
-                [DatabricksParameters.CloudFetchRetryTimeoutSeconds] = ValueKind.PositiveInt,
-                [DatabricksParameters.CloudFetchTimeoutMinutes] = ValueKind.PositiveInt,
-                [DatabricksParameters.CloudFetchUrlExpirationBufferSeconds] = ValueKind.PositiveInt,
-                [DatabricksParameters.FeatureFlagTimeoutSeconds] = ValueKind.PositiveInt,
-                [DatabricksParameters.FetchHeartbeatInterval] = ValueKind.PositiveInt,
-                [DatabricksParameters.OperationStatusRequestTimeout] = ValueKind.PositiveInt,
+                if (field.GetRawConstantValue() is string key && !string.IsNullOrEmpty(key))
+                {
+                    map[key] = attr.Kind;
+                }
+            }
 
-                // Positive long (GetPositiveLongPropertyWithValidation)
-                [DatabricksParameters.MaxBytesPerFile] = ValueKind.PositiveLong,
+            // Base-class (Apache) parameters live in a separate assembly and cannot carry the
+            // attribute; register them explicitly. These mirror the Get*PropertyWithValidation
+            // reads on the StatementExecution connect path.
+            map[ApacheParameters.QueryTimeoutSeconds] = FeatureFlagValueKind.Int;
+            map[ApacheParameters.PollTimeMilliseconds] = FeatureFlagValueKind.PositiveInt;
 
-                // Base-class (Apache) parameters read via PropertyHelper on the connect path.
-                [ApacheParameters.QueryTimeoutSeconds] = ValueKind.Int,
-                [ApacheParameters.PollTimeMilliseconds] = ValueKind.PositiveInt,
-            };
+            return map;
+        }
 
         /// <summary>
         /// Returns true if <paramref name="value"/> is acceptable for the given feature-flag
@@ -105,7 +116,7 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         public static bool IsAcceptable(string key, string? value)
         {
-            if (!s_typedParameters.TryGetValue(key, out ValueKind kind))
+            if (!s_typedParameters.TryGetValue(key, out FeatureFlagValueKind kind))
             {
                 // Not a strictly-typed parameter; the connection never throws parsing it.
                 return true;
@@ -113,15 +124,15 @@ namespace AdbcDrivers.Databricks
 
             switch (kind)
             {
-                case ValueKind.Boolean:
+                case FeatureFlagValueKind.Boolean:
                     return bool.TryParse(value, out _);
-                case ValueKind.Int:
+                case FeatureFlagValueKind.Int:
                     return int.TryParse(value, out _);
-                case ValueKind.PositiveInt:
+                case FeatureFlagValueKind.PositiveInt:
                     return int.TryParse(value, out int i) && i > 0;
-                case ValueKind.Long:
+                case FeatureFlagValueKind.Long:
                     return long.TryParse(value, out _);
-                case ValueKind.PositiveLong:
+                case FeatureFlagValueKind.PositiveLong:
                     return long.TryParse(value, out long l) && l > 0;
                 default:
                     return true;
