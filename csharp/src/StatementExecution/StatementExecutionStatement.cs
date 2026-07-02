@@ -732,6 +732,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // treat it like SUCCEEDED and skip the redundant close on Dispose.
             if (state == "CLOSED")
             {
+                // Mirror the query path: CLOSED is only equivalent to SUCCEEDED when the direct
+                // result is present in THIS response. If the manifest is absent, the result is
+                // genuinely gone (expired or already-closed statement). Surface it as an error
+                // rather than letting ReadNumAffectedRows fall through to its attachment == null
+                // branch and silently report 0 affected rows for a DML statement.
+                if (response.Manifest == null)
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
                 _statementClosedByServer = true;
             }
 

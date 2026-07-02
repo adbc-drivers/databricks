@@ -182,6 +182,30 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             }
         }
 
+        [Fact]
+        public async Task ExecuteUpdate_ClosedState_WithoutManifest_Throws_NotZeroRows()
+        {
+            // Update-side analogue of ClosedState_WithoutManifest_Throws_NotEmptyRows: a CLOSED
+            // response with no manifest means the DML direct result is genuinely gone. Without the
+            // guard, ReadNumAffectedRows hits its attachment == null branch and reports 0 affected
+            // rows for a statement that actually ran — silently masking a lost result.
+            var closedBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "x",
+                status = new { state = "CLOSED" },
+            });
+
+            var (http, _) = CapturingHttp(closedBody);
+            using (http)
+            {
+                var connection = new StatementExecutionConnection(BaseProps(), http);
+                using var stmt = (StatementExecutionStatement)connection.CreateStatement();
+                stmt.SqlQuery = "DELETE FROM t WHERE 1 = 1";
+
+                await Assert.ThrowsAsync<AdbcException>(() => stmt.ExecuteUpdateAsync(CancellationToken.None));
+            }
+        }
+
         private static byte[] BuildSingleRowIntArrow(string column, int value)
         {
             var schema = new Schema(new[] { new Field(column, Int32Type.Default, nullable: false) }, null);
