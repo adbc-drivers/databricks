@@ -395,18 +395,6 @@ namespace AdbcDrivers.Databricks
         [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string OperationStatusRequestTimeout = "adbc.databricks.operation_status_request_timeout";
 
-        /// <summary>
-        /// The timeout in seconds bounding a full metadata operation (GetObjects/GetTableSchema)
-        /// on the Statement Execution (REST) path. A single metadata call can fan out into many
-        /// SHOW COLUMNS / SHOW CATALOGS statements (e.g. full-catalog enumeration), so this bounds
-        /// the whole tree rather than an individual request. Decoupled from the request wait_timeout,
-        /// which is derived from the direct-results flag and is never a positive value.
-        /// Default value is 300 seconds (5 minutes) if not specified.
-        /// Must be a positive integer value.
-        /// Only applicable when Protocol is "rest".
-        /// </summary>
-        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
-        public const string MetadataOperationTimeoutSeconds = "adbc.databricks.rest.metadata_operation_timeout_seconds";
 
         // Statement Execution API configuration parameters
 
@@ -532,11 +520,12 @@ namespace AdbcDrivers.Databricks
         public const int DefaultOperationStatusRequestTimeoutSeconds = 30;
 
         /// <summary>
-        /// Default timeout in seconds bounding a full metadata operation (GetObjects/GetTableSchema)
-        /// on the Statement Execution (REST) path. Generous because a single call can fan out into
-        /// many SHOW COLUMNS / SHOW CATALOGS statements.
+        /// Default query timeout in seconds for the Statement Execution (REST) path. Applies to both
+        /// regular queries (poll-until-complete) and metadata operations (which are just queries).
+        /// Matches the Thrift path's Databricks default (<c>DatabricksConnection.DefaultQueryTimeSeconds</c>)
+        /// so a long-running query is bounded consistently across protocols. 0 disables the timeout.
         /// </summary>
-        public const int DefaultMetadataOperationTimeoutSeconds = 300; // 5 minutes
+        public const int DefaultQueryTimeoutSeconds = 3 * 60 * 60; // 3 hours
 
         /// <summary>
         /// Default async execution poll interval in milliseconds.

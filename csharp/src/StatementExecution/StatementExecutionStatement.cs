@@ -184,8 +184,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _waitTimeout = waitTimeout;
             _pollingIntervalMs = pollingIntervalMs;
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
+            // Default matches the Thrift path (3h) so SEA queries aren't unbounded; 0 = no timeout.
             _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
-                properties, ApacheParameters.QueryTimeoutSeconds, 0);
+                properties, ApacheParameters.QueryTimeoutSeconds, DatabricksConstants.DefaultQueryTimeoutSeconds);
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));

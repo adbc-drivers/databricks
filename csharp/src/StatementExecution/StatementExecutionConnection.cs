@@ -63,7 +63,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Never a positive value (see ValidateProperties / ES-2034600).
         private string? _waitTimeout;
         private int _pollingIntervalMs;
-        private int _metadataOperationTimeoutSeconds;
+        // Query timeout (seconds) shared by regular queries and metadata operations. 0 = no timeout.
+        private int _queryTimeoutSeconds;
         private bool _enablePKFK;
         private bool _enableMultipleCatalogSupport;
         private bool _useDescTableExtended;
@@ -353,11 +354,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
                 properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
 
-            // Bounds a full metadata operation (GetObjects/GetTableSchema), which can fan out into
-            // many SHOW COLUMNS / SHOW CATALOGS statements. Configurable; default 300s (5 minutes).
-            _metadataOperationTimeoutSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(
-                properties, DatabricksParameters.MetadataOperationTimeoutSeconds,
-                DatabricksConstants.DefaultMetadataOperationTimeoutSeconds);
+            // Query timeout (adbc.apache.statement.query_timeout_s) shared by regular queries and
+            // metadata operations — a metadata call is just another query, and can fan out into many
+            // SHOW COLUMNS / SHOW CATALOGS statements. Default matches the Thrift path (3h); 0 = no
+            // timeout. Bounds the metadata operation via CreateMetadataTimeoutCts and the statement's
+            // own poll loop (PollWithTimeoutAsync) using the same value.
+            _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
+                properties, ApacheParameters.QueryTimeoutSeconds,
+                DatabricksConstants.DefaultQueryTimeoutSeconds);
 
             // Tracing propagation configuration. Base class (TracingConnection) already handles ActivityTrace init.
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
@@ -998,14 +1002,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return _catalog;
         }
 
-        // Metadata operations (GetObjects) can legitimately take a while (full-catalog SHOW COLUMNS,
-        // etc.), so bound them with a generous timeout — decoupled from the request wait_timeout
-        // (which is derived from the direct-results flag and is never positive; FromSeconds(0) would
-        // have cancelled metadata almost immediately). Configurable via
-        // adbc.databricks.rest.metadata_operation_timeout_seconds; default 300s.
+        // Metadata operations (GetObjects/GetTableSchema) are just queries — bound them with the same
+        // query timeout as regular queries (adbc.apache.statement.query_timeout_s, default 3h,
+        // matching Thrift). A single metadata call can fan out into many SHOW COLUMNS / SHOW CATALOGS
+        // statements, so this bounds the whole tree. 0 = no timeout (never-cancelled CTS), matching
+        // PollWithTimeoutAsync and the Thrift ApacheUtility.GetCancellationToken semantics.
         internal CancellationTokenSource CreateMetadataTimeoutCts()
         {
-            return new CancellationTokenSource(TimeSpan.FromSeconds(_metadataOperationTimeoutSeconds));
+            return _queryTimeoutSeconds <= 0
+                ? new CancellationTokenSource()
+                : new CancellationTokenSource(TimeSpan.FromSeconds(_queryTimeoutSeconds));
         }
 
         /// <summary>
