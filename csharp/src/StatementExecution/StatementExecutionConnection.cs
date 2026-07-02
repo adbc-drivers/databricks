@@ -59,7 +59,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string _resultDisposition = null!;
         private string _resultFormat = null!;
         private string? _resultCompression;
-        private int _waitTimeoutSeconds;
+        // Request wait_timeout: null = unset (direct results on), "0s" = async (direct results off).
+        // Never a positive value (see ValidateProperties / ES-2034600).
+        private string? _waitTimeout;
         private int _pollingIntervalMs;
         private bool _enablePKFK;
         private bool _enableMultipleCatalogSupport;
@@ -332,12 +334,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
             properties.TryGetValue(DatabricksParameters.ResultCompression, out _resultCompression);
 
-            _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
-            if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
-                directResults.Equals("false", StringComparison.OrdinalIgnoreCase))
-            {
-                _waitTimeoutSeconds = 0;
-            }
+            // wait_timeout is NOT a customer-tunable knob; it is derived from the direct-results flag.
+            //   Direct results ON (default): leave wait_timeout UNSET so the server returns the full
+            //     result inline in a single response (state SUCCEEDED or CLOSED) — the SEA equivalent
+            //     of Thrift DirectResults, and what databricks-jdbc sends by default.
+            //   Direct results OFF: send wait_timeout="0s" (fully async) and poll for the result.
+            // We deliberately never send a NON-ZERO wait_timeout: a positive value routes the request
+            //   to the old SEA sync-hybrid results path, which truncates multi-chunk results (the
+            //   manifest advertises N chunks but only chunk 0 is delivered). Tracked as ES-2034600.
+            bool enableDirectResults =
+                !(properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults)
+                  && directResults.Equals("false", StringComparison.OrdinalIgnoreCase));
+            _waitTimeout = enableDirectResults ? null : "0s";
             // PECO-3064: adbc.apache.statement.polltime_ms is the single key for SEA polling cadence
             // (consolidated with the Thrift path). SEA defaults to 1000 ms — HTTP/JSON polls are
             // heavier than Thrift's 100 ms default — but both protocols share the same property.
@@ -547,7 +555,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _resultDisposition,
                 _resultFormat,
                 _resultCompression,
-                _waitTimeoutSeconds,
+                _waitTimeout,
                 _pollingIntervalMs,
                 _properties,
                 _recyclableMemoryStreamManager,
@@ -983,9 +991,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return _catalog;
         }
 
+        // Metadata operations (GetObjects) can legitimately take a while (full-catalog SHOW COLUMNS,
+        // etc.), so bound them with a generous fixed timeout — decoupled from the request wait_timeout
+        // (which is now unset/"0s"; FromSeconds(0) would have cancelled metadata almost immediately).
+        private const int MetadataOperationTimeoutSeconds = 300;
+
         internal CancellationTokenSource CreateMetadataTimeoutCts()
         {
-            return new CancellationTokenSource(TimeSpan.FromSeconds(_waitTimeoutSeconds));
+            return new CancellationTokenSource(TimeSpan.FromSeconds(MetadataOperationTimeoutSeconds));
         }
 
         /// <summary>

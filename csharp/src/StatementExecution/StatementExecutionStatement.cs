@@ -52,7 +52,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string _resultDisposition;
         private readonly string _resultFormat;
         private readonly string? _resultCompression;
-        private readonly int _waitTimeoutSeconds;
+        // Request wait_timeout: null = omit (direct results on), "0s" = async (direct results off).
+        private readonly string? _waitTimeout;
         private readonly int _pollingIntervalMs;
         private readonly int _queryTimeoutSeconds; // 0 = no timeout
 
@@ -74,6 +75,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Statement state
         private string? _currentStatementId;
+        // Set when the server returns state=CLOSED (direct-result delivery): the result is already
+        // in-hand and the statement is closed server-side, so Dispose must NOT re-close it.
+        private bool _statementClosedByServer;
         private string? _sqlQuery;
 
         // Cancel support
@@ -159,7 +163,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string resultDisposition,
             string resultFormat,
             string? resultCompression,
-            int waitTimeoutSeconds,
+            string? waitTimeout,
             int pollingIntervalMs,
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager recyclableMemoryStreamManager,
@@ -177,7 +181,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _resultDisposition = resultDisposition ?? throw new ArgumentNullException(nameof(resultDisposition));
             _resultFormat = resultFormat ?? throw new ArgumentNullException(nameof(resultFormat));
             _resultCompression = resultCompression;
-            _waitTimeoutSeconds = waitTimeoutSeconds;
+            _waitTimeout = waitTimeout;
             _pollingIntervalMs = pollingIntervalMs;
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
             _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
@@ -335,7 +339,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 Disposition = _resultDisposition,
                 Format = _resultFormat,
                 ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
+                WaitTimeout = _waitTimeout,
                 OnWaitTimeout = "CONTINUE",
                 IsMetadata = isMetadataExecution,
                 QueryTags = ParseQueryTags(_queryTags)
@@ -369,9 +373,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 throw new AdbcException("Statement execution was canceled");
             }
+            // CLOSED = execution succeeded and the statement is already closed server-side; the
+            // direct result (manifest + inline attachment) is present in THIS response. Treat it
+            // like SUCCEEDED — read the result below — and remember it's closed so Dispose skips the
+            // redundant CloseStatement. Matches databricks-jdbc, which treats CLOSED == SUCCEEDED.
             if (state == "CLOSED")
             {
-                throw new AdbcException("Statement was closed before results could be retrieved");
+                _statementClosedByServer = true;
             }
 
             // Check for truncated results warning
@@ -675,7 +683,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 Disposition = _resultDisposition,
                 Format = _resultFormat,
                 ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
+                WaitTimeout = _waitTimeout,
                 OnWaitTimeout = "CONTINUE",
                 IsMetadata = false,
                 QueryTags = ParseQueryTags(_queryTags)
@@ -703,9 +711,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 throw new AdbcException("Statement execution was canceled");
             }
+            // CLOSED = success with a direct result already in this response (see the query path);
+            // treat it like SUCCEEDED and skip the redundant close on Dispose.
             if (state == "CLOSED")
             {
-                throw new AdbcException("Statement was closed before results could be retrieved");
+                _statementClosedByServer = true;
             }
 
             // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
@@ -758,6 +768,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public override void Dispose()
         {
+            // Direct-result CLOSED: the server already closed the statement, so there is nothing to
+            // close and calling CloseStatement would just error. Clear the id and skip the close.
+            if (_statementClosedByServer)
+            {
+                _currentStatementId = null;
+            }
+
             if (_currentStatementId != null)
             {
                 // Start a dedicated span instead of annotating Activity.Current: Dispose is
