@@ -348,6 +348,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
             _currentStatementId = response.StatementId;
+            // Reset per-execution: statements are reusable, so this must reflect the CURRENT
+            // execution's state, not a prior CLOSED result. Otherwise a later SUCCEEDED (genuinely
+            // open server-side) execution would inherit true and skip its legitimate CloseStatement.
+            _statementClosedByServer = false;
 
             // Handle query status according to Databricks API documentation:
             // PENDING: waiting for warehouse - continue polling
@@ -692,6 +696,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
             _currentStatementId = response.StatementId;
+            // Reset per-execution (see ExecuteQueryInternalAsync): must reflect the CURRENT
+            // execution so a reused statement doesn't inherit a prior CLOSED flag.
+            _statementClosedByServer = false;
 
             // Handle query status - poll until complete
             var state = response.Status?.State;
