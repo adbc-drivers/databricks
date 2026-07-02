@@ -330,7 +330,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Result configuration.
             _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
-            properties.TryGetValue(DatabricksParameters.ResultCompression, out _resultCompression);
+            // Default the REST result compression to the client's LZ4 capability flag
+            // (adbc.databricks.cloudfetch.lz4.enabled, default true) so a single flag drives LZ4
+            // across both the Thrift/CloudFetch and REST paths, and disabling that pre-existing
+            // flag keeps disabling LZ4 everywhere. An explicit adbc.databricks.rest.result_compression
+            // takes precedence over the derived default. The reader decompresses based on the
+            // response manifest, so an uncompressed response is still handled correctly.
+            //
+            // Result compression in the SEA API is only meaningful for ARROW_STREAM; for
+            // JSON_ARRAY/CSV the field was previously omitted, so only derive the LZ4 default
+            // when the format is ARROW_STREAM. This preserves the prior (working) behavior for
+            // users who explicitly select a non-Arrow format without setting a compression.
+            bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
+            bool isArrowStream = _resultFormat.Equals("ARROW_STREAM", StringComparison.OrdinalIgnoreCase);
+            string defaultResultCompression = (canDecompressLz4 && isArrowStream) ? "LZ4_FRAME" : "NONE";
+            _resultCompression = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultCompression, defaultResultCompression);
 
             _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
             if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
