@@ -709,44 +709,33 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
-            // column is num_affected_rows. DDL (CREATE TABLE, DROP TABLE, CTAS, etc.)
-            // returns no result data. Return -1 for DDL per the ADBC convention for
-            // "unknown or not applicable", matching what the Thrift path does.
-            return new UpdateResult(ReadNumAffectedRows(response.Manifest, response.Result));
+            // column is num_affected_rows. Reuse the standard reader route so all result
+            // decoding — LZ4 decompression, inline vs external links, multi-chunk — lives in
+            // exactly one place (CreateReader). DDL (CREATE TABLE, DROP TABLE, CTAS, etc.)
+            // yields no batch; return -1 per the ADBC convention for "unknown or not
+            // applicable", matching what the Thrift path does.
+            using var reader = CreateReader(response, cancellationToken);
+            return new UpdateResult(await ReadNumAffectedRowsAsync(reader, cancellationToken).ConfigureAwait(false));
         }
 
-        private static long ReadNumAffectedRows(ResultManifest? manifest, ResultData? result)
+        private static async Task<long> ReadNumAffectedRowsAsync(IArrowArrayStream reader, CancellationToken cancellationToken)
         {
-            // DML statements (INSERT/UPDATE/DELETE) return a 1-row ARROW_STREAM result whose
-            // single column is num_affected_rows. DDL (CREATE TABLE, DROP, CTAS) has no result
-            // data. Return -1 for DDL per the ADBC convention for "unknown/not applicable".
-            var attachment = result?.Attachment;
-            if (attachment != null && attachment.Length > 0)
+            // DML statements (INSERT/UPDATE/DELETE) return a 1-row result whose single column is
+            // num_affected_rows. DDL (CREATE TABLE, DROP, CTAS) has no result data → no batch →
+            // -1 per the ADBC convention for "unknown/not applicable".
+            using var batch = await reader.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+            if (batch == null)
             {
-                try
+                return -1;
+            }
+
+            var fields = batch.Schema.FieldsList;
+            for (int i = 0; i < fields.Count; i++)
+            {
+                if (string.Equals(fields[i].Name, "num_affected_rows", StringComparison.OrdinalIgnoreCase)
+                    && batch.Length > 0 && batch.Column(i) is Int64Array arr)
                 {
-                    using var ms = new System.IO.MemoryStream(attachment);
-                    using var reader = new ArrowStreamReader(ms);
-                    var batch = reader.ReadNextRecordBatch();
-                    if (batch != null)
-                    {
-                        var fields = batch.Schema.FieldsList;
-                        int colIdx = -1;
-                        for (int i = 0; i < fields.Count; i++)
-                        {
-                            if (string.Equals(fields[i].Name, "num_affected_rows", StringComparison.OrdinalIgnoreCase))
-                            {
-                                colIdx = i;
-                                break;
-                            }
-                        }
-                        if (colIdx >= 0 && batch.Length > 0 && batch.Column(colIdx) is Int64Array arr)
-                            return arr.GetValue(0) ?? -1;
-                    }
-                }
-                catch
-                {
-                    // Fall through to -1
+                    return arr.GetValue(0) ?? -1;
                 }
             }
 
