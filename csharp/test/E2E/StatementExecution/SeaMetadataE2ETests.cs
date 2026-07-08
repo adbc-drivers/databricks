@@ -490,5 +490,28 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 foreignTable: "");
             Assert.Equal(0, rows);
         }
+
+        // GetColumnsExtended
+        //
+        // GetCrossReferenceAsForeignTableAsync has no metadata command name of its own;
+        // it is reached only through the base GetColumnsExtendedAsync, which the Databricks
+        // override delegates to on its fallback path (BuildTableName empty => empty TableName).
+        // On that path the base helper invokes GetCrossReferenceAsForeignTableAsync with the
+        // statement's own catalog/schema/table bound to the FOREIGN slot, so an empty-string
+        // identifier there is what the new guard (DatabricksStatement.cs ~L1031) must absorb.
+        // Without the guard the foreign-table cross-reference RPC would raise
+        // HiveServer2Exception. Empty table forces the fallback, exercising that guard.
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptyTable_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: TestConfiguration.Metadata.Catalog,
+                schema: TestConfiguration.Metadata.Schema,
+                table: "");
+            Assert.Equal(0, rows);
+        }
     }
 }
