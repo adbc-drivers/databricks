@@ -383,10 +383,29 @@ namespace AdbcDrivers.Databricks
                 {
                     foreach (var flag in response.Flags)
                     {
-                        if (!string.IsNullOrEmpty(flag.Name))
+                        if (string.IsNullOrEmpty(flag.Name))
                         {
-                            _flags[flag.Name] = flag.Value ?? string.Empty;
+                            continue;
                         }
+
+                        var flagValue = flag.Value ?? string.Empty;
+
+                        // Fail-safe: a strictly-typed parameter with a value that would throw when
+                        // read on the connect path is dropped here, so one bad server-pushed value
+                        // can't break connection setup for every client of the workspace. The driver
+                        // then falls back to the parameter's default.
+                        if (!FeatureFlagValueValidator.IsAcceptable(flag.Name, flagValue))
+                        {
+                            activity?.AddEvent(new ActivityEvent("feature_flags.invalid_value_dropped",
+                                tags: new ActivityTagsCollection
+                                {
+                                    { "flag.name", flag.Name },
+                                    { "flag.value", flagValue },
+                                }));
+                            continue;
+                        }
+
+                        _flags[flag.Name] = flagValue;
                     }
 
                     activity?.SetTag("feature_flags.count", response.Flags.Count);
