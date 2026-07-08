@@ -806,6 +806,18 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("statement.table_types", TableTypes ?? "(none)");
                 activity?.SetTag("statement.feature.enable_multiple_catalog_support", enableMultipleCatalogSupport);
 
+                // Issue #524: empty-string identifier -> empty result (parity with SEA);
+                // the Thrift RPC would otherwise raise HiveServer2Exception.
+                if (MetadataUtilities.HasEmptyStringIdentifier(CatalogName, SchemaName, TableName))
+                {
+                    activity?.AddEvent("statement.get_tables.returning_empty_result", [
+                        new("reason", "Empty-string identifier argument")
+                    ]);
+                    activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
+                    activity?.AddEvent("statement.get_tables.complete");
+                    return MetadataSchemaFactory.CreateEmptyTablesResult();
+                }
+
                 // Handle SPARK catalog case
                 HandleSparkCatalog();
                 activity?.SetTag("statement.catalog_name_after_spark_handling", CatalogName ?? "(none)");
@@ -851,6 +863,19 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("statement.table_name", TableName ?? "(none)");
                 activity?.SetTag("statement.column_name", ColumnName ?? "(none)");
                 activity?.SetTag("statement.feature.enable_multiple_catalog_support", enableMultipleCatalogSupport);
+
+                // Issue #524: empty-string identifier -> empty result (parity with SEA);
+                // the Thrift RPC would otherwise raise HiveServer2Exception.
+                if (MetadataUtilities.HasEmptyStringIdentifier(CatalogName, SchemaName, TableName, ColumnName))
+                {
+                    activity?.AddEvent("statement.get_columns.returning_empty_result", [
+                        new("reason", "Empty-string identifier argument")
+                    ]);
+                    activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
+                    activity?.AddEvent("statement.get_columns.complete");
+                    return new QueryResult(0, new HiveInfoArrowStream(
+                        MetadataSchemaFactory.CreateColumnMetadataSchema(), CreateColumnMetadataEmptyArray()));
+                }
 
                 // Handle SPARK catalog case
                 HandleSparkCatalog();
@@ -916,6 +941,18 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("statement.table_name", TableName ?? "(none)");
                 activity?.SetTag("statement.feature.pk_fk_enabled", enablePKFK);
 
+                // Issue #524: empty-string identifier -> empty result (parity with SEA);
+                // the Thrift RPC would otherwise raise HiveServer2Exception.
+                if (MetadataUtilities.HasEmptyStringIdentifier(CatalogName, SchemaName, TableName))
+                {
+                    activity?.AddEvent("statement.get_primary_keys.returning_empty_result", [
+                        new("reason", "Empty-string identifier argument")
+                    ]);
+                    activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
+                    activity?.AddEvent("statement.get_primary_keys.complete");
+                    return EmptyPrimaryKeysResult();
+                }
+
                 if (ShouldReturnEmptyPkFkResult())
                 {
                     activity?.AddEvent("statement.get_primary_keys.returning_empty_result", [
@@ -953,6 +990,20 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("statement.foreign_table_name", ForeignTableName ?? "(none)");
                 activity?.SetTag("statement.feature.pk_fk_enabled", enablePKFK);
 
+                // Issue #524: empty-string identifier -> empty result (parity with SEA);
+                // the Thrift RPC would otherwise raise HiveServer2Exception.
+                if (MetadataUtilities.HasEmptyStringIdentifier(
+                        CatalogName, SchemaName, TableName,
+                        ForeignCatalogName, ForeignSchemaName, ForeignTableName))
+                {
+                    activity?.AddEvent("statement.get_cross_reference.returning_empty_result", [
+                        new("reason", "Empty-string identifier argument")
+                    ]);
+                    activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
+                    activity?.AddEvent("statement.get_cross_reference.complete");
+                    return EmptyCrossReferenceResult();
+                }
+
                 if (ShouldReturnEmptyPkFkResult())
                 {
                     activity?.AddEvent("statement.get_cross_reference.returning_empty_result", [
@@ -979,6 +1030,20 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("statement.catalog_name", CatalogName ?? "(none)");
                 activity?.SetTag("statement.foreign_catalog_name", ForeignCatalogName ?? "(none)");
                 activity?.SetTag("statement.feature.pk_fk_enabled", enablePKFK);
+
+                // Issue #524: empty-string identifier -> empty result (parity with SEA);
+                // the Thrift RPC would otherwise raise HiveServer2Exception.
+                if (MetadataUtilities.HasEmptyStringIdentifier(
+                        CatalogName, SchemaName, TableName,
+                        ForeignCatalogName, ForeignSchemaName, ForeignTableName))
+                {
+                    activity?.AddEvent("statement.get_cross_reference_as_foreign_table.returning_empty_result", [
+                        new("reason", "Empty-string identifier argument")
+                    ]);
+                    activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
+                    activity?.AddEvent("statement.get_cross_reference_as_foreign_table.complete");
+                    return EmptyCrossReferenceResult();
+                }
 
                 if (ShouldReturnEmptyPkFkResult())
                 {
