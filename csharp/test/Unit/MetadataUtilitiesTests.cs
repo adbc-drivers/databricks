@@ -136,5 +136,49 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         {
             Assert.Equal("`main`.`my``schema`.`my``table`", MetadataUtilities.BuildQualifiedTableName("main", "my`schema", "my`table"));
         }
+
+        // HasEmptyStringIdentifier
+
+        [Fact]
+        public void HasEmptyStringIdentifier_EmptyString_ReturnsTrue()
+        {
+            Assert.True(MetadataUtilities.HasEmptyStringIdentifier(""));
+        }
+
+        [Fact]
+        public void HasEmptyStringIdentifier_Null_ReturnsFalse()
+        {
+            Assert.False(MetadataUtilities.HasEmptyStringIdentifier((string?)null));
+        }
+
+        [Fact]
+        public void HasEmptyStringIdentifier_Whitespace_ReturnsFalse()
+        {
+            Assert.False(MetadataUtilities.HasEmptyStringIdentifier(" "));
+        }
+
+        [Fact]
+        public void HasEmptyStringIdentifier_NonEmpty_ReturnsFalse()
+        {
+            Assert.False(MetadataUtilities.HasEmptyStringIdentifier("main"));
+        }
+
+        [Fact]
+        public void HasEmptyStringIdentifier_NoArgs_ReturnsFalse()
+        {
+            Assert.False(MetadataUtilities.HasEmptyStringIdentifier());
+        }
+
+        [Fact]
+        public void HasEmptyStringIdentifier_MixedWithEmpty_ReturnsTrue()
+        {
+            Assert.True(MetadataUtilities.HasEmptyStringIdentifier("main", null, "", "users"));
+        }
+
+        [Fact]
+        public void HasEmptyStringIdentifier_MixedNoEmpty_ReturnsFalse()
+        {
+            Assert.False(MetadataUtilities.HasEmptyStringIdentifier("main", null, "default", "users"));
+        }
     }
 }
