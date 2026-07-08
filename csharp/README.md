@@ -292,7 +292,7 @@ These properties apply only when `adbc.databricks.protocol=rest`.
 |----------|-------------|-------------|
 | `adbc.databricks.rest.result_disposition` | Result mode: `inline`, `external_links`, or `inline_or_external_links` | `inline_or_external_links` |
 | `adbc.databricks.rest.result_format` | Format: `arrow_stream`, `json_array`, or `csv` | `arrow_stream` |
-| `adbc.databricks.rest.result_compression` | **Deprecated and ignored** — recognized but inert; setting it has no effect. Compression is derived solely from `adbc.databricks.cloudfetch.lz4.enabled`: `LZ4_FRAME` is requested only for Arrow-based result formats when the flag is enabled (default); non-Arrow formats (e.g. `JSON_ARRAY`, `CSV`) and the disabled case send `NONE`. | (derived) |
+| `adbc.databricks.rest.result_compression` | **Deprecated and ignored** — recognized but inert; setting it has no effect. Compression is derived solely from `adbc.databricks.cloudfetch.lz4.enabled`: `LZ4_FRAME` is requested whenever the client can decompress it (default), regardless of result format; `NONE` is requested when the flag is disabled. The server ignores the codec for non-Arrow formats (e.g. `JSON_ARRAY`, `CSV`). | (derived) |
 | `adbc.databricks.rest.wait_timeout` | Wait timeout in seconds (0=async, 5-50=sync) | `10` |
 | `adbc.databricks.rest.enable_session_management` | Enable session management | `true` |
 
