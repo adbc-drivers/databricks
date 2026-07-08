@@ -171,11 +171,28 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Theory]
         [InlineData("JSON_ARRAY")]
         [InlineData("CSV")]
-        public async Task ExecuteStatement_DerivesLz4ForNonArrowFormat(string resultFormat)
+        public async Task ExecuteStatement_DerivesNoneForNonArrowFormat(string resultFormat)
         {
-            // Compression is no longer gated on result format: it is derived solely from the LZ4
-            // capability flag and sent directly to the backend, which applies it only where
-            // meaningful. So a non-Arrow format still requests LZ4_FRAME when the flag is enabled.
+            // LZ4_FRAME is only requested for Arrow-based formats. For non-Arrow formats the
+            // request sends NONE even when the LZ4 capability flag is enabled: the server's
+            // tolerance of LZ4_FRAME on these formats is not something we rely on, and this
+            // driver's reader is Arrow-only so non-Arrow results are not consumable anyway.
+            var properties = BaseProperties();
+            properties[DatabricksParameters.ResultFormat] = resultFormat;
+
+            var body = await CaptureExecuteStatementBodyAsync(properties);
+
+            Assert.NotNull(body);
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
+        }
+
+        [Theory]
+        [InlineData("ARROW_STREAM")]
+        [InlineData("arrow_stream")]
+        public async Task ExecuteStatement_DerivesLz4ForArrowFormat(string resultFormat)
+        {
+            // Arrow formats request LZ4_FRAME when the capability flag is enabled (the default).
             var properties = BaseProperties();
             properties[DatabricksParameters.ResultFormat] = resultFormat;
 
