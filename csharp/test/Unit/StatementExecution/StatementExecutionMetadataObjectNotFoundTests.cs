@@ -189,7 +189,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 resultDisposition: "INLINE_OR_EXTERNAL_LINKS",
                 resultFormat: "ARROW_STREAM",
                 resultCompression: null,
-                waitTimeoutSeconds: 0,
+                waitTimeout: "0s",
                 pollingIntervalMs: 50,
                 properties: properties,
                 recyclableMemoryStreamManager: new RecyclableMemoryStreamManager(),

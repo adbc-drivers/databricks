@@ -169,6 +169,95 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         /// <summary>
+        /// Warehouse-style paths (/sql/1.0/warehouses/{id}, /sql/1.0/endpoints/{id}) — with or
+        /// without query strings — must be classified as DBSQL warehouse so the fast-metadata
+        /// flag can take effect on them.
+        /// </summary>
+        [Theory]
+        [InlineData("/sql/1.0/warehouses/abc123")]
+        [InlineData("/sql/1.0/warehouses/abc123/")]
+        [InlineData("/sql/1.0/warehouses/abc123?o=987654")]
+        [InlineData("/sql/1.0/endpoints/abc123")]
+        [InlineData("/sql/1.0/endpoints/abc123?o=111&foo=bar")]
+        public void IsWarehousePath_WarehousePaths_ReturnsTrue(string path)
+        {
+            var properties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "test.databricks.com",
+                [SparkParameters.Token] = "test-token",
+                [SparkParameters.Path] = path
+            };
+            using var connection = new DatabricksConnection(properties);
+            Assert.True(connection.IsWarehousePath, $"Path '{path}' should be classified as a warehouse");
+        }
+
+        /// <summary>
+        /// General-cluster paths and empty paths must NOT be classified as warehouses, so the
+        /// fast-metadata flag is a no-op there even when enabled.
+        /// </summary>
+        [Theory]
+        [InlineData("/sql/protocolv1/o/123456789/0123-456789-abcdef")]
+        [InlineData("/sql/protocolv1/o/987/cluster-id")]
+        [InlineData("/some/other/path")]
+        [InlineData("")]
+        public void IsWarehousePath_NonWarehousePaths_ReturnsFalse(string path)
+        {
+            var properties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "test.databricks.com",
+                [SparkParameters.Token] = "test-token"
+            };
+            if (!string.IsNullOrEmpty(path))
+            {
+                properties[SparkParameters.Path] = path;
+            }
+            using var connection = new DatabricksConnection(properties);
+            Assert.False(connection.IsWarehousePath, $"Path '{path}' should NOT be classified as a warehouse");
+        }
+
+        /// <summary>
+        /// IsWarehousePath should also resolve a path embedded in the AdbcOptions.Uri property
+        /// (the JDBC-style "uri" form) so users who configure that way still get the optimization.
+        /// </summary>
+        [Fact]
+        public void IsWarehousePath_PathFromUri_ReturnsTrue()
+        {
+            var properties = new Dictionary<string, string>
+            {
+                [SparkParameters.Token] = "test-token",
+                [AdbcOptions.Uri] = "https://test.databricks.com/sql/1.0/warehouses/abc123?o=555"
+            };
+            using var connection = new DatabricksConnection(properties);
+            Assert.True(connection.IsWarehousePath);
+        }
+
+        /// <summary>
+        /// UseFastMetadataQuery requires BOTH the opt-in flag and a warehouse path. Verify the
+        /// AND-gating: flag without warehouse path stays false, warehouse without flag stays false,
+        /// only flag-and-warehouse-together returns true.
+        /// </summary>
+        [Theory]
+        [InlineData("true", "/sql/1.0/warehouses/abc123", true)]
+        [InlineData("true", "/sql/protocolv1/o/123/cluster", false)] // flag set but general cluster
+        [InlineData("false", "/sql/1.0/warehouses/abc123", false)]    // warehouse but flag off
+        [InlineData(null, "/sql/1.0/warehouses/abc123", false)]       // flag absent (default false)
+        public void UseFastMetadataQuery_RequiresFlagAndWarehousePath(string? flagValue, string path, bool expected)
+        {
+            var properties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "test.databricks.com",
+                [SparkParameters.Token] = "test-token",
+                [SparkParameters.Path] = path
+            };
+            if (flagValue != null)
+            {
+                properties[DatabricksParameters.EnableFastMetadataQuery] = flagValue;
+            }
+            using var connection = new DatabricksConnection(properties);
+            Assert.Equal(expected, connection.UseFastMetadataQuery);
+        }
+
+        /// <summary>
         /// Tests that GetInfo returns correct driver information for DriverName and DriverArrowVersion.
         /// Note: VendorName and VendorVersion require a server connection and should be tested in E2E tests.
         /// </summary>

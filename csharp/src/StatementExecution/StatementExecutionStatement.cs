@@ -52,7 +52,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string _resultDisposition;
         private readonly string _resultFormat;
         private readonly string? _resultCompression;
-        private readonly int _waitTimeoutSeconds;
+        // Request wait_timeout: null = omit (direct results on), "0s" = async (direct results off).
+        private readonly string? _waitTimeout;
         private readonly int _pollingIntervalMs;
         private readonly int _queryTimeoutSeconds; // 0 = no timeout
 
@@ -74,6 +75,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Statement state
         private string? _currentStatementId;
+        // Set when the server returns state=CLOSED (direct-result delivery): the result is already
+        // in-hand and the statement is closed server-side, so Dispose must NOT re-close it.
+        private bool _statementClosedByServer;
         private string? _sqlQuery;
 
         // Cancel support
@@ -159,7 +163,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string resultDisposition,
             string resultFormat,
             string? resultCompression,
-            int waitTimeoutSeconds,
+            string? waitTimeout,
             int pollingIntervalMs,
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager recyclableMemoryStreamManager,
@@ -177,11 +181,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _resultDisposition = resultDisposition ?? throw new ArgumentNullException(nameof(resultDisposition));
             _resultFormat = resultFormat ?? throw new ArgumentNullException(nameof(resultFormat));
             _resultCompression = resultCompression;
-            _waitTimeoutSeconds = waitTimeoutSeconds;
+            _waitTimeout = waitTimeout;
             _pollingIntervalMs = pollingIntervalMs;
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
+            // Default matches the Thrift path (3h) so SEA queries aren't unbounded; 0 = no timeout.
             _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
-                properties, ApacheParameters.QueryTimeoutSeconds, 0);
+                properties, ApacheParameters.QueryTimeoutSeconds, DatabricksConstants.DefaultQueryTimeoutSeconds);
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -335,7 +340,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 Disposition = _resultDisposition,
                 Format = _resultFormat,
                 ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
+                WaitTimeout = _waitTimeout,
                 OnWaitTimeout = "CONTINUE",
                 IsMetadata = isMetadataExecution,
                 QueryTags = ParseQueryTags(_queryTags)
@@ -344,6 +349,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
             _currentStatementId = response.StatementId;
+            // Reset per-execution: statements are reusable, so this must reflect the CURRENT
+            // execution's state, not a prior CLOSED result. Otherwise a later SUCCEEDED (genuinely
+            // open server-side) execution would inherit true and skip its legitimate CloseStatement.
+            _statementClosedByServer = false;
 
             // Handle query status according to Databricks API documentation:
             // PENDING: waiting for warehouse - continue polling
@@ -369,9 +378,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 throw new AdbcException("Statement execution was canceled");
             }
+            // CLOSED = execution succeeded and the statement is already closed server-side; the
+            // direct result (manifest + inline attachment) is present in THIS response. Treat it
+            // like SUCCEEDED — read the result below — and remember it's closed so Dispose skips the
+            // redundant CloseStatement. Matches databricks-jdbc, which treats CLOSED == SUCCEEDED.
             if (state == "CLOSED")
             {
-                throw new AdbcException("Statement was closed before results could be retrieved");
+                // CLOSED is only equivalent to SUCCEEDED when the direct result is present in THIS
+                // response. If the manifest is absent, the result is genuinely gone (expired or
+                // already-closed statement) and there is nothing to read: surface it as an error
+                // rather than falling through to CreateReader and silently returning an empty
+                // (0-row) stream.
+                if (response.Manifest == null)
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
+                _statementClosedByServer = true;
             }
 
             // Check for truncated results warning
@@ -675,7 +697,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 Disposition = _resultDisposition,
                 Format = _resultFormat,
                 ResultCompression = _resultCompression,
-                WaitTimeout = $"{_waitTimeoutSeconds}s",
+                WaitTimeout = _waitTimeout,
                 OnWaitTimeout = "CONTINUE",
                 IsMetadata = false,
                 QueryTags = ParseQueryTags(_queryTags)
@@ -684,6 +706,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
             _currentStatementId = response.StatementId;
+            // Reset per-execution (see ExecuteQueryInternalAsync): must reflect the CURRENT
+            // execution so a reused statement doesn't inherit a prior CLOSED flag.
+            _statementClosedByServer = false;
 
             // Handle query status - poll until complete
             var state = response.Status?.State;
@@ -703,9 +728,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 throw new AdbcException("Statement execution was canceled");
             }
+            // CLOSED = success with a direct result already in this response (see the query path);
+            // treat it like SUCCEEDED and skip the redundant close on Dispose.
             if (state == "CLOSED")
             {
-                throw new AdbcException("Statement was closed before results could be retrieved");
+                // Mirror the query path: CLOSED is only equivalent to SUCCEEDED when the direct
+                // result is present in THIS response. If the manifest is absent, the result is
+                // genuinely gone (expired or already-closed statement). Surface it as an error
+                // rather than letting ReadNumAffectedRows fall through to its attachment == null
+                // branch and silently report 0 affected rows for a DML statement.
+                if (response.Manifest == null)
+                {
+                    throw new AdbcException("Statement was closed before results could be retrieved");
+                }
+                _statementClosedByServer = true;
             }
 
             // DML statements (INSERT, UPDATE, DELETE) return a 1-row result whose first
@@ -758,40 +794,51 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public override void Dispose()
         {
-            if (_currentStatementId != null)
+            if (_currentStatementId == null)
             {
-                // Start a dedicated span instead of annotating Activity.Current: Dispose is
-                // typically called outside any ambient activity (e.g. connection pooling),
-                // so Activity.Current is usually null here and the event would be dropped.
-                // Mirrors DatabricksCompositeReader.Dispose on the Thrift path, which owns
-                // its own span so the close is always traced regardless of caller context.
-                this.TraceActivity(activity =>
+                return;
+            }
+
+            // Start a dedicated span instead of annotating Activity.Current: Dispose is
+            // typically called outside any ambient activity (e.g. connection pooling),
+            // so Activity.Current is usually null here and the event would be dropped.
+            // Mirrors DatabricksCompositeReader.Dispose on the Thrift path, which owns
+            // its own span so the close is always traced regardless of caller context.
+            this.TraceActivity(activity =>
+            {
+                try
                 {
-                    try
+                    // Direct-result CLOSED: the server already closed the statement, so there is
+                    // nothing to close and calling CloseStatement again would just error. Still
+                    // emit statement.dispose so the dispose path stays observable (connection-pool
+                    // reuse relies on this event); only skip the redundant HTTP DELETE.
+                    bool alreadyClosed = _statementClosedByServer;
+                    activity?.AddEvent(new ActivityEvent("statement.dispose",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "statement_id", _currentStatementId },
+                            { "already_closed", alreadyClosed }
+                        }));
+                    if (!alreadyClosed)
                     {
                         // Close statement synchronously during dispose
-                        activity?.AddEvent(new ActivityEvent("statement.dispose",
-                            tags: new ActivityTagsCollection
-                            {
-                                { "statement_id", _currentStatementId }
-                            }));
                         _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
                     }
-                    catch (Exception ex)
-                    {
-                        // Best effort - ignore errors during dispose
-                        activity?.AddEvent(new ActivityEvent("statement.dispose.error",
-                            tags: new ActivityTagsCollection
-                            {
-                                { "error", ex.Message }
-                            }));
-                    }
-                    finally
-                    {
-                        _currentStatementId = null;
-                    }
-                }, activityName: nameof(StatementExecutionStatement) + "." + nameof(Dispose));
-            }
+                }
+                catch (Exception ex)
+                {
+                    // Best effort - ignore errors during dispose
+                    activity?.AddEvent(new ActivityEvent("statement.dispose.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error", ex.Message }
+                        }));
+                }
+                finally
+                {
+                    _currentStatementId = null;
+                }
+            }, activityName: nameof(StatementExecutionStatement) + "." + nameof(Dispose));
         }
 
         public override void Cancel()
@@ -1202,10 +1249,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var typeNameBuilder = new StringArray.Builder();
                 var selfRefColBuilder = new StringArray.Builder();
                 var refGenBuilder = new StringArray.Builder();
+                // Issue #526: match JDBC's MetadataResultSetBuilder and the Thrift path -
+                // the types filter is a case-SENSITIVE exact match against the server's
+                // uppercase type names (TABLE/VIEW/...). Use Ordinal, not OrdinalIgnoreCase.
                 var tableTypeFilter = !string.IsNullOrEmpty(_metadataTableTypes)
                     ? new HashSet<string>(
                         _metadataTableTypes!.Split(',').Select(t => t.Trim()),
-                        StringComparer.OrdinalIgnoreCase)
+                        StringComparer.Ordinal)
                     : null;
 
                 int count = 0;
@@ -1372,7 +1422,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string? fullTableName = MetadataUtilities.BuildQualifiedTableName(
                 catalogForTableName, _metadataSchemaName, _metadataTableName);
 
-            string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+            // Fast metadata: STATIC ONLY (runtime PR #198486) skips Delta log / Mesa RPCs.
+            // SEA's ExecuteMetadataSqlAsync already sends the x-databricks-sea-can-run-fully-sync
+            // header — the SEA equivalent of Thrift's RunAsync=false — so the flag alone is enough
+            // here to enable the fast-metadata path end-to-end.
+            bool useFastMetadataQuery = _connection.EnableFastMetadataQuery;
+            string query = useFastMetadataQuery
+                ? $"DESC TABLE EXTENDED {fullTableName} AS JSON STATIC ONLY"
+                : $"DESC TABLE EXTENDED {fullTableName} AS JSON";
 
             List<RecordBatch> batches;
             try
@@ -1382,6 +1439,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
                 return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
+            }
+            catch (DatabricksException ex) when (ex.IsDescTableExtendedUnsupportedException())
+            {
+                // The runtime does not support `DESC TABLE EXTENDED ... AS JSON [STATIC ONLY]`
+                // (e.g. STATIC ONLY on a DBR without PR #198486 → 42601 parse error, or 20000).
+                // Fall back to the multi-call metadata path, mirroring the Thrift base
+                // (DatabricksStatement.GetColumnsExtendedAsync). This keeps the fast-metadata
+                // opt-in safe to roll out before the runtime change reaches every endpoint.
+                return await GetColumnsExtendedViaThreeCalls(cancellationToken).ConfigureAwait(false);
             }
 
             string? resultJson = null;

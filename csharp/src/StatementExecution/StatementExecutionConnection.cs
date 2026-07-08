@@ -59,11 +59,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string _resultDisposition = null!;
         private string _resultFormat = null!;
         private string? _resultCompression;
-        private int _waitTimeoutSeconds;
+        // Request wait_timeout: null = unset (direct results on), "0s" = async (direct results off).
+        // Never a positive value (see ValidateProperties / ES-2034600).
+        private string? _waitTimeout;
         private int _pollingIntervalMs;
+        // Query timeout (seconds) shared by regular queries and metadata operations. 0 = no timeout.
+        private int _queryTimeoutSeconds;
         private bool _enablePKFK;
         private bool _enableMultipleCatalogSupport;
         private bool _useDescTableExtended;
+        private bool _enableFastMetadataQuery;
         private bool _applySSPWithQueries;
 
         // Connection bring-up timeout (PECO-3059). Mirrors the Thrift path's
@@ -305,6 +310,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
+            _enableFastMetadataQuery = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableFastMetadataQuery, false);
             // When true, SSPs (adbc.databricks.ssp_*) are applied via post-open SET statements
             // rather than CreateSession.session_confs — mirrors Thrift's behavior so callers
             // who depend on the SET-statement path (e.g., for audit visibility or for SSPs
@@ -330,17 +336,32 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
             properties.TryGetValue(DatabricksParameters.ResultCompression, out _resultCompression);
 
-            _waitTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.WaitTimeout, 10);
-            if (properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults) &&
-                directResults.Equals("false", StringComparison.OrdinalIgnoreCase))
-            {
-                _waitTimeoutSeconds = 0;
-            }
+            // wait_timeout is NOT a customer-tunable knob; it is derived from the direct-results flag.
+            //   Direct results ON (default): leave wait_timeout UNSET so the server returns the full
+            //     result inline in a single response (state SUCCEEDED or CLOSED) — the SEA equivalent
+            //     of Thrift DirectResults, and what databricks-jdbc sends by default.
+            //   Direct results OFF: send wait_timeout="0s" (fully async) and poll for the result.
+            // We deliberately never send a NON-ZERO wait_timeout: a positive value routes the request
+            //   to the old SEA sync-hybrid results path, which truncates multi-chunk results (the
+            //   manifest advertises N chunks but only chunk 0 is delivered). Tracked as ES-2034600.
+            bool enableDirectResults =
+                !(properties.TryGetValue(DatabricksParameters.EnableDirectResults, out var directResults)
+                  && directResults.Equals("false", StringComparison.OrdinalIgnoreCase));
+            _waitTimeout = enableDirectResults ? null : "0s";
             // PECO-3064: adbc.apache.statement.polltime_ms is the single key for SEA polling cadence
             // (consolidated with the Thrift path). SEA defaults to 1000 ms — HTTP/JSON polls are
             // heavier than Thrift's 100 ms default — but both protocols share the same property.
             _pollingIntervalMs = PropertyHelper.GetPositiveIntPropertyWithValidation(
                 properties, ApacheParameters.PollTimeMilliseconds, defaultValue: 1000);
+
+            // Query timeout (adbc.apache.statement.query_timeout_s) shared by regular queries and
+            // metadata operations — a metadata call is just another query, and can fan out into many
+            // SHOW COLUMNS / SHOW CATALOGS statements. Default matches the Thrift path (3h); 0 = no
+            // timeout. Bounds the metadata operation via CreateMetadataTimeoutCts and the statement's
+            // own poll loop (PollWithTimeoutAsync) using the same value.
+            _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
+                properties, ApacheParameters.QueryTimeoutSeconds,
+                DatabricksConstants.DefaultQueryTimeoutSeconds);
 
             // Tracing propagation configuration. Base class (TracingConnection) already handles ActivityTrace init.
             _tracePropagationEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TracePropagationEnabled, true);
@@ -545,7 +566,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _resultDisposition,
                 _resultFormat,
                 _resultCompression,
-                _waitTimeoutSeconds,
+                _waitTimeout,
                 _pollingIntervalMs,
                 _properties,
                 _recyclableMemoryStreamManager,
@@ -584,10 +605,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 columnNamePattern = columnNamePattern?.ToLower();
 
                 using var cts = CreateMetadataTimeoutCts();
-                return GetObjectsResultBuilder.BuildGetObjectsResultAsync(
-                    this, depth, catalogPattern, schemaPattern,
-                    tableNamePattern, tableTypes, columnNamePattern,
-                    cts.Token).GetAwaiter().GetResult();
+                try
+                {
+                    return GetObjectsResultBuilder.BuildGetObjectsResultAsync(
+                        this, depth, catalogPattern, schemaPattern,
+                        tableNamePattern, tableTypes, columnNamePattern,
+                        cts.Token).GetAwaiter().GetResult();
+                }
+                catch (Exception ex) when (cts.IsCancellationRequested && ex is not TimeoutException)
+                {
+                    // The aggregate metadata timeout fired: the CTS cancelled the underlying HTTP
+                    // request, surfacing a raw TaskCanceledException. Translate it to TimeoutException
+                    // for parity with HiveServer2Connection.GetObjects (Thrift base).
+                    throw new TimeoutException(
+                        "The metadata query execution timed out. Consider increasing the query timeout value.", ex);
+                }
             }, nameof(GetObjects));
         }
 
@@ -649,8 +681,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // which sends catalog as-is to the server. ExecuteShowColumnsAsync
                 // handles null by iterating all catalogs.
                 string? resolvedCatalog = DatabricksConnection.HandleSparkCatalog(catalog);
-                var batches = ExecuteShowColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
-                    .GetAwaiter().GetResult();
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = ExecuteShowColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
+                        .GetAwaiter().GetResult();
+                }
+                catch (Exception ex) when (cts.IsCancellationRequested && ex is not TimeoutException)
+                {
+                    // Aggregate metadata timeout fired; translate the CTS cancellation to
+                    // TimeoutException for parity with the Thrift base (see GetObjects).
+                    throw new TimeoutException(
+                        "The metadata query execution timed out. Consider increasing the query timeout value.", ex);
+                }
 
                 var fields = new List<Field>();
                 foreach (var batch in batches)
@@ -949,6 +992,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal bool UseDescTableExtended => _useDescTableExtended;
 
         /// <summary>
+        /// Whether to emit <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON STATIC ONLY</c> in place of
+        /// the base <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON</c>. SEA always targets a DBSQL
+        /// warehouse, so the flag alone is sufficient (no warehouse-path check needed). The
+        /// metadata-query header is already sent by <see cref="ExecuteMetadataSqlAsync"/>,
+        /// which provides the SEA equivalent of Thrift's RunAsync=false signal.
+        /// Default: false.
+        /// </summary>
+        internal bool EnableFastMetadataQuery => _enableFastMetadataQuery;
+
+        /// <summary>
         /// Returns the session's default catalog. Used by statements when
         /// enableMultipleCatalogSupport=false and no catalog was specified.
         /// </summary>
@@ -971,9 +1024,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return _catalog;
         }
 
+        // Metadata operations (GetObjects/GetTableSchema) are just queries — bound them with the same
+        // query timeout as regular queries (adbc.apache.statement.query_timeout_s, default 3h,
+        // matching Thrift). A single metadata call can fan out into many SHOW COLUMNS / SHOW CATALOGS
+        // statements, so this bounds the whole tree. 0 = no timeout (never-cancelled CTS), matching
+        // PollWithTimeoutAsync and the Thrift ApacheUtility.GetCancellationToken semantics.
         internal CancellationTokenSource CreateMetadataTimeoutCts()
         {
-            return new CancellationTokenSource(TimeSpan.FromSeconds(_waitTimeoutSeconds));
+            return _queryTimeoutSeconds <= 0
+                ? new CancellationTokenSource()
+                : new CancellationTokenSource(TimeSpan.FromSeconds(_queryTimeoutSeconds));
         }
 
         /// <summary>

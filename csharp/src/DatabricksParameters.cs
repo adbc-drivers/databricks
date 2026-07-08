@@ -35,12 +35,14 @@ namespace AdbcDrivers.Databricks
         /// Whether to use CloudFetch for retrieving results.
         /// Default value is true if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string UseCloudFetch = "adbc.databricks.cloudfetch.enabled";
 
         /// <summary>
         /// Whether the client can decompress LZ4 compressed results.
         /// Default value is true if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string CanDecompressLz4 = "adbc.databricks.cloudfetch.lz4.enabled";
 
         /// <summary>
@@ -49,6 +51,7 @@ namespace AdbcDrivers.Databricks
         /// If no unit is specified, the value is treated as bytes.
         /// Default value is 20MB if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveLong)]
         public const string MaxBytesPerFile = "adbc.databricks.cloudfetch.max_bytes_per_file";
 
         /// <summary>
@@ -63,36 +66,42 @@ namespace AdbcDrivers.Databricks
         /// Uses exponential backoff with jitter within this time budget.
         /// Default value is 300 (5 minutes) if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string CloudFetchRetryTimeoutSeconds = "adbc.databricks.cloudfetch.retry_timeout_seconds";
 
         /// <summary>
         /// Delay in milliseconds between CloudFetch retry attempts.
         /// Default value is 500ms if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string CloudFetchRetryDelayMs = "adbc.databricks.cloudfetch.retry_delay_ms";
 
         /// <summary>
         /// Timeout in minutes for CloudFetch HTTP operations.
         /// Default value is 5 minutes if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string CloudFetchTimeoutMinutes = "adbc.databricks.cloudfetch.timeout_minutes";
 
         /// <summary>
         /// Buffer time in seconds before URL expiration to trigger refresh.
         /// Default value is 60 seconds if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string CloudFetchUrlExpirationBufferSeconds = "adbc.databricks.cloudfetch.url_expiration_buffer_seconds";
 
         /// <summary>
         /// Maximum number of URL refresh attempts for CloudFetch downloads.
         /// Default value is 3 if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string CloudFetchMaxUrlRefreshAttempts = "adbc.databricks.cloudfetch.max_url_refresh_attempts";
 
         /// <summary>
         /// Whether to enable the use of direct results when executing queries.
         /// Default value is true if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string EnableDirectResults = "adbc.databricks.enable_direct_results";
 
         /// <summary>
@@ -100,6 +109,7 @@ namespace AdbcDrivers.Databricks
         /// by setting the Thrift configuration when the session is opened.
         /// Default value is false if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string ApplySSPWithQueries = "adbc.databricks.apply_ssp_with_queries";
 
 
@@ -122,18 +132,21 @@ namespace AdbcDrivers.Databricks
         /// Controls whether to retry requests that receive retryable responses (408, 502, 503, 504).
         /// Default value is true (enabled). Set to false to disable retry behavior.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string TemporarilyUnavailableRetry = "adbc.spark.temporarily_unavailable_retry";
 
         /// <summary>
         /// Maximum total time in seconds to retry retryable responses (408, 502, 503, 504) before failing.
         /// Default value is 900 seconds (15 minutes). Set to 0 to retry indefinitely.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Int)]
         public const string TemporarilyUnavailableRetryTimeout = "adbc.spark.temporarily_unavailable_retry_timeout";
 
         /// <summary>
         /// Controls whether to retry requests that receive HTTP 429 (TooManyRequests) response.
         /// Default value is true. Set to false to disable rate limit retry behavior.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string RateLimitRetry = "adbc.databricks.rate_limit_retry";
 
         /// <summary>
@@ -141,6 +154,7 @@ namespace AdbcDrivers.Databricks
         /// when the operation receives an HTTP 429 response.
         /// Default value is 120 seconds. Set to 0 to retry indefinitely.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Int)]
         public const string RateLimitRetryTimeout = "adbc.databricks.rate_limit_retry_timeout";
 
         /// <summary>
@@ -148,6 +162,7 @@ namespace AdbcDrivers.Databricks
         /// (connection refused, TCP reset, DNS failure, dead connections).
         /// Default value is true (enabled). Set to false to disable transport error retry behavior.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string TransportErrorRetry = "adbc.databricks.transport_error_retry";
 
         /// <summary>
@@ -162,18 +177,21 @@ namespace AdbcDrivers.Databricks
         /// Maximum number of parallel downloads for CloudFetch operations.
         /// Default value is 3 if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string CloudFetchParallelDownloads = "adbc.databricks.cloudfetch.parallel_downloads";
 
         /// <summary>
         /// Number of files to prefetch in CloudFetch operations.
         /// Default value is 2 if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string CloudFetchPrefetchCount = "adbc.databricks.cloudfetch.prefetch_count";
 
         /// <summary>
         /// Maximum memory buffer size in MB for CloudFetch prefetched files.
         /// Default value is 200MB if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string CloudFetchMemoryBufferSize = "adbc.databricks.cloudfetch.memory_buffer_size_mb";
 
         /// <summary>
@@ -269,24 +287,49 @@ namespace AdbcDrivers.Databricks
         /// Whether to use multiple catalogs.
         /// Default value is true if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string EnableMultipleCatalogSupport = "adbc.databricks.enable_multiple_catalog_support";
 
         /// <summary>
         /// Whether to enable primary key foreign key metadata call.
         /// Default value is true if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string EnablePKFK = "adbc.databricks.enable_pk_fk";
 
         /// <summary>
         /// Whether to use query DESC TABLE EXTENDED to get extended column metadata when the current DBR supports it
         /// Default value is true if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string UseDescTableExtended = "adbc.databricks.use_desc_table_extended";
+
+        /// <summary>
+        /// Whether to opt into the fast metadata query path for DESC TABLE EXTENDED.
+        /// When enabled, the driver emits <c>DESC TABLE EXTENDED &lt;t&gt; AS JSON STATIC ONLY</c>
+        /// (runtime PR #198486), which tells the server to skip Delta log access, Mesa RPCs,
+        /// and other expensive I/O. The driver also pairs the SQL change with the matching
+        /// off-WLM signal per protocol:
+        /// <list type="bullet">
+        /// <item>Thrift: sets <c>RunAsync=false</c> on the descStmt, only when the connection
+        /// targets a DBSQL warehouse (/sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}).
+        /// On general clusters the flag is ignored entirely.</item>
+        /// <item>SEA: relies on the existing <c>x-databricks-sea-can-run-fully-sync</c>
+        /// header that <c>ExecuteMetadataSqlAsync</c> already sends. SEA always targets
+        /// a warehouse, so the flag alone gates the SQL change.</item>
+        /// </list>
+        /// Both signals (SQL keyword + off-WLM routing) are required together — STATIC ONLY
+        /// alone still goes through WLM; off-WLM routing alone still does the full scan.
+        /// Default value is false if not specified.
+        /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
+        public const string EnableFastMetadataQuery = "adbc.databricks.enable_fast_metadata_query";
 
         /// <summary>
         /// Whether to enable RunAsync flag in Thrift operation
         /// Default value is true if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string EnableRunAsyncInThriftOp = "adbc.databricks.enable_run_async_thrift";
 
         /// <summary>
@@ -294,6 +337,7 @@ namespace AdbcDrivers.Databricks
         /// Default value is true if not specified.
         /// When enabled, the driver will add W3C Trace Context headers to all HTTP requests.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string TracePropagationEnabled = "adbc.databricks.trace_propagation.enabled";
 
         /// <summary>
@@ -308,6 +352,7 @@ namespace AdbcDrivers.Databricks
         /// Default value is false if not specified.
         /// When enabled, the driver will also propagate the tracestate header if available.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string TraceStateEnabled = "adbc.databricks.trace_propagation.state_enabled";
 
         /// <summary>
@@ -338,6 +383,7 @@ namespace AdbcDrivers.Databricks
         /// Default value is 60 seconds if not specified.
         /// Must be a positive integer value.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string FetchHeartbeatInterval = "adbc.databricks.fetch_heartbeat_interval";
 
         /// <summary>
@@ -346,7 +392,9 @@ namespace AdbcDrivers.Databricks
         /// Default value is 30 seconds if not specified.
         /// Must be a positive integer value.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string OperationStatusRequestTimeout = "adbc.databricks.operation_status_request_timeout";
+
 
         // Statement Execution API configuration parameters
 
@@ -399,13 +447,16 @@ namespace AdbcDrivers.Databricks
         public const string ResultCompression = "adbc.databricks.rest.result_compression";
 
         /// <summary>
-        /// Wait timeout for statement execution in seconds.
-        /// - 0: Async mode, return immediately
-        /// - 5-50: Sync mode up to timeout
-        /// Default: 10 seconds
-        /// Note: When enable_direct_results=true, this parameter is not set (server waits until complete)
+        /// Deprecated and ignored. This key is recognized but inert: it is no longer read, and
+        /// setting it has no effect. The request wait_timeout is now derived solely from the
+        /// enable_direct_results flag (see StatementExecutionConnection.ValidateProperties):
+        /// - enable_direct_results=true: wait_timeout is not set (server waits until complete).
+        /// - enable_direct_results=false: wait_timeout="0s" (fully async, then poll).
+        /// A non-zero wait_timeout is deliberately never sent, since a positive value routes the
+        /// request to the SEA sync-hybrid results path, which truncates multi-chunk results.
         /// Only applicable when Protocol is "rest".
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Int)]
         public const string WaitTimeout = "adbc.databricks.rest.wait_timeout";
 
         /// <summary>
@@ -428,6 +479,7 @@ namespace AdbcDrivers.Databricks
         /// Timeout in seconds for feature flag API requests.
         /// Default value is 5 seconds if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string FeatureFlagTimeoutSeconds = "adbc.databricks.feature_flag_timeout_seconds";
 
         /// <summary>
@@ -444,6 +496,7 @@ namespace AdbcDrivers.Databricks
         /// This applies to both Thrift and SEA protocols, providing consistent behavior across protocols.
         /// Default value is false if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string EnableComplexDatatypeSupport = "adbc.databricks.enable_complex_datatype_support";
     }
 
@@ -465,6 +518,14 @@ namespace AdbcDrivers.Databricks
         /// Default timeout in seconds for operation status polling requests.
         /// </summary>
         public const int DefaultOperationStatusRequestTimeoutSeconds = 30;
+
+        /// <summary>
+        /// Default query timeout in seconds for the Statement Execution (REST) path. Applies to both
+        /// regular queries (poll-until-complete) and metadata operations (which are just queries).
+        /// Matches the Thrift path's Databricks default (<c>DatabricksConnection.DefaultQueryTimeSeconds</c>)
+        /// so a long-running query is bounded consistently across protocols. 0 disables the timeout.
+        /// </summary>
+        public const int DefaultQueryTimeoutSeconds = 3 * 60 * 60; // 3 hours
 
         /// <summary>
         /// Default async execution poll interval in milliseconds.

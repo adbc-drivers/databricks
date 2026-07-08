@@ -133,7 +133,7 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: 0f749f0ec5a3cc65888020dedcc0256078311474
+          ENGINE_REF: 5fbcee18e479c58656a94e7704dabfe7edaf2b26
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
@@ -210,6 +210,7 @@ jobs:
           # databricks-claude-opus-4-8 serving endpoint; DATABRICKS_TOKEN authenticates it
           # (Bearer). Both already exist as adbc CI secrets — no new secrets needed.
           MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          REPO_RULES_FILES: csharp/CLAUDE.md,rust/CLAUDE.md   # adbc keeps conventions per-language (no root CLAUDE.md)
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: python -m databricks_bot_engine.engineer_bot.run --phase author --bot .bot
 
@@ -236,11 +237,13 @@ jobs:
           TOUCHED_FILES: ${{ steps.author.outputs.touched_files }}
           TOUCHED_COUNT: ${{ steps.author.outputs.touched_count }}
           SUMMARY:       ${{ steps.author.outputs.summary }}
-          # Bug-fix flow's structured test lists → build_pr_body renders the
-          # {test_plan} token (each added test, red→green vs regression). Absent
-          # for non-bug-fix flows → publish falls back to a generic line.
+          # Bug-fix flow outputs. RED_GREEN_TESTS → build_pr_body renders the
+          # {test_plan} token (every added test is red→green; the flow no longer
+          # adds regression tests). OUT_OF_SCOPE → publish lists facets the bot
+          # couldn't fix here, with the reason, for a human to follow up. Both
+          # absent for non-bug-fix flows → publish falls back to a generic line.
           RED_GREEN_TESTS: ${{ steps.author.outputs.red_green_tests }}
-          TESTS_ADDED:     ${{ steps.author.outputs.tests_added }}
+          OUT_OF_SCOPE:    ${{ steps.author.outputs.out_of_scope }}
         run: python -m databricks_bot_engine.engineer_bot.publish
 
       - name: Label the fix PR for review
