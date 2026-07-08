@@ -20,6 +20,8 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-07-08
+
 ### Changed
 
 - **`adbc.databricks.rest.result_compression` is now ignored** (deprecated). Result
@@ -29,6 +31,13 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
   `LZ4_FRAME` by default. To opt out of LZ4 compression, set
   `adbc.databricks.cloudfetch.lz4.enabled=false`; explicit `result_compression=none`
   (or `gzip`) values are no longer honored.
+
+### Fixed
+
+- Fix `*`/`%` wildcard semantics and `TABLE_CAT` identifier echo divergence between the
+  Thrift and REST/SEA metadata paths (#536, #525)
+- Derive SEA `wait_timeout` from the direct-results setting and treat a `CLOSED` statement
+  state as success (#566)
 
 ## [1.1.6] - 2026-07-02
 
