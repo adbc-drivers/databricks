@@ -44,7 +44,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public void TestResultCompressionParameterExists()
         {
+            // Deprecated but still a recognized key; validate its stable string value.
+#pragma warning disable CS0618 // Type or member is obsolete
             Assert.Equal("adbc.databricks.rest.result_compression", DatabricksParameters.ResultCompression);
+#pragma warning restore CS0618
         }
 
         [Fact]
@@ -84,7 +87,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             // Verify REST-specific parameters use "adbc.databricks.rest." prefix
             Assert.StartsWith("adbc.databricks.rest.", DatabricksParameters.ResultDisposition);
             Assert.StartsWith("adbc.databricks.rest.", DatabricksParameters.ResultFormat);
+#pragma warning disable CS0618 // Type or member is obsolete
             Assert.StartsWith("adbc.databricks.rest.", DatabricksParameters.ResultCompression);
+#pragma warning restore CS0618
             Assert.StartsWith("adbc.databricks.rest.", DatabricksParameters.WaitTimeout);
         }
 

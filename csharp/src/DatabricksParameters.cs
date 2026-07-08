@@ -438,16 +438,15 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Deprecated and ignored. This key is recognized but inert: it is no longer read, and
-        /// setting it has no effect. Result compression is now derived solely from the
-        /// "adbc.databricks.cloudfetch.lz4.enabled" capability flag and the result format (see
-        /// StatementExecutionConnection.ValidateProperties): "LZ4_FRAME" when LZ4 is enabled (the
-        /// default) and the result format is "ARROW_STREAM", otherwise "NONE" (for example,
-        /// "JSON_ARRAY" and "CSV" formats always resolve to "NONE"). The single LZ4 capability flag
-        /// drives compression across both the Thrift/CloudFetch and REST paths. The server still
-        /// returns results uncompressed when it chooses to (e.g. small inline results), and the
-        /// reader honors the response manifest.
+        /// setting it has no effect. Result compression is derived solely from the
+        /// "adbc.databricks.cloudfetch.lz4.enabled" capability flag: "LZ4_FRAME" when LZ4 is
+        /// enabled (the default), "NONE" when disabled, sent to the backend regardless of result
+        /// format. The single LZ4 capability flag drives compression across both the
+        /// Thrift/CloudFetch and REST paths. The server still returns results uncompressed when it
+        /// chooses to (e.g. small inline results), and the reader honors the response manifest.
         /// Only applicable when Protocol is "rest".
         /// </summary>
+        [System.Obsolete("Ignored: result compression is controlled by adbc.databricks.cloudfetch.lz4.enabled. This key has no effect and will be removed in a future major release.")]
         public const string ResultCompression = "adbc.databricks.rest.result_compression";
 
         /// <summary>

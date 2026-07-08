@@ -125,7 +125,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // read. Setting it to NONE must NOT override the LZ4 default derived from the
             // (enabled-by-default) capability flag.
             var properties = BaseProperties();
+#pragma warning disable CS0618 // Type or member is obsolete
             properties[DatabricksParameters.ResultCompression] = "NONE";
+#pragma warning restore CS0618
 
             var body = await CaptureExecuteStatementBodyAsync(properties);
 
@@ -155,7 +157,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // the capability flag disables it. Compression is driven solely by the LZ4 flag.
             var properties = BaseProperties();
             properties[DatabricksParameters.CanDecompressLz4] = "false";
+#pragma warning disable CS0618 // Type or member is obsolete
             properties[DatabricksParameters.ResultCompression] = "LZ4_FRAME";
+#pragma warning restore CS0618
 
             var body = await CaptureExecuteStatementBodyAsync(properties);
 
