@@ -343,13 +343,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // adbc.databricks.rest.result_compression is deprecated and no longer read: it drove
             // no real client and only added confusion. The LZ4 capability flag is the single knob.
             //
-            // Result compression in the SEA API is only meaningful for ARROW_STREAM; for
-            // JSON_ARRAY/CSV the field was previously omitted, so only derive the LZ4 default
-            // when the format is ARROW_STREAM. This preserves the prior (working) behavior for
-            // users who explicitly select a non-Arrow format.
+            // The value is sent directly to the backend regardless of result format — the server
+            // applies it only where meaningful, so no client-side format gating is needed.
             bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
-            bool isArrowStream = _resultFormat.Equals("ARROW_STREAM", StringComparison.OrdinalIgnoreCase);
-            _resultCompression = (canDecompressLz4 && isArrowStream) ? "LZ4_FRAME" : "NONE";
+            _resultCompression = canDecompressLz4 ? "LZ4_FRAME" : "NONE";
 
             // wait_timeout is NOT a customer-tunable knob; it is derived from the direct-results flag.
             //   Direct results ON (default): leave wait_timeout UNSET so the server returns the full

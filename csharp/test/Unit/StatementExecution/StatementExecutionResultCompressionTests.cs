@@ -167,34 +167,19 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Theory]
         [InlineData("JSON_ARRAY")]
         [InlineData("CSV")]
-        public async Task ExecuteStatement_DerivesNoneForNonArrowFormat(string resultFormat)
+        public async Task ExecuteStatement_DerivesLz4ForNonArrowFormat(string resultFormat)
         {
+            // Compression is no longer gated on result format: it is derived solely from the LZ4
+            // capability flag and sent directly to the backend, which applies it only where
+            // meaningful. So a non-Arrow format still requests LZ4_FRAME when the flag is enabled.
             var properties = BaseProperties();
-            // Compression is only meaningful for ARROW_STREAM; for JSON_ARRAY/CSV the LZ4 default
-            // must NOT be derived even when the capability flag is enabled (its default).
             properties[DatabricksParameters.ResultFormat] = resultFormat;
 
             var body = await CaptureExecuteStatementBodyAsync(properties);
 
             Assert.NotNull(body);
             using var doc = JsonDocument.Parse(body!);
-            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
-        }
-
-        [Fact]
-        public async Task ExecuteStatement_DeprecatedCompressionIgnoredForNonArrowFormat()
-        {
-            // The deprecated rest.result_compression key is inert; a non-Arrow format still
-            // resolves to NONE regardless of what the deprecated key is set to.
-            var properties = BaseProperties();
-            properties[DatabricksParameters.ResultFormat] = "JSON_ARRAY";
-            properties[DatabricksParameters.ResultCompression] = "LZ4_FRAME";
-
-            var body = await CaptureExecuteStatementBodyAsync(properties);
-
-            Assert.NotNull(body);
-            using var doc = JsonDocument.Parse(body!);
-            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
+            Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
         }
 
         [Fact]
