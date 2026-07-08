@@ -334,7 +334,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Result configuration.
             _resultDisposition = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultDisposition, "INLINE_OR_EXTERNAL_LINKS");
             _resultFormat = PropertyHelper.GetStringProperty(properties, DatabricksParameters.ResultFormat, "ARROW_STREAM");
-            properties.TryGetValue(DatabricksParameters.ResultCompression, out _resultCompression);
+            // Result compression is derived solely from the client's LZ4 capability flag
+            // (adbc.databricks.cloudfetch.lz4.enabled, default true) so a single flag drives LZ4
+            // across both the Thrift/CloudFetch and REST paths, and disabling that pre-existing
+            // flag keeps disabling LZ4 everywhere. The reader decompresses based on the response
+            // manifest, so an uncompressed response is still handled correctly.
+            //
+            // adbc.databricks.rest.result_compression is deprecated and no longer read: it drove
+            // no real client and only added confusion. The LZ4 capability flag is the single knob.
+            //
+            // LZ4_FRAME is requested whenever the client can decompress it, regardless of result
+            // format. The SEA server ignores the compression codec for non-Arrow formats
+            // (JSON_ARRAY, CSV), so there is no need to gate the request on the format.
+            bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
+            _resultCompression = canDecompressLz4 ? "LZ4_FRAME" : "NONE";
 
             // wait_timeout is NOT a customer-tunable knob; it is derived from the direct-results flag.
             //   Direct results ON (default): leave wait_timeout UNSET so the server returns the full

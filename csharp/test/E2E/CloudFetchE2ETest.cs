@@ -183,7 +183,8 @@ namespace AdbcDrivers.Databricks.Tests
                 // Note: API expects uppercase values
                 parameters[DatabricksParameters.ResultDisposition] = "INLINE_OR_EXTERNAL_LINKS";
                 parameters[DatabricksParameters.ResultFormat] = "ARROW_STREAM";
-                parameters[DatabricksParameters.ResultCompression] = "LZ4_FRAME";
+                // result_compression is deprecated/inert; LZ4 is derived from CanDecompressLz4=true
+                // above and the ARROW_STREAM format, so no explicit compression key is needed.
             }
 
             var connection = NewConnection(TestConfiguration, parameters);

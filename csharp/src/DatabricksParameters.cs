@@ -437,13 +437,18 @@ namespace AdbcDrivers.Databricks
         public const string ResultFormat = "adbc.databricks.rest.result_format";
 
         /// <summary>
-        /// Result compression codec for Statement Execution API.
-        /// Supported values:
-        /// - "lz4": LZ4 compression (default for external_links)
-        /// - "gzip": GZIP compression
-        /// - "none": No compression (default for inline)
+        /// Deprecated and ignored. This key is recognized but inert: it is no longer read, and
+        /// setting it has no effect. Result compression is derived solely from the
+        /// "adbc.databricks.cloudfetch.lz4.enabled" capability flag: "LZ4_FRAME" is requested
+        /// whenever the client can decompress it (the default), regardless of result format, and
+        /// "NONE" is requested when LZ4 is disabled. The single LZ4 capability flag drives
+        /// compression across both the Thrift/CloudFetch and REST paths. The server ignores the
+        /// codec for non-Arrow formats (e.g. JSON_ARRAY, CSV) and still returns results
+        /// uncompressed when it chooses to (e.g. small inline results); the reader honors the
+        /// response manifest either way.
         /// Only applicable when Protocol is "rest".
         /// </summary>
+        [System.Obsolete("Ignored: result compression is controlled by adbc.databricks.cloudfetch.lz4.enabled. This key has no effect and will be removed in a future major release.")]
         public const string ResultCompression = "adbc.databricks.rest.result_compression";
 
         /// <summary>
