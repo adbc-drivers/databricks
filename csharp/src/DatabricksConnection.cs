@@ -86,7 +86,7 @@ namespace AdbcDrivers.Databricks
         private long _directResultMaxRows = DefaultDirectResultMaxRows;
         // CloudFetch configuration
         private const long DefaultMaxBytesPerFile = 20 * 1024 * 1024; // 20MB
-        private const int DefaultQueryTimeSeconds = 3 * 60 * 60; // 3 hours
+        private const int DefaultQueryTimeSeconds = DatabricksConstants.DefaultQueryTimeoutSeconds; // 3 hours (shared with SEA path)
         private bool _useCloudFetch = true;
         private bool _canDecompressLz4 = true;
         private long _maxBytesPerFile = DefaultMaxBytesPerFile;

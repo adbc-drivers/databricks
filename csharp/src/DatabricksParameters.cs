@@ -395,6 +395,7 @@ namespace AdbcDrivers.Databricks
         [FeatureFlagType(FeatureFlagValueKind.PositiveInt)]
         public const string OperationStatusRequestTimeout = "adbc.databricks.operation_status_request_timeout";
 
+
         // Statement Execution API configuration parameters
 
         /// <summary>
@@ -446,11 +447,13 @@ namespace AdbcDrivers.Databricks
         public const string ResultCompression = "adbc.databricks.rest.result_compression";
 
         /// <summary>
-        /// Wait timeout for statement execution in seconds.
-        /// - 0: Async mode, return immediately
-        /// - 5-50: Sync mode up to timeout
-        /// Default: 10 seconds
-        /// Note: When enable_direct_results=true, this parameter is not set (server waits until complete)
+        /// Deprecated and ignored. This key is recognized but inert: it is no longer read, and
+        /// setting it has no effect. The request wait_timeout is now derived solely from the
+        /// enable_direct_results flag (see StatementExecutionConnection.ValidateProperties):
+        /// - enable_direct_results=true: wait_timeout is not set (server waits until complete).
+        /// - enable_direct_results=false: wait_timeout="0s" (fully async, then poll).
+        /// A non-zero wait_timeout is deliberately never sent, since a positive value routes the
+        /// request to the SEA sync-hybrid results path, which truncates multi-chunk results.
         /// Only applicable when Protocol is "rest".
         /// </summary>
         [FeatureFlagType(FeatureFlagValueKind.Int)]
@@ -515,6 +518,14 @@ namespace AdbcDrivers.Databricks
         /// Default timeout in seconds for operation status polling requests.
         /// </summary>
         public const int DefaultOperationStatusRequestTimeoutSeconds = 30;
+
+        /// <summary>
+        /// Default query timeout in seconds for the Statement Execution (REST) path. Applies to both
+        /// regular queries (poll-until-complete) and metadata operations (which are just queries).
+        /// Matches the Thrift path's Databricks default (<c>DatabricksConnection.DefaultQueryTimeSeconds</c>)
+        /// so a long-running query is bounded consistently across protocols. 0 disables the timeout.
+        /// </summary>
+        public const int DefaultQueryTimeoutSeconds = 3 * 60 * 60; // 3 hours
 
         /// <summary>
         /// Default async execution poll interval in milliseconds.
