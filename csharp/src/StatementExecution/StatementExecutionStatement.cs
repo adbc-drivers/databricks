@@ -794,47 +794,51 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public override void Dispose()
         {
-            // Direct-result CLOSED: the server already closed the statement, so there is nothing to
-            // close and calling CloseStatement would just error. Clear the id and skip the close.
-            if (_statementClosedByServer)
+            if (_currentStatementId == null)
             {
-                _currentStatementId = null;
+                return;
             }
 
-            if (_currentStatementId != null)
+            // Start a dedicated span instead of annotating Activity.Current: Dispose is
+            // typically called outside any ambient activity (e.g. connection pooling),
+            // so Activity.Current is usually null here and the event would be dropped.
+            // Mirrors DatabricksCompositeReader.Dispose on the Thrift path, which owns
+            // its own span so the close is always traced regardless of caller context.
+            this.TraceActivity(activity =>
             {
-                // Start a dedicated span instead of annotating Activity.Current: Dispose is
-                // typically called outside any ambient activity (e.g. connection pooling),
-                // so Activity.Current is usually null here and the event would be dropped.
-                // Mirrors DatabricksCompositeReader.Dispose on the Thrift path, which owns
-                // its own span so the close is always traced regardless of caller context.
-                this.TraceActivity(activity =>
+                try
                 {
-                    try
+                    // Direct-result CLOSED: the server already closed the statement, so there is
+                    // nothing to close and calling CloseStatement again would just error. Still
+                    // emit statement.dispose so the dispose path stays observable (connection-pool
+                    // reuse relies on this event); only skip the redundant HTTP DELETE.
+                    bool alreadyClosed = _statementClosedByServer;
+                    activity?.AddEvent(new ActivityEvent("statement.dispose",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "statement_id", _currentStatementId },
+                            { "already_closed", alreadyClosed }
+                        }));
+                    if (!alreadyClosed)
                     {
                         // Close statement synchronously during dispose
-                        activity?.AddEvent(new ActivityEvent("statement.dispose",
-                            tags: new ActivityTagsCollection
-                            {
-                                { "statement_id", _currentStatementId }
-                            }));
                         _client.CloseStatementAsync(_currentStatementId, CancellationToken.None).GetAwaiter().GetResult();
                     }
-                    catch (Exception ex)
-                    {
-                        // Best effort - ignore errors during dispose
-                        activity?.AddEvent(new ActivityEvent("statement.dispose.error",
-                            tags: new ActivityTagsCollection
-                            {
-                                { "error", ex.Message }
-                            }));
-                    }
-                    finally
-                    {
-                        _currentStatementId = null;
-                    }
-                }, activityName: nameof(StatementExecutionStatement) + "." + nameof(Dispose));
-            }
+                }
+                catch (Exception ex)
+                {
+                    // Best effort - ignore errors during dispose
+                    activity?.AddEvent(new ActivityEvent("statement.dispose.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error", ex.Message }
+                        }));
+                }
+                finally
+                {
+                    _currentStatementId = null;
+                }
+            }, activityName: nameof(StatementExecutionStatement) + "." + nameof(Dispose));
         }
 
         public override void Cancel()

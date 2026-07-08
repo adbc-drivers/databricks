@@ -605,10 +605,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 columnNamePattern = columnNamePattern?.ToLower();
 
                 using var cts = CreateMetadataTimeoutCts();
-                return GetObjectsResultBuilder.BuildGetObjectsResultAsync(
-                    this, depth, catalogPattern, schemaPattern,
-                    tableNamePattern, tableTypes, columnNamePattern,
-                    cts.Token).GetAwaiter().GetResult();
+                try
+                {
+                    return GetObjectsResultBuilder.BuildGetObjectsResultAsync(
+                        this, depth, catalogPattern, schemaPattern,
+                        tableNamePattern, tableTypes, columnNamePattern,
+                        cts.Token).GetAwaiter().GetResult();
+                }
+                catch (Exception ex) when (cts.IsCancellationRequested && ex is not TimeoutException)
+                {
+                    // The aggregate metadata timeout fired: the CTS cancelled the underlying HTTP
+                    // request, surfacing a raw TaskCanceledException. Translate it to TimeoutException
+                    // for parity with HiveServer2Connection.GetObjects (Thrift base).
+                    throw new TimeoutException(
+                        "The metadata query execution timed out. Consider increasing the query timeout value.", ex);
+                }
             }, nameof(GetObjects));
         }
 
@@ -670,8 +681,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // which sends catalog as-is to the server. ExecuteShowColumnsAsync
                 // handles null by iterating all catalogs.
                 string? resolvedCatalog = DatabricksConnection.HandleSparkCatalog(catalog);
-                var batches = ExecuteShowColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
-                    .GetAwaiter().GetResult();
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = ExecuteShowColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
+                        .GetAwaiter().GetResult();
+                }
+                catch (Exception ex) when (cts.IsCancellationRequested && ex is not TimeoutException)
+                {
+                    // Aggregate metadata timeout fired; translate the CTS cancellation to
+                    // TimeoutException for parity with the Thrift base (see GetObjects).
+                    throw new TimeoutException(
+                        "The metadata query execution timed out. Consider increasing the query timeout value.", ex);
+                }
 
                 var fields = new List<Field>();
                 foreach (var batch in batches)
