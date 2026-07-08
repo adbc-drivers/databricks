@@ -321,16 +321,7 @@ namespace AdbcDrivers.Databricks
             try
             {
                 // Check if feature flag cache is enabled (default: true).
-                // Only an explicit, parseable "false" disables it; an absent or
-                // unparsable value keeps the default.
-                bool enabled = true;
-                if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) &&
-                    bool.TryParse(enabledStr, out bool parsedEnabled))
-                {
-                    enabled = parsedEnabled;
-                }
-
-                if (!enabled)
+                if (!IsCacheEnabled(localProperties))
                 {
                     activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
                         tags: new ActivityTagsCollection { { "reason", "disabled_by_config" } }));
@@ -410,6 +401,73 @@ namespace AdbcDrivers.Databricks
                 .ConfigureAwait(false)
                 .GetAwaiter()
                 .GetResult();
+        }
+
+        /// <summary>
+        /// Whether the feature-flag cache is enabled for the given properties. Enabled by default;
+        /// only an explicit, parseable <c>"false"</c> for
+        /// <see cref="DatabricksParameters.FeatureFlagCacheEnabled"/> disables it. An absent or
+        /// unparsable value keeps the default (enabled).
+        /// </summary>
+        private static bool IsCacheEnabled(IReadOnlyDictionary<string, string> localProperties)
+        {
+            bool enabled = true;
+            if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) &&
+                bool.TryParse(enabledStr, out bool parsedEnabled))
+            {
+                enabled = parsedEnabled;
+            }
+
+            return enabled;
+        }
+
+        /// <summary>
+        /// Non-blocking feature-flag application for the connection-open path.
+        /// <para>
+        /// If flags for the host are already cached (warm), returns <paramref name="localProperties"/>
+        /// merged with them (local properties win) so the connection sees the server flags immediately.
+        /// If the cache is cold, starts a background warm-up so a subsequent connection to the same
+        /// host applies the flags, and returns <paramref name="localProperties"/> unchanged for this
+        /// connection.
+        /// </para>
+        /// <para>
+        /// Never performs a blocking network fetch, so it never stalls <c>Connect()</c>. Always returns
+        /// a valid properties dictionary — <paramref name="localProperties"/> unchanged when the cache
+        /// is disabled (<see cref="DatabricksParameters.FeatureFlagCacheEnabled"/> explicitly
+        /// <c>false</c>), when no host can be determined, or when the cache is cold.
+        /// </para>
+        /// </summary>
+        /// <param name="localProperties">The connection properties (already merged with environment config).</param>
+        /// <param name="assemblyVersion">Driver version, used when warming the cache.</param>
+        /// <returns>The properties with warm-cache flags merged in, or <paramref name="localProperties"/> unchanged.</returns>
+        public IReadOnlyDictionary<string, string> MergeWarmFeatureFlags(
+            IReadOnlyDictionary<string, string> localProperties,
+            string assemblyVersion)
+        {
+            if (!IsCacheEnabled(localProperties))
+            {
+                return localProperties;
+            }
+
+            var host = TryGetHost(localProperties);
+            if (string.IsNullOrEmpty(host))
+            {
+                return localProperties;
+            }
+
+            // Warm cache (or negatively-cached failure): apply whatever flags are cached, synchronously.
+            // A negative entry has no flags, so this is a no-op merge and — importantly — does NOT
+            // trigger another fetch, honoring the negative-cache backoff.
+            if (TryGetContext(host!, out var context) && context != null)
+            {
+                var flags = context.GetAllFlags();
+                return flags.Count > 0 ? MergeProperties(flags, localProperties) : localProperties;
+            }
+
+            // Cold cache: warm it in the background so the next connection to this host gets flags.
+            // This connection proceeds without them (never blocks).
+            _ = Task.Run(() => MergePropertiesWithFeatureFlagsAsync(localProperties, assemblyVersion));
+            return localProperties;
         }
 
 

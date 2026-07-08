@@ -18,6 +18,22 @@
 
 All notable changes to the C# Databricks ADBC driver are documented in this file.
 
+## [1.1.6] - 2026-07-02
+
+### Added
+
+- Add `enable_fast_metadata_query` flag for DESC TABLE EXTENDED (#456)
+
+### Fixed
+
+- Apply cached feature flags on connect (warm cache) (#563)
+- Correct getTables types filter for empty array `[]` and lowercase case-sensitivity differences between protocols (#546)
+- Emit `http.response.status_code` on DownloadFile (#496)
+
+### Changed
+
+- Bump hiveserver2 submodule for empty table-types GetTables fix (#559)
+
 ## [1.1.5] - 2026-06-11
 
 ### Added

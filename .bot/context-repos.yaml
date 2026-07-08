@@ -28,3 +28,16 @@ context_repos:
       issue names (e.g. MetadataResultSetBuilder) to see how JDBC does it, then
       mirror it in the C# driver.
     clone_url: https://github.com/databricks/databricks-jdbc.git
+  - name: hiveserver2
+    description: >
+      The HiveServer2/Thrift base that the C# drivers build on — the source for
+      the `csharp/hiveserver2` submodule, which is NOT checked out in this
+      workspace and can't be fetched otherwise. Consult it when a decision turns
+      on how the Thrift base actually behaves: metadata fan-out
+      (HiveServer2Connection.GetObjects and the GetCatalogs/GetSchemas/GetTables/
+      GetColumns RPCs it issues), cancellation/timeout bounding
+      (ApacheUtility.GetCancellationToken — whether a token is per-RPC or shared
+      across a call tree), type mapping, and error/status semantics. grep for the
+      class/method the issue names (e.g. HiveServer2Connection, ApacheUtility)
+      under csharp/src/AdbcDrivers.HiveServer2/ to see how the base does it.
+    clone_url: https://github.com/adbc-drivers/hiveserver2.git

@@ -384,6 +384,14 @@ namespace AdbcDrivers.Databricks.Tests
                     null // QueryTimeout = 300
                 };
 
+                // At QueryTimeout=1 the timeout can surface at different layers depending on the
+                // protocol: Thrift throws a transport-level TTransportException, whereas SEA (REST)
+                // translates the cancelled HTTP request into a TimeoutException (see
+                // StatementExecutionConnection.GetObjects, mirroring HiveServer2Connection.GetObjects).
+                // Accept TimeoutException as the alternate so the matrix is protocol-agnostic for the
+                // 1-second timeout instead of flaking whenever a metadata call happens to exceed it.
+                alternateExceptions ??= new List<Type?>() { null, typeof(TimeoutException), null, null, null };
+
                 AddAction(name, action, expectedExceptions, alternateExceptions);
             }
 

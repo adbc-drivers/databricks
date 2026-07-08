@@ -231,12 +231,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task MetadataExecution_ForcesNoneCompression_EvenWhenLz4IsDefault()
+        public async Task MetadataExecution_UsesLz4Compression_LikeRegularQueries()
         {
-            // Metadata executions send x-databricks-sea-can-run-fully-sync, which makes the server
-            // deliver large results inline across multiple chunks -- a path where LZ4 is broken
-            // server-side (ES-2034600: chunk 1 is advertised but unfetchable -> silent truncation).
-            // So the driver must request NONE for metadata even though LZ4 is the query default.
+            // Metadata executions no longer special-case compression. The ES-2034600 truncation
+            // (large inline multi-chunk metadata results dropping chunks under LZ4) was rooted in
+            // sending a non-zero wait_timeout, which routed the request to the broken SEA
+            // sync-hybrid results path. Since wait_timeout is now only ever unset (direct results)
+            // or "0s" (async) and never positive, multi-chunk results are delivered correctly, so
+            // metadata requests the same LZ4 default as regular queries.
             var (http, getBody) = HttpClientCapturingExecuteBody();
             using (http)
             {
@@ -250,7 +252,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var body = getBody();
             Assert.NotNull(body);
             using var doc = JsonDocument.Parse(body!);
-            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
+            Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
         }
 
         /// <summary>
