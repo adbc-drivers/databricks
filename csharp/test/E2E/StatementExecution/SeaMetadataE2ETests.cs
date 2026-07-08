@@ -363,6 +363,16 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             return db.Connect(new Dictionary<string, string>());
         }
 
+        // Connection pinned to the SEA (REST) protocol regardless of the configured default.
+        private AdbcConnection CreateSeaConnection()
+        {
+            var parameters = GetDriverParameters(TestConfiguration);
+            parameters[DatabricksParameters.Protocol] = "rest";
+            var driver = new DatabricksDriver();
+            var db = driver.Open(parameters);
+            return db.Connect(new Dictionary<string, string>());
+        }
+
         /// <summary>
         /// Executes a metadata command and returns the total row count. Must not throw.
         /// </summary>
@@ -536,6 +546,35 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         {
             SkipIfNotConfigured();
             using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: TestConfiguration.Metadata.Catalog,
+                schema: "",
+                table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        // SEA-path parity: the empty-catalog / empty-schema short-circuit lives in
+        // StatementExecutionStatement.GetColumnsExtendedAsync as well. Without it, the DESC
+        // path's BuildQualifiedTableName drops the empty part and returns real rows, diverging
+        // from Thrift. These SEA-pinned variants verify both protocols agree on empty results.
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptyCatalog_Sea_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateSeaConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: "",
+                schema: TestConfiguration.Metadata.Schema,
+                table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptySchema_Sea_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateSeaConnection();
             int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
                 catalog: TestConfiguration.Metadata.Catalog,
                 schema: "",

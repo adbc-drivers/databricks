@@ -1374,6 +1374,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("table", _metadataTableName ?? "(none)");
                 activity?.SetTag("use_desc_table_extended", _connection.UseDescTableExtended);
 
+                // Issue #524: empty-string identifier -> empty result (parity with the Thrift
+                // DatabricksStatement.GetColumnsExtendedAsync guard). Without this, an empty
+                // catalog/schema with a non-empty table would be dropped by BuildQualifiedTableName,
+                // producing a valid identifier and real rows on the DESC path -> Thrift<->SEA divergence.
+                if (MetadataUtilities.HasEmptyStringIdentifier(_metadataCatalogName, _metadataSchemaName, _metadataTableName))
+                {
+                    activity?.AddEvent("statement.get_columns_extended.returning_empty_result", [
+                        new("reason", "Empty-string identifier argument")
+                    ]);
+                    return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
+                }
+
                 if (string.IsNullOrEmpty(_metadataTableName))
                     throw new ArgumentException("Table name is required for GetColumnsExtended");
 
