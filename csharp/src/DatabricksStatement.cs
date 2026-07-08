@@ -1083,6 +1083,20 @@ namespace AdbcDrivers.Databricks
                 activity?.SetTag("statement.desc_table_extended.full_table_name", fullTableName ?? "(none)");
                 activity?.SetTag("statement.desc_table_extended.can_use", canUseDescTableExtended);
 
+                // Issue #524: empty-string identifier -> empty result (parity with SEA and GetColumnsAsync).
+                // On the primary DESC TABLE EXTENDED path, BuildTableName drops an empty catalog/schema, so
+                // an empty catalog or schema would otherwise produce a valid identifier and return real rows,
+                // diverging from GetColumnsAsync. Guard here so both column APIs behave identically.
+                if (MetadataUtilities.HasEmptyStringIdentifier(CatalogName, SchemaName, TableName))
+                {
+                    activity?.AddEvent("statement.get_columns_extended.returning_empty_result", [
+                        new("reason", "Empty-string identifier argument")
+                    ]);
+                    activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
+                    activity?.AddEvent("statement.get_columns_extended.complete");
+                    return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
+                }
+
                 if (!canUseDescTableExtended || string.IsNullOrEmpty(fullTableName))
                 {
                     activity?.AddEvent("statement.get_columns_extended.fallback_to_base", [

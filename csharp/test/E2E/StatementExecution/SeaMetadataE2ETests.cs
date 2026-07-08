@@ -513,5 +513,34 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 table: "");
             Assert.Equal(0, rows);
         }
+
+        // On the primary DESC TABLE EXTENDED path, BuildTableName drops an empty catalog/schema,
+        // so without the guard these would produce a valid identifier and return real rows,
+        // diverging from GetColumnsAsync. These cover the empty-catalog / empty-schema cases with
+        // a non-empty table (which do NOT force the empty-table fallback).
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptyCatalog_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: "",
+                schema: TestConfiguration.Metadata.Schema,
+                table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptySchema_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: TestConfiguration.Metadata.Catalog,
+                schema: "",
+                table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
     }
 }
