@@ -973,6 +973,65 @@ namespace AdbcDrivers.Databricks
             }
         }
 
+        /// <summary>
+        /// Overrides the base type-name handling so that SQL type names the
+        /// <see cref="SqlTypeNameParser{T}"/> registry has no entry for (e.g. Databricks
+        /// GEOMETRY/GEOGRAPHY geospatial types) do not throw
+        /// <see cref="NotSupportedException"/> during GetColumns/list_columns metadata
+        /// discovery (issue #568). Known types keep the base behavior; unknown types fall
+        /// back to using the raw type name so a metadata row is still produced.
+        /// </summary>
+        internal override void SetPrecisionScaleAndTypeName(
+            short colType,
+            string typeName,
+            TableInfo? tableInfo,
+            int columnSize,
+            int decimalDigits)
+        {
+            // For any type name that the parser registry can handle, defer to the base
+            // implementation (DECIMAL/NUMERIC, CHAR/VARCHAR family, and all registered
+            // simple/complex types).
+            if (SqlTypeNameParser<SqlTypeNameParserResult>.TryParse(typeName, out SqlTypeNameParserResult? _, colType))
+            {
+                base.SetPrecisionScaleAndTypeName(colType, typeName, tableInfo, columnSize, decimalDigits);
+                return;
+            }
+
+            // Graceful fallback for unsupported type names (e.g. GEOMETRY/GEOGRAPHY):
+            // keep the original type name and derive a reasonable base type name from it
+            // instead of throwing, so GetColumns returns a row for the column.
+            tableInfo?.TypeName.Add(typeName);
+            tableInfo?.Precision.Add(null);
+            tableInfo?.Scale.Add(null);
+            tableInfo?.BaseTypeName.Add(GetBaseTypeNameFallback(typeName));
+        }
+
+        /// <summary>
+        /// Derives a base type name from an unparsed SQL type name by stripping any
+        /// parameter/sub-clause decoration (e.g. "GEOMETRY(4326)" -> "GEOMETRY").
+        /// </summary>
+        private static string GetBaseTypeNameFallback(string typeName)
+        {
+            if (string.IsNullOrWhiteSpace(typeName))
+            {
+                return typeName;
+            }
+
+            string trimmed = typeName.Trim();
+            int cut = trimmed.Length;
+            for (int i = 0; i < trimmed.Length; i++)
+            {
+                char c = trimmed[i];
+                if (c == '(' || c == '<' || char.IsWhiteSpace(c))
+                {
+                    cut = i;
+                    break;
+                }
+            }
+
+            return trimmed.Substring(0, cut);
+        }
+
         protected override void ValidateOptions()
         {
             base.ValidateOptions();
