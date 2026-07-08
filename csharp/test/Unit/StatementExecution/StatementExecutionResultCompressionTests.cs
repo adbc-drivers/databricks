@@ -119,8 +119,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task ExecuteStatement_RespectsExplicitCompressionOverride()
+        public async Task ExecuteStatement_IgnoresDeprecatedResultCompressionProperty()
         {
+            // adbc.databricks.rest.result_compression is deprecated and inert: it is no longer
+            // read. Setting it to NONE must NOT override the LZ4 default derived from the
+            // (enabled-by-default) capability flag.
             var properties = BaseProperties();
             properties[DatabricksParameters.ResultCompression] = "NONE";
 
@@ -128,7 +131,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.NotNull(body);
             using var doc = JsonDocument.Parse(body!);
-            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
+            Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
         }
 
         [Fact]
@@ -146,10 +149,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task ExecuteStatement_ExplicitCompressionOverridesLz4DisabledFlag()
+        public async Task ExecuteStatement_DeprecatedCompressionDoesNotOverrideLz4DisabledFlag()
         {
+            // The deprecated rest.result_compression key is inert: it cannot re-enable LZ4 when
+            // the capability flag disables it. Compression is driven solely by the LZ4 flag.
             var properties = BaseProperties();
-            // Explicit rest.result_compression wins even when the capability flag is disabled.
             properties[DatabricksParameters.CanDecompressLz4] = "false";
             properties[DatabricksParameters.ResultCompression] = "LZ4_FRAME";
 
@@ -157,7 +161,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.NotNull(body);
             using var doc = JsonDocument.Parse(body!);
-            Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
+            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
         }
 
         [Theory]
@@ -178,10 +182,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task ExecuteStatement_ExplicitCompressionHonoredForNonArrowFormat()
+        public async Task ExecuteStatement_DeprecatedCompressionIgnoredForNonArrowFormat()
         {
+            // The deprecated rest.result_compression key is inert; a non-Arrow format still
+            // resolves to NONE regardless of what the deprecated key is set to.
             var properties = BaseProperties();
-            // An explicit override still takes precedence regardless of format.
             properties[DatabricksParameters.ResultFormat] = "JSON_ARRAY";
             properties[DatabricksParameters.ResultCompression] = "LZ4_FRAME";
 
@@ -189,7 +194,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.NotNull(body);
             using var doc = JsonDocument.Parse(body!);
-            Assert.Equal("LZ4_FRAME", doc.RootElement.GetProperty("result_compression").GetString());
+            Assert.Equal("NONE", doc.RootElement.GetProperty("result_compression").GetString());
         }
 
         [Fact]
