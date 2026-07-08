@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading.Tasks;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
@@ -482,6 +483,61 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 $"Expected polltime_ms={slowPollMs} to drive SEA polling cadence, but query " +
                 $"completed in {sw.ElapsedMilliseconds}ms (expected >= 1800ms). " +
                 $"This indicates polltime_ms is not wired into SEA's polling interval.");
+        }
+
+        // Issue #525: the `%` SQL-LIKE wildcard must mean "match all catalogs" on the SEA
+        // path, exactly as Thrift treats it. Previously the SEA metadata path passed the
+        // catalog argument through as a literal backtick-quoted identifier, so
+        // GetSchemas(catalog="%") generated `SHOW SCHEMAS IN `%`` which matches no catalog
+        // and returns an empty result, while Thrift enumerates every catalog. This asserts
+        // the SEA path now expands `%` to all catalogs and echoes the server's matched
+        // catalog name (e.g. "main"), not the literal "%" argument.
+        [SkippableFact]
+        public async Task GetSchemas_CatalogPercentWildcard_ExpandsToAllCatalogs()
+        {
+            SkipIfNotConfigured();
+
+            using var connection = CreateRestConnection();
+            using var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SetOption(ApacheParameters.CatalogName, "%");
+            statement.SqlQuery = "GetSchemas";
+
+            var result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            int catalogColIndex = -1;
+            for (int j = 0; j < reader!.Schema.FieldsList.Count; j++)
+            {
+                var name = reader.Schema.GetFieldByIndex(j).Name;
+                if (name.Equals("TABLE_CATALOG", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("TABLE_CAT", StringComparison.OrdinalIgnoreCase))
+                {
+                    catalogColIndex = j;
+                    break;
+                }
+            }
+            Assert.True(catalogColIndex >= 0, "GetSchemas result must contain a catalog column");
+
+            var catalogValues = new HashSet<string>(StringComparer.Ordinal);
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                var catalogArray = (Apache.Arrow.StringArray)batch.Column(catalogColIndex);
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (!catalogArray.IsNull(i))
+                        catalogValues.Add(catalogArray.GetString(i));
+                }
+            }
+
+            // `%` must expand to all catalogs, so we must get schemas from at least the
+            // "main" catalog, and the echoed catalog name must be the server's matched
+            // name ("main"), never the literal wildcard "%".
+            Assert.Contains("main", catalogValues);
+            Assert.DoesNotContain("%", catalogValues);
         }
     }
 }
