@@ -866,7 +866,7 @@ namespace AdbcDrivers.Databricks
 
                 // Issue #524: empty-string identifier -> empty result (parity with SEA);
                 // the Thrift RPC would otherwise raise HiveServer2Exception.
-                if (MetadataUtilities.HasEmptyStringIdentifier(CatalogName, SchemaName, TableName, ColumnName))
+                if (MetadataUtilities.HasEmptyStringIdentifier(CatalogName, SchemaName, TableName))
                 {
                     activity?.AddEvent("statement.get_columns.returning_empty_result", [
                         new("reason", "Empty-string identifier argument")
