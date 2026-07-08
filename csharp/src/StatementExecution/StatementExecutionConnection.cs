@@ -343,15 +343,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // adbc.databricks.rest.result_compression is deprecated and no longer read: it drove
             // no real client and only added confusion. The LZ4 capability flag is the single knob.
             //
-            // LZ4_FRAME is only requested for Arrow-based result formats. The SEA server's
-            // tolerance of LZ4_FRAME on non-Arrow formats (JSON_ARRAY, CSV) is not something we
-            // verify here, and this driver's reader is Arrow-only so non-Arrow results are not
-            // consumable regardless. Gating on format keeps the request conservative: non-Arrow
-            // formats send NONE (matching the prior behavior) rather than relying on the server
-            // to silently ignore a compression codec it may not accept for that format.
+            // LZ4_FRAME is requested whenever the client can decompress it, regardless of result
+            // format. The SEA server ignores the compression codec for non-Arrow formats
+            // (JSON_ARRAY, CSV), so there is no need to gate the request on the format.
             bool canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CanDecompressLz4, true);
-            bool isArrowFormat = _resultFormat.IndexOf("ARROW", StringComparison.OrdinalIgnoreCase) >= 0;
-            _resultCompression = (canDecompressLz4 && isArrowFormat) ? "LZ4_FRAME" : "NONE";
+            _resultCompression = canDecompressLz4 ? "LZ4_FRAME" : "NONE";
 
             // wait_timeout is NOT a customer-tunable knob; it is derived from the direct-results flag.
             //   Direct results ON (default): leave wait_timeout UNSET so the server returns the full
