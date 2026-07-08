@@ -245,12 +245,12 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 
 **CloudFetch Properties:**
 
-On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only, except `adbc.databricks.cloudfetch.lz4.enabled`, which also sets the default value of `adbc.databricks.rest.result_compression` on the SEA path (see *REST API Configuration*).
+On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only, except `adbc.databricks.cloudfetch.lz4.enabled`, which also controls SEA result compression (see *REST API Configuration*).
 
 | Property | Description | Thrift Default | SEA Default |
 |----------|-------------|----------------|-------------|
 | `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` | Not Supported |
-| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | `true` (sets the default for `adbc.databricks.rest.result_compression`) |
+| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | `true` (also drives SEA result compression: `LZ4_FRAME` when enabled, else `NONE`) |
 | `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` | Not Supported |
 | `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` | Not Supported |
 | `adbc.databricks.cloudfetch.prefetch_count` | Files to prefetch ahead | `2` | Not Supported |
@@ -292,7 +292,7 @@ These properties apply only when `adbc.databricks.protocol=rest`.
 |----------|-------------|-------------|
 | `adbc.databricks.rest.result_disposition` | Result mode: `inline`, `external_links`, or `inline_or_external_links` | `inline_or_external_links` |
 | `adbc.databricks.rest.result_format` | Format: `arrow_stream`, `json_array`, or `csv` | `arrow_stream` |
-| `adbc.databricks.rest.result_compression` | **Deprecated and ignored** — recognized but inert; setting it has no effect. Compression is derived solely from `adbc.databricks.cloudfetch.lz4.enabled` and the result format: `LZ4_FRAME` when the flag is enabled (default) and the format is `ARROW_STREAM`, otherwise `NONE` (non-Arrow formats such as `JSON_ARRAY`/`CSV` always resolve to `NONE`, and `NONE` when the flag is disabled). | (derived) |
+| `adbc.databricks.rest.result_compression` | **Deprecated and ignored** — recognized but inert; setting it has no effect. Compression is derived solely from `adbc.databricks.cloudfetch.lz4.enabled`: `LZ4_FRAME` when the flag is enabled (default), `NONE` when disabled. Sent to the backend regardless of result format. | (derived) |
 | `adbc.databricks.rest.wait_timeout` | Wait timeout in seconds (0=async, 5-50=sync) | `10` |
 | `adbc.databricks.rest.enable_session_management` | Enable session management | `true` |
 
