@@ -672,6 +672,35 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
+        /// Normalizes the catalog argument for the Thrift metadata path (GetSchemas/GetTables/GetColumns)
+        /// so that catalog behaves as an exact-name identifier rather than a SQL-LIKE pattern (issue #525),
+        /// matching the SEA path and PR #536.
+        ///
+        /// - A bare match-all wildcard ("%" or "*") — like a null argument — means "all catalogs", so it is
+        ///   mapped to null. On Thrift the server already expands "%"/"*", but mapping to null keeps the
+        ///   behavior identical to the SEA path (StatementExecutionStatement.EffectiveCatalog).
+        /// - Any other catalog name has its "_" and "%" wildcard characters escaped so the Thrift server
+        ///   matches it literally. The server honors the "\_"/"\%" escape (verified against a live warehouse);
+        ///   without escaping it treats "_" as a single-char wildcard, so e.g. catalog "comparator_tests"
+        ///   would also match "comparator-tests".
+        ///
+        /// When <paramref name="escapePatternWildcards"/> is true the base class (HiveServer2Statement) already
+        /// escapes the catalog argument, so the name is returned unescaped here (after the bare-wildcard
+        /// normalization) to avoid double-escaping.
+        /// </summary>
+        internal static string? NormalizeCatalogForThrift(string? catalog, bool escapePatternWildcards)
+        {
+            if (catalog == null || catalog == "%" || catalog == "*")
+            {
+                return null;
+            }
+
+            return escapePatternWildcards
+                ? catalog
+                : catalog.Replace("_", "\\_").Replace("%", "\\%");
+        }
+
+        /// <summary>
         /// Helper method that returns the fully qualified table name enclosed by backtick.
         /// The returned value can be used as table name in the SQL statement
         ///
@@ -764,6 +793,12 @@ namespace AdbcDrivers.Databricks
                 HandleSparkCatalog();
                 activity?.SetTag("statement.catalog_name_after_spark_handling", CatalogName ?? "(none)");
 
+                // Issue #525: on Thrift, catalog is an exact-name identifier, not a LIKE pattern.
+                // Map a bare match-all wildcard to null ("all catalogs") and escape any other catalog
+                // name so the server matches it literally (parity with the SEA path / PR #536).
+                CatalogName = NormalizeCatalogForThrift(CatalogName, EscapePatternWildcards);
+                activity?.SetTag("statement.catalog_name_after_pattern_normalization", CatalogName ?? "(none)");
+
                 // If EnableMultipleCatalogSupport is false and catalog is not null or SPARK, return empty result without RPC call
                 if (!enableMultipleCatalogSupport && CatalogName != null)
                 {
@@ -810,6 +845,12 @@ namespace AdbcDrivers.Databricks
                 HandleSparkCatalog();
                 activity?.SetTag("statement.catalog_name_after_spark_handling", CatalogName ?? "(none)");
 
+                // Issue #525: on Thrift, catalog is an exact-name identifier, not a LIKE pattern.
+                // Map a bare match-all wildcard to null ("all catalogs") and escape any other catalog
+                // name so the server matches it literally (parity with the SEA path / PR #536).
+                CatalogName = NormalizeCatalogForThrift(CatalogName, EscapePatternWildcards);
+                activity?.SetTag("statement.catalog_name_after_pattern_normalization", CatalogName ?? "(none)");
+
                 // If EnableMultipleCatalogSupport is false and catalog is not null or SPARK, return empty result without RPC call
                 if (!enableMultipleCatalogSupport && CatalogName != null)
                 {
@@ -855,6 +896,12 @@ namespace AdbcDrivers.Databricks
                 // Handle SPARK catalog case
                 HandleSparkCatalog();
                 activity?.SetTag("statement.catalog_name_after_spark_handling", CatalogName ?? "(none)");
+
+                // Issue #525: on Thrift, catalog is an exact-name identifier, not a LIKE pattern.
+                // Map a bare match-all wildcard to null ("all catalogs") and escape any other catalog
+                // name so the server matches it literally (parity with the SEA path / PR #536).
+                CatalogName = NormalizeCatalogForThrift(CatalogName, EscapePatternWildcards);
+                activity?.SetTag("statement.catalog_name_after_pattern_normalization", CatalogName ?? "(none)");
 
                 // If EnableMultipleCatalogSupport is false and catalog is not null, return empty result without RPC call
                 if (!enableMultipleCatalogSupport && CatalogName != null)

@@ -56,6 +56,37 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
+        /// Issue #525: on the Thrift metadata path the catalog argument must behave as an exact-name
+        /// identifier, not a SQL-LIKE pattern. NormalizeCatalogForThrift maps a bare match-all wildcard
+        /// ("%"/"*") — like null — to null ("all catalogs"), and escapes "_"/"%" in any other catalog
+        /// name so the server matches it literally. When EscapePatternWildcards is already enabled the
+        /// base class escapes catalog itself, so the literal name is returned unchanged to avoid
+        /// double-escaping.
+        /// </summary>
+        [Theory]
+        // bare match-all wildcards (and null) -> null ("all catalogs"), regardless of the escape flag
+        [InlineData(null, false, null)]
+        [InlineData("%", false, null)]
+        [InlineData("*", false, null)]
+        [InlineData("%", true, null)]
+        [InlineData("*", true, null)]
+        // plain name with no wildcard chars -> unchanged
+        [InlineData("main", false, "main")]
+        [InlineData("main", true, "main")]
+        // name containing "_" -> escaped so it matches literally (flag off)
+        [InlineData("comparator_tests", false, "comparator\\_tests")]
+        [InlineData("hive_metastore", false, "hive\\_metastore")]
+        // "%" inside a name -> escaped too (flag off)
+        [InlineData("a%b_c", false, "a\\%b\\_c")]
+        // flag on: base class escapes, so leave the literal name unchanged here (no double-escape)
+        [InlineData("comparator_tests", true, "comparator_tests")]
+        public void NormalizeCatalogForThrift_NormalizesAndEscapesCatalog(string? input, bool escapePatternWildcards, string? expected)
+        {
+            string? actual = DatabricksStatement.NormalizeCatalogForThrift(input, escapePatternWildcards);
+            Assert.Equal(expected, actual);
+        }
+
+        /// <summary>
         /// Tests that query_tags parameter is captured and added to confOverlay.
         /// </summary>
         [Fact]
