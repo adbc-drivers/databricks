@@ -34,7 +34,6 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch.StragglerDownload;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
-using Microsoft.IO;
 
 namespace AdbcDrivers.Databricks.Reader.CloudFetch
 {
@@ -59,7 +58,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly int _urlExpirationBufferSeconds;
         private readonly int _timeoutMinutes;
         private readonly SemaphoreSlim _downloadSemaphore;
-        private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
         private readonly ArrayPool<byte>? _lz4BufferPool;
         private Task? _downloadTask;
         private CancellationTokenSource? _cancellationTokenSource;
@@ -112,7 +110,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _maxUrlRefreshAttempts = config.MaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = config.UrlExpirationBufferSeconds;
             _timeoutMinutes = config.TimeoutMinutes;
-            _memoryStreamManager = config.MemoryStreamManager;
             _lz4BufferPool = config.Lz4BufferPool;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
             _isCompleted = false;
@@ -169,7 +166,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _maxUrlRefreshAttempts = CloudFetchConfiguration.DefaultMaxUrlRefreshAttempts;
             _urlExpirationBufferSeconds = CloudFetchConfiguration.DefaultUrlExpirationBufferSeconds;
             _timeoutMinutes = CloudFetchConfiguration.DefaultTimeoutMinutes;
-            _memoryStreamManager = null;
             _lz4BufferPool = null;
             _downloadSemaphore = new SemaphoreSlim(_maxParallelDownloads, _maxParallelDownloads);
             _isCompleted = false;
@@ -830,57 +826,25 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 Stream dataStream;
                 long actualSize = fileData.Length;
 
-                // If the data is LZ4 compressed, decompress it
+                // If the data is LZ4 compressed, wrap it in a streaming decoder rather than
+                // decompressing the whole file up front. The reader (ArrowStreamReader) then
+                // decompresses incrementally as it consumes batches, so a partially-consumed result
+                // never materializes its full decompressed size — peak/allocation is bounded to what
+                // is read plus the (smaller) compressed buffer. Decompression errors now surface
+                // during read, not here. Tracked as #573.
                 if (_isLz4Compressed)
                 {
-                    try
-                    {
-                        var decompressStopwatch = Stopwatch.StartNew();
+                    // Protocol-agnostic: use the ArrayPool from config (populated by the caller from
+                    // the connection); fall back to the shared pool if not provided.
+                    var lz4BufferPool = _lz4BufferPool ?? ArrayPool<byte>.Shared;
+                    dataStream = Lz4Utilities.CreateDecompressingStream(fileData, lz4BufferPool);
 
-                        // Use shared Lz4Utilities for decompression with both RecyclableMemoryStream and ArrayPool
-                        // The returned stream must be disposed by Arrow after reading
-                        // Protocol-agnostic: use resources from config (populated by caller from connection)
-                        // Falls back to creating new instances if not provided (less efficient but works)
-                        var memoryStreamManager = _memoryStreamManager ?? new RecyclableMemoryStreamManager();
-                        var lz4BufferPool = _lz4BufferPool ?? ArrayPool<byte>.Shared;
-                        dataStream = await Lz4Utilities.DecompressLz4Async(
-                            fileData,
-                            memoryStreamManager,
-                            lz4BufferPool,
-                            cancellationToken).ConfigureAwait(false);
-
-                        decompressStopwatch.Stop();
-
-                        // Calculate throughput metrics
-                        double compressionRatio = (double)dataStream.Length / actualSize;
-
-                        activity?.AddEvent("cloudfetch.decompression_complete", [
-                            new("offset", downloadResult.StartRowOffset),
-                            new("sanitized_url", sanitizedUrl),
-                            new("decompression_time_ms", decompressStopwatch.ElapsedMilliseconds),
-                            new("compressed_size_bytes", actualSize),
-                            new("compressed_size_kb", actualSize / 1024.0),
-                            new("decompressed_size_bytes", dataStream.Length),
-                            new("decompressed_size_kb", dataStream.Length / 1024.0),
-                            new("compression_ratio", compressionRatio)
-                        ]);
-
-                        actualSize = dataStream.Length;
-                    }
-                    catch (Exception ex)
-                    {
-                        stopwatch.Stop();
-                        activity?.AddException(ex, [
-                            new("error.context", "cloudfetch.decompression"),
-                            new("offset", downloadResult.StartRowOffset),
-                            new("sanitized_url", sanitizedUrl),
-                            new("elapsed_time_ms", stopwatch.ElapsedMilliseconds)
-                        ]);
-
-                        // Release the memory we acquired
-                        _memoryManager.ReleaseMemory(size);
-                        throw new InvalidOperationException($"Error decompressing data: {ex.Message}", ex);
-                    }
+                    activity?.AddEvent("cloudfetch.decompression_streaming", [
+                        new("offset", downloadResult.StartRowOffset),
+                        new("sanitized_url", sanitizedUrl),
+                        new("compressed_size_bytes", actualSize),
+                        new("compressed_size_kb", actualSize / 1024.0)
+                    ]);
                 }
                 else
                 {

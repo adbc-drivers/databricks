@@ -102,6 +102,32 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
+        /// Wraps LZ4-framed compressed bytes in a forward-only stream that decompresses
+        /// <b>incrementally as it is read</b>, rather than decompressing the whole payload up front.
+        /// </summary>
+        /// <remarks>
+        /// Unlike <see cref="DecompressLz4(byte[], RecyclableMemoryStreamManager, ArrayPool{byte})"/>,
+        /// which fully materializes the decompressed result before returning, this hands back a lazy
+        /// decoder over the compressed bytes. When the consumer (e.g. <c>ArrowStreamReader</c>) reads
+        /// only part of the result and disposes, only the batches actually read are decompressed —
+        /// the whole result is never materialized. Peak/allocation is bounded to what is consumed
+        /// plus the (smaller) compressed buffer. The caller MUST dispose the returned stream; disposal
+        /// closes the inner compressed-bytes stream. See #573.
+        /// </remarks>
+        /// <param name="compressedData">The LZ4-framed compressed bytes.</param>
+        /// <param name="bufferPool">The ArrayPool for the decoder's work buffers (from DatabricksDatabase).</param>
+        /// <returns>A forward-only, self-decompressing <see cref="Stream"/>. Caller must dispose.</returns>
+        public static Stream CreateDecompressingStream(byte[] compressedData, ArrayPool<byte> bufferPool)
+        {
+            return new CustomLZ4DecoderStream(
+                new MemoryStream(compressedData),
+                descriptor => descriptor.CreateDecoder(),
+                bufferPool,
+                leaveOpen: false,
+                interactive: false);
+        }
+
+        /// <summary>
         /// Asynchronously decompresses LZ4 compressed data into memory.
         /// Returns a RecyclableMemoryStream that must be disposed by the caller.
         /// </summary>
