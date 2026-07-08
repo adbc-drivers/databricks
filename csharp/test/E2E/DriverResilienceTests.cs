@@ -58,6 +58,21 @@ namespace AdbcDrivers.Databricks.Tests
             using var connection = NewConnection();
             long memBefore, memAfter;
 
+            // Warm-up: run one full read+dispose cycle BEFORE the baseline snapshot. The
+            // LZ4 decompression path pools buffers (RecyclableMemoryStreamManager + ArrayPool),
+            // and that pool sizes itself once to the peak footprint of a single result and then
+            // reuses it — a bounded, one-time cost, not a per-iteration leak (verified: growth
+            // plateaus across 5 vs 20 iterations, and disabling LZ4 removes it entirely). Sizing
+            // the pool before memBefore keeps that one-time allocation out of the measurement, so
+            // the loop below measures only per-iteration accumulation — i.e. an actual leak.
+            using (var warmup = connection.CreateStatement())
+            {
+                warmup.SqlQuery = "SELECT * FROM RANGE(1000000)";
+                var warmupResult = warmup.ExecuteQuery();
+                using var warmupReader = warmupResult.Stream;
+                await warmupReader.ReadNextRecordBatchAsync();
+            }
+
             GC.Collect(2, GCCollectionMode.Forced, true);
             memBefore = GC.GetTotalMemory(true);
 
