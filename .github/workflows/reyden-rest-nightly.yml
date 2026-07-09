@@ -30,7 +30,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
+      # Reyden warehouse (Lakehouse//RT): used for the actual E2E test connection over REST/SEA.
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_REYDEN_HTTP_PATH }}
+      # Regular serverless DBSQL warehouse: used for schema provisioning/seeding/teardown,
+      # since Reyden (Lakehouse//RT) does not support DDL (CREATE/DROP SCHEMA) yet. Both
+      # warehouses share the same metastore/`main` catalog, so the seeded schema is visible
+      # to the Reyden connection.
+      DATABRICKS_DDL_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
       DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
       DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
     steps:
@@ -68,9 +74,11 @@ jobs:
           PER_RUN_SCHEMA="adbc_testing_run_${{ github.run_id }}_${{ github.run_attempt }}_rest"
           echo "PER_RUN_SCHEMA=$PER_RUN_SCHEMA" >> $GITHUB_OUTPUT
           echo "Per-run schema: main.$PER_RUN_SCHEMA"
-          WAREHOUSE_ID=$(echo "${{ env.DATABRICKS_HTTP_PATH }}" | awk -F/ '{print $NF}')
+          # DDL (CREATE/DROP SCHEMA, seeding) runs on the regular serverless DBSQL warehouse,
+          # not the Reyden warehouse, which does not support DDL yet.
+          WAREHOUSE_ID=$(echo "${{ env.DATABRICKS_DDL_HTTP_PATH }}" | awk -F/ '{print $NF}')
           if [ -z "$WAREHOUSE_ID" ]; then
-            echo "ERROR: Could not extract warehouse id from DATABRICKS_HTTP_PATH"
+            echo "ERROR: Could not extract warehouse id from DATABRICKS_DDL_HTTP_PATH"
             exit 1
           fi
           echo "WAREHOUSE_ID=$WAREHOUSE_ID" >> $GITHUB_OUTPUT
