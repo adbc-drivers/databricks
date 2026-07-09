@@ -1,4 +1,4 @@
-# Copyright (c) 2025-2026 ADBC Drivers Contributors
+# Copyright (c) 2025 ADBC Drivers Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,11 +18,10 @@
 name: Dev PR
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - edited
-      - reopened
       - synchronize
       - ready_for_review
       - review_requested
@@ -44,16 +43,18 @@ jobs:
     runs-on: ubuntu-slim
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 1
           persist-credentials: false
 
       - name: Check PR title format
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          git clone --depth 1 https://github.com/adbc-drivers/dev
+          git clone --depth 1 https://github.com/adbc-drivers/dev && git -C dev fetch --depth 1 origin "$DEV_REPO_SHA" && git -C dev checkout "$DEV_REPO_SHA"
           python dev/adbc_drivers_dev/title_check.py $(pwd) "$PR_TITLE"
+        env:
+          DEV_REPO_SHA: 9d4550a2a9fb2133a86cf16e9f7bfbc32ffb8c48
+          # Set as env var to avoid direct shell interpolation of untrusted input
+          PR_TITLE: ${{ github.event.pull_request.title }}
 
       # TODO: assign milestone

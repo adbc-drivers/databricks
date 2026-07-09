@@ -32,15 +32,13 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  # Must share concurrency group with rust_test workflow since it also builds/tests
+  group: ${{ github.repository }}-${{ github.ref }}-rust-azure-prod
   cancel-in-progress: true
 
 defaults:
   run:
     shell: bash
-
-permissions:
-  contents: read
 
 jobs:
   test:
@@ -64,20 +62,19 @@ jobs:
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # v1.17.0
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
         with:
-          cache: false
           components: "clippy"
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.63.2
           run-install: false
 
 
@@ -115,10 +112,10 @@ jobs:
 
       - name: Test
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }} # zizmor: ignore[secrets-outside-env]
-          DATABRICKS_HTTPPATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }} # zizmor: ignore[secrets-outside-env]
-          DATABRICKS_OAUTH_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }} # zizmor: ignore[secrets-outside-env]
-          DATABRICKS_OAUTH_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }} # zizmor: ignore[secrets-outside-env]
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HTTPPATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
+          DATABRICKS_OAUTH_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+          DATABRICKS_OAUTH_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
         working-directory: rust
         run: |
           set -a
@@ -135,7 +132,7 @@ jobs:
 
           if [[ -f ci/scripts/pre-test.sh ]]; then
             echo "Loading pre-test"
-            ./ci/scripts/pre-test.sh ${{ matrix.platform }} ${{ matrix.arch }} "test-service"
+            ./ci/scripts/pre-test.sh ${{ matrix.platform }} ${{ matrix.arch }}
           fi
 
           cargo test
@@ -144,10 +141,6 @@ jobs:
             ./ci/scripts/post-test.sh
           fi
 
-      - name: clippy
-        working-directory: rust
-        run: |
-          cargo clippy --locked --no-deps -- -A unused_variables -D warnings
 
 
   build:
@@ -162,25 +155,25 @@ jobs:
           - { platform: linux, arch: arm64, runner: ubuntu-24.04-arm }
           - { platform: macos, arch: arm64, runner: macos-latest }
           - { platform: windows, arch: amd64, runner: windows-latest }
+    environment: azure-prod
     permissions:
       contents: read
       packages: read
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # v1.17.0
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
         with:
-          cache: false
           components: "clippy"
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.63.2
           run-install: false
 
       - name: Install dev tools
@@ -190,10 +183,8 @@ jobs:
 
       - name: Log in to ghcr.io
         if: runner.os == 'Linux'
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build Library
         working-directory: rust
@@ -210,8 +201,9 @@ jobs:
             source .env.release
           fi
           set +a
-          pixi run adbc-make check CI=true VERBOSE=true DRIVER=databricks IMPL_LANG=rust TARGET_NAME=databricks_adbc RELEASE=true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+          pixi run adbc-make check CI=true VERBOSE=true DRIVER=databricks IMPL_LANG=rust TARGET_NAME=databricks_adbc
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: drivers-${{ matrix.platform }}-${{ matrix.arch }}
           path: "rust/build/libadbc_driver_databricks.*"
@@ -220,29 +212,27 @@ jobs:
   package:
     name: "Generate Packages"
     runs-on: ubuntu-latest
-    needs:
-      - build
+    needs: build
     permissions:
       contents: read
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # v1.17.0
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
         with:
-          cache: false
           components: "clippy"
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.63.2
           run-install: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
         with:
           pattern: "drivers-*"
           path: "~/drivers"
@@ -250,7 +240,7 @@ jobs:
       - name: Install tools
         working-directory: rust
         run: |
-          cargo install cargo-about@0.9.1 --locked -F cli
+          cargo install cargo-about --version 0.8.4 --locked
 
       - name: Generate packages
         working-directory: rust
@@ -261,18 +251,17 @@ jobs:
             --name databricks \
             --root $(pwd) \
             --manifest-template $(pwd)/manifest.toml \
-            --release \
+            ${{ (inputs.release && '--release') || '' }}\
             -o ~/packages \
             ~/drivers/drivers-*-*/
 
           ls ~/packages
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: all-packages
           path: ~/packages
           retention-days: 7
-
 
   test-packages:
     name: "Test Packages/${{ matrix.platform }}_${{ matrix.arch }}"
@@ -286,17 +275,17 @@ jobs:
           - { platform: linux, arch: amd64, runner: ubuntu-latest }
           - { platform: macos, arch: arm64, runner: macos-latest }
           - { platform: windows, arch: amd64, runner: windows-latest }
+    environment: azure-prod
     steps:
       # for now, install dbc from main
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
         with:
-          cache: false
           go-version: 'stable'
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.63.2
           run-install: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
         with:
           name: "all-packages"
           path: "~/packages"
@@ -304,7 +293,7 @@ jobs:
         # dbc uses the filename as the driver name
         run: |
           echo "Installing dbc"
-          git clone --depth 1 https://github.com/columnar-tech/dbc
+          git clone https://github.com/columnar-tech/dbc && git -C dbc checkout 96a28b1718e25bf258fff5b7ebcf936cc05a3bdf
           cd dbc
           go build ./cmd/dbc
           echo "Installed dbc"
@@ -313,7 +302,7 @@ jobs:
           echo "Installing ${driver_pkg}"
           ./dbc install --no-verify "${driver_pkg}"
           echo "Installed ${driver_pkg}"
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -346,18 +335,18 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.63.2
           run-install: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
         with:
           name: "all-packages"
           path: "~/packages"
@@ -369,9 +358,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: rust
         run: |
-          tag="${GITHUB_REF_NAME}"
+          ref=${{ github.ref }}
+          tag=${ref#"refs/tags/"}
           declared_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          if [[ "${declared_version}" != "${tag#*v}" ]]; then
+          if [[ "${declared_version}" != "${tag#*v}" ]];
              echo "Declared driver version in Cargo.toml ${declared_version}"
              echo "does not match tag ${tag#*v}"
              echo "Please update the version before release."
@@ -386,8 +376,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: rust
         run: |
-          git tag rust/v1000.0.0
-          tag=rust/v1000.0.0
+          git tag go/v1000.0.0
+          tag=go/v1000.0.0
 
           pixi run release --dry-run $(pwd) $tag
           echo gh release upload $tag $(find ~/packages -name '*.tar.gz') $(find ~/packages -name 'manifest.yaml') $(find ~/packages -name '*.md')
