@@ -144,7 +144,7 @@ func (d *DatabricksQuirks) CreateSampleTable(tableName string, r arrow.RecordBat
 	b.WriteString(quoteTblName(tableName))
 	b.WriteString(" (")
 
-	for i := 0; i < int(r.NumCols()); i++ {
+	for i := range int(r.NumCols()) {
 		if i != 0 {
 			b.WriteString(", ")
 		}
@@ -175,9 +175,9 @@ func (d *DatabricksQuirks) insertDataRows(stmt adbc.Statement, tableName string,
 		return nil
 	}
 
-	for row := 0; row < int(r.NumRows()); row++ {
+	for row := range int(r.NumRows()) {
 		var values []string
-		for col := 0; col < int(r.NumCols()); col++ {
+		for col := range int(r.NumCols()) {
 			column := r.Column(col)
 			if column.IsNull(row) {
 				values = append(values, "NULL")

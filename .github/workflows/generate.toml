@@ -13,13 +13,18 @@
 # limitations under the License.
 
 driver = "databricks"
+
+[lang.go.test]
 environment = "azure-prod"
 
-[lang]
-go = true
+[[lang.go.validation.configs]]
+environment = "azure-prod"
 
-[lang.rust]
-skip_validate = true
+[lang.rust.test]
+environment = "azure-prod"
+
+[lang.rust.validation]
+skip = true
 
 [lang.rust.build]
 additional-make-args = ["TARGET_NAME=databricks_adbc"]
