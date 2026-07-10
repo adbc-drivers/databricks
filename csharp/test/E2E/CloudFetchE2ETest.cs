@@ -159,16 +159,6 @@ namespace AdbcDrivers.Databricks.Tests
         [MemberData(nameof(TestCases))]
         public async Task TestCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults)
         {
-            // This test forces the presigned-URL refresh path (CloudFetchUrlExpirationBufferSeconds
-            // is set to ~the URL lifetime below), which renews links via the SEA GetResultChunk
-            // endpoint. Reyden (Lakehouse//RT) does not serve that endpoint (returns 404), so the
-            // refresh cannot succeed there — a server-side gap tracked in ES-2049942. Skip on Reyden;
-            // the regular multi-chunk CloudFetch download path is still covered on RT by
-            // CloudFetchStressTests (which uses the default expiration buffer, no forced refresh).
-            Skip.If(
-                TestConfiguration.WarehouseType.Equals("reyden", StringComparison.OrdinalIgnoreCase),
-                "Reyden does not support presigned-URL refresh (SEA GetResultChunk 404s) — ES-2049942");
-
             // Effective protocol comes from config (mirrors DatabricksDatabase's default),
             // not from the test — so the rest-only setup below tracks the configured protocol.
             string protocol = string.IsNullOrEmpty(TestConfiguration.Protocol)

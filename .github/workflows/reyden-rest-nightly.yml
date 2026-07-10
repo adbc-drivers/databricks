@@ -165,7 +165,6 @@ jobs:
             "access_token": "${{ steps.oauth.outputs.OAUTH_TOKEN }}",
             "type": "databricks",
             "protocol": "rest",
-            "warehouseType": "reyden",
             "catalog": "main",
             "db_schema": "${PER_RUN_SCHEMA}",
             "query": "SELECT * FROM main.${PER_RUN_SCHEMA}.adbc_testing_table",
@@ -193,6 +192,27 @@ jobs:
         shell: bash
         run: |
           export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
+          # Reyden is a Lakehouse//RT warehouse: no DDL/DML (CREATE/DROP/UPDATE), no
+          # EXTERNAL_LINKS, and no presigned-URL refresh (SEA GetResultChunk 404s, ES-2049942).
+          # Curate the suite to the read/query subset by excluding tests that need those
+          # capabilities (value/write fixtures, ExecuteUpdate, metadata tests that create
+          # tables, CloudFetch refresh). The read path (incl. CloudFetchStressTests) still runs.
+          F="FullyQualifiedName!~ValueTests"
+          F="$F&FullyQualifiedName!~ExecuteUpdate"
+          F="$F&FullyQualifiedName!~ExecuteQuery_AfterInsert"
+          F="$F&FullyQualifiedName!~StatementExecutionDriverE2ETests"
+          F="$F&FullyQualifiedName!~ServerSidePropertyE2ETest"
+          F="$F&FullyQualifiedName!~NoColumnTable"
+          F="$F&FullyQualifiedName!~CanGetCrossReference"
+          F="$F&FullyQualifiedName!~CanGetPrimaryKeys"
+          F="$F&FullyQualifiedName!~CanGetObjectsTablesWithSpecialCharacter"
+          F="$F&FullyQualifiedName!~CanInteractUsingSetOptions"
+          F="$F&FullyQualifiedName!~VerifyTypesAndValues"
+          F="$F&FullyQualifiedName!~SetDefaultCatalogAndSchemaOptionsTest"
+          F="$F&FullyQualifiedName!~TestCloudFetch"
+          F="$F&FullyQualifiedName!~DownloadSlotAcquired"
+          F="$F&FullyQualifiedName!~DisposeCloseOperation_EmitsStartedAndCompletedWithDistinctTimestamps"
+          export TEST_FILTER="$F"
           ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
 
       - name: Drop per-run schema

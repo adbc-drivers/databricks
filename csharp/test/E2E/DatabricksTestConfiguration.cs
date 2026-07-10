@@ -75,13 +75,5 @@ namespace AdbcDrivers.Databricks.Tests
 
         [JsonPropertyName("protocol"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public string Protocol { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Warehouse type the test connection targets (e.g. "reyden" for a Lakehouse//RT warehouse).
-        /// Empty for a regular DBSQL warehouse. Used to skip tests exercising capabilities a given
-        /// warehouse type does not yet support (see ES-2049942).
-        /// </summary>
-        [JsonPropertyName("warehouseType"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-        public string WarehouseType { get; set; } = string.Empty;
     }
 }
