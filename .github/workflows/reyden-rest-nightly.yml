@@ -165,6 +165,7 @@ jobs:
             "access_token": "${{ steps.oauth.outputs.OAUTH_TOKEN }}",
             "type": "databricks",
             "protocol": "rest",
+            "warehouseType": "reyden",
             "catalog": "main",
             "db_schema": "${PER_RUN_SCHEMA}",
             "query": "SELECT * FROM main.${PER_RUN_SCHEMA}.adbc_testing_table",
