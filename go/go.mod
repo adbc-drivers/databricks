@@ -21,7 +21,7 @@ require (
 	github.com/adbc-drivers/driverbase-go/validation v0.0.0-20251215145213-df04bfe8de4f
 	github.com/apache/arrow-adbc/go/adbc v1.9.0
 	github.com/apache/arrow-go/v18 v18.5.0
-	github.com/databricks/databricks-sql-go v1.9.0
+	github.com/databricks/databricks-sql-go v1.13.1
 	github.com/rs/zerolog v1.28.0
 	github.com/stretchr/testify v1.11.1
 )
@@ -38,10 +38,11 @@ require (
 	github.com/dnephin/pflag v1.0.7 // indirect
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/fsnotify/fsnotify v1.5.4 // indirect
-	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
+	github.com/go-jose/go-jose/v3 v3.0.5 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.9.23+incompatible // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
