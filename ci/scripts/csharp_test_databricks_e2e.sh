@@ -20,6 +20,13 @@ set -ex
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-# Run all tests in the Databricks test project
-dotnet test --verbosity normal
+# Run all tests in the Databricks test project.
+# TEST_FILTER (optional) is a VSTest --filter expression; when set, only matching
+# tests run. Used by the Reyden nightly to exclude tests that require warehouse
+# capabilities Lakehouse//RT does not support (DDL/DML, presigned-URL refresh).
+if [ -n "${TEST_FILTER:-}" ]; then
+  dotnet test --verbosity normal --filter "${TEST_FILTER}"
+else
+  dotnet test --verbosity normal
+fi
 popd
