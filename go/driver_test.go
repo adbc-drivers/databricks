@@ -29,7 +29,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adbc-drivers/databricks/go"
+	databricks "github.com/adbc-drivers/databricks/go"
 	"github.com/adbc-drivers/driverbase-go/validation"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -269,7 +269,7 @@ func (d *DatabricksQuirks) GetMetadata(code adbc.InfoCode) any {
 	case adbc.InfoDriverArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoVendorVersion:
-		return "2025.40"
+		return "2026.15"
 	case adbc.InfoVendorArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoDriverADBCVersion:
