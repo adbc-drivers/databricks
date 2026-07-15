@@ -58,8 +58,8 @@ fn main() {
         std::env::var("DATABRICKS_TOKEN").expect("DATABRICKS_TOKEN environment variable required");
 
     println!("=== Inline Arrow Results Test ===\n");
-    println!("Host: {}", &host);
-    println!("HTTP Path: {}", &http_path);
+    println!("Host: {}", host);
+    println!("HTTP Path: {}", http_path);
     println!();
     println!("This test executes small queries that should return inline Arrow results");
     println!("rather than using CloudFetch. Watch the debug logs for:");
