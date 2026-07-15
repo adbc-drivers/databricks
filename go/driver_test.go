@@ -29,7 +29,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adbc-drivers/databricks/go"
+	databricks "github.com/adbc-drivers/databricks/go"
 	"github.com/adbc-drivers/driverbase-go/validation"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -144,7 +144,7 @@ func (d *DatabricksQuirks) CreateSampleTable(tableName string, r arrow.RecordBat
 	b.WriteString(quoteTblName(tableName))
 	b.WriteString(" (")
 
-	for i := 0; i < int(r.NumCols()); i++ {
+	for i := range int(r.NumCols()) {
 		if i != 0 {
 			b.WriteString(", ")
 		}
@@ -175,9 +175,9 @@ func (d *DatabricksQuirks) insertDataRows(stmt adbc.Statement, tableName string,
 		return nil
 	}
 
-	for row := 0; row < int(r.NumRows()); row++ {
+	for row := range int(r.NumRows()) {
 		var values []string
-		for col := 0; col < int(r.NumCols()); col++ {
+		for col := range int(r.NumCols()) {
 			column := r.Column(col)
 			if column.IsNull(row) {
 				values = append(values, "NULL")
@@ -269,7 +269,7 @@ func (d *DatabricksQuirks) GetMetadata(code adbc.InfoCode) any {
 	case adbc.InfoDriverArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoVendorVersion:
-		return "2025.40"
+		return "2026.20"
 	case adbc.InfoVendorArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoDriverADBCVersion:

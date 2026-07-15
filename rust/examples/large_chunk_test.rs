@@ -39,8 +39,8 @@ fn main() {
         std::env::var("DATABRICKS_TOKEN").expect("DATABRICKS_TOKEN environment variable required");
 
     println!("=== Large Chunk CloudFetch Test (>10 chunks) ===\n");
-    println!("Host: {}", &host);
-    println!("HTTP Path: {}", &http_path);
+    println!("Host: {}", host);
+    println!("HTTP Path: {}", http_path);
     println!();
 
     // Create driver and database
