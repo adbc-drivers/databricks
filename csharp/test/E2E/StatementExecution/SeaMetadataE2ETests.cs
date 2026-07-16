@@ -330,4 +330,256 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.True(batch!.Length >= 5, "GetInfo should return at least 5 info codes");
         }
     }
+
+    /// <summary>
+    /// Issue #524: an empty-string identifier argument (catalog="", schema="",
+    /// table="", foreign_schema="", foreign_table="") passed to a metadata op must
+    /// NOT throw HiveServer2Exception on the Thrift path. It must return an empty
+    /// result set, matching the SEA/REST path (Thrift vs SEA outcome parity).
+    ///
+    /// These tests force the Thrift protocol (adbc.databricks.protocol=thrift) so the
+    /// regression reproduces regardless of the CI run's default protocol; the Thrift
+    /// path is where the divergence lives.
+    /// </summary>
+    public class EmptyStringMetadataArgE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
+    {
+        public EmptyStringMetadataArgE2ETest(ITestOutputHelper? outputHelper)
+            : base(outputHelper, new DatabricksTestEnvironment.Factory())
+        {
+        }
+
+        private void SkipIfNotConfigured()
+        {
+            Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
+        }
+
+        // Connection pinned to the Thrift protocol regardless of the configured default.
+        private AdbcConnection CreateThriftConnection()
+        {
+            var parameters = GetDriverParameters(TestConfiguration);
+            parameters[DatabricksParameters.Protocol] = "thrift";
+            var driver = new DatabricksDriver();
+            var db = driver.Open(parameters);
+            return db.Connect(new Dictionary<string, string>());
+        }
+
+        // Connection pinned to the SEA (REST) protocol regardless of the configured default.
+        private AdbcConnection CreateSeaConnection()
+        {
+            var parameters = GetDriverParameters(TestConfiguration);
+            parameters[DatabricksParameters.Protocol] = "rest";
+            var driver = new DatabricksDriver();
+            var db = driver.Open(parameters);
+            return db.Connect(new Dictionary<string, string>());
+        }
+
+        /// <summary>
+        /// Executes a metadata command and returns the total row count. Must not throw.
+        /// </summary>
+        private static async Task<int> ExecuteMetadataRowCount(AdbcConnection connection, string command,
+            string? catalog = null, string? schema = null, string? table = null,
+            string? foreignCatalog = null, string? foreignSchema = null, string? foreignTable = null)
+        {
+            using var stmt = connection.CreateStatement();
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            if (catalog != null) stmt.SetOption(ApacheParameters.CatalogName, catalog);
+            if (schema != null) stmt.SetOption(ApacheParameters.SchemaName, schema);
+            if (table != null) stmt.SetOption(ApacheParameters.TableName, table);
+            if (foreignCatalog != null) stmt.SetOption(ApacheParameters.ForeignCatalogName, foreignCatalog);
+            if (foreignSchema != null) stmt.SetOption(ApacheParameters.ForeignSchemaName, foreignSchema);
+            if (foreignTable != null) stmt.SetOption(ApacheParameters.ForeignTableName, foreignTable);
+
+            stmt.SqlQuery = command;
+            QueryResult result = await stmt.ExecuteQueryAsync();
+
+            int rows = 0;
+            using var reader = result.Stream!;
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                rows += batch.Length;
+            }
+            return rows;
+        }
+
+        // GetColumns
+
+        [SkippableFact]
+        public async Task GetColumns_EmptyCatalog_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumns",
+                catalog: "", schema: TestConfiguration.Metadata.Schema, table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        [SkippableFact]
+        public async Task GetColumns_EmptySchema_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumns",
+                catalog: TestConfiguration.Metadata.Catalog, schema: "", table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        // GetTables
+
+        [SkippableFact]
+        public async Task GetTables_EmptyCatalog_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetTables",
+                catalog: "", schema: TestConfiguration.Metadata.Schema);
+            Assert.Equal(0, rows);
+        }
+
+        [SkippableFact]
+        public async Task GetTables_EmptySchema_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetTables",
+                catalog: TestConfiguration.Metadata.Catalog, schema: "");
+            Assert.Equal(0, rows);
+        }
+
+        // GetPrimaryKeys
+
+        [SkippableFact]
+        public async Task GetPrimaryKeys_EmptySchema_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetPrimaryKeys",
+                catalog: TestConfiguration.Metadata.Catalog, schema: "", table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        [SkippableFact]
+        public async Task GetPrimaryKeys_EmptyTable_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetPrimaryKeys",
+                catalog: TestConfiguration.Metadata.Catalog, schema: TestConfiguration.Metadata.Schema, table: "");
+            Assert.Equal(0, rows);
+        }
+
+        // GetCrossReference
+
+        [SkippableFact]
+        public async Task GetCrossReference_EmptyForeignSchema_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetCrossReference",
+                catalog: TestConfiguration.Metadata.Catalog,
+                schema: TestConfiguration.Metadata.Schema,
+                table: TestConfiguration.Metadata.Table,
+                foreignCatalog: TestConfiguration.Metadata.Catalog,
+                foreignSchema: "",
+                foreignTable: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        [SkippableFact]
+        public async Task GetCrossReference_EmptyForeignTable_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetCrossReference",
+                catalog: TestConfiguration.Metadata.Catalog,
+                schema: TestConfiguration.Metadata.Schema,
+                table: TestConfiguration.Metadata.Table,
+                foreignCatalog: TestConfiguration.Metadata.Catalog,
+                foreignSchema: TestConfiguration.Metadata.Schema,
+                foreignTable: "");
+            Assert.Equal(0, rows);
+        }
+
+        // GetColumnsExtended
+        //
+        // GetCrossReferenceAsForeignTableAsync has no metadata command name of its own;
+        // it is reached only through the base GetColumnsExtendedAsync, which the Databricks
+        // override delegates to on its fallback path (BuildTableName empty => empty TableName).
+        // On that path the base helper invokes GetCrossReferenceAsForeignTableAsync with the
+        // statement's own catalog/schema/table bound to the FOREIGN slot, so an empty-string
+        // identifier there is what the new guard (DatabricksStatement.cs ~L1031) must absorb.
+        // Without the guard the foreign-table cross-reference RPC would raise
+        // HiveServer2Exception. Empty table forces the fallback, exercising that guard.
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptyTable_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: TestConfiguration.Metadata.Catalog,
+                schema: TestConfiguration.Metadata.Schema,
+                table: "");
+            Assert.Equal(0, rows);
+        }
+
+        // On the primary DESC TABLE EXTENDED path, BuildTableName drops an empty catalog/schema,
+        // so without the guard these would produce a valid identifier and return real rows,
+        // diverging from GetColumnsAsync. These cover the empty-catalog / empty-schema cases with
+        // a non-empty table (which do NOT force the empty-table fallback).
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptyCatalog_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: "",
+                schema: TestConfiguration.Metadata.Schema,
+                table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptySchema_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateThriftConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: TestConfiguration.Metadata.Catalog,
+                schema: "",
+                table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        // SEA-path parity: the empty-catalog / empty-schema short-circuit lives in
+        // StatementExecutionStatement.GetColumnsExtendedAsync as well. Without it, the DESC
+        // path's BuildQualifiedTableName drops the empty part and returns real rows, diverging
+        // from Thrift. These SEA-pinned variants verify both protocols agree on empty results.
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptyCatalog_Sea_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateSeaConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: "",
+                schema: TestConfiguration.Metadata.Schema,
+                table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+
+        [SkippableFact]
+        public async Task GetColumnsExtended_EmptySchema_Sea_ReturnsEmptyWithoutThrowing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateSeaConnection();
+            int rows = await ExecuteMetadataRowCount(conn, "GetColumnsExtended",
+                catalog: TestConfiguration.Metadata.Catalog,
+                schema: "",
+                table: TestConfiguration.Metadata.Table);
+            Assert.Equal(0, rows);
+        }
+    }
 }

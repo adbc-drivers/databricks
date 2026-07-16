@@ -38,4 +38,9 @@ reader can grep for it.
 
 ## Entries
 
-(no entries yet)
+### 2026-07-08: metadata (Thrift vs SEA) — empty-string identifier arg must map to empty result, not an exception
+
+**Issue:** #524 — passing an empty-string identifier (catalog="", schema="", table="", foreign_schema="", foreign_table="") to a metadata op threw `HiveServer2Exception` on the Thrift path but returned an empty `QueryResult` on SEA (1,763 outcome diffs across list_columns/list_tables/get_primary_keys/get_cross_reference).
+**Root Cause:** `HiveServer2Statement.SetOption` stores the empty string verbatim into `CatalogName`/`SchemaName`/`TableName`/`Foreign*` and the Thrift metadata RPCs pass it straight through; the server rejects `""` (e.g. `ListTableSummaries` "name \"\" is not a valid name", GetPrimaryKeys "Can not create a Path from an empty string"). SEA already short-circuited via its `string.IsNullOrEmpty(...)` checks. The existing Thrift guards only covered `catalog != null` (multi-catalog) and PK/FK invalid-catalog — none caught a non-null empty string on schema/table/foreign args. `HandleSparkCatalog("")` returns `""` (only "SPARK"→null), so empty catalog also slipped through.
+**Fix:** Added `MetadataUtilities.HasEmptyStringIdentifier(params string?[])` (true only for a non-null zero-length string; null = "no filter" untouched) and guarded the Databricks Thrift overrides in `DatabricksStatement.cs` (GetTables/GetColumns/GetPrimaryKeys/GetCrossReference/GetCrossReferenceAsForeignTable) to return the empty result *before* calling `base.*`, mirroring SEA. Note: on Thrift, GetColumns with catalog=""/schema="" already returned empty for some param combos (SHOW COLUMNS tolerates it) — only GetTables/PK/FK actually threw — but guarding all ops uniformly is the parity-correct behavior.
+**Rule:** Normalize empty-string metadata identifier args to an empty result set up front in the editable Databricks overrides — never let `""` reach a base HiveServer2 RPC (it throws); null means "no filter" and must pass through.

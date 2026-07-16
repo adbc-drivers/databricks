@@ -31,6 +31,27 @@ namespace AdbcDrivers.Databricks
             return catalogName;
         }
 
+        /// <summary>
+        /// Issue #524: an empty-string identifier argument (catalog="", schema="",
+        /// table="", foreign_*="") is a degenerate filter that can never match a real
+        /// object. The Thrift metadata RPCs reject it with a HiveServer2Exception,
+        /// while the SEA path returns an empty result set. To keep the two protocols
+        /// consistent (empty-string → empty result set, never an exception), callers
+        /// short-circuit to an empty result when any relevant identifier is empty.
+        ///
+        /// Only a non-null, zero-length string counts; null means "no filter"
+        /// (e.g. "all catalogs") and is left untouched.
+        /// </summary>
+        internal static bool HasEmptyStringIdentifier(params string?[] identifiers)
+        {
+            foreach (string? identifier in identifiers)
+            {
+                if (identifier != null && identifier.Length == 0)
+                    return true;
+            }
+            return false;
+        }
+
         internal static bool IsInvalidPKFKCatalog(string? catalogName)
         {
             return string.IsNullOrEmpty(catalogName) ||
