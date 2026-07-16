@@ -673,6 +673,75 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(0, actualBatchLength);
         }
 
+        // Issue #568: Thrift GetColumns must not throw NotSupportedException on
+        // GEOMETRY/GEOGRAPHY columns; it should return a row for the column.
+        [SkippableTheory]
+        [InlineData("GEOMETRY", "geom_col")]
+        [InlineData("GEOGRAPHY", "geog_col")]
+        public async Task CanGetColumnsOnGeospatialColumn(string geoType, string columnName)
+        {
+            // Use main.default per workspace isolation guidance (never write to pqtest).
+            string catalogName = "main";
+            string schemaName = "default";
+            string tableName = Guid.NewGuid().ToString("N");
+            string fullTableName = string.Format(
+                "{0}.{1}.{2}",
+                DelimitIdentifier(catalogName),
+                DelimitIdentifier(schemaName),
+                DelimitIdentifier(tableName));
+            using TemporaryTable temporaryTable = await TemporaryTable.NewTemporaryTableAsync(
+                Statement,
+                fullTableName,
+                $"CREATE TABLE IF NOT EXISTS {fullTableName} (id INT, {columnName} {geoType}(4326));",
+                OutputHelper);
+
+            var statement = Connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SetOption(ApacheParameters.CatalogName, catalogName);
+            statement.SetOption(ApacheParameters.SchemaName, schemaName);
+            statement.SetOption(ApacheParameters.TableName, tableName);
+            statement.SqlQuery = "GetColumns";
+
+            // Prior to the fix this throws NotSupportedException while parsing the
+            // GEOMETRY/GEOGRAPHY type name during GetColumns.
+            QueryResult queryResult = await statement.ExecuteQueryAsync();
+            Assert.NotNull(queryResult.Stream);
+
+            int columnNameIndex = -1;
+            for (int i = 0; i < queryResult.Stream.Schema.FieldsList.Count; i++)
+            {
+                if (queryResult.Stream.Schema.FieldsList[i].Name.Equals("COLUMN_NAME", StringComparison.OrdinalIgnoreCase))
+                {
+                    columnNameIndex = i;
+                    break;
+                }
+            }
+            Assert.True(columnNameIndex >= 0, "COLUMN_NAME column not found in GetColumns result");
+
+            bool foundGeoColumn = false;
+            int actualRowCount = 0;
+            while (queryResult.Stream != null)
+            {
+                RecordBatch? batch = await queryResult.Stream.ReadNextRecordBatchAsync();
+                if (batch == null)
+                {
+                    break;
+                }
+                actualRowCount += batch.Length;
+                var columnNames = (StringArray)batch.Column(columnNameIndex);
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (string.Equals(columnNames.GetString(i), columnName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foundGeoColumn = true;
+                    }
+                }
+            }
+
+            Assert.True(actualRowCount >= 2, $"Expected at least 2 columns for {geoType} table, got {actualRowCount}");
+            Assert.True(foundGeoColumn, $"GetColumns should return a row for the {geoType} column '{columnName}'");
+        }
+
         [SkippableFact]
         public async Task CanGetColumnsExtendedOnNoColumnTable()
         {

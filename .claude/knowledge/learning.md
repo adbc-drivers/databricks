@@ -38,4 +38,9 @@ reader can grep for it.
 
 ## Entries
 
-(no entries yet)
+### 2026-07-08: metadata (Thrift GetColumns) — SqlTypeNameParser throws on unregistered SQL types (GEOMETRY/GEOGRAPHY)
+
+**Issue:** GetColumns/list_columns on the Thrift path threw `NotSupportedException` for any table with a GEOMETRY or GEOGRAPHY column (issue #568). The whole metadata call crashed, not just the one column.
+**Root Cause:** `SparkConnection.SetPrecisionScaleAndTypeName`'s `default` arm calls `SqlTypeNameParser<SqlTypeNameParserResult>.Parse(typeName, colType)`, which throws when no registered parser matches. The registry (in the read-only `hiveserver2` submodule) has no GEOMETRY/GEOGRAPHY entry and no catch-all.
+**Fix:** Override `SetPrecisionScaleAndTypeName` in the editable `DatabricksConnection : SparkHttpConnection` (`csharp/src/DatabricksConnection.cs`). It's `internal abstract`/`internal override` (not sealed) and HiveServer2 grants InternalsVisibleTo to AdbcDrivers.Databricks, so the override is legal from this repo. Use `SqlTypeNameParser<...>.TryParse` first — if it succeeds, defer to `base` (keeps existing behavior); otherwise add the raw type name + a derived base type name (strip `(`/`<`/whitespace) instead of throwing.
+**Rule:** When base HiveServer2/Spark metadata code throws on an unhandled SQL type, don't edit the submodule parser — override the `internal` (non-sealed) hook in `DatabricksConnection` and use `TryParse` + graceful fallback so GetColumns returns a row.
