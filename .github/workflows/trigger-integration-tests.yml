@@ -525,8 +525,9 @@ jobs:
   # =============================================================================
   # After merge: trigger AI test-coverage generation for C# changes
   # Fires when a PR lands on main (via merge queue or direct merge) and touches
-  # csharp/ files. Dispatches csharp-coverage to databricks-driver-test, which
-  # creates a tracking issue and runs the coverage agent as peco-engineer-bot.
+  # csharp/ files. Dispatches `coverage-fanout` to databricks-driver-test, whose
+  # coverage-fanout-tracker.yml creates a tracking issue and kicks off the
+  # multi-language fan-out (reference: csharp) as peco-engineer-bot.
   # =============================================================================
   trigger-csharp-coverage:
     if: |
@@ -566,5 +567,5 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
-          event-type: csharp-coverage
-          client-payload: '{"pr_number": "${{ github.event.pull_request.number }}"}'
+          event-type: coverage-fanout
+          client-payload: '{"reference_language": "csharp", "pr_number": "${{ github.event.pull_request.number }}", "pr_url": "${{ github.event.pull_request.html_url }}"}'
