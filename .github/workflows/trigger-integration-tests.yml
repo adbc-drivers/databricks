@@ -568,4 +568,4 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
           event-type: coverage-fanout
-          client-payload: '{"reference_language": "csharp", "pr_number": "${{ github.event.pull_request.number }}", "pr_url": "${{ github.event.pull_request.html_url }}"}'
+          client-payload: '{"reference_repo": "${{ github.repository }}", "pr_number": "${{ github.event.pull_request.number }}", "pr_url": "${{ github.event.pull_request.html_url }}"}'
