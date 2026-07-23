@@ -1026,7 +1026,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // enumerates every catalog for catalog="%". Otherwise SEA would emit
                 // SHOW SCHEMAS IN `%`, match no catalog, and return an empty result that
                 // diverges from Thrift.
-                if (IsMatchAllCatalogPattern(catalog))
+                //
+                // Issue #593: only treat a bare "%"/"*" catalog as match-all when the caller
+                // has NOT asked for wildcards to be escaped. With escape_pattern_wildcards=true
+                // the caller wants "%" treated LITERALLY, matching the Thrift path (which
+                // escapes "%" -> "\%", a literal catalog that matches nothing -> 0 rows).
+                // In that case we leave "%" as a literal identifier; SHOW ... IN `%` yields
+                // SCHEMA_NOT_FOUND, already caught by the IsObjectNotFoundException handlers
+                // and mapped to an empty result.
+                if (IsMatchAllCatalogPattern(catalog) && !_escapePatternWildcards)
                     catalog = null;
 
                 if (_connection.EnableMultipleCatalogSupport)
