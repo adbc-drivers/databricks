@@ -207,6 +207,9 @@ jobs:
             // Remove characters that could break JSON or enable injection
             return title.replace(/[\\"\n\r\t]/g, ' ').substring(0, 200);
 
+      # ONE dispatch — driver-test's receiver runs the full backend matrix (thrift
+      # + sea). No separate REST dispatch / extra_parameters: the receiver owns
+      # backend selection now (design: unified replay PR gate).
       - name: Dispatch C# tests to internal repo
         if: steps.changed.outputs.csharp == 'true'
         uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
@@ -222,24 +225,6 @@ jobs:
               "pr_url": "${{ github.event.pull_request.html_url }}",
               "pr_title": "${{ steps.sanitize.outputs.result }}",
               "pr_author": "${{ github.event.pull_request.user.login }}"
-            }
-
-      - name: Dispatch C# REST tests to internal repo
-        if: steps.changed.outputs.sea == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          repository: databricks/databricks-driver-test
-          event-type: adbc-csharp-pr-test
-          client-payload: |
-            {
-              "pr_number": "${{ github.event.pull_request.number }}",
-              "commit_sha": "${{ github.event.pull_request.head.sha }}",
-              "pr_repo": "${{ github.repository }}",
-              "pr_url": "${{ github.event.pull_request.html_url }}",
-              "pr_title": "${{ steps.sanitize.outputs.result }}",
-              "pr_author": "${{ github.event.pull_request.user.login }}",
-              "extra_parameters": "{\"adbc.databricks.protocol\": \"rest\"}"
             }
 
       - name: Dispatch Rust tests to internal repo
@@ -396,24 +381,6 @@ jobs:
               "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
               "pr_title": "Merge queue validation",
               "pr_author": "merge-queue"
-            }
-
-      - name: Dispatch C# REST tests
-        if: steps.changed.outputs.sea == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          repository: databricks/databricks-driver-test
-          event-type: adbc-csharp-pr-test
-          client-payload: |
-            {
-              "pr_number": "${{ steps.extract-pr.outputs.pr_number }}",
-              "commit_sha": "${{ github.event.merge_group.head_sha }}",
-              "pr_repo": "${{ github.repository }}",
-              "pr_url": "https://github.com/${{ github.repository }}/pull/${{ steps.extract-pr.outputs.pr_number }}",
-              "pr_title": "Merge queue validation",
-              "pr_author": "merge-queue",
-              "extra_parameters": "{\"adbc.databricks.protocol\": \"rest\"}"
             }
 
       - name: Fail check on dispatch error
