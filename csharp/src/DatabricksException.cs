@@ -74,27 +74,6 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Returns true if this exception indicates a catalog, schema, or table was not found.
-        /// Per JDBC spec, metadata methods should return empty result sets for non-existent objects
-        /// rather than throwing. Checks both SQL state (42704) and error message content for
-        /// not-found indicators, matching JDBC's isObjectNotFoundException.
-        /// </summary>
-        internal bool IsObjectNotFoundException()
-        {
-            const string ObjectNotFoundSqlState = "42704";
-
-            if (SqlState == ObjectNotFoundSqlState)
-                return true;
-
-            var message = Message;
-            if (string.IsNullOrEmpty(message)) return false;
-            return message.IndexOf("NO_SUCH_CATALOG_EXCEPTION", StringComparison.OrdinalIgnoreCase) >= 0
-                || message.IndexOf("TABLE_OR_VIEW_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
-                || message.IndexOf("SCHEMA_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
-                || message.IndexOf("INVALID_PARAMETER_VALUE", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        /// <summary>
         /// Returns true if this exception indicates the server rejected
         /// <c>DESC TABLE EXTENDED ... AS JSON [STATIC ONLY]</c>: SQL state 42601 (parse/syntax
         /// error — e.g. STATIC ONLY on a runtime without PR #198486) or 20000 (internal error
