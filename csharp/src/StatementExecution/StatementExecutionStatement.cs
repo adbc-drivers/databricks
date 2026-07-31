@@ -1031,8 +1031,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // has NOT asked for wildcards to be escaped. With escape_pattern_wildcards=true
                 // the caller wants "%" treated LITERALLY, matching the Thrift path (which
                 // escapes "%" -> "\%", a literal catalog that matches nothing -> 0 rows).
-                // In that case we leave "%" as a literal identifier; SHOW ... IN `%` yields
-                // SCHEMA_NOT_FOUND, which propagates to the caller as an exception.
+                // In that case we leave "%" as a literal identifier here. Thrift parity
+                // (0 rows, no throw) is preserved by the metadata methods themselves:
+                // GetSchemasAsync/GetTablesAsync/GetColumnsAsync short-circuit to an empty
+                // result for the "%"/"*"-catalog + escape case before ever calling
+                // EffectiveCatalog, so they never issue SHOW ... IN `%`. Any other path that
+                // does reach this branch with a literal "%" would surface SCHEMA_NOT_FOUND.
                 if (IsMatchAllCatalogPattern(catalog) && !_escapePatternWildcards)
                     catalog = null;
 
@@ -1078,19 +1082,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (!_escapePatternWildcards || name == null)
                 return name;
 
-            // escape_pattern_wildcards=true means the input is a LITERAL object name,
-            // not a pattern: every character is literal content, including backslash.
-            // Escape all three pattern metacharacters so the name matches literally.
-            // Backslash MUST be escaped first, or the backslashes we introduce for _/%
-            // would themselves be doubled. No idempotency / "already-escaped" detection:
-            // under escape=true there are no escape sequences in the input to preserve.
+            // Escape bare wildcard metacharacters (_ and %) so the name matches
+            // literally once ConvertPattern turns the LIKE pattern into a Hive glob.
+            // This escape is IDEMPOTENT: an already-escaped sequence (\_, \%, \\) is
+            // passed through unchanged, so callers who pre-escape their patterns are
+            // not double-escaped into "\\_..." — which ConvertPattern would turn into
+            // an invalid glob ("\\.") that the server rejects. Re-running the escaper
+            // on its own output is therefore a no-op.
             var sb = new System.Text.StringBuilder(name.Length + 8);
             for (int i = 0; i < name.Length; i++)
             {
                 char c = name[i];
-                if (c == '\\')
+                if (c == '\\' && i + 1 < name.Length &&
+                    (name[i + 1] == '_' || name[i + 1] == '%' || name[i + 1] == '\\'))
                 {
-                    sb.Append("\\\\");
+                    // Already-escaped sequence — copy both chars verbatim.
+                    sb.Append(c);
+                    sb.Append(name[i + 1]);
+                    i++;
                 }
                 else if (c == '_')
                 {

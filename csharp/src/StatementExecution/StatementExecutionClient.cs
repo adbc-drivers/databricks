@@ -244,10 +244,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Throw HiveServer2Exception (not DatabricksException) so metadata callers
             // receive the same exception type as the Thrift path (HiveServer2Connection
             // .ThrowErrorResponse), enabling protocol-agnostic error handling.
-            // IsMetadata guards this path: non-metadata executions use the FAILED check
-            // in ExecuteQueryInternalAsync (throws AdbcException) and never reach here
-            // for FAILED — ExecuteStatementAsync is only called for immediate FAILED
-            // (sync metadata execution) while async polling uses GetStatementAsync.
+            // This fires for ANY execution (metadata or not) whose initial response is
+            // immediately FAILED — it is not gated on request.IsMetadata. A regular
+            // query that fails synchronously (e.g. a VARCHAR-limit violation) surfaces
+            // HiveServer2Exception here; the FAILED check in StatementExecutionStatement
+            // (which throws AdbcException) only applies on the async polling path via
+            // GetStatementAsync, when the initial response was PENDING/RUNNING.
             if (executeResponse.Status?.State == "FAILED")
             {
                 var error = executeResponse.Status.Error;
