@@ -371,8 +371,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Check for terminal error states
             if (state == "FAILED")
             {
-                var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                throw NewFailedStateException(response.Status?.Error);
             }
             if (state == "CANCELED")
             {
@@ -721,8 +720,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Check for terminal error states
             if (state == "FAILED")
             {
-                var error = response.Status?.Error;
-                throw new AdbcException($"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})");
+                throw NewFailedStateException(response.Status?.Error);
             }
             if (state == "CANCELED")
             {
@@ -1134,6 +1132,29 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             var ex = new HiveServer2Exception($"Invalid argument: {detail}", AdbcStatusCode.InternalError);
             ex.SetSqlState("42000");
+            return ex;
+        }
+
+        /// <summary>
+        /// Builds the exception thrown when a statement resolves to FAILED on the async
+        /// polling path. Throws HiveServer2Exception (not a bare AdbcException) with
+        /// SqlState/NativeError populated from the server error, so the exception identity
+        /// (type + Status + SqlState) matches both the synchronous FAILED path in
+        /// StatementExecutionClient and the Thrift path (HiveServer2Connection
+        /// .ThrowErrorResponse). Metadata queries usually resolve synchronously via the
+        /// can-run-fully-sync header, but a slow warehouse can push them onto this polling
+        /// path — this keeps object-not-found and other failures protocol-agnostic
+        /// regardless of timing.
+        /// </summary>
+        private static HiveServer2Exception NewFailedStateException(StatementError? error)
+        {
+            var ex = new HiveServer2Exception(
+                $"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})",
+                AdbcStatusCode.InternalError);
+            if (error?.SqlState != null)
+                ex.SetSqlState(error.SqlState);
+            if (error?.ErrorCode != null && int.TryParse(error.ErrorCode, out int nativeError))
+                ex.SetNativeError(nativeError);
             return ex;
         }
 
