@@ -36,9 +36,9 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
             var sql = new StringBuilder("SHOW TABLES");
             AppendCatalogScope(sql, _catalog);
             if (_schemaPattern != null)
-                sql.Append(string.Format(SchemaLikeFormat, ConvertPattern(_schemaPattern)));
+                sql.Append(string.Format(SchemaLikeFormat, LikePattern(_schemaPattern)));
             if (_tablePattern != null)
-                sql.Append(string.Format(LikeFormat, ConvertPattern(_tablePattern)));
+                sql.Append(string.Format(LikeFormat, LikePattern(_tablePattern)));
             return sql.ToString();
         }
     }

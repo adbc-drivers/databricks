@@ -1078,16 +1078,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (!_escapePatternWildcards || name == null)
                 return name;
 
+            // escape_pattern_wildcards=true means the input is a LITERAL object name,
+            // not a pattern: every character is literal content, including backslash.
+            // Escape all three pattern metacharacters so the name matches literally.
+            // Backslash MUST be escaped first, or the backslashes we introduce for _/%
+            // would themselves be doubled. No idempotency / "already-escaped" detection:
+            // under escape=true there are no escape sequences in the input to preserve.
             var sb = new System.Text.StringBuilder(name.Length + 8);
             for (int i = 0; i < name.Length; i++)
             {
                 char c = name[i];
-                if (c == '\\' && i + 1 < name.Length && (name[i + 1] == '_' || name[i + 1] == '%' || name[i + 1] == '\\'))
+                if (c == '\\')
                 {
-                    // Already-escaped sequence — pass through as-is and skip the next char.
-                    sb.Append(c);
-                    sb.Append(name[i + 1]);
-                    i++;
+                    sb.Append("\\\\");
                 }
                 else if (c == '_')
                 {
