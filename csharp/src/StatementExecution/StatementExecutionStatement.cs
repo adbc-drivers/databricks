@@ -1061,10 +1061,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// percent signs in identifiers from being treated as pattern wildcards.
         ///
         /// Already-escaped sequences (\_, \%, \\) are passed through unchanged so
-        /// that callers who pre-escape their patterns (e.g. the comparator passes
-        /// "test\_result\_set\_types" verbatim) are not double-escaped into
+        /// that callers who pre-escape their patterns are not double-escaped into
         /// "\\_..." which ConvertPattern then converts to invalid SHOW-command glob
         /// syntax and the server rejects with a DatabricksException.
+        ///
+        /// This idempotency mirrors the JDBC reference driver
+        /// (WildcardUtil.escapeCatalogName): "Already-escaped sequences (\_) are
+        /// left unchanged." Note ConvertPattern itself is byte-identical to JDBC's
+        /// jdbcPatternToHive; the divergence this fixes was solely the double-escape
+        /// introduced by running this escape step before ConvertPattern (JDBC has
+        /// no separate escape step — it feeds the client pattern straight to
+        /// jdbcPatternToHive), so the fix belongs here, not in ConvertPattern.
         /// </summary>
         private string? EscapePatternWildcardsInName(string? name)
         {
