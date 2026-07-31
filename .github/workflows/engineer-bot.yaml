@@ -246,20 +246,10 @@ jobs:
           OUT_OF_SCOPE:    ${{ steps.author.outputs.out_of_scope }}
         run: python -m databricks_bot_engine.engineer_bot.publish
 
-      - name: Label the fix PR for review
-        # publish applies `engineer-bot` (engineer opt-in) but the reviewer gates
-        # strictly on `review-bot`, so add that label here too — otherwise the fix
-        # PR would never be reviewed and the loop wouldn't close. Keeps the labels
-        # single-purpose (engineer-bot ⇒ engineer, review-bot ⇒ reviewer); the fix
-        # PR simply opts into both. The `labeled` event fires reviewer-bot.yml.
-        if: steps.author.outputs.outcome == 'success' && steps.publish.outputs.coverage_pr_url != ''
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          # Bind the engine-produced URL to an env var rather than interpolating
-          # ${{ }} into the run-script, mirroring the "Comment outcome" step — the
-          # runner shell never parses it as command syntax (defense-in-depth).
-          COVERAGE_PR_URL: ${{ steps.publish.outputs.coverage_pr_url }}
-        run: gh pr edit "$COVERAGE_PR_URL" --add-label review-bot
+      # (Removed "Label the fix PR for review": the reviewer now auto-runs on every
+      # non-draft, non-fork PR — no `review-bot` label needed — so the fix PR is
+      # reviewed without an explicit label-add. publish still applies `engineer-bot`
+      # for the engineer follow-up opt-in.)
 
       - name: Comment outcome on the issue
         if: always()

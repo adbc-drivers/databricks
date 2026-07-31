@@ -23,16 +23,14 @@ bot_login_prefix: peco-engineer-bot       # <-- your engineer-bot App's login pr
 
 # safe_path denylist (relative to repo root). .git + the secret-scanner allowlist
 # at minimum. NOTE (security): csharp/src is NOT denied — the agent must edit the
-# code it fixes. But .github + .bot ARE denied as defense-in-depth: a bug fix
-# never needs to write the bot's own CI/workflows or config/prompts, and both the
-# author and follow-up system prompts already forbid it. Enforcing it in-sandbox
-# means a prompt-injected issue/review body cannot induce such edits at all,
-# rather than relying solely on a reviewer spotting them. The human PR-review gate
-# remains the backstop — reviewers should still scrutinize any .bot/.github diffs.
+# code it fixes. `.bot` stays denied as defense-in-depth (the agent should never
+# rewrite its own config/prompts). `.github` is INTENTIONALLY allowed (maintainer
+# decision): the engineer-bot may need to fix its own CI/workflow wiring (e.g. a
+# missing engine flag), and the human PR-review gate is the backstop — reviewers
+# must scrutinize any `.github` diffs, since workflows carry secrets/tokens.
 denied_subpaths:
   - .git
   - .gitleaksignore
-  - .github
   - .bot
   # csharp/hiveserver2 is a SEPARATE repo (git submodule -> adbc-drivers/hiveserver2).
   # Edits there cannot be committed to a parent-repo PR, so deny them. The author
