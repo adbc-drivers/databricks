@@ -1064,18 +1064,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// EscapePatternWildcards is enabled. This prevents literal underscores or
         /// percent signs in identifiers from being treated as pattern wildcards.
         ///
-        /// Already-escaped sequences (\_, \%, \\) are passed through unchanged so
-        /// that callers who pre-escape their patterns are not double-escaped into
-        /// "\\_..." which ConvertPattern then converts to invalid SHOW-command glob
-        /// syntax and the server rejects with a DatabricksException.
+        /// When escape_pattern_wildcards=true the input is a LITERAL object name, not
+        /// a pattern: every character is literal content, INCLUDING backslash. All
+        /// three pattern metacharacters are therefore escaped unconditionally — \ → \\,
+        /// _ → \_, % → \% — with backslash escaped first so the backslashes we introduce
+        /// for _/% are not themselves doubled. There is no "already-escaped" pass-through:
+        /// under escape=true a leading '\' is a literal backslash in the object name, so
+        /// it must be escaped too. An idempotency heuristic ("if I see \_, assume the
+        /// caller pre-escaped and pass it through") cannot distinguish a caller-intended
+        /// literal backslash from a pre-escape, and so silently drops literal backslashes
+        /// and matches the wrong object — verified live thrift-vs-rest against schemas
+        /// named a\b / a\_b / a\\b.
         ///
-        /// This idempotency mirrors the JDBC reference driver
-        /// (WildcardUtil.escapeCatalogName): "Already-escaped sequences (\_) are
-        /// left unchanged." Note ConvertPattern itself is byte-identical to JDBC's
-        /// jdbcPatternToHive; the divergence this fixes was solely the double-escape
-        /// introduced by running this escape step before ConvertPattern (JDBC has
-        /// no separate escape step — it feeds the client pattern straight to
-        /// jdbcPatternToHive), so the fix belongs here, not in ConvertPattern.
+        /// This is Layer 1 of two complementary escaping layers: it maps a literal name
+        /// to a LIKE pattern. Layer 2 (LikePattern) then maps the LIKE glob to a SQL
+        /// string literal by doubling backslashes, because the glob is embedded in '...'
+        /// and the server's string-literal parser consumes one backslash layer before the
+        /// LIKE regex. The same under-escaping exists in the JDBC reference driver
+        /// (databricks-jdbc#1598).
         /// </summary>
         private string? EscapePatternWildcardsInName(string? name)
         {
