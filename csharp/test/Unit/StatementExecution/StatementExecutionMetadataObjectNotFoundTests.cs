@@ -286,5 +286,105 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // The pre-fix double-escape would produce test\\.result\\.set\\.types — a wildcard
             Assert.DoesNotContain(captured, sql => sql.Contains("test\\\\.") || sql.Contains("test\\."));
         }
+
+        // ─── Issue #593: catalog="%" + escape_pattern_wildcards=true → empty result ────
+        //
+        // Thrift escapes "%" → "\%" (a literal catalog matching nothing → 0 rows, no throw).
+        // SEA's EffectiveCatalog leaves "%" as a literal backtick-quoted identifier, which
+        // causes the server to return SCHEMA_NOT_FOUND. The fix short-circuits to an empty
+        // result before issuing the doomed SHOW command, so NO statement is executed.
+        // These tests verify that no SHOW SQL is emitted when catalog="%" + escape=true.
+
+        [Fact]
+        public async Task GetSchemas_PercentCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        {
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SqlQuery = "getschemas";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // No SHOW statement should be executed — short-circuit to empty before the HTTP call.
+            Assert.Empty(captured);
+            // Result is an empty schema result (0 rows).
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetTables_PercentCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        {
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SqlQuery = "gettables";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Empty(captured);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetColumns_PercentCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        {
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumns";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Empty(captured);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetSchemas_StarCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        {
+            // "*" is the Databricks alias for "%" in the match-all catalog wildcard
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "*");
+            stmt.SqlQuery = "getschemas";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Empty(captured);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetSchemas_PercentCatalog_EscapeFalse_StillEmitsShowInAllCatalogs()
+        {
+            // When escape=false, "%" is the match-all wildcard → should expand to "IN ALL CATALOGS",
+            // not short-circuit. Verifies the short-circuit does not fire for escape=false.
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            // escape=false (default): "%" → null → "IN ALL CATALOGS"
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SqlQuery = "getschemas";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // escape=false: the existing #525 path still fires — SHOW IN ALL CATALOGS.
+            Assert.Contains("SHOW SCHEMAS IN ALL CATALOGS", captured);
+        }
     }
 }

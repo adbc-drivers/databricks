@@ -1168,6 +1168,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
+                // Issue #593: when escape_pattern_wildcards=true and the catalog is a bare
+                // match-all wildcard ("%"/"*"), Thrift escapes "%" → "\%" (a literal catalog
+                // that matches nothing → 0 rows, no throw). SEA's EffectiveCatalog deliberately
+                // leaves "%" as a literal backtick-quoted identifier in this case, which makes
+                // the server return SCHEMA_NOT_FOUND. Short-circuit to empty here so SEA and
+                // Thrift both return 0 rows without throwing.
+                if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
+                    && _escapePatternWildcards)
+                    return MetadataSchemaFactory.CreateEmptySchemasResult();
+
                 var catalog = EffectiveCatalog;
                 activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
@@ -1233,6 +1243,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
+                // Issue #593: see GetSchemasAsync for the full rationale. Same short-circuit here.
+                if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
+                    && _escapePatternWildcards)
+                    return MetadataSchemaFactory.CreateEmptyTablesResult();
+
                 var catalog = EffectiveCatalog;
                 activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
@@ -1315,6 +1330,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
+                // Issue #593: see GetSchemasAsync for the full rationale. Same short-circuit here.
+                if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
+                    && _escapePatternWildcards)
+                    return FlatColumnsResultBuilder.BuildFlatColumnsResult(
+                        System.Array.Empty<(string, string, string, TableInfo)>());
+
                 var catalog = EffectiveCatalog;
                 activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
@@ -1436,7 +1457,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 batches = await _connection.ExecuteMetadataSqlAsync(query, cancellationToken).ConfigureAwait(false);
             }
-            catch (DatabricksException ex) when (ex.IsDescTableExtendedUnsupportedException())
+            catch (AdbcException ex) when (DatabricksException.IsDescTableExtendedUnsupported(ex))
             {
                 // The runtime does not support `DESC TABLE EXTENDED ... AS JSON [STATIC ONLY]`
                 // (e.g. STATIC ONLY on a DBR without PR #198486 → 42601 parse error, or 20000).

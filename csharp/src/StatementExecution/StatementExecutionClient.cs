@@ -22,6 +22,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.StatementExecution
@@ -239,15 +240,28 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new DatabricksException("Failed to deserialize ExecuteStatementResponse");
             }
 
-            // Check for FAILED state and throw exception (like JDBC driver does)
+            // Check for FAILED state and throw exception (like JDBC driver does).
+            // Throw HiveServer2Exception (not DatabricksException) so metadata callers
+            // receive the same exception type as the Thrift path (HiveServer2Connection
+            // .ThrowErrorResponse), enabling protocol-agnostic error handling.
+            // IsMetadata guards this path: non-metadata executions use the FAILED check
+            // in ExecuteQueryInternalAsync (throws AdbcException) and never reach here
+            // for FAILED — ExecuteStatementAsync is only called for immediate FAILED
+            // (sync metadata execution) while async polling uses GetStatementAsync.
             if (executeResponse.Status?.State == "FAILED")
             {
+                var error = executeResponse.Status.Error;
                 var errorMessage = $"Statement execution failed. State: {executeResponse.Status.State}";
-                if (executeResponse.Status.Error != null)
+                if (error != null)
                 {
-                    errorMessage += $". Error Code: {executeResponse.Status.Error.ErrorCode}, Message: {executeResponse.Status.Error.Message}";
+                    errorMessage += $". Error Code: {error.ErrorCode}, Message: {error.Message}";
                 }
-                throw new DatabricksException(errorMessage);
+                var ex = new HiveServer2Exception(errorMessage, AdbcStatusCode.InternalError);
+                if (error?.SqlState != null)
+                    ex.SetSqlState(error.SqlState);
+                if (error?.ErrorCode != null && int.TryParse(error.ErrorCode, out int nativeError))
+                    ex.SetNativeError(nativeError);
+                throw ex;
             }
 
             return executeResponse;

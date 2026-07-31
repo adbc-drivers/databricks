@@ -82,11 +82,20 @@ namespace AdbcDrivers.Databricks
         /// SEA execute path surfaces the SQL state only inside the error message (SqlState is null).
         /// </summary>
         internal bool IsDescTableExtendedUnsupportedException()
+            => IsDescTableExtendedUnsupported(this);
+
+        /// <summary>
+        /// Static helper that accepts any <see cref="AdbcException"/> so the catch clause in
+        /// <c>GetColumnsExtendedViaDescTableAsync</c> works for both <see cref="DatabricksException"/>
+        /// (Thrift / legacy SEA path) and <see cref="AdbcDrivers.HiveServer2.Hive2.HiveServer2Exception"/>
+        /// (SEA path after the HiveServer2Exception parity change).
+        /// </summary>
+        internal static bool IsDescTableExtendedUnsupported(AdbcException ex)
         {
-            if (SqlState == "42601" || SqlState == "20000")
+            if (ex.SqlState == "42601" || ex.SqlState == "20000")
                 return true;
 
-            var message = Message;
+            var message = ex.Message;
             if (string.IsNullOrEmpty(message)) return false;
             return message.IndexOf("SQLSTATE: 42601", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("SQLSTATE: 20000", StringComparison.OrdinalIgnoreCase) >= 0;
