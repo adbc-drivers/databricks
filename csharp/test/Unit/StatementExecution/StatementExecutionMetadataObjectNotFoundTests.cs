@@ -20,8 +20,10 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Microsoft.IO;
 using Moq;
@@ -223,9 +225,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public async Task GetTables_PreEscapedUnderscore_EscapeTrue_DoesNotDoubleEscape()
         {
-            // pre-escaped "foo\_bar" + escape=true → must NOT become "foo\\_bar"
-            // which ConvertPattern would turn into "foo\\.bar" (invalid glob, server throws).
-            // The fix leaves "foo\_bar" unchanged → ConvertPattern → "foo_bar" (literal match).
+            // escape=true means the input is a LITERAL name, so "foo\_bar" is the 8-char
+            // literal name foo \ _ bar. The escape step escapes every metacharacter
+            // (\ -> \\, _ -> \_) and LikePattern doubles backslashes for the SQL string
+            // literal, yielding LIKE 'foo\\_bar' (which the server reads as the literal
+            // name foo\_bar). No "already-escaped" idempotency — that guess was unsound.
             var captured = new List<string>();
             using var http = HttpClientCapturingStatements(captured);
             using var stmt = CreateMetadataStatement(http);
@@ -236,17 +240,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             await stmt.ExecuteQueryAsync(CancellationToken.None);
 
-            // Pre-escaped \_ passes through unchanged → ConvertPattern strips the \ → literal _
-            Assert.Contains(captured, sql => sql.Contains("LIKE 'foo_bar'"));
-            // The double-escape bug would produce \\.bar (glob wildcard dot) — must not appear
-            Assert.DoesNotContain(captured, sql => sql.Contains("LIKE 'foo\\\\.bar'"));
-            Assert.DoesNotContain(captured, sql => sql.Contains("LIKE 'foo\\.bar'"));
+            // Literal name foo\_bar → LIKE 'foo\\_bar' (two backslashes in the SQL literal).
+            Assert.Contains(captured, sql => sql.Contains(@"LIKE 'foo\\\\_bar'"));
         }
 
         [Fact]
         public async Task GetTables_PreEscapedPercent_EscapeTrue_DoesNotDoubleEscape()
         {
-            // pre-escaped "foo\%bar" + escape=true → must stay "foo\%bar", not "foo\\%bar"
+            // escape=true → "foo\%bar" is the 8-char literal name foo \ % bar. Escaping
+            // every metacharacter (\ -> \\, % -> \%) then doubling for the SQL string
+            // literal yields LIKE 'foo\\%bar' (server reads literal name foo\%bar).
             var captured = new List<string>();
             using var http = HttpClientCapturingStatements(captured);
             using var stmt = CreateMetadataStatement(http);
@@ -257,19 +260,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             await stmt.ExecuteQueryAsync(CancellationToken.None);
 
-            // \% passes through unchanged → ConvertPattern strips the \ → literal % in glob
-            Assert.Contains(captured, sql => sql.Contains("LIKE 'foo%bar'"));
-            // Double-escape bug would produce \\%bar which ConvertPattern turns into \*bar
-            Assert.DoesNotContain(captured, sql => sql.Contains("LIKE 'foo\\\\%bar'"));
+            // Literal name foo\%bar → LIKE 'foo\\%bar' (two backslashes in the SQL literal).
+            Assert.Contains(captured, sql => sql.Contains(@"LIKE 'foo\\\\%bar'"));
         }
 
         [Fact]
         public async Task GetColumns_PreEscapedTableName_EscapeTrue_DoesNotDoubleEscape()
         {
-            // Regression guard for the specific comparator fixture pattern:
-            // "test\_result\_set\_types" (pre-escaped) + escape=true
-            // Before fix: double-escaped → invalid SQL → DatabricksException
-            // After fix: passed through → LIKE 'test_result_set_types' (exact literal match)
+            // escape=true → the input is the literal name test\_result\_set\_types
+            // (containing literal backslashes). Each backslash is escaped (\ -> \\) and
+            // each underscore (_ -> \_), then LikePattern doubles backslashes for the SQL
+            // string literal, yielding LIKE 'test\\_result\\_set\\_types' — the server
+            // reads it as the literal name test\_result\_set\_types.
             var captured = new List<string>();
             using var http = HttpClientCapturingStatements(captured);
             using var stmt = CreateMetadataStatement(http);
@@ -281,10 +283,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             await stmt.ExecuteQueryAsync(CancellationToken.None);
 
-            // All three \_ sequences should resolve to literal _ in the glob pattern
-            Assert.Contains(captured, sql => sql.Contains("LIKE 'test_result_set_types'"));
-            // The pre-fix double-escape would produce test\\.result\\.set\\.types — a wildcard
-            Assert.DoesNotContain(captured, sql => sql.Contains("test\\\\.") || sql.Contains("test\\."));
+            Assert.Contains(captured, sql => sql.Contains(@"LIKE 'test\\\\_result\\\\_set\\\\_types'"));
         }
 
         // ─── Issue #593: catalog="%" + escape_pattern_wildcards=true → empty result ────
@@ -385,6 +384,47 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             // escape=false: the existing #525 path still fires — SHOW IN ALL CATALOGS.
             Assert.Contains("SHOW SCHEMAS IN ALL CATALOGS", captured);
+        }
+
+        // ─── Exact-match ops throw on missing table, matching the Thrift path ─────────
+        // GetPrimaryKeys / GetCrossReference are exact-match (table required). Thrift's
+        // TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with a
+        // HiveServer2Exception (AdbcStatusCode.InternalError, SqlState 42000) when the
+        // table is null; SEA must throw the SAME exception instead of returning empty.
+        // The comparator's exception identity is type + Status + SqlState.
+
+        [Fact]
+        public async Task GetPrimaryKeys_NullTable_ThrowsHiveServer2ExceptionMatchingThrift()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "some_schema");
+            // TableName deliberately not set (null).
+            stmt.SqlQuery = "getprimarykeys";
+
+            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_NullTables_ThrowsHiveServer2ExceptionMatchingThrift()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "some_schema");
+            // Neither foreign table nor parent table set (both null).
+            stmt.SqlQuery = "getcrossreference";
+
+            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
         }
     }
 }

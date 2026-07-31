@@ -1117,6 +1117,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Builds the exception SEA throws for a missing exact-match argument on
+        /// GetPrimaryKeys / GetCrossReference, matching the Thrift path: Thrift's
+        /// TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with
+        /// a HiveServer2Exception (AdbcStatusCode.InternalError, SqlState 42000).
+        /// The comparator's exception identity is type + Status + SqlState (message
+        /// is not compared), so those three must match the Thrift result.
+        /// </summary>
+        private static HiveServer2Exception NewInvalidArgumentException(string detail)
+        {
+            var ex = new HiveServer2Exception($"Invalid argument: {detail}", AdbcStatusCode.InternalError);
+            ex.SetSqlState("42000");
+            return ex;
+        }
+
         private Task<QueryResult> ExecuteMetadataCommandAsync(CancellationToken cancellationToken)
         {
             return _sqlQuery?.ToLowerInvariant() switch
@@ -1586,8 +1601,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName) ||
-                    string.IsNullOrEmpty(_metadataTableName))
+                // GetPrimaryKeys is an exact-match operation: table is required. Thrift's
+                // TGetPrimaryKeysReq is rejected server-side with a stable error when the
+                // table is null; throw the SAME exception (type + status + SqlState +
+                // message) so SEA matches the Thrift path instead of returning empty.
+                if (string.IsNullOrEmpty(_metadataTableName))
+                    throw NewInvalidArgumentException("tableName may not be null");
+
+                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
                 string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
@@ -1652,6 +1673,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             if (MetadataUtilities.ShouldReturnEmptyPKFKResult(pkCatalog, fkCatalog, _connection.EnablePKFK))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+
+            // GetCrossReference is an exact-match operation: it needs at least one table
+            // side. Thrift's TGetCrossReferenceReq is rejected server-side with a stable
+            // error when BOTH the foreign table and the parent table are null; throw the
+            // SAME exception so SEA matches the Thrift path instead of returning empty.
+            if (string.IsNullOrEmpty(fkTable) && string.IsNullOrEmpty(pkTable))
+                throw NewInvalidArgumentException("foreignTable and parentTableName are both null");
 
             if (string.IsNullOrEmpty(fkCatalog) || string.IsNullOrEmpty(fkSchema) || string.IsNullOrEmpty(fkTable))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();

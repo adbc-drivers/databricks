@@ -108,7 +108,7 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
         ///
         /// NOTE: the JDBC reference driver does NOT do this (it interpolates
         /// jdbcPatternToHive output straight into <c>LIKE '%s'</c>), so JDBC mishandles
-        /// backslash-containing identifiers the same way; see databricks-jdbc issue.
+        /// backslash-containing identifiers the same way; see databricks-jdbc#1598.
         /// </summary>
         protected static string LikePattern(string? pattern)
         {
