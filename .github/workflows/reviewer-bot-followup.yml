@@ -55,12 +55,11 @@ concurrency:
 jobs:
   followup:
     # SECURITY: skip fork PRs — keep model/LLM secrets out of untrusted code's reach.
-    # Same `review-bot` label gate as reviewer-bot.yml — the follow-up only acts on
-    # PRs the reviewer was allowed to review.
+    # No label gate (matches reviewer-bot.yml and the other consumer repos): the
+    # follow-up acts on any open, non-fork PR, mirroring the initial reviewer.
     if: >-
       github.event.pull_request.head.repo.fork == false
       && github.event.pull_request.state == 'open'
-      && contains(github.event.pull_request.labels.*.name, 'review-bot')
     runs-on: [self-hosted, Linux, X64, peco-driver]
     timeout-minutes: 15
     steps:
