@@ -1082,24 +1082,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (!_escapePatternWildcards || name == null)
                 return name;
 
-            // Escape bare wildcard metacharacters (_ and %) so the name matches
-            // literally once ConvertPattern turns the LIKE pattern into a Hive glob.
-            // This escape is IDEMPOTENT: an already-escaped sequence (\_, \%, \\) is
-            // passed through unchanged, so callers who pre-escape their patterns are
-            // not double-escaped into "\\_..." — which ConvertPattern would turn into
-            // an invalid glob ("\\.") that the server rejects. Re-running the escaper
-            // on its own output is therefore a no-op.
+            // escape_pattern_wildcards=true means the input is a LITERAL object name,
+            // not a pattern: every character is literal content, including backslash.
+            // Escape all three pattern metacharacters so the name matches literally.
+            // Backslash MUST be escaped first, or the backslashes we introduce for _/%
+            // would themselves be doubled. No idempotency / "already-escaped" detection:
+            // under escape=true there are no escape sequences in the input to preserve —
+            // a leading '\' is a literal backslash in the name, so it must be escaped too.
+            // (Verified live thrift-vs-rest against schemas named a\b / a\_b / a\\b: the
+            // "already-escaped pass-through" heuristic silently dropped literal backslashes
+            // and matched the wrong object.)
             var sb = new System.Text.StringBuilder(name.Length + 8);
             for (int i = 0; i < name.Length; i++)
             {
                 char c = name[i];
-                if (c == '\\' && i + 1 < name.Length &&
-                    (name[i + 1] == '_' || name[i + 1] == '%' || name[i + 1] == '\\'))
+                if (c == '\\')
                 {
-                    // Already-escaped sequence — copy both chars verbatim.
-                    sb.Append(c);
-                    sb.Append(name[i + 1]);
-                    i++;
+                    sb.Append("\\\\");
                 }
                 else if (c == '_')
                 {
