@@ -23,6 +23,7 @@ using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Microsoft.IO;
 using Moq;
@@ -84,6 +85,42 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     return new HttpResponseMessage(HttpStatusCode.OK)
                     {
                         Content = new StringContent(succeededBody),
+                    };
+                });
+
+            return new HttpClient(handler.Object);
+        }
+
+        // Returns an HttpClient whose ExecuteStatement always responds with an immediately
+        // FAILED state carrying an object-not-found error (e.g. SCHEMA_NOT_FOUND). The SEA
+        // client turns this into a HiveServer2Exception, which the metadata methods now
+        // PROPAGATE (matching Thrift) instead of swallowing to an empty result.
+        private static HttpClient HttpClientFailingWith(string errorCode, string message, string sqlState)
+        {
+            var failedBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-fail",
+                status = new
+                {
+                    state = "FAILED",
+                    error = new { error_code = errorCode, message, sql_state = sqlState },
+                },
+            });
+            var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
+
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
+                {
+                    var path = req.RequestUri?.AbsolutePath ?? string.Empty;
+                    var body = path.EndsWith("/api/2.0/sql/sessions") ? sessionBody : failedBody;
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(body),
                     };
                 });
 
@@ -448,6 +485,66 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
             Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
             Assert.Equal("42000", ex.SqlState);
+        }
+
+        // ─── Object-not-found errors PROPAGATE, they are not swallowed to empty ──────
+        //
+        // The core behavioral change of this PR: SEA metadata methods no longer catch
+        // NO_SUCH_CATALOG / SCHEMA_NOT_FOUND / TABLE_OR_VIEW_NOT_FOUND and return an
+        // empty result — they let the error surface to the caller, matching the Thrift
+        // path. These tests mock a FAILED execute response carrying such an error and
+        // assert the metadata method THROWS (guarding against a future change that
+        // re-adds a broad catch). The SEA client throws HiveServer2Exception on an
+        // immediate FAILED state; DatabricksException/HiveServer2Exception are sibling
+        // AdbcException subclasses, so we assert on the AdbcException base plus the
+        // load-bearing Status/error content.
+
+        [Fact]
+        public async Task GetSchemas_SchemaNotFound_PropagatesToCaller()
+        {
+            using var http = HttpClientFailingWith("SCHEMA_NOT_FOUND", "Schema 'missing' not found", "42000");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "missing");
+            stmt.SqlQuery = "getschemas";
+
+            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+        }
+
+        [Fact]
+        public async Task GetTables_TableOrViewNotFound_PropagatesToCaller()
+        {
+            using var http = HttpClientFailingWith("TABLE_OR_VIEW_NOT_FOUND", "Table not found", "42P01");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "missing");
+            stmt.SqlQuery = "gettables";
+
+            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+        }
+
+        [Fact]
+        public async Task GetColumns_NoSuchCatalog_PropagatesToCaller()
+        {
+            // GetColumns with an explicit (non match-all) catalog issues SHOW COLUMNS
+            // IN CATALOG `main`; a NO_SUCH_CATALOG failure must surface, not be swallowed.
+            using var http = HttpClientFailingWith("NO_SUCH_CATALOG", "Catalog 'main' not found", "42000");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumns";
+
+            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
         }
     }
 }
