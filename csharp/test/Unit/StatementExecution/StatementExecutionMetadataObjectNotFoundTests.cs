@@ -23,7 +23,6 @@ using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2;
-using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Microsoft.IO;
 using Moq;
@@ -388,13 +387,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
         // ─── Exact-match ops throw on missing table, matching the Thrift path ─────────
         // GetPrimaryKeys / GetCrossReference are exact-match (table required). Thrift's
-        // TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with a
-        // HiveServer2Exception (AdbcStatusCode.InternalError, SqlState 42000) when the
-        // table is null; SEA must throw the SAME exception instead of returning empty.
-        // The comparator's exception identity is type + Status + SqlState.
+        // TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with
+        // AdbcStatusCode.InternalError + SqlState 42000 when the table is null; SEA must
+        // throw an equivalent error instead of returning empty. SEA throws its own
+        // DatabricksException (the natural SEA type); the comparator treats any
+        // AdbcException subclass as equivalent and compares Status + SqlState, so those
+        // two are the load-bearing assertions here (not the concrete type).
 
         [Fact]
-        public async Task GetPrimaryKeys_NullTable_ThrowsHiveServer2ExceptionMatchingThrift()
+        public async Task GetPrimaryKeys_NullTable_ThrowsWithThriftStatusAndSqlState()
         {
             using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
@@ -404,14 +405,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // TableName deliberately not set (null).
             stmt.SqlQuery = "getprimarykeys";
 
-            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
             Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
             Assert.Equal("42000", ex.SqlState);
         }
 
         [Fact]
-        public async Task GetCrossReference_NullTables_ThrowsHiveServer2ExceptionMatchingThrift()
+        public async Task GetCrossReference_NullTables_ThrowsWithThriftStatusAndSqlState()
         {
             using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
@@ -421,7 +422,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // Neither foreign table nor parent table set (both null).
             stmt.SqlQuery = "getcrossreference";
 
-            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
             Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
             Assert.Equal("42000", ex.SqlState);

@@ -1124,31 +1124,33 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// Builds the exception SEA throws for a missing exact-match argument on
         /// GetPrimaryKeys / GetCrossReference, matching the Thrift path: Thrift's
         /// TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with
-        /// a HiveServer2Exception (AdbcStatusCode.InternalError, SqlState 42000).
-        /// The comparator's exception identity is type + Status + SqlState (message
-        /// is not compared), so those three must match the Thrift result.
+        /// AdbcStatusCode.InternalError, SqlState 42000. SEA throws its own
+        /// DatabricksException (the natural SEA type); the comparator treats any
+        /// AdbcException subclass as equivalent and compares Status + SqlState, so
+        /// those two must match the Thrift result (the concrete type need not).
         /// </summary>
-        private static HiveServer2Exception NewInvalidArgumentException(string detail)
+        private static DatabricksException NewInvalidArgumentException(string detail)
         {
-            var ex = new HiveServer2Exception($"Invalid argument: {detail}", AdbcStatusCode.InternalError);
+            var ex = new DatabricksException($"Invalid argument: {detail}", AdbcStatusCode.InternalError);
             ex.SetSqlState("42000");
             return ex;
         }
 
         /// <summary>
         /// Builds the exception thrown when a statement resolves to FAILED on the async
-        /// polling path. Throws HiveServer2Exception (not a bare AdbcException) with
+        /// polling path. Throws DatabricksException (the natural SEA type) with
         /// SqlState/NativeError populated from the server error, so the exception identity
-        /// (type + Status + SqlState) matches both the synchronous FAILED path in
-        /// StatementExecutionClient and the Thrift path (HiveServer2Connection
-        /// .ThrowErrorResponse). Metadata queries usually resolve synchronously via the
-        /// can-run-fully-sync header, but a slow warehouse can push them onto this polling
-        /// path — this keeps object-not-found and other failures protocol-agnostic
-        /// regardless of timing.
+        /// that the comparator compares (Status + SqlState) matches both the synchronous
+        /// FAILED path in StatementExecutionClient and the Thrift path (HiveServer2Connection
+        /// .ThrowErrorResponse). The concrete subclass is not compared — the comparator
+        /// treats any AdbcException as equivalent. Metadata queries usually resolve
+        /// synchronously via the can-run-fully-sync header, but a slow warehouse can push
+        /// them onto this polling path — this keeps object-not-found and other failures
+        /// consistent regardless of timing.
         /// </summary>
-        private static HiveServer2Exception NewFailedStateException(StatementError? error)
+        private static DatabricksException NewFailedStateException(StatementError? error)
         {
-            var ex = new HiveServer2Exception(
+            var ex = new DatabricksException(
                 $"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})",
                 AdbcStatusCode.InternalError);
             if (error?.SqlState != null)

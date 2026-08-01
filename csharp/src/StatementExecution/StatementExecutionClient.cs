@@ -241,14 +241,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // Check for FAILED state and throw exception (like JDBC driver does).
-            // Throw HiveServer2Exception (not DatabricksException) so metadata callers
-            // receive the same exception type as the Thrift path (HiveServer2Connection
-            // .ThrowErrorResponse), enabling protocol-agnostic error handling.
+            // SEA throws its own DatabricksException (the natural type for the REST/SEA
+            // path). The comparator treats any AdbcException subclass as equivalent and
+            // compares Status + SqlState, so parity with the Thrift path
+            // (HiveServer2Exception) holds without forcing a cross-protocol type here.
             // This fires for ANY execution (metadata or not) whose initial response is
             // immediately FAILED — it is not gated on request.IsMetadata. A regular
             // query that fails synchronously (e.g. a VARCHAR-limit violation) surfaces
-            // HiveServer2Exception here; the FAILED check in StatementExecutionStatement
-            // (which throws AdbcException) only applies on the async polling path via
+            // this exception; the FAILED check in StatementExecutionStatement (which
+            // throws AdbcException) only applies on the async polling path via
             // GetStatementAsync, when the initial response was PENDING/RUNNING.
             if (executeResponse.Status?.State == "FAILED")
             {
@@ -258,7 +259,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     errorMessage += $". Error Code: {error.ErrorCode}, Message: {error.Message}";
                 }
-                var ex = new HiveServer2Exception(errorMessage, AdbcStatusCode.InternalError);
+                var ex = new DatabricksException(errorMessage, AdbcStatusCode.InternalError);
                 if (error?.SqlState != null)
                     ex.SetSqlState(error.SqlState);
                 if (error?.ErrorCode != null && int.TryParse(error.ErrorCode, out int nativeError))
