@@ -322,6 +322,31 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Contains(captured, sql => sql.Contains(@"LIKE 'test\\\\_result\\\\_set\\\\_types'"));
         }
 
+        [Fact]
+        public async Task GetTables_BackslashPattern_EscapeFalse_DoublesBackslashForSqlLiteral()
+        {
+            // escape=false: the input is a JDBC LIKE pattern, so "foo\\bar" is an escaped
+            // backslash that ConvertPattern preserves as a literal backslash in the glob
+            // (foo\\bar). LikePattern then doubles backslashes for the SQL string literal,
+            // yielding LIKE 'foo\\\\bar' so a schema/table literally named foo\bar matches
+            // through both the SQL-literal parser and the SHOW ... LIKE regex.
+            //
+            // This is the Layer-2 doubling on the escape=false path (prior behavior emitted
+            // LIKE 'foo\\bar', which collapsed to a single backslash and never matched).
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            // escape=false (default): pattern is interpreted as a JDBC LIKE pattern.
+            stmt.SetOption(ApacheParameters.TableName, @"foo\\bar");
+            stmt.SqlQuery = "gettables";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Literal backslash → LIKE 'foo\\\\bar' (four backslashes in the SQL literal).
+            Assert.Contains(captured, sql => sql.Contains(@"LIKE 'foo\\\\bar'"));
+        }
+
         // ─── Issue #593: catalog="%" + escape_pattern_wildcards=true → empty result ────
         //
         // Thrift escapes "%" → "\%" (a literal catalog matching nothing → 0 rows, no throw).
