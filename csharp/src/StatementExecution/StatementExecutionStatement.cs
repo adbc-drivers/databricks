@@ -1676,12 +1676,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-                // GetPrimaryKeys is an exact-match operation: table is required. Thrift's
-                // TGetPrimaryKeysReq is rejected server-side with a stable error when the
-                // table is null; throw the SAME exception (type + status + SqlState +
-                // message) so SEA matches the Thrift path instead of returning empty.
+                // GetPrimaryKeys is an exact-match operation. Validate required args
+                // client-side (mirroring the JDBC reference driver's resolveKeyBasedParams):
+                //   - table null/empty          -> throw "tableName may not be null"
+                //   - catalog set + schema null -> throw "schema may not be null when catalog is specified"
+                // Validating here (before issuing SHOW KEYS) also avoids the Thrift server's
+                // internal "GET_FUNCTIONS assertion failed" bug on schema-null, and gives a
+                // clean, deterministic error instead of relying on a server round-trip.
                 if (string.IsNullOrEmpty(_metadataTableName))
                     throw NewInvalidArgumentException("tableName may not be null");
+
+                if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
+                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
 
                 if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
@@ -1757,12 +1763,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (MetadataUtilities.ShouldReturnEmptyPKFKResult(pkCatalog, fkCatalog, _connection.EnablePKFK))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-            // GetCrossReference is an exact-match operation: it needs at least one table
-            // side. Thrift's TGetCrossReferenceReq is rejected server-side with a stable
-            // error when BOTH the foreign table and the parent table are null; throw the
-            // SAME exception so SEA matches the Thrift path instead of returning empty.
+            // GetCrossReference is an exact-match operation. Validate client-side
+            // (mirroring the JDBC reference driver's resolveKeyBasedParams), which also
+            // avoids the Thrift server's internal "GET_FUNCTIONS assertion failed" bug on
+            // a null foreign schema:
+            //   - both foreign table and parent table null -> throw
+            //   - foreign catalog set + foreign schema null -> throw
             if (string.IsNullOrEmpty(fkTable) && string.IsNullOrEmpty(pkTable))
                 throw NewInvalidArgumentException("foreignTable and parentTableName are both null");
+
+            if (!string.IsNullOrEmpty(fkCatalog) && string.IsNullOrEmpty(fkSchema))
+                throw NewInvalidArgumentException("schema may not be null when catalog is specified");
 
             if (string.IsNullOrEmpty(fkCatalog) || string.IsNullOrEmpty(fkSchema) || string.IsNullOrEmpty(fkTable))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();

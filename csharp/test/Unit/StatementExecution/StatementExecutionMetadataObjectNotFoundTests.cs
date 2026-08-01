@@ -518,6 +518,44 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal("42000", ex.SqlState);
         }
 
+        // Exact-match ops also require schema when catalog is specified (mirroring the JDBC
+        // reference driver's resolveKeyBasedParams). Validating client-side gives a clean
+        // error and avoids the Thrift server's internal "GET_FUNCTIONS assertion failed" bug
+        // on a null schema.
+        [Fact]
+        public async Task GetPrimaryKeys_CatalogSetSchemaNull_Throws()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            // SchemaName deliberately not set (null) while catalog IS set.
+            stmt.SqlQuery = "getprimarykeys";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ForeignCatalogSetSchemaNull_Throws()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            // ForeignSchemaName deliberately not set (null) while foreign catalog IS set.
+            stmt.SqlQuery = "getcrossreference";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
         // ─── Object-not-found errors are SWALLOWED to an empty result ────────────────
         //
         // SEA metadata methods catch NO_SUCH_CATALOG / SCHEMA_NOT_FOUND /
