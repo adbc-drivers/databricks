@@ -347,6 +347,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Empty(captured);
             // Result is an empty schema result (0 rows).
             Assert.Equal(0, result.RowCount);
+            // The empty result must still carry the JDBC-shaped GetSchemas schema (field names
+            // and order) that ADBC consumers rely on for column-by-name lookups — guards against
+            // a regression in CreateEmptySchemasResult's shape.
+            var fields = result.Stream!.Schema.FieldsList;
+            Assert.Equal(2, fields.Count);
+            Assert.Equal("TABLE_SCHEM", fields[0].Name);
+            Assert.Equal("TABLE_CATALOG", fields[1].Name);
         }
 
         [Fact]
