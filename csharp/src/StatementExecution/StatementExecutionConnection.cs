@@ -742,7 +742,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
         async Task<IReadOnlyList<string>> IGetObjectsDataProvider.GetCatalogsAsync(string? catalogPattern, CancellationToken cancellationToken)
         {
             string sql = new ShowCatalogsCommand(catalogPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                // Object-not-found → empty (GetObjects nested-shape path; matches the
+                // flat metadata methods and the JDBC reference driver).
+                return System.Array.Empty<string>();
+            }
             var result = new List<string>();
             foreach (var batch in batches)
             {
@@ -765,7 +775,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
 
-            List<RecordBatch> batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return System.Array.Empty<(string, string)>();
+            }
 
             // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
@@ -805,7 +823,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
 
-            List<RecordBatch> batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return System.Array.Empty<(string, string, string, string)>();
+            }
             var result = new List<(string, string, string, string)>();
             foreach (var batch in batches)
             {
@@ -843,7 +869,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            List<RecordBatch> batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                // Object-not-found → leave the column info unpopulated (empty), matching
+                // the flat metadata methods and the JDBC reference driver.
+                return;
+            }
 
             var tablePositions = new Dictionary<string, int>();
 
