@@ -241,4 +241,9 @@ jobs:
           MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
           REPO_RULES_FILES: csharp/CLAUDE.md,rust/CLAUDE.md   # adbc keeps conventions per-language (no root CLAUDE.md)
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: python -m databricks_bot_engine.engineer_bot.run --phase followup --bot .bot
+        # --system-prompt is REQUIRED for the followup phase (engine #89 removed the
+        # .bot/ prompt-name fallback). Point at the engineer-followup system prompt
+        # that already exists in .bot/prompts/ (mirrors databricks-jdbc's onboarding).
+        run: >-
+          python -m databricks_bot_engine.engineer_bot.run --phase followup --bot .bot
+          --system-prompt .bot/prompts/engineer-followup/system.md
