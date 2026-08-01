@@ -1226,16 +1226,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                // Issue #593: when escape_pattern_wildcards=true and the catalog is a bare
-                // match-all wildcard ("%"/"*"), Thrift escapes "%" → "\%" (a literal catalog
-                // that matches nothing → 0 rows, no throw). SEA's EffectiveCatalog deliberately
-                // leaves "%" as a literal backtick-quoted identifier in this case, which makes
-                // the server return SCHEMA_NOT_FOUND. Short-circuit to empty here so SEA and
-                // Thrift both return 0 rows without throwing.
-                if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
-                    && _escapePatternWildcards)
-                    return MetadataSchemaFactory.CreateEmptySchemasResult();
-
                 var catalog = EffectiveCatalog;
                 activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
@@ -1314,11 +1304,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                // Issue #593: see GetSchemasAsync for the full rationale. Same short-circuit here.
-                if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
-                    && _escapePatternWildcards)
-                    return MetadataSchemaFactory.CreateEmptyTablesResult();
-
                 var catalog = EffectiveCatalog;
                 activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
@@ -1409,12 +1394,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                // Issue #593: see GetSchemasAsync for the full rationale. Same short-circuit here.
-                if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
-                    && _escapePatternWildcards)
-                    return FlatColumnsResultBuilder.BuildFlatColumnsResult(
-                        System.Array.Empty<(string, string, string, TableInfo)>());
-
                 var catalog = EffectiveCatalog;
                 activity?.SetTag("catalog", catalog ?? "(none)");
                 activity?.SetTag("schema_pattern", _metadataSchemaName ?? "(none)");
@@ -1504,10 +1483,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (string.IsNullOrEmpty(_metadataTableName))
                     throw new ArgumentException("Table name is required for GetColumnsExtended");
 
-                // Issue #593: see GetSchemasAsync for the full rationale. Same short-circuit here,
-                // so getcolumnsextended matches the plain getcolumns path for catalog="%"/"*" with
-                // escape_pattern_wildcards=true (the DescTable path would otherwise issue
-                // `DESC TABLE EXTENDED \`%\`.…` and propagate the resulting SCHEMA_NOT_FOUND).
+                // Issue #593: catalog="%"/"*" + escape_pattern_wildcards=true short-circuits to
+                // empty. Unlike GetSchemas/GetTables/GetColumns — where the object-not-found catch
+                // (IsObjectNotFoundException) swallows the resulting SCHEMA_NOT_FOUND — the DESC
+                // TABLE EXTENDED path surfaces an empty result as a FormatException ("Empty result
+                // from DESC TABLE EXTENDED `%`.…"), which is NOT an object-not-found AdbcException
+                // and so would escape. Keep the explicit short-circuit here to match Thrift's 0 rows.
                 if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
                     && _escapePatternWildcards)
                     return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());

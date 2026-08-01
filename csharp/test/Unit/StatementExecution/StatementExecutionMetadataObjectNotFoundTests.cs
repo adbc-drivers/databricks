@@ -349,16 +349,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         // ─── Issue #593: catalog="%" + escape_pattern_wildcards=true → empty result ────
         //
         // Thrift escapes "%" → "\%" (a literal catalog matching nothing → 0 rows, no throw).
-        // SEA's EffectiveCatalog leaves "%" as a literal backtick-quoted identifier, which
-        // causes the server to return SCHEMA_NOT_FOUND. The fix short-circuits to an empty
-        // result before issuing the doomed SHOW command, so NO statement is executed.
-        // These tests verify that no SHOW SQL is emitted when catalog="%" + escape=true.
+        // SEA's EffectiveCatalog leaves "%" as a literal backtick-quoted identifier, so it
+        // issues SHOW ... IN `%`, the server returns SCHEMA_NOT_FOUND, and the object-not-found
+        // catch (DatabricksException.IsObjectNotFoundException) swallows it to an empty result —
+        // matching Thrift's 0 rows. (Earlier this branch had a dedicated pre-SHOW short-circuit
+        // for this case; it was removed as redundant once the general object-not-found catch was
+        // restored — verified live that catalog="%"+escape still returns 0 rows on both protocols.)
+        // These tests assert the empty (0-row) result and its JDBC-shaped schema.
 
         [Fact]
-        public async Task GetSchemas_PercentCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        public async Task GetSchemas_PercentCatalog_EscapeTrue_ReturnsEmpty()
         {
-            var captured = new List<string>();
-            using var http = HttpClientCapturingStatements(captured);
+            using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
@@ -367,13 +369,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
 
-            // No SHOW statement should be executed — short-circuit to empty before the HTTP call.
-            Assert.Empty(captured);
-            // Result is an empty schema result (0 rows).
             Assert.Equal(0, result.RowCount);
             // The empty result must still carry the JDBC-shaped GetSchemas schema (field names
-            // and order) that ADBC consumers rely on for column-by-name lookups — guards against
-            // a regression in CreateEmptySchemasResult's shape.
+            // and order) that ADBC consumers rely on for column-by-name lookups.
             var fields = result.Stream!.Schema.FieldsList;
             Assert.Equal(2, fields.Count);
             Assert.Equal("TABLE_SCHEM", fields[0].Name);
@@ -381,10 +379,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task GetTables_PercentCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        public async Task GetTables_PercentCatalog_EscapeTrue_ReturnsEmpty()
         {
-            var captured = new List<string>();
-            using var http = HttpClientCapturingStatements(captured);
+            using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
@@ -392,16 +389,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SqlQuery = "gettables";
 
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
-
-            Assert.Empty(captured);
             Assert.Equal(0, result.RowCount);
         }
 
         [Fact]
-        public async Task GetColumns_PercentCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        public async Task GetColumns_PercentCatalog_EscapeTrue_ReturnsEmpty()
         {
-            var captured = new List<string>();
-            using var http = HttpClientCapturingStatements(captured);
+            using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
@@ -411,19 +405,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SqlQuery = "getcolumns";
 
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
-
-            Assert.Empty(captured);
             Assert.Equal(0, result.RowCount);
         }
 
         [Fact]
-        public async Task GetColumnsExtended_PercentCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        public async Task GetColumnsExtended_PercentCatalog_EscapeTrue_ReturnsEmpty()
         {
-            // getcolumnsextended routes through EffectiveCatalog just like getcolumns, so it must
-            // honor the same #593 short-circuit (otherwise the DESC TABLE EXTENDED path issues
-            // `DESC TABLE EXTENDED \`%\`.…` and propagates SCHEMA_NOT_FOUND instead of empty).
-            var captured = new List<string>();
-            using var http = HttpClientCapturingStatements(captured);
+            using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
@@ -433,17 +421,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SqlQuery = "getcolumnsextended";
 
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
-
-            Assert.Empty(captured);
             Assert.Equal(0, result.RowCount);
         }
 
         [Fact]
-        public async Task GetSchemas_StarCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        public async Task GetSchemas_StarCatalog_EscapeTrue_ReturnsEmpty()
         {
             // "*" is the Databricks alias for "%" in the match-all catalog wildcard
-            var captured = new List<string>();
-            using var http = HttpClientCapturingStatements(captured);
+            using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
@@ -451,8 +436,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SqlQuery = "getschemas";
 
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
-
-            Assert.Empty(captured);
             Assert.Equal(0, result.RowCount);
         }
 
