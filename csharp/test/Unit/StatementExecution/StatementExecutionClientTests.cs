@@ -23,7 +23,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
-using AdbcDrivers.HiveServer2.Hive2;
 using Moq;
 using Moq.Protected;
 using Xunit;
@@ -318,14 +317,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task ExecuteStatementAsync_WithFailedState_ThrowsHiveServer2ExceptionWithSqlStateAndNativeError()
+        public async Task ExecuteStatementAsync_WithFailedState_ThrowsDatabricksExceptionWithSqlStateAndNativeError()
         {
-            // Guards the load-bearing contract of this path: a synchronously-FAILED
-            // execution must surface a HiveServer2Exception (NOT a DatabricksException,
-            // which is a sibling AdbcException subclass) so callers that
-            // catch (HiveServer2Exception) behave identically on the SEA/REST and Thrift
-            // paths. The exact type matters, so assert on it directly here rather than
-            // relying only on the E2E StringValueTests (skipped in CI without a warehouse).
+            // A synchronously-FAILED execution surfaces a DatabricksException — the natural
+            // type for the SEA/REST path — with Status + SqlState + NativeError populated
+            // from the server error. Cross-protocol parity with the Thrift path
+            // (HiveServer2Exception) is enforced by the Thrift-vs-SEA comparator on
+            // Status + SqlState (any AdbcException subclass is equivalent), not on the
+            // concrete subclass. This asserts the load-bearing Status/SqlState/NativeError.
             var request = new ExecuteStatementRequest { Statement = "SELECT 1" };
             var responseJson = JsonSerializer.Serialize(new
             {
@@ -345,7 +344,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             SetupMockResponse(HttpStatusCode.OK, responseJson);
 
             var client = new StatementExecutionClient(_httpClient, _testHost);
-            var exception = await Assert.ThrowsAsync<HiveServer2Exception>(() =>
+            var exception = await Assert.ThrowsAsync<DatabricksException>(() =>
                 client.ExecuteStatementAsync(request, CancellationToken.None));
 
             Assert.Equal(AdbcStatusCode.InternalError, exception.Status);

@@ -23,7 +23,6 @@ using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2;
-using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Microsoft.IO;
 using Moq;
@@ -93,8 +92,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
         // Returns an HttpClient whose ExecuteStatement always responds with an immediately
         // FAILED state carrying an object-not-found error (e.g. SCHEMA_NOT_FOUND). The SEA
-        // client turns this into a HiveServer2Exception, which the metadata methods now
-        // PROPAGATE (matching Thrift) instead of swallowing to an empty result.
+        // client turns this into a DatabricksException, which the metadata methods now
+        // PROPAGATE (matching Thrift's behavior) instead of swallowing to an empty result.
         private static HttpClient HttpClientFailingWith(string errorCode, string message, string sqlState)
         {
             var failedBody = JsonSerializer.Serialize(new
@@ -526,10 +525,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         // empty result — they let the error surface to the caller, matching the Thrift
         // path. These tests mock a FAILED execute response carrying such an error and
         // assert the metadata method THROWS (guarding against a future change that
-        // re-adds a broad catch). The SEA client throws HiveServer2Exception on an
-        // immediate FAILED state; DatabricksException/HiveServer2Exception are sibling
-        // AdbcException subclasses, so we assert on the AdbcException base plus the
-        // load-bearing Status/error content.
+        // re-adds a broad catch). The SEA client throws its own DatabricksException on an
+        // immediate FAILED state (the natural REST/SEA type); cross-protocol parity is
+        // enforced by the comparator on Status + SqlState, not the concrete subclass.
 
         [Fact]
         public async Task GetSchemas_SchemaNotFound_PropagatesToCaller()
@@ -541,7 +539,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SetOption(ApacheParameters.SchemaName, "missing");
             stmt.SqlQuery = "getschemas";
 
-            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
             Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
         }
@@ -556,7 +554,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SetOption(ApacheParameters.SchemaName, "missing");
             stmt.SqlQuery = "gettables";
 
-            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
             Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
         }
@@ -574,7 +572,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SetOption(ApacheParameters.TableName, "t");
             stmt.SqlQuery = "getcolumns";
 
-            var ex = await Assert.ThrowsAsync<HiveServer2Exception>(
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
             Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
         }

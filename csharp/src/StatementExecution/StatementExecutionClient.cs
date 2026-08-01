@@ -241,11 +241,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // Check for FAILED state and throw exception (like JDBC driver does).
-            // SEA throws a HiveServer2Exception to match the Thrift path: callers (and
-            // tests such as StringValueTests.TestVarcharExceptionData) assert on the
-            // exact HiveServer2Exception type, and DatabricksException is a sibling
-            // AdbcException subclass — not an ancestor — so throwing DatabricksException
-            // here would not satisfy those assertions on the SEA/REST path.
+            // SEA throws its own DatabricksException — the natural type for the REST/SEA
+            // path. Cross-protocol parity is enforced by the comparator on Status +
+            // SqlState (the ADBC contract consumers branch on), NOT on the concrete
+            // AdbcException subclass, so a semantically-honest DatabricksException here
+            // is equivalent to the Thrift path's HiveServer2Exception. (The shared E2E
+            // base TestVarcharExceptionData in the hiveserver2 submodule asserts the
+            // exact HiveServer2Exception type; the SEA variant is skipped for that
+            // reason — see StringValueTests + PECO-3014 — since the submodule base
+            // cannot be relaxed from here.)
             // This fires for ANY execution (metadata or not) whose initial response is
             // immediately FAILED — it is not gated on request.IsMetadata. A regular
             // query that fails synchronously (e.g. a VARCHAR-limit violation) surfaces
@@ -260,7 +264,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     errorMessage += $". Error Code: {error.ErrorCode}, Message: {error.Message}";
                 }
-                var ex = new HiveServer2Exception(errorMessage, AdbcStatusCode.InternalError);
+                var ex = new DatabricksException(errorMessage, AdbcStatusCode.InternalError);
                 if (error?.SqlState != null)
                     ex.SetSqlState(error.SqlState);
                 if (error?.ErrorCode != null && int.TryParse(error.ErrorCode, out int nativeError))
