@@ -85,6 +85,31 @@ namespace AdbcDrivers.Databricks
             => IsDescTableExtendedUnsupported(this);
 
         /// <summary>
+        /// Returns true if this exception indicates a catalog, schema, or table was not found
+        /// (or the server rejected the object name as invalid). Per the JDBC spec — and matching
+        /// both the Thrift path and the JDBC reference driver (WildcardUtil / isObjectNotFoundException)
+        /// — metadata methods return an EMPTY result set for non-existent objects rather than
+        /// throwing. Checks SQL state (42704) and error-message content for not-found / invalid-name
+        /// indicators. INVALID_PARAMETER_VALUE is included because the server rejects an empty-string
+        /// catalog with that error (name "" is not a valid name); the caller treats it the same as
+        /// "no such object" and returns empty, matching Thrift's 0-row behavior for that filter.
+        /// </summary>
+        internal bool IsObjectNotFoundException()
+        {
+            const string ObjectNotFoundSqlState = "42704";
+
+            if (SqlState == ObjectNotFoundSqlState)
+                return true;
+
+            var message = Message;
+            if (string.IsNullOrEmpty(message)) return false;
+            return message.IndexOf("NO_SUCH_CATALOG_EXCEPTION", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("TABLE_OR_VIEW_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("SCHEMA_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("INVALID_PARAMETER_VALUE", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
         /// Static helper that accepts any <see cref="AdbcException"/> so the catch clause in
         /// <c>GetColumnsExtendedViaDescTableAsync</c> works for both <see cref="DatabricksException"/>
         /// (Thrift / legacy SEA path) and <see cref="AdbcDrivers.HiveServer2.Hive2.HiveServer2Exception"/>

@@ -1251,7 +1251,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     EscapePatternWildcardsInName(_metadataSchemaName)).Build();
                 activity?.SetTag("sql_query", sql);
 
-                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                // Object-not-found (missing catalog/schema/table, or the server rejecting
+                // an empty/invalid name) → return an EMPTY result, matching both the Thrift
+                // path and the JDBC reference driver (isObjectNotFoundException). Restores
+                // the #388 behavior; the "make SEA throw" premise was disproven — Thrift
+                // returns empty on object-not-found too.
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    return MetadataSchemaFactory.CreateEmptySchemasResult();
+                }
 
                 // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
                 // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
@@ -1322,7 +1335,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     EscapePatternWildcardsInName(_metadataTableName)).Build();
                 activity?.SetTag("sql_query", sql);
 
-                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    return MetadataSchemaFactory.CreateEmptyTablesResult();
+                }
 
                 var tableCatBuilder = new StringArray.Builder();
                 var tableSchemaBuilder = new StringArray.Builder();
@@ -1409,12 +1430,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return FlatColumnsResultBuilder.BuildFlatColumnsResult(
                         System.Array.Empty<(string, string, string, TableInfo)>());
 
-                List<RecordBatch> batches = await _connection.ExecuteShowColumnsAsync(
-                    catalog,
-                    EscapePatternWildcardsInName(_metadataSchemaName),
-                    EscapePatternWildcardsInName(_metadataTableName),
-                    EscapePatternWildcardsInName(_metadataColumnName),
-                    cancellationToken).ConfigureAwait(false);
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteShowColumnsAsync(
+                        catalog,
+                        EscapePatternWildcardsInName(_metadataSchemaName),
+                        EscapePatternWildcardsInName(_metadataTableName),
+                        EscapePatternWildcardsInName(_metadataColumnName),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    return FlatColumnsResultBuilder.BuildFlatColumnsResult(
+                        System.Array.Empty<(string, string, string, TableInfo)>());
+                }
 
                 var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
 
@@ -1531,6 +1561,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // (DatabricksStatement.GetColumnsExtendedAsync). This keeps the fast-metadata
                 // opt-in safe to roll out before the runtime change reaches every endpoint.
                 return await GetColumnsExtendedViaThreeCalls(cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                // Missing catalog/schema/table (or invalid/empty name) → empty result,
+                // matching Thrift + JDBC (see GetSchemasAsync).
+                return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
             }
 
             string? resultJson = null;
@@ -1653,7 +1689,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
                 activity?.SetTag("sql_query", sql);
 
-                List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                List<RecordBatch> batches;
+                try
+                {
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
+                }
 
                 var keys = new List<(string, string, string, string, int, string)>();
                 int seq = 0;
@@ -1725,7 +1769,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             string sql = new ShowForeignKeysCommand(fkCatalog!, fkSchema!, fkTable!).Build();
 
-            List<RecordBatch> batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+            }
 
             var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
             int seq = 0;

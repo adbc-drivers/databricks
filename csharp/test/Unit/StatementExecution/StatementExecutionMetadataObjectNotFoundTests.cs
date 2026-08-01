@@ -518,19 +518,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal("42000", ex.SqlState);
         }
 
-        // ─── Object-not-found errors PROPAGATE, they are not swallowed to empty ──────
+        // ─── Object-not-found errors are SWALLOWED to an empty result ────────────────
         //
-        // The core behavioral change of this PR: SEA metadata methods no longer catch
-        // NO_SUCH_CATALOG / SCHEMA_NOT_FOUND / TABLE_OR_VIEW_NOT_FOUND and return an
-        // empty result — they let the error surface to the caller, matching the Thrift
-        // path. These tests mock a FAILED execute response carrying such an error and
-        // assert the metadata method THROWS (guarding against a future change that
-        // re-adds a broad catch). The SEA client throws its own DatabricksException on an
-        // immediate FAILED state (the natural REST/SEA type); cross-protocol parity is
-        // enforced by the comparator on Status + SqlState, not the concrete subclass.
-
+        // SEA metadata methods catch NO_SUCH_CATALOG / SCHEMA_NOT_FOUND /
+        // TABLE_OR_VIEW_NOT_FOUND / INVALID_PARAMETER_VALUE (DatabricksException.
+        // IsObjectNotFoundException) and return an EMPTY result set rather than throwing —
+        // matching BOTH the Thrift path (which returns 0 rows on object-not-found, verified
+        // live) and the JDBC reference driver (isObjectNotFoundException). These tests mock a
+        // FAILED execute response carrying such an error and assert the metadata method
+        // returns an empty result (guarding against a regression that lets the error escape).
         [Fact]
-        public async Task GetSchemas_SchemaNotFound_PropagatesToCaller()
+        public async Task GetSchemas_SchemaNotFound_ReturnsEmpty()
         {
             using var http = HttpClientFailingWith("SCHEMA_NOT_FOUND", "Schema 'missing' not found", "42000");
             using var stmt = CreateMetadataStatement(http);
@@ -539,13 +537,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SetOption(ApacheParameters.SchemaName, "missing");
             stmt.SqlQuery = "getschemas";
 
-            var ex = await Assert.ThrowsAsync<DatabricksException>(
-                () => stmt.ExecuteQueryAsync(CancellationToken.None));
-            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
         }
 
         [Fact]
-        public async Task GetTables_TableOrViewNotFound_PropagatesToCaller()
+        public async Task GetTables_TableOrViewNotFound_ReturnsEmpty()
         {
             using var http = HttpClientFailingWith("TABLE_OR_VIEW_NOT_FOUND", "Table not found", "42P01");
             using var stmt = CreateMetadataStatement(http);
@@ -554,17 +551,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SetOption(ApacheParameters.SchemaName, "missing");
             stmt.SqlQuery = "gettables";
 
-            var ex = await Assert.ThrowsAsync<DatabricksException>(
-                () => stmt.ExecuteQueryAsync(CancellationToken.None));
-            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
         }
 
         [Fact]
-        public async Task GetColumns_NoSuchCatalog_PropagatesToCaller()
+        public async Task GetColumns_NoSuchCatalog_ReturnsEmpty()
         {
-            // GetColumns with an explicit (non match-all) catalog issues SHOW COLUMNS
-            // IN CATALOG `main`; a NO_SUCH_CATALOG failure must surface, not be swallowed.
-            using var http = HttpClientFailingWith("NO_SUCH_CATALOG", "Catalog 'main' not found", "42000");
+            // Real server error shape (captured live): NO_SUCH_CATALOG_EXCEPTION + SQLSTATE 42704.
+            using var http = HttpClientFailingWith("NO_SUCH_CATALOG_EXCEPTION", "Catalog 'main' was not found", "42704");
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.CatalogName, "main");
@@ -572,9 +567,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SetOption(ApacheParameters.TableName, "t");
             stmt.SqlQuery = "getcolumns";
 
-            var ex = await Assert.ThrowsAsync<DatabricksException>(
-                () => stmt.ExecuteQueryAsync(CancellationToken.None));
-            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
         }
     }
 }
