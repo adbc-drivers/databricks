@@ -411,7 +411,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Fact]
         public async Task GetColumnsExtended_PercentCatalog_EscapeTrue_ReturnsEmpty()
         {
-            using var http = HttpClientCapturingStatements(new List<string>());
+            // On a real server, DESC TABLE EXTENDED `%`.`s`.`t` fails with
+            // TABLE_OR_VIEW_NOT_FOUND (verified live), which the object-not-found catch
+            // swallows to empty — so use a FAILED mock carrying that error (not the
+            // SUCCEEDED-empty capturing mock, which would surface as a FormatException the
+            // real server never produces here).
+            using var http = HttpClientFailingWith(
+                "TABLE_OR_VIEW_NOT_FOUND", "The table or view `%`.`s`.`t` cannot be found", "42P01");
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");

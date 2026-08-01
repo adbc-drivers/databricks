@@ -1483,16 +1483,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (string.IsNullOrEmpty(_metadataTableName))
                     throw new ArgumentException("Table name is required for GetColumnsExtended");
 
-                // Issue #593: catalog="%"/"*" + escape_pattern_wildcards=true short-circuits to
-                // empty. Unlike GetSchemas/GetTables/GetColumns — where the object-not-found catch
-                // (IsObjectNotFoundException) swallows the resulting SCHEMA_NOT_FOUND — the DESC
-                // TABLE EXTENDED path surfaces an empty result as a FormatException ("Empty result
-                // from DESC TABLE EXTENDED `%`.…"), which is NOT an object-not-found AdbcException
-                // and so would escape. Keep the explicit short-circuit here to match Thrift's 0 rows.
-                if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
-                    && _escapePatternWildcards)
-                    return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
-
                 if (_connection.UseDescTableExtended)
                     return await GetColumnsExtendedViaDescTableAsync(catalog, cancellationToken).ConfigureAwait(false);
 
