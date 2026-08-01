@@ -597,5 +597,24 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
             Assert.Equal(0, result.RowCount);
         }
+
+        // Negative direction: the object-not-found catch must ONLY swallow object-not-found
+        // (the `when (ex.IsObjectNotFoundException())` filter). An UNRELATED failure (e.g.
+        // ACCESS_DENIED) must still propagate, not be silently turned into an empty result.
+        // Guards against a regression that broadens the catch (dropping the `when` filter or
+        // over-matching in IsObjectNotFoundException).
+        [Fact]
+        public async Task GetSchemas_UnrelatedError_PropagatesToCaller()
+        {
+            using var http = HttpClientFailingWith("ACCESS_DENIED", "Permission denied on catalog 'main'", "42501");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SqlQuery = "getschemas";
+
+            await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+        }
     }
 }

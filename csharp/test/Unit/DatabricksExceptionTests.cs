@@ -73,5 +73,52 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var ex = new DatabricksException("");
             Assert.False(ex.IsDescTableExtendedUnsupportedException());
         }
+
+        // ─── IsObjectNotFoundException ───────────────────────────────────────────────
+        // Load-bearing for the SEA metadata catch: it must return true for object-not-found
+        // (→ swallow to empty, matching Thrift + JDBC) and false for anything else (→ let it
+        // propagate). The negative cases pin it against over-matching.
+
+        [Fact]
+        public void IsObjectNotFoundException_SqlState42704_ReturnsTrue()
+        {
+            var ex = new DatabricksException("some failure").SetSqlState("42704");
+            Assert.True(ex.IsObjectNotFoundException());
+        }
+
+        [Theory]
+        [InlineData("... [NO_SUCH_CATALOG_EXCEPTION] Catalog 'x' was not found ...")]
+        [InlineData("Statement execution failed: [SCHEMA_NOT_FOUND] The schema ...")]
+        [InlineData("Error Code: TABLE_OR_VIEW_NOT_FOUND, Message: The table ...")]
+        [InlineData("... INVALID_PARAMETER_VALUE ... name \"\" is not a valid name ...")]
+        public void IsObjectNotFoundException_KnownMessage_ReturnsTrue(string message)
+        {
+            var ex = new DatabricksException(message);
+            Assert.True(ex.IsObjectNotFoundException());
+        }
+
+        [Fact]
+        public void IsObjectNotFoundException_UnrelatedMessage_ReturnsFalse()
+        {
+            // ACCESS_DENIED / permission errors must NOT be swallowed.
+            var ex = new DatabricksException("[ACCESS_DENIED] Permission denied on catalog 'main'")
+                .SetSqlState("42501");
+            Assert.False(ex.IsObjectNotFoundException());
+        }
+
+        [Fact]
+        public void IsObjectNotFoundException_UnrelatedSqlState_ReturnsFalse()
+        {
+            var ex = new DatabricksException("Connection timeout while executing query")
+                .SetSqlState("08000");
+            Assert.False(ex.IsObjectNotFoundException());
+        }
+
+        [Fact]
+        public void IsObjectNotFoundException_EmptyMessageNoSqlState_ReturnsFalse()
+        {
+            var ex = new DatabricksException("");
+            Assert.False(ex.IsObjectNotFoundException());
+        }
     }
 }

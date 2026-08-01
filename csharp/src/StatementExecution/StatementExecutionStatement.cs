@@ -1029,12 +1029,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // has NOT asked for wildcards to be escaped. With escape_pattern_wildcards=true
                 // the caller wants "%" treated LITERALLY, matching the Thrift path (which
                 // escapes "%" -> "\%", a literal catalog that matches nothing -> 0 rows).
-                // In that case we leave "%" as a literal identifier here. Thrift parity
-                // (0 rows, no throw) is preserved by the metadata methods themselves:
-                // GetSchemasAsync/GetTablesAsync/GetColumnsAsync short-circuit to an empty
-                // result for the "%"/"*"-catalog + escape case before ever calling
-                // EffectiveCatalog, so they never issue SHOW ... IN `%`. Any other path that
-                // does reach this branch with a literal "%" would surface SCHEMA_NOT_FOUND.
+                // In that case we leave "%" as a literal identifier here, so the metadata
+                // method issues SHOW ... IN `%`; the server returns SCHEMA_NOT_FOUND and the
+                // IsObjectNotFoundException catch maps it to an empty result — matching
+                // Thrift's 0 rows. (There is no separate pre-SHOW short-circuit; the general
+                // object-not-found catch handles this uniformly with every other not-found case.)
                 if (IsMatchAllCatalogPattern(catalog) && !_escapePatternWildcards)
                     catalog = null;
 

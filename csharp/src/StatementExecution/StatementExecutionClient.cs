@@ -22,7 +22,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc;
 
 namespace AdbcDrivers.Databricks.StatementExecution
