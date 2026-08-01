@@ -1095,7 +1095,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // (Verified live thrift-vs-rest against schemas named a\b / a\_b / a\\b: the
             // "already-escaped pass-through" heuristic silently dropped literal backslashes
             // and matched the wrong object.)
-            var sb = new System.Text.StringBuilder(name.Length + 8);
+            var sb = new System.Text.StringBuilder(name.Length);
             for (int i = 0; i < name.Length; i++)
             {
                 char c = name[i];
