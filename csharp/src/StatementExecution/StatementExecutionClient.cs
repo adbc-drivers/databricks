@@ -241,10 +241,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // Check for FAILED state and throw exception (like JDBC driver does).
-            // SEA throws its own DatabricksException (the natural type for the REST/SEA
-            // path). The comparator treats any AdbcException subclass as equivalent and
-            // compares Status + SqlState, so parity with the Thrift path
-            // (HiveServer2Exception) holds without forcing a cross-protocol type here.
+            // SEA throws a HiveServer2Exception to match the Thrift path: callers (and
+            // tests such as StringValueTests.TestVarcharExceptionData) assert on the
+            // exact HiveServer2Exception type, and DatabricksException is a sibling
+            // AdbcException subclass — not an ancestor — so throwing DatabricksException
+            // here would not satisfy those assertions on the SEA/REST path.
             // This fires for ANY execution (metadata or not) whose initial response is
             // immediately FAILED — it is not gated on request.IsMetadata. A regular
             // query that fails synchronously (e.g. a VARCHAR-limit violation) surfaces
@@ -259,7 +260,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     errorMessage += $". Error Code: {error.ErrorCode}, Message: {error.Message}";
                 }
-                var ex = new DatabricksException(errorMessage, AdbcStatusCode.InternalError);
+                var ex = new HiveServer2Exception(errorMessage, AdbcStatusCode.InternalError);
                 if (error?.SqlState != null)
                     ex.SetSqlState(error.SqlState);
                 if (error?.ErrorCode != null && int.TryParse(error.ErrorCode, out int nativeError))
