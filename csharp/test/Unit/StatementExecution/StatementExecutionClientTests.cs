@@ -21,7 +21,9 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.HiveServer2.Hive2;
 using Moq;
 using Moq.Protected;
 using Xunit;
@@ -313,6 +315,43 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var client = new StatementExecutionClient(_httpClient, _testHost);
             await Assert.ThrowsAsync<ArgumentNullException>(() =>
                 client.ExecuteStatementAsync(null!, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task ExecuteStatementAsync_WithFailedState_ThrowsHiveServer2ExceptionWithSqlStateAndNativeError()
+        {
+            // Guards the load-bearing contract of this path: a synchronously-FAILED
+            // execution must surface a HiveServer2Exception (NOT a DatabricksException,
+            // which is a sibling AdbcException subclass) so callers that
+            // catch (HiveServer2Exception) behave identically on the SEA/REST and Thrift
+            // paths. The exact type matters, so assert on it directly here rather than
+            // relying only on the E2E StringValueTests (skipped in CI without a warehouse).
+            var request = new ExecuteStatementRequest { Statement = "SELECT 1" };
+            var responseJson = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-failed",
+                status = new
+                {
+                    state = "FAILED",
+                    error = new
+                    {
+                        error_code = "12345",
+                        message = "value too long for VARCHAR",
+                        sql_state = "22001",
+                    },
+                },
+            });
+
+            SetupMockResponse(HttpStatusCode.OK, responseJson);
+
+            var client = new StatementExecutionClient(_httpClient, _testHost);
+            var exception = await Assert.ThrowsAsync<HiveServer2Exception>(() =>
+                client.ExecuteStatementAsync(request, CancellationToken.None));
+
+            Assert.Equal(AdbcStatusCode.InternalError, exception.Status);
+            Assert.Equal("22001", exception.SqlState);
+            Assert.Equal(12345, exception.NativeError);
+            Assert.Contains("value too long for VARCHAR", exception.Message);
         }
 
         [Fact]

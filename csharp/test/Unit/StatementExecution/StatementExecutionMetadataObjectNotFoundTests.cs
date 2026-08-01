@@ -349,6 +349,28 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
+        public async Task GetColumnsExtended_PercentCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
+        {
+            // getcolumnsextended routes through EffectiveCatalog just like getcolumns, so it must
+            // honor the same #593 short-circuit (otherwise the DESC TABLE EXTENDED path issues
+            // `DESC TABLE EXTENDED \`%\`.…` and propagates SCHEMA_NOT_FOUND instead of empty).
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumnsextended";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Empty(captured);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
         public async Task GetSchemas_StarCatalog_EscapeTrue_ReturnsEmptyWithoutExecuting()
         {
             // "*" is the Databricks alias for "%" in the match-all catalog wildcard

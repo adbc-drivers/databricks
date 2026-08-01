@@ -1477,6 +1477,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (string.IsNullOrEmpty(_metadataTableName))
                     throw new ArgumentException("Table name is required for GetColumnsExtended");
 
+                // Issue #593: see GetSchemasAsync for the full rationale. Same short-circuit here,
+                // so getcolumnsextended matches the plain getcolumns path for catalog="%"/"*" with
+                // escape_pattern_wildcards=true (the DescTable path would otherwise issue
+                // `DESC TABLE EXTENDED \`%\`.…` and propagate the resulting SCHEMA_NOT_FOUND).
+                if (IsMatchAllCatalogPattern(DatabricksConnection.HandleSparkCatalog(_metadataCatalogName))
+                    && _escapePatternWildcards)
+                    return CreateEmptyExtendedColumnsResult(MetadataSchemaFactory.CreateColumnMetadataSchema());
+
                 if (_connection.UseDescTableExtended)
                     return await GetColumnsExtendedViaDescTableAsync(catalog, cancellationToken).ConfigureAwait(false);
 
