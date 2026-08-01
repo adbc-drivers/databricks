@@ -1138,19 +1138,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         /// <summary>
         /// Builds the exception thrown when a statement resolves to FAILED on the async
-        /// polling path. Throws DatabricksException (the natural SEA type) with
-        /// SqlState/NativeError populated from the server error, so the exception identity
-        /// that the comparator compares (Status + SqlState) matches both the synchronous
-        /// FAILED path in StatementExecutionClient and the Thrift path (HiveServer2Connection
-        /// .ThrowErrorResponse). The concrete subclass is not compared — the comparator
-        /// treats any AdbcException as equivalent. Metadata queries usually resolve
-        /// synchronously via the can-run-fully-sync header, but a slow warehouse can push
-        /// them onto this polling path — this keeps object-not-found and other failures
-        /// consistent regardless of timing.
+        /// polling path. Throws HiveServer2Exception — the SAME concrete type as the
+        /// synchronous FAILED path in StatementExecutionClient.ExecuteStatementAsync — so
+        /// the two SEA FAILED paths are type-consistent regardless of whether the initial
+        /// response was immediately FAILED or resolved to FAILED after PENDING/RUNNING.
+        /// This matters for .NET consumers that `catch (HiveServer2Exception)` and for
+        /// tests (e.g. StringValueTests.TestVarcharExceptionDataDatabricks) that assert on
+        /// the exact type: a slow warehouse could otherwise push a synchronously-failing
+        /// query onto this polling path and surface a sibling type. SqlState/NativeError
+        /// are populated from the server error, matching both the synchronous SEA path and
+        /// the Thrift path (HiveServer2Connection.ThrowErrorResponse). The comparator only
+        /// compares Status + SqlState (any AdbcException is equivalent to it), but keeping
+        /// the concrete type identical avoids the timing-dependent divergence above.
+        /// Metadata queries usually resolve synchronously via the can-run-fully-sync
+        /// header, but a slow warehouse can push them onto this polling path — this keeps
+        /// object-not-found and other failures consistent regardless of timing.
         /// </summary>
-        private static DatabricksException NewFailedStateException(StatementError? error)
+        private static HiveServer2Exception NewFailedStateException(StatementError? error)
         {
-            var ex = new DatabricksException(
+            var ex = new HiveServer2Exception(
                 $"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})",
                 AdbcStatusCode.InternalError);
             if (error?.SqlState != null)
