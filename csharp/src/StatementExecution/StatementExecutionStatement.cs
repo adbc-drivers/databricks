@@ -1252,6 +1252,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
+                    activity?.AddEvent("statement.get_schemas.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
                     return MetadataSchemaFactory.CreateEmptySchemasResult();
                 }
 
@@ -1326,6 +1329,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
+                    activity?.AddEvent("statement.get_tables.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
                     return MetadataSchemaFactory.CreateEmptyTablesResult();
                 }
 
@@ -1420,6 +1426,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
+                    activity?.AddEvent("statement.get_columns.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
                     return FlatColumnsResultBuilder.BuildFlatColumnsResult(
                         System.Array.Empty<(string, string, string, TableInfo)>());
                 }
@@ -1672,6 +1681,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
+                    activity?.AddEvent("statement.get_primary_keys.object_not_found", [
+                        new("error", ex.Message)
+                    ]);
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
                 }
 
