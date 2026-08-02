@@ -1740,11 +1740,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-                // Argument validation for the user-facing GetCrossReference, mirroring the
-                // JDBC reference driver's listCrossReferences + resolveKeyBasedParams:
-                //   - null foreign table  -> empty result (Thrift returns empty; "unspecified")
-                //   - foreign catalog set + foreign schema null -> throw (avoids Thrift's
-                //     internal "GET_FUNCTIONS assertion failed" and matches JDBC's clean error)
+                // Argument handling for the user-facing GetCrossReference, mirroring the JDBC
+                // reference driver's SEA path (DatabricksMetadataQueryClient.listCrossReferences):
+                //   - foreign table null -> empty result. JDBC SEA checks ONLY the foreign table
+                //     (it never inspects the parent table) and returns empty for "unspecified".
+                //     We match that: null foreign table -> empty, regardless of the parent table.
+                //     (Live Thrift instead throws 42000 when BOTH tables are null; ADBC SEA follows
+                //     JDBC SEA here, not Thrift, so the comparator whitelists that one input.)
+                //   - foreign catalog set + foreign schema null -> throw 42000, mirroring JDBC
+                //     SEA resolveKeyBasedParams "schema may not be null when catalog is specified"
+                //     (and avoiding Thrift's internal "GET_FUNCTIONS assertion failed" 08000 bug).
                 if (string.IsNullOrEmpty(_metadataForeignTableName))
                     return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 

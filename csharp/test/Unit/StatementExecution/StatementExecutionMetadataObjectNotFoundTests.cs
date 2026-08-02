@@ -497,16 +497,41 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task GetCrossReference_NullForeignTable_ReturnsEmpty()
+        public async Task GetCrossReference_BothTablesNull_ReturnsEmpty()
         {
-            // JDBC (listCrossReferences): a null foreign table means "unspecified" and
-            // returns an EMPTY result (Thrift returns empty too) — it does NOT throw.
+            // JDBC SEA (DatabricksMetadataQueryClient.listCrossReferences) checks ONLY the
+            // foreign table: a null foreign table means "unspecified" and returns an empty
+            // result — it never inspects the parent table. ADBC SEA mirrors JDBC SEA here, so
+            // BOTH tables null → empty (NOT a throw). Live Thrift instead throws 42000 for the
+            // both-null case; ADBC SEA follows JDBC SEA, and the comparator whitelists that one
+            // input as a Thrift-vs-SEA divergence.
             using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
             stmt.SetOption(ApacheParameters.ForeignSchemaName, "some_schema");
-            // Foreign table deliberately not set (null).
+            // Neither parent table nor foreign table set (both null).
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ParentTableSetForeignTableNull_ReturnsEmpty()
+        {
+            // JDBC SEA: a null foreign table returns empty regardless of the parent table
+            // (listCrossReferences short-circuits on foreignTable == null before looking at
+            // the parent side). SEA must return empty here too.
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "some_schema");
+            stmt.SetOption(ApacheParameters.TableName, "fk_parent");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "some_schema");
+            // Foreign table deliberately not set (null) while the parent table IS set.
             stmt.SqlQuery = "getcrossreference";
 
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
