@@ -126,7 +126,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return new HttpClient(handler.Object);
         }
 
-        private static StatementExecutionStatement CreateMetadataStatement(HttpClient httpClient)
+        private static StatementExecutionStatement CreateMetadataStatement(
+            HttpClient httpClient, IReadOnlyDictionary<string, string>? extraProperties = null)
         {
             var properties = new Dictionary<string, string>
             {
@@ -134,6 +135,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 { DatabricksParameters.WarehouseId, "wh-1" },
                 { SparkParameters.AccessToken, "token" },
             };
+            if (extraProperties != null)
+            {
+                foreach (var kv in extraProperties)
+                    properties[kv.Key] = kv.Value;
+            }
 
             var connection = new StatementExecutionConnection(properties, httpClient);
             // The outer statement's IStatementExecutionClient is unused on the metadata
@@ -545,6 +551,44 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
             Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
             Assert.Equal("42000", ex.SqlState);
+        }
+
+        // When PK/FK is disabled, the driver returns empty PK/FK metadata uniformly, and
+        // the arg-validation throws must NOT fire — both exact-match ops behave the same.
+        // GetPrimaryKeysAsync already short-circuits before validation; this pins that
+        // GetCrossReferenceAsync does too (regression: it used to throw before the guard).
+
+        [Fact]
+        public async Task GetCrossReference_PKFKDisabled_ForeignCatalogSetForeignSchemaNull_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http,
+                new Dictionary<string, string> { { DatabricksParameters.EnablePKFK, "false" } });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            // Foreign schema deliberately null while foreign catalog IS set — would throw
+            // if PK/FK were enabled, but the disabled feature must short-circuit to empty.
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetPrimaryKeys_PKFKDisabled_CatalogSetSchemaNull_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http,
+                new Dictionary<string, string> { { DatabricksParameters.EnablePKFK, "false" } });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            // SchemaName deliberately null while catalog IS set — the sibling of the above.
+            stmt.SqlQuery = "getprimarykeys";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
         }
 
         // ─── Object-not-found errors are SWALLOWED to an empty result ────────────────
