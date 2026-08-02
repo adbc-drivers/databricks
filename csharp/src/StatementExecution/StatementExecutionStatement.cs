@@ -1731,6 +1731,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
                 activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
+                // When the PK/FK feature is disabled (or neither catalog is a valid PKFK
+                // catalog), short-circuit to an empty result BEFORE any argument validation,
+                // mirroring GetPrimaryKeysAsync. Otherwise this method would throw for a
+                // foreign-catalog-set/foreign-schema-null request while the sibling returns
+                // empty for the equivalent GetPrimaryKeys request, diverging from both the
+                // sibling method and the disabled-feature contract (MetadataUtilities.cs).
+                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK))
+                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+
                 // Argument validation for the user-facing GetCrossReference, mirroring the
                 // JDBC reference driver's listCrossReferences + resolveKeyBasedParams:
                 //   - null foreign table  -> empty result (Thrift returns empty; "unspecified")
