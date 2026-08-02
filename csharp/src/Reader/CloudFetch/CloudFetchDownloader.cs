@@ -315,10 +315,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 long totalBytes = 0;
                 var overallStopwatch = Stopwatch.StartNew();
 
+                // Keep track of active download tasks. Hoisted to method scope so the
+                // finally block can drain in-flight downloads on the cancellation path
+                // (partial-read + dispose): otherwise those tasks are orphaned and their
+                // buffers + acquired memory outlive disposal, which looks like a leak.
+                var downloadTasks = new ConcurrentDictionary<Task, IDownloadResult>();
+
                 try
                 {
-                    // Keep track of active download tasks
-                    var downloadTasks = new ConcurrentDictionary<Task, IDownloadResult>();
                     var downloadTaskCompletionSource = new TaskCompletionSource<bool>();
 
                     // Process items from the download queue until it's completed
@@ -517,6 +521,29 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 }
                 finally
                 {
+                    // Drain any in-flight per-file download tasks before returning. On the
+                    // cancellation path (partial-read + dispose) the foreach above exits via
+                    // OperationCanceledException WITHOUT reaching the end-of-results
+                    // Task.WhenAll, so without this the downloads keep running orphaned —
+                    // their file buffers and acquired memory outlive Dispose and register as a
+                    // leak under load. Each task's continuation already releases the semaphore
+                    // and memory and removes itself from the dictionary; awaiting them here
+                    // makes disposal deterministic. Their DownloadResults remain in the queues,
+                    // which CloudFetchDownloadManager.Dispose drains and disposes.
+                    if (!downloadTasks.IsEmpty)
+                    {
+                        try
+                        {
+                            await Task.WhenAll(downloadTasks.Keys).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Individual tasks handle their own errors; a cancelled/faulted
+                            // in-flight download must not mask the original loop exit.
+                            activity?.AddException(ex, [new("error.context", "cloudfetch.drain_inflight_on_exit")]);
+                        }
+                    }
+
                     overallStopwatch.Stop();
 
                     activity?.AddEvent("cloudfetch.download_summary", [
