@@ -491,14 +491,33 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task GetCrossReference_NullTables_ThrowsWithThriftStatusAndSqlState()
+        public async Task GetCrossReference_NullForeignTable_ReturnsEmpty()
         {
+            // JDBC (listCrossReferences): a null foreign table means "unspecified" and
+            // returns an EMPTY result (Thrift returns empty too) — it does NOT throw.
             using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
             stmt.SetOption(ApacheParameters.ForeignSchemaName, "some_schema");
-            // Neither foreign table nor parent table set (both null).
+            // Foreign table deliberately not set (null).
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ForeignCatalogSetForeignSchemaNull_Throws()
+        {
+            // Foreign catalog set + foreign schema null (with a foreign table) → throw,
+            // mirroring JDBC resolveKeyBasedParams and avoiding Thrift's assertion-failed bug.
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            // Foreign schema deliberately not set (null) while foreign catalog IS set.
             stmt.SqlQuery = "getcrossreference";
 
             var ex = await Assert.ThrowsAsync<DatabricksException>(
@@ -521,23 +540,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             stmt.SetOption(ApacheParameters.TableName, "t");
             // SchemaName deliberately not set (null) while catalog IS set.
             stmt.SqlQuery = "getprimarykeys";
-
-            var ex = await Assert.ThrowsAsync<DatabricksException>(
-                () => stmt.ExecuteQueryAsync(CancellationToken.None));
-            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
-            Assert.Equal("42000", ex.SqlState);
-        }
-
-        [Fact]
-        public async Task GetCrossReference_ForeignCatalogSetSchemaNull_Throws()
-        {
-            using var http = HttpClientCapturingStatements(new List<string>());
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
-            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
-            // ForeignSchemaName deliberately not set (null) while foreign catalog IS set.
-            stmt.SqlQuery = "getcrossreference";
 
             var ex = await Assert.ThrowsAsync<DatabricksException>(
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));

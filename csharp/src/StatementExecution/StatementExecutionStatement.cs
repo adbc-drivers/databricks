@@ -1580,7 +1580,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (columnsResult.Stream == null)
                 return columnsResult;
 
-            var pkResult = await GetPrimaryKeysAsync(cancellationToken).ConfigureAwait(false);
+            // validateArgs: false — this is the internal columns-extended reuse, not the
+            // user-facing getprimarykeys command; a null schema here is legitimate.
+            var pkResult = await GetPrimaryKeysAsync(cancellationToken, validateArgs: false).ConfigureAwait(false);
 
             // Find FKs where the current table is the FK (child) side — null PK params to
             // match any parent, mirroring Thrift's GetCrossReferenceAsForeignTableAsync.
@@ -1643,7 +1645,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return new QueryResult(totalRows, new HiveInfoArrowStream(combinedSchema, combinedData));
         }
 
-        private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
+        // validateArgs=true for the user-facing getprimarykeys command; false when called
+        // internally by GetColumnsExtendedViaThreeCalls (which reuses this to gather PKs for
+        // a column set and legitimately passes a null schema — it must not be rejected).
+        private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken, bool validateArgs = true)
         {
             return await this.TraceActivityAsync(async activity =>
             {
@@ -1662,13 +1667,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Validating here (before issuing SHOW KEYS) also avoids the Thrift server's
                 // internal "GET_FUNCTIONS assertion failed" bug on schema-null, and gives a
                 // clean, deterministic error instead of relying on a server round-trip.
-                if (string.IsNullOrEmpty(_metadataTableName))
-                    throw NewInvalidArgumentException("tableName may not be null");
+                if (validateArgs)
+                {
+                    if (string.IsNullOrEmpty(_metadataTableName))
+                        throw NewInvalidArgumentException("tableName may not be null");
 
-                if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
-                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+                    if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
+                        throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+                }
 
-                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName))
+                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName)
+                    || string.IsNullOrEmpty(_metadataTableName))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
                 string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
@@ -1722,6 +1731,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
                 activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
+                // Argument validation for the user-facing GetCrossReference, mirroring the
+                // JDBC reference driver's listCrossReferences + resolveKeyBasedParams:
+                //   - null foreign table  -> empty result (Thrift returns empty; "unspecified")
+                //   - foreign catalog set + foreign schema null -> throw (avoids Thrift's
+                //     internal "GET_FUNCTIONS assertion failed" and matches JDBC's clean error)
+                if (string.IsNullOrEmpty(_metadataForeignTableName))
+                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+
+                if (!string.IsNullOrEmpty(_metadataForeignCatalogName)
+                    && string.IsNullOrEmpty(_metadataForeignSchemaName))
+                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+
                 var result = await FetchCrossReferenceAsync(
                     _metadataCatalogName, _metadataSchemaName, _metadataTableName,
                     _metadataForeignCatalogName, _metadataForeignSchemaName, _metadataForeignTableName,
@@ -1745,18 +1766,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (MetadataUtilities.ShouldReturnEmptyPKFKResult(pkCatalog, fkCatalog, _connection.EnablePKFK))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-            // GetCrossReference is an exact-match operation. Validate client-side
-            // (mirroring the JDBC reference driver's resolveKeyBasedParams), which also
-            // avoids the Thrift server's internal "GET_FUNCTIONS assertion failed" bug on
-            // a null foreign schema:
-            //   - both foreign table and parent table null -> throw
-            //   - foreign catalog set + foreign schema null -> throw
-            if (string.IsNullOrEmpty(fkTable) && string.IsNullOrEmpty(pkTable))
-                throw NewInvalidArgumentException("foreignTable and parentTableName are both null");
-
-            if (!string.IsNullOrEmpty(fkCatalog) && string.IsNullOrEmpty(fkSchema))
-                throw NewInvalidArgumentException("schema may not be null when catalog is specified");
-
+            // NOTE: argument validation (foreign-table/foreign-schema) lives in the
+            // user-facing GetCrossReferenceAsync entry, NOT here — this core fetch is also
+            // called by GetColumnsExtendedViaThreeCalls with the current table as the FK
+            // side (which legitimately passes a null schema), and must not reject that.
             if (string.IsNullOrEmpty(fkCatalog) || string.IsNullOrEmpty(fkSchema) || string.IsNullOrEmpty(fkTable))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
