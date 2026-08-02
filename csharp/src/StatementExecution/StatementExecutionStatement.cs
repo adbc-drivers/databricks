@@ -1120,22 +1120,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         /// <summary>
-        /// Builds the exception SEA throws for a missing exact-match argument on
-        /// GetPrimaryKeys / GetCrossReference, matching the Thrift path: Thrift's
-        /// TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with
-        /// AdbcStatusCode.InternalError, SqlState 42000. SEA throws its own
-        /// DatabricksException (the natural SEA type); the comparator treats any
-        /// AdbcException subclass as equivalent and compares Status + SqlState, so
-        /// those two must match the Thrift result (the concrete type need not).
-        /// </summary>
-        private static DatabricksException NewInvalidArgumentException(string detail)
-        {
-            var ex = new DatabricksException($"Invalid argument: {detail}", AdbcStatusCode.InternalError);
-            ex.SetSqlState("42000");
-            return ex;
-        }
-
-        /// <summary>
         /// Builds the exception thrown when a statement resolves to FAILED on the async
         /// polling path. Throws DatabricksException — the SAME concrete type as the
         /// synchronous FAILED path in StatementExecutionClient.ExecuteStatementAsync — so
@@ -1580,9 +1564,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (columnsResult.Stream == null)
                 return columnsResult;
 
-            // validateArgs: false — this is the internal columns-extended reuse, not the
-            // user-facing getprimarykeys command; a null schema here is legitimate.
-            var pkResult = await GetPrimaryKeysAsync(cancellationToken, validateArgs: false).ConfigureAwait(false);
+            var pkResult = await GetPrimaryKeysAsync(cancellationToken).ConfigureAwait(false);
 
             // Find FKs where the current table is the FK (child) side — null PK params to
             // match any parent, mirroring Thrift's GetCrossReferenceAsForeignTableAsync.
@@ -1645,10 +1627,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return new QueryResult(totalRows, new HiveInfoArrowStream(combinedSchema, combinedData));
         }
 
-        // validateArgs=true for the user-facing getprimarykeys command; false when called
-        // internally by GetColumnsExtendedViaThreeCalls (which reuses this to gather PKs for
-        // a column set and legitimately passes a null schema — it must not be rejected).
-        private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken, bool validateArgs = true)
+        private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
         {
             return await this.TraceActivityAsync(async activity =>
             {
@@ -1659,22 +1638,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
-
-                // GetPrimaryKeys is an exact-match operation. Validate required args
-                // client-side (mirroring the JDBC reference driver's resolveKeyBasedParams):
-                //   - table null/empty          -> throw "tableName may not be null"
-                //   - catalog set + schema null -> throw "schema may not be null when catalog is specified"
-                // Validating here (before issuing SHOW KEYS) also avoids the Thrift server's
-                // internal "GET_FUNCTIONS assertion failed" bug on schema-null, and gives a
-                // clean, deterministic error instead of relying on a server round-trip.
-                if (validateArgs)
-                {
-                    if (string.IsNullOrEmpty(_metadataTableName))
-                        throw NewInvalidArgumentException("tableName may not be null");
-
-                    if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
-                        throw NewInvalidArgumentException("schema may not be null when catalog is specified");
-                }
 
                 if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName)
                     || string.IsNullOrEmpty(_metadataTableName))
@@ -1731,18 +1694,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
                 activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-                // Argument validation for the user-facing GetCrossReference, mirroring the
-                // JDBC reference driver's listCrossReferences + resolveKeyBasedParams:
-                //   - null foreign table  -> empty result (Thrift returns empty; "unspecified")
-                //   - foreign catalog set + foreign schema null -> throw (avoids Thrift's
-                //     internal "GET_FUNCTIONS assertion failed" and matches JDBC's clean error)
-                if (string.IsNullOrEmpty(_metadataForeignTableName))
-                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-
-                if (!string.IsNullOrEmpty(_metadataForeignCatalogName)
-                    && string.IsNullOrEmpty(_metadataForeignSchemaName))
-                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
-
                 var result = await FetchCrossReferenceAsync(
                     _metadataCatalogName, _metadataSchemaName, _metadataTableName,
                     _metadataForeignCatalogName, _metadataForeignSchemaName, _metadataForeignTableName,
@@ -1766,10 +1717,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (MetadataUtilities.ShouldReturnEmptyPKFKResult(pkCatalog, fkCatalog, _connection.EnablePKFK))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-            // NOTE: argument validation (foreign-table/foreign-schema) lives in the
-            // user-facing GetCrossReferenceAsync entry, NOT here — this core fetch is also
-            // called by GetColumnsExtendedViaThreeCalls with the current table as the FK
-            // side (which legitimately passes a null schema), and must not reject that.
             if (string.IsNullOrEmpty(fkCatalog) || string.IsNullOrEmpty(fkSchema) || string.IsNullOrEmpty(fkTable))
                 return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
