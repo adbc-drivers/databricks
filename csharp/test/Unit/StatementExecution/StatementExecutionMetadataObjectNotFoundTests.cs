@@ -464,13 +464,37 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Contains("SHOW SCHEMAS IN ALL CATALOGS", captured);
         }
 
-        // GetCrossReference with a null foreign table returns an EMPTY result (JDBC's
-        // listCrossReferences treats a null foreign table as "unspecified"; Thrift returns
-        // empty too). This holds independent of exact-match argument validation (which is
-        // added in a separate, stacked PR).
+        // ─── Exact-match ops throw on missing table, matching the Thrift path ─────────
+        // GetPrimaryKeys / GetCrossReference are exact-match (table required). Thrift's
+        // TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with
+        // AdbcStatusCode.InternalError + SqlState 42000 when the table is null; SEA must
+        // throw an equivalent error instead of returning empty. SEA throws its own
+        // DatabricksException (the natural SEA type); the comparator treats any
+        // AdbcException subclass as equivalent and compares Status + SqlState, so those
+        // two are the load-bearing assertions here (not the concrete type).
+
+        [Fact]
+        public async Task GetPrimaryKeys_NullTable_ThrowsWithThriftStatusAndSqlState()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "some_schema");
+            // TableName deliberately not set (null).
+            stmt.SqlQuery = "getprimarykeys";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
         [Fact]
         public async Task GetCrossReference_NullForeignTable_ReturnsEmpty()
         {
+            // JDBC (listCrossReferences): a null foreign table means "unspecified" and
+            // returns an EMPTY result (Thrift returns empty too) — it does NOT throw.
             using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
@@ -481,6 +505,46 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
             Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ForeignCatalogSetForeignSchemaNull_Throws()
+        {
+            // Foreign catalog set + foreign schema null (with a foreign table) → throw,
+            // mirroring JDBC resolveKeyBasedParams and avoiding Thrift's assertion-failed bug.
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            // Foreign schema deliberately not set (null) while foreign catalog IS set.
+            stmt.SqlQuery = "getcrossreference";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        // Exact-match ops also require schema when catalog is specified (mirroring the JDBC
+        // reference driver's resolveKeyBasedParams). Validating client-side gives a clean
+        // error and avoids the Thrift server's internal "GET_FUNCTIONS assertion failed" bug
+        // on a null schema.
+        [Fact]
+        public async Task GetPrimaryKeys_CatalogSetSchemaNull_Throws()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            // SchemaName deliberately not set (null) while catalog IS set.
+            stmt.SqlQuery = "getprimarykeys";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
         }
 
         // ─── Object-not-found errors are SWALLOWED to an empty result ────────────────
