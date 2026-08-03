@@ -49,9 +49,16 @@ namespace AdbcDrivers.Databricks.Tests
 
         /// <summary>
         /// Read only 1 batch from a large result, then dispose the statement, repeatedly.
-        /// Verifies the result pipeline (CloudFetch download tasks / inline decompression
-        /// buffers / Arrow readers) is fully released on partial consumption — nothing stays
-        /// rooted after the reader is disposed.
+        /// Verifies the disposed reader's object graph is fully collectable on partial
+        /// consumption — i.e. the reader and anything transitively reachable from it (its
+        /// CloudFetch download tasks, decompression buffers, and Arrow readers) is released
+        /// once the reader is disposed and goes out of scope.
+        ///
+        /// Scope of the check: this asserts reachability of the reader graph via a
+        /// <see cref="WeakReference"/> to the reader. It does NOT detect a buffer or pool
+        /// entry that is rooted independently of the reader (e.g. retained in a
+        /// connection/database-scoped RecyclableMemoryStreamManager free list) — such an
+        /// object leaves the reader collectable and would not show up here.
         ///
         /// Leak detection is by <see cref="WeakReference"/>, NOT by a GC.GetTotalMemory delta.
         /// A managed-memory delta is unusable here: the decompressed result arrays are &gt;85KB
@@ -60,8 +67,9 @@ namespace AdbcDrivers.Databricks.Tests
         /// ~50→122MB then flat) even though every disposed reader is collectable. That plateau is
         /// GC heap accounting, not a leak. Weak references measure the real invariant directly:
         /// after dispose + a full GC, the readers must be collected. (Verified on the CI runner:
-        /// aliveReaders=0/7 while GC.GetTotalMemory plateaued at 122MB.) A genuine leak — a
-        /// download task, buffer, or reader still rooted after dispose — keeps its weak ref alive.
+        /// aliveReaders=0/7 while GC.GetTotalMemory plateaued at 122MB.) A genuine leak that
+        /// keeps the disposed reader graph rooted — e.g. a download task or continuation still
+        /// holding the reader — keeps its weak ref alive.
         /// </summary>
         [SkippableFact]
         public async Task PartialRead_DisposeStatement_ShouldNotHangOrLeak()
@@ -100,7 +108,8 @@ namespace AdbcDrivers.Databricks.Tests
 
             // Every disposed reader must be collectable. Allow 1 for a benign straggler
             // (e.g. a just-completed finalizer/continuation not yet reclaimed); more than that
-            // means the partial-read/dispose path is rooting result buffers — a real leak.
+            // means the partial-read/dispose path is keeping the disposed reader graph rooted
+            // — a real leak of the reader and everything reachable from it.
             Assert.True(aliveReaders <= 1,
                 $"Possible pipeline leak on partial consumption: {aliveReaders}/{readerRefs.Count} " +
                 $"disposed result readers remained rooted after a full GC.");
