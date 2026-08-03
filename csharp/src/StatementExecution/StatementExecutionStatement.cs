@@ -1584,11 +1584,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // a null schema (legitimately passed here while gathering PKs for a column set)
             // must NOT be rejected. Call the non-throwing internal, which returns an empty PK
             // result for such "unspecified" args instead of throwing.
-            var pkResult = await GetPrimaryKeysAsyncInternal(cancellationToken).ConfigureAwait(false);
+            var pkResult = await GetPrimaryKeysAsyncInternal(
+                _metadataCatalogName, _metadataSchemaName, _metadataTableName,
+                cancellationToken).ConfigureAwait(false);
 
             // Find FKs where the current table is the FK (child) side — null PK params to
-            // match any parent, mirroring Thrift's GetCrossReferenceAsForeignTableAsync.
-            var fkResult = await FetchCrossReferenceAsync(
+            // match any parent, mirroring Thrift's GetCrossReferenceAsForeignTableAsync. The
+            // non-throwing internal returns empty for the null PK side / any unspecified arg.
+            var fkResult = await GetCrossReferenceAsyncInternal(
                 pkCatalog: null, pkSchema: null, pkTable: null,
                 fkCatalog: _metadataCatalogName, fkSchema: _metadataSchemaName, fkTable: _metadataTableName,
                 cancellationToken).ConfigureAwait(false);
@@ -1669,33 +1672,39 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     throw NewInvalidArgumentException("schema may not be null when catalog is specified");
             }
 
-            return await GetPrimaryKeysAsyncInternal(cancellationToken).ConfigureAwait(false);
+            return await GetPrimaryKeysAsyncInternal(
+                _metadataCatalogName, _metadataSchemaName, _metadataTableName,
+                cancellationToken).ConfigureAwait(false);
         }
 
-        // Non-throwing core of GetPrimaryKeys: issues SHOW KEYS and shapes the result, returning
-        // an empty result for unspecified/invalid args (null catalog/schema/table or a disabled
-        // feature) rather than throwing. Argument validation lives in the public GetPrimaryKeysAsync
-        // wrapper; this is safe to call directly from GetColumnsExtendedViaThreeCalls, which reuses
-        // it to gather PKs for a column set and legitimately passes a null schema.
-        private async Task<QueryResult> GetPrimaryKeysAsyncInternal(CancellationToken cancellationToken)
+        /// <summary>
+        /// Non-throwing core of GetPrimaryKeys with explicit params: issues SHOW KEYS and shapes the
+        /// result, returning an empty result for unspecified/invalid args (null catalog/schema/table
+        /// or a disabled feature) rather than throwing. Argument validation lives in the public
+        /// GetPrimaryKeysAsync wrapper; this is safe to call directly from GetColumnsExtendedViaThreeCalls,
+        /// which reuses it to gather PKs for a column set and legitimately passes a null schema.
+        /// </summary>
+        private async Task<QueryResult> GetPrimaryKeysAsyncInternal(
+            string? catalog, string? schema, string? table,
+            CancellationToken cancellationToken)
         {
             return await this.TraceActivityAsync(async activity =>
             {
-                activity?.SetTag("catalog", _metadataCatalogName ?? "(none)");
-                activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
-                activity?.SetTag("table", _metadataTableName ?? "(none)");
+                activity?.SetTag("catalog", catalog ?? "(none)");
+                activity?.SetTag("schema", schema ?? "(none)");
+                activity?.SetTag("table", table ?? "(none)");
                 activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
+                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(catalog, null, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
                 // Unspecified args (any of catalog/schema/table null or empty) -> empty result,
                 // NOT a throw. The public wrapper has already rejected those it must reject.
-                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName)
-                    || string.IsNullOrEmpty(_metadataTableName))
+                if (string.IsNullOrEmpty(catalog) || string.IsNullOrEmpty(schema)
+                    || string.IsNullOrEmpty(table))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-                string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
+                string sql = new ShowKeysCommand(catalog!, schema!, table!).Build();
                 activity?.SetTag("sql_query", sql);
 
                 List<RecordBatch> batches;
@@ -1724,7 +1733,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         if (colNameArray.IsNull(i)) continue;
                         int keySeq = keySeqArray != null && !keySeqArray.IsNull(i) ? keySeqArray.GetValue(i)!.Value : ++seq;
                         string pkName = keyNameArray != null && !keyNameArray.IsNull(i) ? keyNameArray.GetString(i) : "";
-                        keys.Add((_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!,
+                        keys.Add((catalog!, schema!, table!,
                             colNameArray.GetString(i), keySeq, pkName));
                     }
                 }
@@ -1739,8 +1748,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // (DatabricksMetadataQueryClient.resolveKeyBasedParams): a foreign catalog set with a null
         // foreign schema -> clean 42000, instead of the Thrift server's internal "GET_FUNCTIONS
         // assertion failed" 08000 bug. The actual work lives in GetCrossReferenceAsyncInternal,
-        // which does NOT throw; the columns-extended reuse goes through FetchCrossReferenceAsync
-        // directly so its legitimately-unspecified args return empty.
+        // which does NOT throw; the columns-extended reuse calls that directly (with the current
+        // table as the FK side) so its legitimately-unspecified args return empty.
         private async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken)
         {
             // Throw only in the case the internal would otherwise reach a live fetch for: the
@@ -1754,118 +1763,104 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 && string.IsNullOrEmpty(_metadataForeignSchemaName))
                 throw NewInvalidArgumentException("schema may not be null when catalog is specified");
 
-            return await GetCrossReferenceAsyncInternal(cancellationToken).ConfigureAwait(false);
-        }
-
-        // Non-throwing core of GetCrossReference: reads the statement's PK/FK fields, short-circuits
-        // to empty for a disabled feature or an unspecified foreign table (JDBC SEA checks ONLY the
-        // foreign table — a null one is "unspecified" and returns empty, regardless of the parent
-        // table; live Thrift instead throws 42000 for both-tables-null, an intentional divergence
-        // the comparator whitelists), then delegates to the shared FetchCrossReferenceAsync core.
-        // Argument validation lives in the public GetCrossReferenceAsync wrapper.
-        private async Task<QueryResult> GetCrossReferenceAsyncInternal(CancellationToken cancellationToken)
-        {
-            return await this.TraceActivityAsync(async activity =>
-            {
-                activity?.SetTag("pk_catalog", _metadataCatalogName ?? "(none)");
-                activity?.SetTag("pk_schema", _metadataSchemaName ?? "(none)");
-                activity?.SetTag("pk_table", _metadataTableName ?? "(none)");
-                activity?.SetTag("fk_catalog", _metadataForeignCatalogName ?? "(none)");
-                activity?.SetTag("fk_schema", _metadataForeignSchemaName ?? "(none)");
-                activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
-                activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
-
-                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK))
-                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-
-                if (string.IsNullOrEmpty(_metadataForeignTableName))
-                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-
-                var result = await FetchCrossReferenceAsync(
-                    _metadataCatalogName, _metadataSchemaName, _metadataTableName,
-                    _metadataForeignCatalogName, _metadataForeignSchemaName, _metadataForeignTableName,
-                    cancellationToken).ConfigureAwait(false);
-
-                activity?.SetTag("result_count", result.RowCount);
-                return result;
-            }, "GetCrossReference").ConfigureAwait(false);
+            return await GetCrossReferenceAsyncInternal(
+                _metadataCatalogName, _metadataSchemaName, _metadataTableName,
+                _metadataForeignCatalogName, _metadataForeignSchemaName, _metadataForeignTableName,
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Core cross-reference fetch with explicit params. Used by both GetCrossReferenceAsync
-        /// (user-facing, reads from statement fields) and GetColumnsExtendedViaThreeCalls
-        /// (passes current table as the FK side with null PK params to match any parent).
+        /// Non-throwing core of GetCrossReference with explicit params: issues SHOW FOREIGN KEYS
+        /// and shapes the result, returning an empty result for a disabled feature or any
+        /// unspecified foreign arg (JDBC SEA checks ONLY the foreign table — a null one is
+        /// "unspecified" and returns empty, regardless of the parent table; live Thrift instead
+        /// throws 42000 for both-tables-null, an intentional divergence the comparator whitelists)
+        /// rather than throwing. Argument validation lives in the public GetCrossReferenceAsync
+        /// wrapper; this is safe to call directly from GetColumnsExtendedViaThreeCalls, which passes
+        /// the current table as the FK side with null PK params to match any parent.
         /// </summary>
-        private async Task<QueryResult> FetchCrossReferenceAsync(
+        private async Task<QueryResult> GetCrossReferenceAsyncInternal(
             string? pkCatalog, string? pkSchema, string? pkTable,
             string? fkCatalog, string? fkSchema, string? fkTable,
             CancellationToken cancellationToken)
         {
-            if (MetadataUtilities.ShouldReturnEmptyPKFKResult(pkCatalog, fkCatalog, _connection.EnablePKFK))
-                return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-
-            // NOTE: argument validation (foreign-table/foreign-schema) lives in the
-            // user-facing GetCrossReferenceAsync entry, NOT here — this core fetch is also
-            // called by GetColumnsExtendedViaThreeCalls with the current table as the FK
-            // side (which legitimately passes a null schema), and must not reject that.
-            if (string.IsNullOrEmpty(fkCatalog) || string.IsNullOrEmpty(fkSchema) || string.IsNullOrEmpty(fkTable))
-                return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-
-            string sql = new ShowForeignKeysCommand(fkCatalog!, fkSchema!, fkTable!).Build();
-
-            List<RecordBatch> batches;
-            try
+            return await this.TraceActivityAsync(async activity =>
             {
-                batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-            }
-            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-            {
-                return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-            }
+                activity?.SetTag("pk_catalog", pkCatalog ?? "(none)");
+                activity?.SetTag("pk_schema", pkSchema ?? "(none)");
+                activity?.SetTag("pk_table", pkTable ?? "(none)");
+                activity?.SetTag("fk_catalog", fkCatalog ?? "(none)");
+                activity?.SetTag("fk_schema", fkSchema ?? "(none)");
+                activity?.SetTag("fk_table", fkTable ?? "(none)");
+                activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-            var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
-            int seq = 0;
-            foreach (var batch in batches)
-            {
-                var pkCatalogArray = TryGetColumn<StringArray>(batch, "parentCatalogName");
-                var pkSchemaArray = TryGetColumn<StringArray>(batch, "parentNamespace");
-                var pkTableArray = TryGetColumn<StringArray>(batch, "parentTableName");
-                var pkColArray = TryGetColumn<StringArray>(batch, "parentColName");
-                var fkCatalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                var fkSchemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                var fkTableArray = TryGetColumn<StringArray>(batch, "tableName");
-                var fkColArray = TryGetColumn<StringArray>(batch, "col_name");
-                var fkNameArray = TryGetColumn<StringArray>(batch, "constraintName");
-                var fkKeySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
-                var fkUpdateRuleArray = TryGetColumn<Int32Array>(batch, "updateRule");
-                var fkDeleteRuleArray = TryGetColumn<Int32Array>(batch, "deleteRule");
-                var fkDeferrabilityArray = TryGetColumn<Int32Array>(batch, "deferrability");
+                if (MetadataUtilities.ShouldReturnEmptyPKFKResult(pkCatalog, fkCatalog, _connection.EnablePKFK))
+                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-                if (fkColArray == null) continue;
+                // Any unspecified foreign arg (foreign catalog/schema/table null or empty) -> empty
+                // result, NOT a throw. The public wrapper has already rejected the one case it must
+                // reject (foreign catalog set + foreign schema null with a specified foreign table).
+                if (string.IsNullOrEmpty(fkCatalog) || string.IsNullOrEmpty(fkSchema) || string.IsNullOrEmpty(fkTable))
+                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-                for (int i = 0; i < batch.Length; i++)
+                string sql = new ShowForeignKeysCommand(fkCatalog!, fkSchema!, fkTable!).Build();
+                activity?.SetTag("sql_query", sql);
+
+                List<RecordBatch> batches;
+                try
                 {
-                    if (fkColArray.IsNull(i)) continue;
-                    refs.Add((
-                        pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : pkCatalog ?? "",
-                        pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : pkSchema ?? "",
-                        pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : pkTable ?? "",
-                        pkColArray != null && !pkColArray.IsNull(i) ? pkColArray.GetString(i) : "",
-                        fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : fkCatalog!,
-                        fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : fkSchema!,
-                        fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : fkTable!,
-                        fkColArray.GetString(i),
-                        fkKeySeqArray != null && !fkKeySeqArray.IsNull(i) ? fkKeySeqArray.GetValue(i)!.Value : ++seq,
-                        fkUpdateRuleArray != null && !fkUpdateRuleArray.IsNull(i) ? fkUpdateRuleArray.GetValue(i)!.Value : 0,
-                        fkDeleteRuleArray != null && !fkDeleteRuleArray.IsNull(i) ? fkDeleteRuleArray.GetValue(i)!.Value : 0,
-                        fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : "",
-                        (string?)null,
-                        fkDeferrabilityArray != null && !fkDeferrabilityArray.IsNull(i) ? fkDeferrabilityArray.GetValue(i)!.Value : 5
-                    ));
+                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
                 }
-            }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
+                }
 
-            return MetadataSchemaFactory.BuildCrossReferenceResult(refs);
+                var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
+                int seq = 0;
+                foreach (var batch in batches)
+                {
+                    var pkCatalogArray = TryGetColumn<StringArray>(batch, "parentCatalogName");
+                    var pkSchemaArray = TryGetColumn<StringArray>(batch, "parentNamespace");
+                    var pkTableArray = TryGetColumn<StringArray>(batch, "parentTableName");
+                    var pkColArray = TryGetColumn<StringArray>(batch, "parentColName");
+                    var fkCatalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                    var fkSchemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                    var fkTableArray = TryGetColumn<StringArray>(batch, "tableName");
+                    var fkColArray = TryGetColumn<StringArray>(batch, "col_name");
+                    var fkNameArray = TryGetColumn<StringArray>(batch, "constraintName");
+                    var fkKeySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
+                    var fkUpdateRuleArray = TryGetColumn<Int32Array>(batch, "updateRule");
+                    var fkDeleteRuleArray = TryGetColumn<Int32Array>(batch, "deleteRule");
+                    var fkDeferrabilityArray = TryGetColumn<Int32Array>(batch, "deferrability");
+
+                    if (fkColArray == null) continue;
+
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        if (fkColArray.IsNull(i)) continue;
+                        refs.Add((
+                            pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : pkCatalog ?? "",
+                            pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : pkSchema ?? "",
+                            pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : pkTable ?? "",
+                            pkColArray != null && !pkColArray.IsNull(i) ? pkColArray.GetString(i) : "",
+                            fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : fkCatalog!,
+                            fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : fkSchema!,
+                            fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : fkTable!,
+                            fkColArray.GetString(i),
+                            fkKeySeqArray != null && !fkKeySeqArray.IsNull(i) ? fkKeySeqArray.GetValue(i)!.Value : ++seq,
+                            fkUpdateRuleArray != null && !fkUpdateRuleArray.IsNull(i) ? fkUpdateRuleArray.GetValue(i)!.Value : 0,
+                            fkDeleteRuleArray != null && !fkDeleteRuleArray.IsNull(i) ? fkDeleteRuleArray.GetValue(i)!.Value : 0,
+                            fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : "",
+                            (string?)null,
+                            fkDeferrabilityArray != null && !fkDeferrabilityArray.IsNull(i) ? fkDeferrabilityArray.GetValue(i)!.Value : 5
+                        ));
+                    }
+                }
+
+                activity?.SetTag("result_count", refs.Count);
+                return MetadataSchemaFactory.BuildCrossReferenceResult(refs);
+            }, "GetCrossReference").ConfigureAwait(false);
         }
 
         private static T? TryGetColumn<T>(RecordBatch batch, string name) where T : class, IArrowArray
