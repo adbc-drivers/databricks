@@ -87,11 +87,21 @@ namespace AdbcDrivers.Databricks.Tests
                 // method returns; if this ran inline, the last iteration's reader/statement
                 // slot would stay rooted through the GC and inflate the alive count. Confining
                 // it to a helper that has fully returned keeps the alive count at 0 in practice
-                // regardless of build configuration (the assertion still tolerates one benign
-                // straggler — see below).
+                // regardless of build configuration.
                 readerRefs.Add(await RunPartialReadCycleAsync(connection));
                 OutputHelper?.WriteLine($"Iteration {i}: read first batch, disposed reader");
             }
+
+            // Run one extra UNTRACKED cycle after the tracked loop. The most-recently-created
+            // reader in a run is the one most exposed to a transiently-rooted async cancellation
+            // continuation, so it is the least deterministically collectable right after the GC.
+            // By following every *tracked* reader with at least one more full cycle (plus the
+            // settle+GC below), we move that benign-straggler exposure onto this untracked reader
+            // and can assert strict == 0 on the tracked set. This also closes a sensitivity gap:
+            // a cancellation-race leak that only roots the reader whose pipeline was cancelled
+            // last would otherwise hide behind a "tolerate one straggler" bar — here it lands on
+            // a tracked reader and trips the assertion.
+            _ = await RunPartialReadCycleAsync(connection);
 
             // Let any background cancellation settle, then force a full collection.
             await Task.Delay(1000);
@@ -102,17 +112,15 @@ namespace AdbcDrivers.Databricks.Tests
             int aliveReaders = readerRefs.Count(r => r.IsAlive);
             OutputHelper?.WriteLine($"Disposed readers still alive after GC: {aliveReaders}/{readerRefs.Count}");
 
-            // Disposed readers must be collectable. Because each cycle ran in a NoInlining
-            // helper that has fully returned, no reader-holding local survives into this scope,
-            // so in practice this is 0. We allow a single benign straggler (<= 1) rather than
-            // insisting on exactly 0: WeakReference collectability after a forced GC is not
-            // perfectly deterministic across target frameworks (net472 vs net8), GC modes, or
-            // finalizer/continuation timing, and the last iteration's reader is the one most
-            // exposed to a lingering async cancellation continuation transiently rooted by the
-            // runtime. A real leak keeps EVERY disposed reader rooted, so it still trips this
-            // threshold; tolerating one straggler removes the de-flake risk without weakening
-            // leak detection.
-            Assert.True(aliveReaders <= 1,
+            // Every tracked disposed reader must be collectable. Each cycle ran in a NoInlining
+            // helper that has fully returned (so no reader-holding local survives here), and the
+            // trailing untracked cycle above ensures none of the tracked readers is the
+            // most-recently-created one — so the benign last-reader straggler that would otherwise
+            // force a tolerance is not part of the measured set. That lets us assert exactly 0 and
+            // keep full leak sensitivity: any disposed reader still rooted after a full GC — a
+            // steady-state per-iteration leak or a race that only bites the last cancellation —
+            // trips this.
+            Assert.True(aliveReaders == 0,
                 $"Possible pipeline leak on partial consumption: {aliveReaders}/{readerRefs.Count} " +
                 $"disposed result readers remained rooted after a full GC.");
         }
