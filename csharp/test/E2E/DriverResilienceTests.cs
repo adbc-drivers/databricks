@@ -55,69 +55,48 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task PartialRead_DisposeStatement_ShouldNotHangOrLeak()
         {
+            // TEMP DIAGNOSTIC: deterministically track live DownloadResult instances + outstanding
+            // bytes (static counters in DownloadResult) around each partial-read+dispose. If live
+            // count/bytes DON'T return to their post-dispose baseline, the cancel path retains
+            // downloaded chunks (real leak); if they do, the GC-total "growth" was noise.
             using var connection = NewConnection();
 
-            // This guards against a real per-iteration leak of abandoned CloudFetch buffers, but
-            // must not trip on two benign, non-leak memory effects that a raw before/after delta
-            // conflates with a leak (both verified empirically on the CI runner):
-            //   1. The managed heap — chiefly the Large Object Heap, where the >85KB decompressed
-            //      result arrays live — settles to a working-set plateau over the first couple of
-            //      iterations that is HIGHER than a single warm-up reaches, and .NET does not
-            //      compact the LOH by default, so GC.GetTotalMemory reports that one-time step.
-            //   2. LZ4 decompression parks reusable blocks in the shared RecyclableMemoryStream
-            //      pool's free list (never a leak; sized once and reused).
-            // A genuine leak grows on EVERY iteration; a plateau grows once then flattens. So we
-            // measure growth AFTER a 2-iteration warm-up and assert the post-warmup slope is flat,
-            // mirroring the CloudFetchStressTests.RepeatedLargeCloudFetch_MemoryShouldPlateau check.
-            async Task PartialReadOnce()
+            void Dump(string tag)
             {
-                using var statement = connection.CreateStatement();
-                statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
-                using var reader = statement.ExecuteQuery().Stream;
-                // Read only the first batch, then let disposal cancel the CloudFetch pipeline.
-                var batch = await reader.ReadNextRecordBatchAsync();
-                Assert.NotNull(batch);
-            }
-
-            long MeasureSettled()
-            {
-                // One-time LOH compaction so a dead-but-uncompacted LOH segment isn't counted.
-                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
                 GC.Collect(2, GCCollectionMode.Forced, true);
                 GC.WaitForPendingFinalizers();
                 GC.Collect(2, GCCollectionMode.Forced, true);
-                return GC.GetTotalMemory(true);
+                Console.WriteLine(
+                    $"[dlr] {tag} live={AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_liveCount} " +
+                    $"liveBytesMB={AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_liveBytes / 1048576.0:F1} " +
+                    $"created={AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_createdTotal} " +
+                    $"disposed={AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_disposedTotal} " +
+                    $"GC={GC.GetTotalMemory(true) / 1048576.0:F1}");
             }
 
-            const int warmupIterations = 2;   // let the heap reach its working-set plateau
-            const int measuredIterations = 5;
-
-            for (int i = 0; i < warmupIterations; i++)
+            async Task PartialReadOnce(int n)
             {
-                await PartialReadOnce();
+                using (var statement = connection.CreateStatement())
+                {
+                    statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
+                    using var reader = statement.ExecuteQuery().Stream;
+                    var batch = await reader.ReadNextRecordBatchAsync();
+                    Assert.NotNull(batch);
+                }
+                await Task.Delay(500); // let cancellation settle
+                Dump($"after-iter{n}");
             }
-            await Task.Delay(1000);
-            long baseline = MeasureSettled();
 
-            for (int i = 0; i < measuredIterations; i++)
+            Dump("start");
+            for (int i = 1; i <= 7; i++)
             {
-                await PartialReadOnce();
-                OutputHelper?.WriteLine($"Iteration {i + 1}: read first batch, disposing remainder");
+                await PartialReadOnce(i);
             }
-            await Task.Delay(1000);
-            long final = MeasureSettled();
 
-            double postWarmupGrowthMB = (final - baseline) / 1024.0 / 1024.0;
-            OutputHelper?.WriteLine($"Post-warmup baseline: {baseline / 1048576.0:F2} MB");
-            OutputHelper?.WriteLine($"Final:                {final / 1048576.0:F2} MB");
-            OutputHelper?.WriteLine($"Post-warmup growth:   {postWarmupGrowthMB:F2} MB over {measuredIterations} iterations");
-
-            // After warm-up the heap has plateaued; a real leak would keep accumulating ~8MB per
-            // abandoned result set (~40MB over 5). Post-warmup growth must stay near zero.
-            Assert.True(postWarmupGrowthMB < 20.0,
-                $"Possible CloudFetch pipeline leak on partial consumption: {postWarmupGrowthMB:F2} MB " +
-                $"post-warmup growth over {measuredIterations} abandoned result sets.");
+            // The real invariant: after dispose+settle, live DownloadResults must return to ~0.
+            // (Diagnostic assertion — the numbers above tell the story regardless.)
+            Assert.True(AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_liveCount <= 2,
+                $"DownloadResult live count did not drain: {AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_liveCount}");
         }
 
         /// <summary>

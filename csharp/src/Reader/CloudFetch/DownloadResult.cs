@@ -34,6 +34,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
     /// </summary>
     internal sealed class DownloadResult : IDownloadResult
     {
+        // TEMP DIAGNOSTIC: track live DownloadResult instances + outstanding bytes to
+        // deterministically detect whether partial-read+dispose leaks downloaded chunks.
+        internal static int s_liveCount;
+        internal static long s_liveBytes;
+        internal static int s_createdTotal;
+        internal static int s_disposedTotal;
+
         private readonly TaskCompletionSource<bool> _downloadCompletionSource;
         private readonly ICloudFetchMemoryBufferManager _memoryManager;
         private Stream? _dataStream;
@@ -74,6 +81,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             _httpHeaders = httpHeaders;
             _downloadCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _size = byteCount;
+            System.Threading.Interlocked.Increment(ref s_createdTotal);
+            System.Threading.Interlocked.Increment(ref s_liveCount);
         }
 
         /// <summary>
@@ -182,6 +191,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             ThrowIfDisposed();
             _dataStream = dataStream ?? throw new ArgumentNullException(nameof(dataStream));
             _downloadCompletionSource.TrySetResult(true);
+            System.Threading.Interlocked.Add(ref s_liveBytes, size - _size);
             _size = size;
         }
 
@@ -209,8 +219,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 if (_size > 0)
                 {
                     _memoryManager.ReleaseMemory(_size);
+                    System.Threading.Interlocked.Add(ref s_liveBytes, -_size);
                 }
             }
+
+            System.Threading.Interlocked.Increment(ref s_disposedTotal);
+            System.Threading.Interlocked.Decrement(ref s_liveCount);
 
             // Ensure any waiting tasks are completed if not already
             if (!_downloadCompletionSource.Task.IsCompleted)
