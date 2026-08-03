@@ -441,7 +441,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         {
             // Guards the central invariant of the columns-extended fallback path
             // (GetColumnsExtendedViaThreeCalls): it must reuse the NON-throwing
-            // GetPrimaryKeysAsyncInternal / GetCrossReferenceAsyncInternal, which return
+            // GetPrimaryKeysAsyncNoThrow / GetCrossReferenceAsyncNoThrow, which return
             // empty for legitimately-unspecified args (here: catalog set + schema null),
             // rather than the public getprimarykeys/getcrossreference wrappers that
             // validate and throw a 42000 on that same catalog-set-schema-null shape.
