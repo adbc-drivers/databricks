@@ -67,19 +67,31 @@ namespace AdbcDrivers.Databricks.Tests
             // total at both snapshots: what remains is memory that is neither live-in-use nor
             // parked in the reusable pool — i.e. genuinely leaked. This is immune to how large the
             // reuse pool happens to grow under load.
+            // DIAGNOSTIC MODE (temporary — attributes the ~24MB/5-iter non-pooled growth to a
+            // specific pool). Uses Console.WriteLine (NOT OutputHelper — the xUnit console logger
+            // suppresses OutputHelper output for PASSING tests, which is why the earlier probe
+            // produced no data). Per snapshot reports:
+            //   GC  = GC.GetTotalMemory(true)
+            //   sIU = RMSM SmallPoolInUseSize  (blocks handed out and NOT returned → undisposed stream/DownloadResult)
+            //   sFR = RMSM SmallPoolFreeSize   (reusable free list — benign)
+            //   lIU/lFR = large pool (expected ~0; GetBuffer removed in #474)
+            // Reading: if sIU climbs ~4.8MB/iter → an undisposed RecyclableMemoryStream on the
+            // partial-read cancel path. If sIU is flat while GC climbs → the leak is a
+            // connection-level object graph (not the pool).
             var database = (DatabricksDatabase)NewDriver.Open(GetDriverParameters(TestConfiguration));
             var pool = database.RecyclableMemoryStreamManager;
             using var connection = database.Connect(new Dictionary<string, string>());
 
-            // Net managed memory excluding the reusable RMSM free list.
-            long NonPooledMemory()
+            void Dump(string tag)
             {
                 GC.Collect(2, GCCollectionMode.Forced, true);
                 GC.WaitForPendingFinalizers();
                 GC.Collect(2, GCCollectionMode.Forced, true);
-                long gcTotal = GC.GetTotalMemory(true);
-                long poolFree = pool.SmallPoolFreeSize + pool.LargePoolFreeSize;
-                return gcTotal - poolFree;
+                double MB(long b) => b / 1048576.0;
+                Console.WriteLine(
+                    $"[leakdiag] {tag} GC={MB(GC.GetTotalMemory(true)):F1} " +
+                    $"sIU={MB(pool.SmallPoolInUseSize):F1} sFR={MB(pool.SmallPoolFreeSize):F1} " +
+                    $"lIU={MB(pool.LargePoolInUseSize):F1} lFR={MB(pool.LargePoolFreeSize):F1}");
             }
 
             async Task PartialReadOnce()
@@ -87,44 +99,32 @@ namespace AdbcDrivers.Databricks.Tests
                 using var statement = connection.CreateStatement();
                 statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
                 using var reader = statement.ExecuteQuery().Stream;
-                // Read only the first batch, then let disposal clean up the rest — this cancels
-                // the CloudFetch pipeline mid-flight (the scenario under test).
                 var batch = await reader.ReadNextRecordBatchAsync();
                 Assert.NotNull(batch);
             }
 
-            // Warm-up: run the SAME partial-read cycle the measurement loop uses, enough times to
-            // drive the reuse pool to its steady-state peak BEFORE the baseline snapshot. (The
-            // previous single full-read warm-up under-sized the pool vs the 5-iteration loop, so
-            // the pool's growth landed inside the measurement window and looked like a leak.)
-            for (int i = 0; i < 6; i++)
-            {
-                await PartialReadOnce();
-            }
-
+            Dump("start");
+            for (int i = 0; i < 6; i++) await PartialReadOnce();
             await Task.Delay(1000);
-            long before = NonPooledMemory();
+            Dump("after-warmup6");
 
-            // Measure: 5 more partial-read cycles. A real per-iteration leak would accumulate
-            // OUTSIDE the pool and show up here; pooled block reuse cancels out.
+            long before = GC.GetTotalMemory(true) - (pool.SmallPoolFreeSize + pool.LargePoolFreeSize);
+
             for (int i = 0; i < 5; i++)
             {
                 await PartialReadOnce();
-                OutputHelper?.WriteLine($"Iteration {i + 1}: read first batch, disposing remainder");
+                Dump($"iter{i + 1}");
             }
 
-            // Allow background CloudFetch cancellation to settle before the final snapshot.
             await Task.Delay(1000);
-            long after = NonPooledMemory();
+            Dump("final");
+            long after = GC.GetTotalMemory(true) - (pool.SmallPoolFreeSize + pool.LargePoolFreeSize);
 
             double growthMB = (after - before) / 1024.0 / 1024.0;
-            OutputHelper?.WriteLine($"Non-pooled before: {before / 1024.0 / 1024.0:F2} MB");
-            OutputHelper?.WriteLine($"Non-pooled after:  {after / 1024.0 / 1024.0:F2} MB");
-            OutputHelper?.WriteLine($"Pool free (after): {(pool.SmallPoolFreeSize + pool.LargePoolFreeSize) / 1024.0 / 1024.0:F2} MB");
-            OutputHelper?.WriteLine($"Non-pooled growth: {growthMB:F2} MB");
+            Console.WriteLine($"[leakdiag] non-pooled growth over 5 iters = {growthMB:F2} MB");
 
-            // With pooled reuse excluded, any real per-iteration leak of abandoned CloudFetch
-            // buffers (~8MB each) would still show here. Genuine leak-free behavior is ~0.
+            // Keep the assertion so the run's pass/fail still reflects the leak, but the [leakdiag]
+            // Console lines above are printed regardless (Console output is not suppressed).
             Assert.True(growthMB < 20.0,
                 $"Possible CloudFetch pipeline leak on partial consumption: {growthMB:F2} MB non-pooled growth after 5 abandoned result sets.");
         }
