@@ -55,73 +55,69 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task PartialRead_DisposeStatement_ShouldNotHangOrLeak()
         {
-            // TEMP DIAGNOSTIC (not for merge). Runs isolated via TEST_FILTER in e2e-tests.yml.
-            // Attributes the CI growth per iteration using Console.WriteLine (OutputHelper is
-            // suppressed for passing tests). sIU=RMSM SmallPoolInUseSize (undisposed blocks),
-            // sFR=SmallPoolFreeSize (reusable free list), gen0/1/2 collection counts, LOH size.
-            var database = (DatabricksDatabase)NewDriver.Open(GetDriverParameters(TestConfiguration));
-            var pool = database.RecyclableMemoryStreamManager;
-            using var connection = database.Connect(new Dictionary<string, string>());
+            using var connection = NewConnection();
 
-            // Collect WITH one-time LOH compaction. The decompressed result arrays are >85KB and
-            // land on the Large Object Heap, which .NET does NOT compact by default — so dead LOH
-            // arrays leave committed, fragmented segments that GC.GetTotalMemory still counts.
-            // That is the entire source of the observed "growth" (verified: RMSM in-use=0, only LOH
-            // climbs). Compacting once before measuring reclaims that space so we measure a real leak.
-            void CollectCompact()
-            {
-                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-                GC.Collect(2, GCCollectionMode.Forced, true);
-                GC.WaitForPendingFinalizers();
-                GC.Collect(2, GCCollectionMode.Forced, true);
-            }
-
-            void Dump(string tag)
-            {
-                CollectCompact();
-                double MB(long b) => b / 1048576.0;
-                long loh = GC.GetGCMemoryInfo().GenerationInfo is var gi && gi.Length > 3 ? gi[3].SizeAfterBytes : -1;
-                Console.WriteLine(
-                    $"[leakdiag] {tag} GC={MB(GC.GetTotalMemory(true)):F1} " +
-                    $"sIU={MB(pool.SmallPoolInUseSize):F1} sFR={MB(pool.SmallPoolFreeSize):F1} " +
-                    $"lIU={MB(pool.LargePoolInUseSize):F1} lFR={MB(pool.LargePoolFreeSize):F1} " +
-                    $"LOH={MB(loh):F1}");
-            }
-
+            // This guards against a real per-iteration leak of abandoned CloudFetch buffers, but
+            // must not trip on two benign, non-leak memory effects that a raw before/after delta
+            // conflates with a leak (both verified empirically on the CI runner):
+            //   1. The managed heap — chiefly the Large Object Heap, where the >85KB decompressed
+            //      result arrays live — settles to a working-set plateau over the first couple of
+            //      iterations that is HIGHER than a single warm-up reaches, and .NET does not
+            //      compact the LOH by default, so GC.GetTotalMemory reports that one-time step.
+            //   2. LZ4 decompression parks reusable blocks in the shared RecyclableMemoryStream
+            //      pool's free list (never a leak; sized once and reused).
+            // A genuine leak grows on EVERY iteration; a plateau grows once then flattens. So we
+            // measure growth AFTER a 2-iteration warm-up and assert the post-warmup slope is flat,
+            // mirroring the CloudFetchStressTests.RepeatedLargeCloudFetch_MemoryShouldPlateau check.
             async Task PartialReadOnce()
             {
                 using var statement = connection.CreateStatement();
                 statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
                 using var reader = statement.ExecuteQuery().Stream;
+                // Read only the first batch, then let disposal cancel the CloudFetch pipeline.
                 var batch = await reader.ReadNextRecordBatchAsync();
                 Assert.NotNull(batch);
             }
 
-            Dump("start");
-            await PartialReadOnce();
-            await Task.Delay(500);
-            Dump("after-warmup1");
-
-            CollectCompact();
-            long memBefore = GC.GetTotalMemory(true);
-
-            for (int i = 0; i < 5; i++)
+            long MeasureSettled()
             {
-                await PartialReadOnce();
-                Dump($"iter{i + 1}");
+                // One-time LOH compaction so a dead-but-uncompacted LOH segment isn't counted.
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(2, GCCollectionMode.Forced, true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(2, GCCollectionMode.Forced, true);
+                return GC.GetTotalMemory(true);
             }
 
+            const int warmupIterations = 2;   // let the heap reach its working-set plateau
+            const int measuredIterations = 5;
+
+            for (int i = 0; i < warmupIterations; i++)
+            {
+                await PartialReadOnce();
+            }
             await Task.Delay(1000);
-            Dump("final");
-            CollectCompact();
-            long memAfter = GC.GetTotalMemory(true);
+            long baseline = MeasureSettled();
 
-            double growthMB = (memAfter - memBefore) / 1024.0 / 1024.0;
-            Console.WriteLine($"[leakdiag] Growth: {growthMB:F2} MB");
+            for (int i = 0; i < measuredIterations; i++)
+            {
+                await PartialReadOnce();
+                OutputHelper?.WriteLine($"Iteration {i + 1}: read first batch, disposing remainder");
+            }
+            await Task.Delay(1000);
+            long final = MeasureSettled();
 
-            Assert.True(growthMB < 20.0,
-                $"Possible CloudFetch pipeline leak on partial consumption: {growthMB:F2} MB growth after 5 abandoned result sets.");
+            double postWarmupGrowthMB = (final - baseline) / 1024.0 / 1024.0;
+            OutputHelper?.WriteLine($"Post-warmup baseline: {baseline / 1048576.0:F2} MB");
+            OutputHelper?.WriteLine($"Final:                {final / 1048576.0:F2} MB");
+            OutputHelper?.WriteLine($"Post-warmup growth:   {postWarmupGrowthMB:F2} MB over {measuredIterations} iterations");
+
+            // After warm-up the heap has plateaued; a real leak would keep accumulating ~8MB per
+            // abandoned result set (~40MB over 5). Post-warmup growth must stay near zero.
+            Assert.True(postWarmupGrowthMB < 20.0,
+                $"Possible CloudFetch pipeline leak on partial consumption: {postWarmupGrowthMB:F2} MB " +
+                $"post-warmup growth over {measuredIterations} abandoned result sets.");
         }
 
         /// <summary>
