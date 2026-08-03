@@ -1665,11 +1665,27 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // command must match that (don't throw for a request the feature would no-op anyway).
             if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
             {
+                string? validationError = null;
                 if (string.IsNullOrEmpty(_metadataTableName))
-                    throw NewInvalidArgumentException("tableName may not be null");
+                    validationError = "tableName may not be null";
+                else if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
+                    validationError = "schema may not be null when catalog is specified";
 
-                if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
-                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+                if (validationError != null)
+                {
+                    // Emit a span for the client-side rejection so the failure is captured in
+                    // telemetry — the throw happens before GetPrimaryKeysAsyncInternal, so its
+                    // own activity (with these tags) is never reached on this path.
+                    await this.TraceActivityAsync(async activity =>
+                    {
+                        activity?.SetTag("catalog", _metadataCatalogName ?? "(none)");
+                        activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
+                        activity?.SetTag("table", _metadataTableName ?? "(none)");
+                        activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
+                        await Task.CompletedTask.ConfigureAwait(false);
+                        throw NewInvalidArgumentException(validationError);
+                    }, "GetPrimaryKeys").ConfigureAwait(false);
+                }
             }
 
             return await GetPrimaryKeysAsyncInternal(
@@ -1761,7 +1777,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 && !string.IsNullOrEmpty(_metadataForeignTableName)
                 && !string.IsNullOrEmpty(_metadataForeignCatalogName)
                 && string.IsNullOrEmpty(_metadataForeignSchemaName))
-                throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+            {
+                // Emit a span for the client-side rejection so the failure is captured in
+                // telemetry — the throw happens before GetCrossReferenceAsyncInternal, so its
+                // own activity (with these tags) is never reached on this path.
+                await this.TraceActivityAsync(async activity =>
+                {
+                    activity?.SetTag("fk_catalog", _metadataForeignCatalogName ?? "(none)");
+                    activity?.SetTag("fk_schema", _metadataForeignSchemaName ?? "(none)");
+                    activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
+                    activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
+                    await Task.CompletedTask.ConfigureAwait(false);
+                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+                }, "GetCrossReference").ConfigureAwait(false);
+            }
 
             return await GetCrossReferenceAsyncInternal(
                 _metadataCatalogName, _metadataSchemaName, _metadataTableName,
