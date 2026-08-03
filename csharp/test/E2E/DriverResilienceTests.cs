@@ -55,48 +55,42 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task PartialRead_DisposeStatement_ShouldNotHangOrLeak()
         {
-            // TEMP DIAGNOSTIC: deterministically track live DownloadResult instances + outstanding
-            // bytes (static counters in DownloadResult) around each partial-read+dispose. If live
-            // count/bytes DON'T return to their post-dispose baseline, the cancel path retains
-            // downloaded chunks (real leak); if they do, the GC-total "growth" was noise.
+            // TEMP DIAGNOSTIC: WeakReference test — the DEFINITIVE leak check. After each
+            // partial-read+dispose we capture a weak ref to the result-stream reader, then force
+            // full GC. If the weak refs are DEAD (!IsAlive) the driver retains nothing and the
+            // climbing GC.GetTotalMemory is pure LOH/heap accounting noise (→ test fix). If they
+            // stay ALIVE, something roots them (→ real leak; the rooted object names the holder).
             using var connection = NewConnection();
+            var readerRefs = new List<WeakReference>();
 
-            void Dump(string tag)
-            {
-                GC.Collect(2, GCCollectionMode.Forced, true);
-                GC.WaitForPendingFinalizers();
-                GC.Collect(2, GCCollectionMode.Forced, true);
-                Console.WriteLine(
-                    $"[dlr] {tag} live={AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_liveCount} " +
-                    $"liveBytesMB={AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_liveBytes / 1048576.0:F1} " +
-                    $"created={AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_createdTotal} " +
-                    $"disposed={AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_disposedTotal} " +
-                    $"GC={GC.GetTotalMemory(true) / 1048576.0:F1}");
-            }
-
-            async Task PartialReadOnce(int n)
+            for (int i = 1; i <= 7; i++)
             {
                 using (var statement = connection.CreateStatement())
                 {
                     statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
-                    using var reader = statement.ExecuteQuery().Stream;
+                    var reader = statement.ExecuteQuery().Stream;
+                    readerRefs.Add(new WeakReference(reader));
                     var batch = await reader.ReadNextRecordBatchAsync();
                     Assert.NotNull(batch);
+                    reader.Dispose();
                 }
-                await Task.Delay(500); // let cancellation settle
-                Dump($"after-iter{n}");
+                await Task.Delay(300);
+                GC.Collect(2, GCCollectionMode.Forced, true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(2, GCCollectionMode.Forced, true);
+                int aliveReaders = readerRefs.Count(r => r.IsAlive);
+                Console.WriteLine($"[wref] after-iter{i} aliveReaders={aliveReaders}/{readerRefs.Count} GC={GC.GetTotalMemory(true) / 1048576.0:F1}MB");
             }
 
-            Dump("start");
-            for (int i = 1; i <= 7; i++)
-            {
-                await PartialReadOnce(i);
-            }
+            GC.Collect(2, GCCollectionMode.Forced, true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Forced, true);
+            int stillAlive = readerRefs.Count(r => r.IsAlive);
+            Console.WriteLine($"[wref] FINAL aliveReaders={stillAlive}/{readerRefs.Count}");
 
-            // The real invariant: after dispose+settle, live DownloadResults must return to ~0.
-            // (Diagnostic assertion — the numbers above tell the story regardless.)
-            Assert.True(AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_liveCount <= 2,
-                $"DownloadResult live count did not drain: {AdbcDrivers.Databricks.Reader.CloudFetch.DownloadResult.s_liveCount}");
+            // The real invariant: disposed result-stream readers must be collectable.
+            Assert.True(stillAlive <= 1,
+                $"{stillAlive}/{readerRefs.Count} disposed result readers remained rooted — real leak.");
         }
 
         /// <summary>
