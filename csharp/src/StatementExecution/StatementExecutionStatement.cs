@@ -1580,9 +1580,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (columnsResult.Stream == null)
                 return columnsResult;
 
-            // validateArgs: false — this is the internal columns-extended reuse, not the
-            // user-facing getprimarykeys command; a null schema here is legitimate.
-            var pkResult = await GetPrimaryKeysAsync(cancellationToken, validateArgs: false).ConfigureAwait(false);
+            // This is the internal columns-extended reuse, not the user-facing
+            // getprimarykeys command: a null schema (or other exact-match args the
+            // user-facing command rejects) is legitimate here. GetPrimaryKeysAsync
+            // throws on those, so guard and fall back to an empty PK result rather
+            // than letting the validation throw. (For a null schema GetPrimaryKeysAsync
+            // would return an empty result anyway, so this is behavior-preserving.)
+            QueryResult pkResult;
+            if (string.IsNullOrEmpty(_metadataTableName)
+                || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName)))
+            {
+                pkResult = MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
+            }
+            else
+            {
+                pkResult = await GetPrimaryKeysAsync(cancellationToken).ConfigureAwait(false);
+            }
 
             // Find FKs where the current table is the FK (child) side — null PK params to
             // match any parent, mirroring Thrift's GetCrossReferenceAsForeignTableAsync.
@@ -1645,10 +1658,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return new QueryResult(totalRows, new HiveInfoArrowStream(combinedSchema, combinedData));
         }
 
-        // validateArgs=true for the user-facing getprimarykeys command; false when called
-        // internally by GetColumnsExtendedViaThreeCalls (which reuses this to gather PKs for
-        // a column set and legitimately passes a null schema — it must not be rejected).
-        private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken, bool validateArgs = true)
+        // The user-facing getprimarykeys command. GetColumnsExtendedViaThreeCalls also
+        // gathers PKs for a column set, but it screens out the args this method rejects
+        // (e.g. a null schema) and calls CreateEmptyPrimaryKeysResult itself — so this
+        // method can always validate exact-match args without a caller-supplied flag.
+        private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
         {
             return await this.TraceActivityAsync(async activity =>
             {
@@ -1667,14 +1681,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Validating here (before issuing SHOW KEYS) also avoids the Thrift server's
                 // internal "GET_FUNCTIONS assertion failed" bug on schema-null, and gives a
                 // clean, deterministic error instead of relying on a server round-trip.
-                if (validateArgs)
-                {
-                    if (string.IsNullOrEmpty(_metadataTableName))
-                        throw NewInvalidArgumentException("tableName may not be null");
+                if (string.IsNullOrEmpty(_metadataTableName))
+                    throw NewInvalidArgumentException("tableName may not be null");
 
-                    if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
-                        throw NewInvalidArgumentException("schema may not be null when catalog is specified");
-                }
+                if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
+                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
 
                 if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName)
                     || string.IsNullOrEmpty(_metadataTableName))
