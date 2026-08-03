@@ -63,11 +63,23 @@ namespace AdbcDrivers.Databricks.Tests
             var pool = database.RecyclableMemoryStreamManager;
             using var connection = database.Connect(new Dictionary<string, string>());
 
-            void Dump(string tag)
+            // Collect WITH one-time LOH compaction. The decompressed result arrays are >85KB and
+            // land on the Large Object Heap, which .NET does NOT compact by default — so dead LOH
+            // arrays leave committed, fragmented segments that GC.GetTotalMemory still counts.
+            // That is the entire source of the observed "growth" (verified: RMSM in-use=0, only LOH
+            // climbs). Compacting once before measuring reclaims that space so we measure a real leak.
+            void CollectCompact()
             {
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
                 GC.Collect(2, GCCollectionMode.Forced, true);
                 GC.WaitForPendingFinalizers();
                 GC.Collect(2, GCCollectionMode.Forced, true);
+            }
+
+            void Dump(string tag)
+            {
+                CollectCompact();
                 double MB(long b) => b / 1048576.0;
                 long loh = GC.GetGCMemoryInfo().GenerationInfo is var gi && gi.Length > 3 ? gi[3].SizeAfterBytes : -1;
                 Console.WriteLine(
@@ -91,7 +103,7 @@ namespace AdbcDrivers.Databricks.Tests
             await Task.Delay(500);
             Dump("after-warmup1");
 
-            GC.Collect(2, GCCollectionMode.Forced, true);
+            CollectCompact();
             long memBefore = GC.GetTotalMemory(true);
 
             for (int i = 0; i < 5; i++)
@@ -102,6 +114,7 @@ namespace AdbcDrivers.Databricks.Tests
 
             await Task.Delay(1000);
             Dump("final");
+            CollectCompact();
             long memAfter = GC.GetTotalMemory(true);
 
             double growthMB = (memAfter - memBefore) / 1024.0 / 1024.0;
