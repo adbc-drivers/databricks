@@ -1687,10 +1687,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
                     throw NewInvalidArgumentException("schema may not be null when catalog is specified");
 
-                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName)
-                    || string.IsNullOrEmpty(_metadataTableName))
-                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
-
                 string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
                 activity?.SetTag("sql_query", sql);
 
