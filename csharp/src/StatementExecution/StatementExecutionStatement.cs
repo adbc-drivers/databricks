@@ -1664,32 +1664,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // table, or a catalog-set-schema-null request), but only when the feature is genuinely
             // engaged — if it is disabled or the catalog is one PK/FK metadata does not apply to
             // (SPARK/hive_metastore/null), skip validation and delegate: GetPrimaryKeysAsyncNoThrow
-            // short-circuits that case to an empty result *inside* its own TraceActivityAsync. We
-            // deliberately do NOT short-circuit here (mirroring GetCrossReferenceAsync) so the
-            // disabled-feature/invalid-catalog path still emits a span, keeping PK/FK telemetry
-            // symmetric across the two commands. The guard mirrors the internal's early-returns so
-            // the two never diverge.
-            if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK)
-                && (string.IsNullOrEmpty(_metadataTableName)
-                    || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))))
+            // returns an empty result for that case. The client-side rejection is a synchronous,
+            // deterministic check with no I/O; the thrown exception (type + SqlState + message) fully
+            // describes it, so it is not wrapped in a trace span.
+            if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
             {
-                // Emit a span for a client-side rejection so the failure is captured in telemetry —
-                // the throw happens before GetPrimaryKeysAsyncNoThrow, so its own activity (with
-                // these tags) is never reached on this path. The synchronous TraceActivity sets the
-                // activity's status to Error, records the exception as an event, and rethrows.
-                this.TraceActivity(activity =>
-                {
-                    activity?.SetTag("catalog", _metadataCatalogName ?? "(none)");
-                    activity?.SetTag("schema", _metadataSchemaName ?? "(none)");
-                    activity?.SetTag("table", _metadataTableName ?? "(none)");
-                    activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
+                if (string.IsNullOrEmpty(_metadataTableName))
+                    throw NewInvalidArgumentException("tableName may not be null");
 
-                    if (string.IsNullOrEmpty(_metadataTableName))
-                        throw NewInvalidArgumentException("tableName may not be null");
-
-                    if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
-                        throw NewInvalidArgumentException("schema may not be null when catalog is specified");
-                }, "GetPrimaryKeys");
+                if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
+                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
             }
 
             return await GetPrimaryKeysAsyncNoThrow(
@@ -1772,29 +1756,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // table as the FK side) so its legitimately-unspecified args return empty.
         private async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken)
         {
-            // Throw only in the case the internal would otherwise reach a live fetch for: the
-            // feature engaged (else the internal short-circuits to empty), a specified foreign
-            // table (else the internal returns empty — JDBC SEA inspects ONLY the foreign table),
-            // and a foreign catalog set with a null foreign schema. These preconditions mirror the
-            // internal's own early-returns so the two never diverge.
+            // Throw only in the case the internal would otherwise reach a live fetch for: the feature
+            // engaged (else the internal short-circuits to empty), a specified foreign table (else the
+            // internal returns empty — JDBC SEA inspects ONLY the foreign table), and a foreign catalog
+            // set with a null foreign schema. These preconditions mirror the internal's own
+            // early-returns so the two never diverge. The client-side rejection is a synchronous,
+            // deterministic check with no I/O; the thrown exception fully describes it, so it is not
+            // wrapped in a trace span.
             if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK)
                 && !string.IsNullOrEmpty(_metadataForeignTableName)
                 && !string.IsNullOrEmpty(_metadataForeignCatalogName)
                 && string.IsNullOrEmpty(_metadataForeignSchemaName))
             {
-                // Emit a span for the client-side rejection so the failure is captured in telemetry —
-                // the throw happens before GetCrossReferenceAsyncNoThrow, so its own activity (with
-                // these tags) is never reached on this path. The synchronous TraceActivity sets the
-                // activity's status to Error, records the exception as an event, and rethrows.
-                this.TraceActivity(activity =>
-                {
-                    activity?.SetTag("fk_catalog", _metadataForeignCatalogName ?? "(none)");
-                    activity?.SetTag("fk_schema", _metadataForeignSchemaName ?? "(none)");
-                    activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
-                    activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
-
-                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
-                }, "GetCrossReference");
+                throw NewInvalidArgumentException("schema may not be null when catalog is specified");
             }
 
             return await GetCrossReferenceAsyncNoThrow(
