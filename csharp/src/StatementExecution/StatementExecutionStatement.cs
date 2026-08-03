@@ -1660,18 +1660,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // so its legitimately-unspecified args return empty rather than being rejected.
         private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
         {
-            // Throw only in the case the internal would otherwise reach a live fetch for: the
-            // feature engaged (else the internal short-circuits to empty via ShouldReturnEmptyPKFKResult),
-            // AND one of the two exact-match args the JDBC reference driver rejects client-side is bad
-            // (a missing table, or a catalog-set-schema-null request). These preconditions mirror the
-            // throws inside the block so an ordinary successful call — valid catalog with table and
-            // schema both set — never enters the block and never emits a spurious empty span.
-            bool willReject =
-                string.IsNullOrEmpty(_metadataTableName)
-                || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName));
+            // Short-circuit to an empty result before any argument validation when the feature is
+            // disabled or the catalog is one PK/FK metadata does not apply to (SPARK/hive_metastore/
+            // null) — mirroring GetPrimaryKeysAsyncInternal and the JDBC reference driver. Only once
+            // the feature is genuinely engaged do we validate the exact-match args the JDBC driver
+            // rejects client-side, so an ordinary successful call never emits a spurious empty span.
+            if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
+                return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-            if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK)
-                && willReject)
+            // One of the two exact-match args the JDBC reference driver rejects client-side is bad
+            // (a missing table, or a catalog-set-schema-null request). These conditions mirror the
+            // throws inside the block.
+            if (string.IsNullOrEmpty(_metadataTableName)
+                || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName)))
             {
                 // Emit a span for a client-side rejection so the failure is captured in telemetry —
                 // the throw happens before GetPrimaryKeysAsyncInternal, so its own activity (with
