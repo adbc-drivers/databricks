@@ -1584,14 +1584,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // a null schema (legitimately passed here while gathering PKs for a column set)
             // must NOT be rejected. Call the non-throwing internal, which returns an empty PK
             // result for such "unspecified" args instead of throwing.
-            var pkResult = await GetPrimaryKeysAsyncInternal(
+            var pkResult = await GetPrimaryKeysAsyncNoThrow(
                 _metadataCatalogName, _metadataSchemaName, _metadataTableName,
                 cancellationToken).ConfigureAwait(false);
 
             // Find FKs where the current table is the FK (child) side — null PK params to
             // match any parent, mirroring Thrift's GetCrossReferenceAsForeignTableAsync. The
             // non-throwing internal returns empty for the null PK side / any unspecified arg.
-            var fkResult = await GetCrossReferenceAsyncInternal(
+            var fkResult = await GetCrossReferenceAsyncNoThrow(
                 pkCatalog: null, pkSchema: null, pkTable: null,
                 fkCatalog: _metadataCatalogName, fkSchema: _metadataSchemaName, fkTable: _metadataTableName,
                 cancellationToken).ConfigureAwait(false);
@@ -1655,7 +1655,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // driver's resolveKeyBasedParams) and throws a clean 42000 on a missing table / a
         // catalog-set-schema-null request — instead of relying on the Thrift server round-trip
         // (which surfaces an internal "GET_FUNCTIONS assertion failed" 08000 bug on schema-null).
-        // The actual fetch lives in GetPrimaryKeysAsyncInternal, which does NOT throw; the
+        // The actual fetch lives in GetPrimaryKeysAsyncNoThrow, which does NOT throw; the
         // internal columns-extended reuse (GetColumnsExtendedViaThreeCalls) calls that directly
         // so its legitimately-unspecified args return empty rather than being rejected.
         private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
@@ -1663,7 +1663,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Validate the exact-match args the JDBC reference driver rejects client-side (a missing
             // table, or a catalog-set-schema-null request), but only when the feature is genuinely
             // engaged — if it is disabled or the catalog is one PK/FK metadata does not apply to
-            // (SPARK/hive_metastore/null), skip validation and delegate: GetPrimaryKeysAsyncInternal
+            // (SPARK/hive_metastore/null), skip validation and delegate: GetPrimaryKeysAsyncNoThrow
             // short-circuits that case to an empty result *inside* its own TraceActivityAsync. We
             // deliberately do NOT short-circuit here (mirroring GetCrossReferenceAsync) so the
             // disabled-feature/invalid-catalog path still emits a span, keeping PK/FK telemetry
@@ -1674,7 +1674,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))))
             {
                 // Emit a span for a client-side rejection so the failure is captured in telemetry —
-                // the throw happens before GetPrimaryKeysAsyncInternal, so its own activity (with
+                // the throw happens before GetPrimaryKeysAsyncNoThrow, so its own activity (with
                 // these tags) is never reached on this path. The synchronous TraceActivity sets the
                 // activity's status to Error, records the exception as an event, and rethrows.
                 this.TraceActivity(activity =>
@@ -1692,7 +1692,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }, "GetPrimaryKeys");
             }
 
-            return await GetPrimaryKeysAsyncInternal(
+            return await GetPrimaryKeysAsyncNoThrow(
                 _metadataCatalogName, _metadataSchemaName, _metadataTableName,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -1704,7 +1704,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// GetPrimaryKeysAsync wrapper; this is safe to call directly from GetColumnsExtendedViaThreeCalls,
         /// which reuses it to gather PKs for a column set and legitimately passes a null schema.
         /// </summary>
-        private async Task<QueryResult> GetPrimaryKeysAsyncInternal(
+        private async Task<QueryResult> GetPrimaryKeysAsyncNoThrow(
             string? catalog, string? schema, string? table,
             CancellationToken cancellationToken)
         {
@@ -1767,7 +1767,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // validates the one exact-match argument the JDBC reference driver rejects client-side
         // (DatabricksMetadataQueryClient.resolveKeyBasedParams): a foreign catalog set with a null
         // foreign schema -> clean 42000, instead of the Thrift server's internal "GET_FUNCTIONS
-        // assertion failed" 08000 bug. The actual work lives in GetCrossReferenceAsyncInternal,
+        // assertion failed" 08000 bug. The actual work lives in GetCrossReferenceAsyncNoThrow,
         // which does NOT throw; the columns-extended reuse calls that directly (with the current
         // table as the FK side) so its legitimately-unspecified args return empty.
         private async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken)
@@ -1783,7 +1783,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 && string.IsNullOrEmpty(_metadataForeignSchemaName))
             {
                 // Emit a span for the client-side rejection so the failure is captured in telemetry —
-                // the throw happens before GetCrossReferenceAsyncInternal, so its own activity (with
+                // the throw happens before GetCrossReferenceAsyncNoThrow, so its own activity (with
                 // these tags) is never reached on this path. The synchronous TraceActivity sets the
                 // activity's status to Error, records the exception as an event, and rethrows.
                 this.TraceActivity(activity =>
@@ -1797,7 +1797,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }, "GetCrossReference");
             }
 
-            return await GetCrossReferenceAsyncInternal(
+            return await GetCrossReferenceAsyncNoThrow(
                 _metadataCatalogName, _metadataSchemaName, _metadataTableName,
                 _metadataForeignCatalogName, _metadataForeignSchemaName, _metadataForeignTableName,
                 cancellationToken).ConfigureAwait(false);
@@ -1813,7 +1813,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// wrapper; this is safe to call directly from GetColumnsExtendedViaThreeCalls, which passes
         /// the current table as the FK side with null PK params to match any parent.
         /// </summary>
-        private async Task<QueryResult> GetCrossReferenceAsyncInternal(
+        private async Task<QueryResult> GetCrossReferenceAsyncNoThrow(
             string? pkCatalog, string? pkSchema, string? pkTable,
             string? fkCatalog, string? fkSchema, string? fkTable,
             CancellationToken cancellationToken)
