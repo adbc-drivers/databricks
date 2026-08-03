@@ -437,6 +437,47 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
+        public async Task GetColumnsExtended_ThreeCalls_NullSchema_ReuseInternals_NoThrowAndEmpty()
+        {
+            // Guards the central invariant of the columns-extended fallback path
+            // (GetColumnsExtendedViaThreeCalls): it must reuse the NON-throwing
+            // GetPrimaryKeysAsyncInternal / GetCrossReferenceAsyncInternal, which return
+            // empty for legitimately-unspecified args (here: catalog set + schema null),
+            // rather than the public getprimarykeys/getcrossreference wrappers that
+            // validate and throw a 42000 on that same catalog-set-schema-null shape.
+            //
+            // A future change that moved validation into the internals (or had the
+            // three-calls path call the throwing wrappers) would regress this without any
+            // unit failing today: the only other coverage is the E2E GetColumnsExtended
+            // tests, which are skipped in CI without a live warehouse. Pinned at the
+            // HttpMessageHandler seam like the sibling tests.
+            //
+            // UseDescTableExtended=false forces the three-calls fallback (the SEA default
+            // is DESC TABLE EXTENDED, which does not exercise the PK/FK internals).
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(
+                http,
+                new Dictionary<string, string>
+                {
+                    { DatabricksParameters.UseDescTableExtended, "false" },
+                });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            // Catalog defaults to "main" (see CreateMetadataStatement); schema is left null.
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumnsextended";
+
+            // Must NOT throw: the null schema flows through the non-throwing internals.
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+
+            // The null-schema PK/FK contribution short-circuits to empty inside the
+            // internals, so no SHOW KEYS / SHOW FOREIGN KEYS query is ever emitted.
+            Assert.DoesNotContain(captured, sql => sql.Contains("SHOW KEYS"));
+            Assert.DoesNotContain(captured, sql => sql.Contains("SHOW FOREIGN KEYS"));
+        }
+
+        [Fact]
         public async Task GetSchemas_StarCatalog_EscapeTrue_ReturnsEmpty()
         {
             // "*" is the Databricks alias for "%" in the match-all catalog wildcard
