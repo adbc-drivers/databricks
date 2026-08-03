@@ -1580,22 +1580,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             if (columnsResult.Stream == null)
                 return columnsResult;
 
-            // This is the internal columns-extended reuse, not the user-facing
-            // getprimarykeys command: a null schema (or other exact-match args the
-            // user-facing command rejects) is legitimate here. GetPrimaryKeysAsync
-            // throws on those, so guard and fall back to an empty PK result rather
-            // than letting the validation throw. (For a null schema GetPrimaryKeysAsync
-            // would return an empty result anyway, so this is behavior-preserving.)
-            QueryResult pkResult;
-            if (string.IsNullOrEmpty(_metadataTableName)
-                || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName)))
-            {
-                pkResult = MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
-            }
-            else
-            {
-                pkResult = await GetPrimaryKeysAsync(cancellationToken).ConfigureAwait(false);
-            }
+            // Internal columns-extended reuse, not the user-facing getprimarykeys command:
+            // a null schema (legitimately passed here while gathering PKs for a column set)
+            // must NOT be rejected. Call the non-throwing internal, which returns an empty PK
+            // result for such "unspecified" args instead of throwing.
+            var pkResult = await GetPrimaryKeysAsyncInternal(cancellationToken).ConfigureAwait(false);
 
             // Find FKs where the current table is the FK (child) side — null PK params to
             // match any parent, mirroring Thrift's GetCrossReferenceAsForeignTableAsync.
@@ -1658,11 +1647,37 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return new QueryResult(totalRows, new HiveInfoArrowStream(combinedSchema, combinedData));
         }
 
-        // The user-facing getprimarykeys command. GetColumnsExtendedViaThreeCalls also
-        // gathers PKs for a column set, but it screens out the args this method rejects
-        // (e.g. a null schema) and calls CreateEmptyPrimaryKeysResult itself — so this
-        // method can always validate exact-match args without a caller-supplied flag.
+        // The user-facing getprimarykeys command. GetPrimaryKeys is an exact-match operation,
+        // so this wrapper validates the required args client-side (mirroring the JDBC reference
+        // driver's resolveKeyBasedParams) and throws a clean 42000 on a missing table / a
+        // catalog-set-schema-null request — instead of relying on the Thrift server round-trip
+        // (which surfaces an internal "GET_FUNCTIONS assertion failed" 08000 bug on schema-null).
+        // The actual fetch lives in GetPrimaryKeysAsyncInternal, which does NOT throw; the
+        // internal columns-extended reuse (GetColumnsExtendedViaThreeCalls) calls that directly
+        // so its legitimately-unspecified args return empty rather than being rejected.
         private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
+        {
+            // Validate only when the PK/FK feature is actually engaged — the internal short-circuit
+            // (ShouldReturnEmptyPKFKResult) otherwise returns empty for these args, and the public
+            // command must match that (don't throw for a request the feature would no-op anyway).
+            if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
+            {
+                if (string.IsNullOrEmpty(_metadataTableName))
+                    throw NewInvalidArgumentException("tableName may not be null");
+
+                if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
+                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+            }
+
+            return await GetPrimaryKeysAsyncInternal(cancellationToken).ConfigureAwait(false);
+        }
+
+        // Non-throwing core of GetPrimaryKeys: issues SHOW KEYS and shapes the result, returning
+        // an empty result for unspecified/invalid args (null catalog/schema/table or a disabled
+        // feature) rather than throwing. Argument validation lives in the public GetPrimaryKeysAsync
+        // wrapper; this is safe to call directly from GetColumnsExtendedViaThreeCalls, which reuses
+        // it to gather PKs for a column set and legitimately passes a null schema.
+        private async Task<QueryResult> GetPrimaryKeysAsyncInternal(CancellationToken cancellationToken)
         {
             return await this.TraceActivityAsync(async activity =>
             {
@@ -1674,18 +1689,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
-                // GetPrimaryKeys is an exact-match operation. Validate required args
-                // client-side (mirroring the JDBC reference driver's resolveKeyBasedParams):
-                //   - table null/empty          -> throw "tableName may not be null"
-                //   - catalog set + schema null -> throw "schema may not be null when catalog is specified"
-                // Validating here (before issuing SHOW KEYS) also avoids the Thrift server's
-                // internal "GET_FUNCTIONS assertion failed" bug on schema-null, and gives a
-                // clean, deterministic error instead of relying on a server round-trip.
-                if (string.IsNullOrEmpty(_metadataTableName))
-                    throw NewInvalidArgumentException("tableName may not be null");
-
-                if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
-                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+                // Unspecified args (any of catalog/schema/table null or empty) -> empty result,
+                // NOT a throw. The public wrapper has already rejected those it must reject.
+                if (string.IsNullOrEmpty(_metadataCatalogName) || string.IsNullOrEmpty(_metadataSchemaName)
+                    || string.IsNullOrEmpty(_metadataTableName))
+                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
 
                 string sql = new ShowKeysCommand(_metadataCatalogName!, _metadataSchemaName!, _metadataTableName!).Build();
                 activity?.SetTag("sql_query", sql);
@@ -1726,7 +1734,36 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }, "GetPrimaryKeys").ConfigureAwait(false);
         }
 
+        // The user-facing getcrossreference command. Like GetPrimaryKeysAsync, this thin wrapper
+        // validates the one exact-match argument the JDBC reference driver rejects client-side
+        // (DatabricksMetadataQueryClient.resolveKeyBasedParams): a foreign catalog set with a null
+        // foreign schema -> clean 42000, instead of the Thrift server's internal "GET_FUNCTIONS
+        // assertion failed" 08000 bug. The actual work lives in GetCrossReferenceAsyncInternal,
+        // which does NOT throw; the columns-extended reuse goes through FetchCrossReferenceAsync
+        // directly so its legitimately-unspecified args return empty.
         private async Task<QueryResult> GetCrossReferenceAsync(CancellationToken cancellationToken)
+        {
+            // Throw only in the case the internal would otherwise reach a live fetch for: the
+            // feature engaged (else the internal short-circuits to empty), a specified foreign
+            // table (else the internal returns empty — JDBC SEA inspects ONLY the foreign table),
+            // and a foreign catalog set with a null foreign schema. These preconditions mirror the
+            // internal's own early-returns so the two never diverge.
+            if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK)
+                && !string.IsNullOrEmpty(_metadataForeignTableName)
+                && !string.IsNullOrEmpty(_metadataForeignCatalogName)
+                && string.IsNullOrEmpty(_metadataForeignSchemaName))
+                throw NewInvalidArgumentException("schema may not be null when catalog is specified");
+
+            return await GetCrossReferenceAsyncInternal(cancellationToken).ConfigureAwait(false);
+        }
+
+        // Non-throwing core of GetCrossReference: reads the statement's PK/FK fields, short-circuits
+        // to empty for a disabled feature or an unspecified foreign table (JDBC SEA checks ONLY the
+        // foreign table — a null one is "unspecified" and returns empty, regardless of the parent
+        // table; live Thrift instead throws 42000 for both-tables-null, an intentional divergence
+        // the comparator whitelists), then delegates to the shared FetchCrossReferenceAsync core.
+        // Argument validation lives in the public GetCrossReferenceAsync wrapper.
+        private async Task<QueryResult> GetCrossReferenceAsyncInternal(CancellationToken cancellationToken)
         {
             return await this.TraceActivityAsync(async activity =>
             {
@@ -1738,31 +1775,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("fk_table", _metadataForeignTableName ?? "(none)");
                 activity?.SetTag("pk_fk_enabled", _connection.EnablePKFK);
 
-                // When the PK/FK feature is disabled (or neither catalog is a valid PKFK
-                // catalog), short-circuit to an empty result BEFORE any argument validation,
-                // mirroring GetPrimaryKeysAsync. Otherwise this method would throw for a
-                // foreign-catalog-set/foreign-schema-null request while the sibling returns
-                // empty for the equivalent GetPrimaryKeys request, diverging from both the
-                // sibling method and the disabled-feature contract (MetadataUtilities.cs).
                 if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK))
                     return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
 
-                // Argument handling for the user-facing GetCrossReference, mirroring the JDBC
-                // reference driver's SEA path (DatabricksMetadataQueryClient.listCrossReferences):
-                //   - foreign table null -> empty result. JDBC SEA checks ONLY the foreign table
-                //     (it never inspects the parent table) and returns empty for "unspecified".
-                //     We match that: null foreign table -> empty, regardless of the parent table.
-                //     (Live Thrift instead throws 42000 when BOTH tables are null; ADBC SEA follows
-                //     JDBC SEA here, not Thrift, so the comparator whitelists that one input.)
-                //   - foreign catalog set + foreign schema null -> throw 42000, mirroring JDBC
-                //     SEA resolveKeyBasedParams "schema may not be null when catalog is specified"
-                //     (and avoiding Thrift's internal "GET_FUNCTIONS assertion failed" 08000 bug).
                 if (string.IsNullOrEmpty(_metadataForeignTableName))
                     return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-
-                if (!string.IsNullOrEmpty(_metadataForeignCatalogName)
-                    && string.IsNullOrEmpty(_metadataForeignSchemaName))
-                    throw NewInvalidArgumentException("schema may not be null when catalog is specified");
 
                 var result = await FetchCrossReferenceAsync(
                     _metadataCatalogName, _metadataSchemaName, _metadataTableName,
