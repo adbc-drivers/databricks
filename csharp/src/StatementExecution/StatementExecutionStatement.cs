@@ -1660,19 +1660,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // so its legitimately-unspecified args return empty rather than being rejected.
         private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
         {
-            // Short-circuit to an empty result before any argument validation when the feature is
-            // disabled or the catalog is one PK/FK metadata does not apply to (SPARK/hive_metastore/
-            // null) — mirroring GetPrimaryKeysAsyncInternal and the JDBC reference driver. Only once
-            // the feature is genuinely engaged do we validate the exact-match args the JDBC driver
-            // rejects client-side, so an ordinary successful call never emits a spurious empty span.
-            if (MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
-                return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
-
-            // One of the two exact-match args the JDBC reference driver rejects client-side is bad
-            // (a missing table, or a catalog-set-schema-null request). These conditions mirror the
-            // throws inside the block.
-            if (string.IsNullOrEmpty(_metadataTableName)
-                || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName)))
+            // Validate the exact-match args the JDBC reference driver rejects client-side (a missing
+            // table, or a catalog-set-schema-null request), but only when the feature is genuinely
+            // engaged — if it is disabled or the catalog is one PK/FK metadata does not apply to
+            // (SPARK/hive_metastore/null), skip validation and delegate: GetPrimaryKeysAsyncInternal
+            // short-circuits that case to an empty result *inside* its own TraceActivityAsync. We
+            // deliberately do NOT short-circuit here (mirroring GetCrossReferenceAsync) so the
+            // disabled-feature/invalid-catalog path still emits a span, keeping PK/FK telemetry
+            // symmetric across the two commands. The guard mirrors the internal's early-returns so
+            // the two never diverge.
+            if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK)
+                && (string.IsNullOrEmpty(_metadataTableName)
+                    || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))))
             {
                 // Emit a span for a client-side rejection so the failure is captured in telemetry —
                 // the throw happens before GetPrimaryKeysAsyncInternal, so its own activity (with
