@@ -75,14 +75,16 @@ namespace AdbcDrivers.Databricks.Tests
                 using (var statement = connection.CreateStatement())
                 {
                     statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
-                    var reader = statement.ExecuteQuery().Stream;
+                    // `using` guarantees deterministic disposal even if the read below throws;
+                    // the local still goes out of scope at the block's end (before the GC), so
+                    // it holds no strong reference during the WeakReference collectability check.
+                    using var reader = statement.ExecuteQuery().Stream;
                     readerRefs.Add(new WeakReference(reader));
 
                     // Read only the first batch, then dispose — this cancels the result pipeline
                     // mid-stream (the scenario under test) and must release everything it holds.
                     var batch = await reader.ReadNextRecordBatchAsync();
                     Assert.NotNull(batch);
-                    reader.Dispose();
                 }
                 OutputHelper?.WriteLine($"Iteration {i}: read first batch, disposed reader");
             }
