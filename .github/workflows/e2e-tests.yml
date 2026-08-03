@@ -254,6 +254,10 @@ jobs:
         shell: bash
         run: |
           export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
+          # TEMP DIAGNOSTIC (do not merge): isolate PartialRead to test whether it fails
+          # only when preceded by other tests in the same process (shared RMSM pool / process
+          # memory carryover) vs. failing standalone.
+          export TEST_FILTER="FullyQualifiedName~PartialRead_DisposeStatement_ShouldNotHangOrLeak"
           ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
 
       # Always run, even on test failure or job cancellation, so we don't
