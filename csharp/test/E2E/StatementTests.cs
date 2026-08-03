@@ -1025,14 +1025,14 @@ namespace AdbcDrivers.Databricks.Tests
         {
             OutputHelper?.WriteLine($"Testing {queryType} with EnableMultipleCatalogSupport={shouldAllowMultipleCatalogs}, CatalogName={catalogName}");
 
-            var statement = connection.CreateStatement();
-            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            statement.SetOption(ApacheParameters.CatalogName, catalogName);
-            // Use default as schema name, it is the default schema name
-            statement.SetOption(ApacheParameters.SchemaName, "default");
-            statement.SqlQuery = queryType;
-
-            QueryResult queryResult = await statement.ExecuteQueryAsync();
+            // Retry the metadata query on a transient server-side 500. The SEA backend
+            // intermittently returns HTTP 500 INTERNAL_ERROR "The result files are not available
+            // in the result metadata" for metadata statements — a server-side result-staging race,
+            // not a driver or test defect (the identical query succeeds on the next attempt with a
+            // fresh statement). Without this, the shared-warehouse merge-queue run flakes on that
+            // 500. Only this specific transient error is retried; any other exception (and all the
+            // schema/row assertions below) propagate unchanged, so real regressions still fail.
+            QueryResult queryResult = await ExecuteMetadataQueryWithRetryAsync(connection, queryType, catalogName);
             Assert.NotNull(queryResult.Stream);
 
             // Store SPARK catalog schema for comparison
@@ -1160,6 +1160,44 @@ namespace AdbcDrivers.Databricks.Tests
                         $"{queryType} should return results from only the specified catalog when EnableMultipleCatalogSupport is true and catalog is not SPARK");
                     Assert.Contains(catalogName, foundCatalogs);
                     OutputHelper?.WriteLine($"Found results from catalog: {string.Join(", ", foundCatalogs)}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Executes a metadata query, retrying only on the transient server-side 500
+        /// "The result files are not available in the result metadata" (a SEA backend
+        /// result-staging race). Uses a fresh statement per attempt. Any other exception —
+        /// and success — returns/propagates immediately, so genuine failures are not masked.
+        /// </summary>
+        private async Task<QueryResult> ExecuteMetadataQueryWithRetryAsync(
+            AdbcConnection connection, string queryType, string catalogName)
+        {
+            const int maxAttempts = 4;
+            const string transientMarker = "result files are not available in the result metadata";
+
+            for (int attempt = 1; ; attempt++)
+            {
+                var statement = connection.CreateStatement();
+                statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+                statement.SetOption(ApacheParameters.CatalogName, catalogName);
+                // Use default as schema name, it is the default schema name
+                statement.SetOption(ApacheParameters.SchemaName, "default");
+                statement.SqlQuery = queryType;
+
+                try
+                {
+                    return await statement.ExecuteQueryAsync();
+                }
+                catch (Exception ex) when (attempt < maxAttempts &&
+                    ex.ToString().IndexOf(transientMarker, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    // Exponential backoff: 500ms, 1s, 2s — gives the server time to stage results.
+                    int delayMs = 500 * (1 << (attempt - 1));
+                    OutputHelper?.WriteLine(
+                        $"{queryType} (catalog={catalogName}) hit transient server 500 on attempt {attempt}/{maxAttempts}; " +
+                        $"retrying in {delayMs}ms");
+                    await Task.Delay(delayMs);
                 }
             }
         }
