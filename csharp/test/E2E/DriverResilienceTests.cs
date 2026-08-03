@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
@@ -80,20 +81,14 @@ namespace AdbcDrivers.Databricks.Tests
 
             for (int i = 1; i <= iterations; i++)
             {
-                using (var statement = connection.CreateStatement())
-                {
-                    statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
-                    // `using` guarantees deterministic disposal even if the read below throws;
-                    // the local still goes out of scope at the block's end (before the GC), so
-                    // it holds no strong reference during the WeakReference collectability check.
-                    using var reader = statement.ExecuteQuery().Stream;
-                    readerRefs.Add(new WeakReference(reader));
-
-                    // Read only the first batch, then dispose — this cancels the result pipeline
-                    // mid-stream (the scenario under test) and must release everything it holds.
-                    var batch = await reader.ReadNextRecordBatchAsync();
-                    Assert.NotNull(batch);
-                }
+                // Run each partial-read/dispose cycle in a NoInlining helper so no
+                // reader-holding local survives into the collection scope below. In Debug
+                // builds the JIT keeps a method's local slots reported as GC roots until the
+                // method returns; if this ran inline, the last iteration's reader/statement
+                // slot would stay rooted through the GC and inflate the alive count. Confining
+                // it to a helper that has fully returned makes the check deterministically 0
+                // regardless of build configuration.
+                readerRefs.Add(await RunPartialReadCycleAsync(connection));
                 OutputHelper?.WriteLine($"Iteration {i}: read first batch, disposed reader");
             }
 
@@ -106,13 +101,35 @@ namespace AdbcDrivers.Databricks.Tests
             int aliveReaders = readerRefs.Count(r => r.IsAlive);
             OutputHelper?.WriteLine($"Disposed readers still alive after GC: {aliveReaders}/{readerRefs.Count}");
 
-            // Every disposed reader must be collectable. Allow 1 for a benign straggler
-            // (e.g. a just-completed finalizer/continuation not yet reclaimed); more than that
-            // means the partial-read/dispose path is keeping the disposed reader graph rooted
-            // — a real leak of the reader and everything reachable from it.
-            Assert.True(aliveReaders <= 1,
+            // Every disposed reader must be collectable. Because each cycle ran in a
+            // NoInlining helper that has fully returned, no reader-holding local survives
+            // into this scope, so the expected count is 0 regardless of build configuration.
+            // Any survivor means the partial-read/dispose path is keeping the disposed reader
+            // graph rooted — a real leak of the reader and everything reachable from it.
+            Assert.True(aliveReaders == 0,
                 $"Possible pipeline leak on partial consumption: {aliveReaders}/{readerRefs.Count} " +
                 $"disposed result readers remained rooted after a full GC.");
+        }
+
+        /// <summary>
+        /// Runs one partial-read/dispose cycle and returns a <see cref="WeakReference"/> to the
+        /// disposed reader. Marked <see cref="MethodImplOptions.NoInlining"/> so the reader and
+        /// statement locals cannot be hoisted into the caller and reported as GC roots at the
+        /// collectability check — see the caller for why this matters in Debug builds.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static async Task<WeakReference> RunPartialReadCycleAsync(AdbcConnection connection)
+        {
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
+            // `using` guarantees deterministic disposal even if the read below throws.
+            using var reader = statement.ExecuteQuery().Stream;
+
+            // Read only the first batch, then dispose — this cancels the result pipeline
+            // mid-stream (the scenario under test) and must release everything it holds.
+            var batch = await reader.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            return new WeakReference(reader);
         }
 
         /// <summary>
