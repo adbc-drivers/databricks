@@ -1660,10 +1660,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // so its legitimately-unspecified args return empty rather than being rejected.
         private async Task<QueryResult> GetPrimaryKeysAsync(CancellationToken cancellationToken)
         {
-            // Validate only when the PK/FK feature is actually engaged — the internal short-circuit
-            // (ShouldReturnEmptyPKFKResult) otherwise returns empty for these args, and the public
-            // command must match that (don't throw for a request the feature would no-op anyway).
-            if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK))
+            // Throw only in the case the internal would otherwise reach a live fetch for: the
+            // feature engaged (else the internal short-circuits to empty via ShouldReturnEmptyPKFKResult),
+            // AND one of the two exact-match args the JDBC reference driver rejects client-side is bad
+            // (a missing table, or a catalog-set-schema-null request). These preconditions mirror the
+            // throws inside the block so an ordinary successful call — valid catalog with table and
+            // schema both set — never enters the block and never emits a spurious empty span.
+            bool willReject =
+                string.IsNullOrEmpty(_metadataTableName)
+                || (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName));
+
+            if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, null, _connection.EnablePKFK)
+                && willReject)
             {
                 // Emit a span for a client-side rejection so the failure is captured in telemetry —
                 // the throw happens before GetPrimaryKeysAsyncInternal, so its own activity (with
