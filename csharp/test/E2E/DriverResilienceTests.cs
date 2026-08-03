@@ -55,56 +55,58 @@ namespace AdbcDrivers.Databricks.Tests
         [SkippableFact]
         public async Task PartialRead_DisposeStatement_ShouldNotHangOrLeak()
         {
-            using var connection = NewConnection();
-            long memBefore, memAfter;
+            // TEMP DIAGNOSTIC (not for merge). Runs isolated via TEST_FILTER in e2e-tests.yml.
+            // Attributes the CI growth per iteration using Console.WriteLine (OutputHelper is
+            // suppressed for passing tests). sIU=RMSM SmallPoolInUseSize (undisposed blocks),
+            // sFR=SmallPoolFreeSize (reusable free list), gen0/1/2 collection counts, LOH size.
+            var database = (DatabricksDatabase)NewDriver.Open(GetDriverParameters(TestConfiguration));
+            var pool = database.RecyclableMemoryStreamManager;
+            using var connection = database.Connect(new Dictionary<string, string>());
 
-            // Warm-up: run one full read+dispose cycle BEFORE the baseline snapshot. The
-            // LZ4 decompression path pools buffers (RecyclableMemoryStreamManager + ArrayPool),
-            // and that pool sizes itself once to the peak footprint of a single result and then
-            // reuses it — a bounded, one-time cost, not a per-iteration leak (verified: growth
-            // plateaus across 5 vs 20 iterations, and disabling LZ4 removes it entirely). Sizing
-            // the pool before memBefore keeps that one-time allocation out of the measurement, so
-            // the loop below measures only per-iteration accumulation — i.e. an actual leak.
-            using (var warmup = connection.CreateStatement())
+            void Dump(string tag)
             {
-                warmup.SqlQuery = "SELECT * FROM RANGE(1000000)";
-                var warmupResult = warmup.ExecuteQuery();
-                using var warmupReader = warmupResult.Stream;
-                await warmupReader.ReadNextRecordBatchAsync();
+                GC.Collect(2, GCCollectionMode.Forced, true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(2, GCCollectionMode.Forced, true);
+                double MB(long b) => b / 1048576.0;
+                long loh = GC.GetGCMemoryInfo().GenerationInfo is var gi && gi.Length > 3 ? gi[3].SizeAfterBytes : -1;
+                Console.WriteLine(
+                    $"[leakdiag] {tag} GC={MB(GC.GetTotalMemory(true)):F1} " +
+                    $"sIU={MB(pool.SmallPoolInUseSize):F1} sFR={MB(pool.SmallPoolFreeSize):F1} " +
+                    $"lIU={MB(pool.LargePoolInUseSize):F1} lFR={MB(pool.LargePoolFreeSize):F1} " +
+                    $"LOH={MB(loh):F1}");
             }
 
-            GC.Collect(2, GCCollectionMode.Forced, true);
-            memBefore = GC.GetTotalMemory(true);
-
-            // Do this 5 times to amplify any leak
-            for (int i = 0; i < 5; i++)
+            async Task PartialReadOnce()
             {
                 using var statement = connection.CreateStatement();
                 statement.SqlQuery = "SELECT * FROM RANGE(1000000)";
-                var result = statement.ExecuteQuery();
-                using var reader = result.Stream;
-
-                // Read only the first batch, then let disposal clean up the rest
+                using var reader = statement.ExecuteQuery().Stream;
                 var batch = await reader.ReadNextRecordBatchAsync();
                 Assert.NotNull(batch);
-                OutputHelper?.WriteLine($"Iteration {i + 1}: read first batch ({batch!.Length} rows), disposing remainder");
-                // reader and statement dispose here — CloudFetch pipeline must cancel
             }
 
-            // Allow background tasks to settle
+            Dump("start");
+            await PartialReadOnce();
+            await Task.Delay(500);
+            Dump("after-warmup1");
+
+            GC.Collect(2, GCCollectionMode.Forced, true);
+            long memBefore = GC.GetTotalMemory(true);
+
+            for (int i = 0; i < 5; i++)
+            {
+                await PartialReadOnce();
+                Dump($"iter{i + 1}");
+            }
+
             await Task.Delay(1000);
-            GC.Collect(2, GCCollectionMode.Forced, true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(2, GCCollectionMode.Forced, true);
-            memAfter = GC.GetTotalMemory(true);
+            Dump("final");
+            long memAfter = GC.GetTotalMemory(true);
 
             double growthMB = (memAfter - memBefore) / 1024.0 / 1024.0;
-            OutputHelper?.WriteLine($"Memory before: {memBefore / 1024.0 / 1024.0:F2} MB");
-            OutputHelper?.WriteLine($"Memory after:  {memAfter / 1024.0 / 1024.0:F2} MB");
-            OutputHelper?.WriteLine($"Growth: {growthMB:F2} MB");
+            Console.WriteLine($"[leakdiag] Growth: {growthMB:F2} MB");
 
-            // Each abandoned result set is ~8MB of Arrow data (1M int64 values).
-            // If the pipeline leaks downloaded buffers, we'd see 40+ MB growth.
             Assert.True(growthMB < 20.0,
                 $"Possible CloudFetch pipeline leak on partial consumption: {growthMB:F2} MB growth after 5 abandoned result sets.");
         }
