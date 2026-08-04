@@ -126,7 +126,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return new HttpClient(handler.Object);
         }
 
-        private static StatementExecutionStatement CreateMetadataStatement(HttpClient httpClient)
+        private static StatementExecutionStatement CreateMetadataStatement(
+            HttpClient httpClient, IReadOnlyDictionary<string, string>? extraProperties = null)
         {
             var properties = new Dictionary<string, string>
             {
@@ -134,6 +135,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 { DatabricksParameters.WarehouseId, "wh-1" },
                 { SparkParameters.AccessToken, "token" },
             };
+            if (extraProperties != null)
+            {
+                foreach (var kv in extraProperties)
+                    properties[kv.Key] = kv.Value;
+            }
 
             var connection = new StatementExecutionConnection(properties, httpClient);
             // The outer statement's IStatementExecutionClient is unused on the metadata
@@ -431,6 +437,47 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
+        public async Task GetColumnsExtended_ThreeCalls_NullSchema_ReuseInternals_NoThrowAndEmpty()
+        {
+            // Guards the central invariant of the columns-extended fallback path
+            // (GetColumnsExtendedViaThreeCalls): it must reuse the NON-throwing
+            // GetPrimaryKeysAsyncNoThrow / GetCrossReferenceAsyncNoThrow, which return
+            // empty for legitimately-unspecified args (here: catalog set + schema null),
+            // rather than the public getprimarykeys/getcrossreference wrappers that
+            // validate and throw a 42000 on that same catalog-set-schema-null shape.
+            //
+            // A future change that moved validation into the internals (or had the
+            // three-calls path call the throwing wrappers) would regress this without any
+            // unit failing today: the only other coverage is the E2E GetColumnsExtended
+            // tests, which are skipped in CI without a live warehouse. Pinned at the
+            // HttpMessageHandler seam like the sibling tests.
+            //
+            // UseDescTableExtended=false forces the three-calls fallback (the SEA default
+            // is DESC TABLE EXTENDED, which does not exercise the PK/FK internals).
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(
+                http,
+                new Dictionary<string, string>
+                {
+                    { DatabricksParameters.UseDescTableExtended, "false" },
+                });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            // Catalog defaults to "main" (see CreateMetadataStatement); schema is left null.
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumnsextended";
+
+            // Must NOT throw: the null schema flows through the non-throwing internals.
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+
+            // The null-schema PK/FK contribution short-circuits to empty inside the
+            // internals, so no SHOW KEYS / SHOW FOREIGN KEYS query is ever emitted.
+            Assert.DoesNotContain(captured, sql => sql.Contains("SHOW KEYS"));
+            Assert.DoesNotContain(captured, sql => sql.Contains("SHOW FOREIGN KEYS"));
+        }
+
+        [Fact]
         public async Task GetSchemas_StarCatalog_EscapeTrue_ReturnsEmpty()
         {
             // "*" is the Databricks alias for "%" in the match-all catalog wildcard
@@ -464,20 +511,147 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Contains("SHOW SCHEMAS IN ALL CATALOGS", captured);
         }
 
-        // GetCrossReference with a null foreign table returns an EMPTY result (JDBC's
-        // listCrossReferences treats a null foreign table as "unspecified"; Thrift returns
-        // empty too). This holds independent of exact-match argument validation (which is
-        // added in a separate, stacked PR).
+        // ─── Exact-match ops throw on missing table, matching the Thrift path ─────────
+        // GetPrimaryKeys / GetCrossReference are exact-match (table required). Thrift's
+        // TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with
+        // AdbcStatusCode.InternalError + SqlState 42000 when the table is null; SEA must
+        // throw an equivalent error instead of returning empty. SEA throws its own
+        // DatabricksException (the natural SEA type); the comparator treats any
+        // AdbcException subclass as equivalent and compares Status + SqlState, so those
+        // two are the load-bearing assertions here (not the concrete type).
+
         [Fact]
-        public async Task GetCrossReference_NullForeignTable_ReturnsEmpty()
+        public async Task GetPrimaryKeys_NullTable_ThrowsWithThriftStatusAndSqlState()
         {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "some_schema");
+            // TableName deliberately not set (null).
+            stmt.SqlQuery = "getprimarykeys";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_BothTablesNull_ReturnsEmpty()
+        {
+            // JDBC SEA (DatabricksMetadataQueryClient.listCrossReferences) checks ONLY the
+            // foreign table: a null foreign table means "unspecified" and returns an empty
+            // result — it never inspects the parent table. ADBC SEA mirrors JDBC SEA here, so
+            // BOTH tables null → empty (NOT a throw). Live Thrift instead throws 42000 for the
+            // both-null case; ADBC SEA follows JDBC SEA, and the comparator whitelists that one
+            // input as a Thrift-vs-SEA divergence.
             using var http = HttpClientCapturingStatements(new List<string>());
             using var stmt = CreateMetadataStatement(http);
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
             stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
             stmt.SetOption(ApacheParameters.ForeignSchemaName, "some_schema");
-            // Foreign table deliberately not set (null).
+            // Neither parent table nor foreign table set (both null).
             stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ParentTableSetForeignTableNull_ReturnsEmpty()
+        {
+            // JDBC SEA: a null foreign table returns empty regardless of the parent table
+            // (listCrossReferences short-circuits on foreignTable == null before looking at
+            // the parent side). SEA must return empty here too.
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "some_schema");
+            stmt.SetOption(ApacheParameters.TableName, "fk_parent");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "some_schema");
+            // Foreign table deliberately not set (null) while the parent table IS set.
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ForeignCatalogSetForeignSchemaNull_Throws()
+        {
+            // Foreign catalog set + foreign schema null (with a foreign table) → throw,
+            // mirroring JDBC resolveKeyBasedParams and avoiding Thrift's assertion-failed bug.
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            // Foreign schema deliberately not set (null) while foreign catalog IS set.
+            stmt.SqlQuery = "getcrossreference";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        // Exact-match ops also require schema when catalog is specified (mirroring the JDBC
+        // reference driver's resolveKeyBasedParams). Validating client-side gives a clean
+        // error and avoids the Thrift server's internal "GET_FUNCTIONS assertion failed" bug
+        // on a null schema.
+        [Fact]
+        public async Task GetPrimaryKeys_CatalogSetSchemaNull_Throws()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            // SchemaName deliberately not set (null) while catalog IS set.
+            stmt.SqlQuery = "getprimarykeys";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        // When PK/FK is disabled, the driver returns empty PK/FK metadata uniformly, and
+        // the arg-validation throws must NOT fire — both exact-match ops behave the same.
+        // GetPrimaryKeysAsync already short-circuits before validation; this pins that
+        // GetCrossReferenceAsync does too (regression: it used to throw before the guard).
+
+        [Fact]
+        public async Task GetCrossReference_PKFKDisabled_ForeignCatalogSetForeignSchemaNull_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http,
+                new Dictionary<string, string> { { DatabricksParameters.EnablePKFK, "false" } });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            // Foreign schema deliberately null while foreign catalog IS set — would throw
+            // if PK/FK were enabled, but the disabled feature must short-circuit to empty.
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetPrimaryKeys_PKFKDisabled_CatalogSetSchemaNull_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http,
+                new Dictionary<string, string> { { DatabricksParameters.EnablePKFK, "false" } });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            // SchemaName deliberately null while catalog IS set — the sibling of the above.
+            stmt.SqlQuery = "getprimarykeys";
 
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
             Assert.Equal(0, result.RowCount);

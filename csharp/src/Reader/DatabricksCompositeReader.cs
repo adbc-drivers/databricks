@@ -276,9 +276,18 @@ namespace AdbcDrivers.Databricks.Reader
                             }
                             catch (Exception ex)
                             {
+                                // Best-effort close: the TCloseOperationReq is a teardown cleanup
+                                // RPC issued during Dispose, and the operation's results have
+                                // already been consumed by this point — a close failure cannot
+                                // invalidate them and is not actionable by the caller. Record it
+                                // (captured into CloseStatementRpcError below and surfaced via the
+                                // CLOSE_STATEMENT telemetry event + the trace exception) but do NOT
+                                // rethrow: throwing out of Dispose violates the .NET dispose
+                                // contract and would skip the remaining teardown (the active
+                                // reader's Dispose just below), leaking it. Mirrors the swallow
+                                // pattern in DatabricksStatement.Dispose's telemetry emit.
                                 closeError = ex;
                                 activity?.AddException(ex);
-                                throw;
                             }
                             finally
                             {
