@@ -274,9 +274,8 @@ impl SeaClient {
             session_id: Some(session_id.to_string()),
             catalog: params.catalog.clone(),
             schema: params.schema.clone(),
-            // TODO: INLINE_OR_EXTERNAL_LINKS is not a public API disposition but enables
-            // returning all chunk links in a single response (requires JDBC user agent).
-            // Once EXTERNAL_LINKS supports multi-link responses, switch back to it.
+            // INLINE_OR_EXTERNAL_LINKS lets the server choose: small results come
+            // back inline (avoiding an extra S3 round-trip), large ones via CloudFetch.
             disposition: "INLINE_OR_EXTERNAL_LINKS".to_string(),
             format: "ARROW_STREAM".to_string(),
             wait_timeout: params.wait_timeout.clone(),
@@ -351,12 +350,20 @@ impl SeaClient {
             .call_execute_api(session_id, sql, params, request_type)
             .await?;
         let response = self.wait_for_completion(response).await?;
+        // The SEA server returns `Closed` (with inline data) for results that
+        // are fully delivered in the execute response — the statement is already
+        // cleaned up server-side, so the client must not issue a redundant DELETE.
+        let server_side_closed = matches!(
+            response.status.state,
+            crate::types::sea::StatementState::Closed
+        );
         let reader_factory = self.reader_factory()?;
         let reader = reader_factory.create_reader(&response.statement_id, &response)?;
         Ok(ExecuteResult {
             statement_id: response.statement_id,
             reader,
             manifest: response.manifest,
+            server_side_closed,
         })
     }
 }

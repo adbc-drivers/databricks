@@ -281,7 +281,11 @@ impl ResultReaderFactory {
             compression
         );
 
-        let provider = InlineArrowProvider::new(inline_data.to_vec(), compression)?;
+        let provider = InlineArrowProvider::new(
+            inline_data.to_vec(),
+            compression,
+            self.config.batch_merge_target_rows,
+        )?;
 
         Ok(Box::new(InlineArrowReader::new(provider)))
     }
