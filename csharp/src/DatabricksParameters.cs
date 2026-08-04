@@ -525,6 +525,17 @@ namespace AdbcDrivers.Databricks
         /// never collide with a real Databricks table type (TABLE, VIEW, SYSTEM TABLE,
         /// ...) and deliberately avoids control characters (e.g. NUL) so the request
         /// stays well-formed on strict servers. See METADATA-035.
+        ///
+        /// SERVER CONTRACT (METADATA-035): this substitution relies on the Databricks
+        /// server TOLERATING an unrecognized table-type string on the Thrift GetTables /
+        /// is_metadata_command "gettables" path — i.e. filtering it out and returning
+        /// ZERO rows rather than raising an error. This is the only surface where the
+        /// empty-types rule is enforced server-side (the two SEA surfaces filter
+        /// client-side, so they do not depend on this behavior). If a future server
+        /// version rejects an unknown table type with an error instead of matching
+        /// nothing, empty-types GetObjects would throw; that server-round-trip contract
+        /// is guarded only by EmptyTableTypesE2ETests (live workspace, not ordinary CI),
+        /// so treat a regression there as a signal the server contract changed.
         /// </summary>
         internal const string NoMatchTableTypeSentinel = "__ADBC_NO_MATCHING_TABLE_TYPE__";
 
