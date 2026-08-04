@@ -172,5 +172,64 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Single(rows);
             Assert.Equal("TABLE", rows[0].tableType);
         }
+
+        // ─── is_metadata_command path (StatementExecutionStatement.GetTablesAsync) ──────
+        // The metadata-command shim receives tableTypes as a pre-joined string option
+        // (adbc.get_metadata.target_table_types). An empty string means "match none"
+        // (METADATA-035); a never-set (null) option means "all types".
+
+        private static async Task<List<string>> MetadataCommandTableTypes(HttpClient http, string? tableTypesOption)
+        {
+            var connection = CreateConnection(http);
+            using var stmt = (StatementExecutionStatement)connection.CreateStatement();
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "default");
+            if (tableTypesOption != null)
+                stmt.SetOption(ApacheParameters.TableTypes, tableTypesOption);
+            stmt.SqlQuery = "gettables";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            using var reader = result.Stream!;
+            int typeIdx = reader.Schema.FieldsList.ToList().FindIndex(f => f.Name == "TABLE_TYPE");
+            var types = new List<string>();
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                var typeArr = (StringArray)batch.Column(typeIdx);
+                for (int i = 0; i < batch.Length; i++)
+                    types.Add(typeArr.GetString(i));
+            }
+            return types;
+        }
+
+        [Fact]
+        public async Task MetadataCommand_UnsetTableTypes_ReturnsAllTypes()
+        {
+            using var http = HttpClientReturningShowTables();
+            var types = await MetadataCommandTableTypes(http, tableTypesOption: null);
+            Assert.Equal(2, types.Count);
+            Assert.Contains("TABLE", types);
+            Assert.Contains("VIEW", types);
+        }
+
+        [Fact]
+        public async Task MetadataCommand_EmptyStringTableTypes_ReturnsNoTypes()
+        {
+            // METADATA-035: empty (non-null) filter matches nothing.
+            using var http = HttpClientReturningShowTables();
+            var types = await MetadataCommandTableTypes(http, tableTypesOption: "");
+            Assert.Empty(types);
+        }
+
+        [Fact]
+        public async Task MetadataCommand_SpecificTableType_ReturnsOnlyThatType()
+        {
+            using var http = HttpClientReturningShowTables();
+            var types = await MetadataCommandTableTypes(http, tableTypesOption: "TABLE");
+            Assert.Single(types);
+            Assert.Equal("TABLE", types[0]);
+        }
     }
 }

@@ -1332,9 +1332,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Issue #526: match JDBC's MetadataResultSetBuilder and the Thrift path -
                 // the types filter is a case-SENSITIVE exact match against the server's
                 // uppercase type names (TABLE/VIEW/...). Use Ordinal, not OrdinalIgnoreCase.
-                var tableTypeFilter = !string.IsNullOrEmpty(_metadataTableTypes)
+                //
+                // METADATA-035: an EMPTY (non-null) types filter matches NO table types
+                // (zero rows), matching databricks-jdbc; only an UNSET (null) filter means
+                // "all types". Guard on `!= null` (not IsNullOrEmpty) so an empty string
+                // builds a HashSet{""} that no real table type matches → zero rows, while
+                // null skips the filter entirely.
+                var tableTypeFilter = _metadataTableTypes != null
                     ? new HashSet<string>(
-                        _metadataTableTypes!.Split(',').Select(t => t.Trim()),
+                        _metadataTableTypes.Split(',').Select(t => t.Trim()),
                         StringComparer.Ordinal)
                     : null;
 
