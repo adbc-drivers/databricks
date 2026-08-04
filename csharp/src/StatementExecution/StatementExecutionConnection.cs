@@ -854,7 +854,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             tableType = serverType;
                     }
 
-                    if (tableTypes != null && tableTypes.Count > 0 && !tableTypes.Contains(tableType))
+                    // Empty (non-null) tableTypes filters to NO types (zero rows),
+                    // matching databricks-jdbc. A null tableTypes means "all types"
+                    // and skips this filter entirely. See METADATA-035.
+                    if (tableTypes != null && !tableTypes.Contains(tableType))
                         continue;
 
                     result.Add((catalogArray.GetString(i), schemaArray.GetString(i),
