@@ -58,10 +58,15 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Sentinel table-type list used to force a server-side GetTables filter that
         /// matches no rows, so an empty (non-null) tableTypes argument returns zero
-        /// tables (databricks-jdbc parity). The value contains a NUL character so it
-        /// can never collide with a real Databricks table type (TABLE, VIEW, ...).
+        /// tables (databricks-jdbc parity). The value is a plain ASCII string that can
+        /// never collide with a real Databricks table type (TABLE, VIEW, SYSTEM TABLE,
+        /// ...). It deliberately avoids control characters (e.g. NUL): an embedded NUL
+        /// is the most likely thing to trip server-side/transport string validation on
+        /// a strict server, which would turn an empty filter into a hard error instead
+        /// of an empty result. A normal identifier-shaped token that simply matches no
+        /// known type keeps the request well-formed while still returning zero rows.
         /// </summary>
-        private static readonly IReadOnlyList<string> NoMatchTableTypes = new[] { "\0__adbc_no_match__" };
+        private static readonly IReadOnlyList<string> NoMatchTableTypes = new[] { "__ADBC_NO_MATCHING_TABLE_TYPE__" };
 
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
@@ -534,7 +539,11 @@ namespace AdbcDrivers.Databricks
             // The shared HiveServer2 base filters server-side and only forwards a
             // non-empty list, so it would otherwise treat empty as "all". Substitute
             // an unmatchable sentinel type so the server returns zero tables without
-            // modifying the shared base. See METADATA-035.
+            // modifying the shared base. The sentinel is a plain ASCII token (see
+            // NoMatchTableTypes) so the GetTables request stays well-formed; a server
+            // that filters on it returns zero rows. This server-side path is exercised
+            // in CI by EmptyTableTypesE2ETests, which runs on both thrift and rest.
+            // See METADATA-035.
             if (tableTypes != null && tableTypes.Count == 0)
             {
                 tableTypes = NoMatchTableTypes;

@@ -30,10 +30,12 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
     /// <summary>
     /// METADATA-035 live E2E: an EMPTY (non-null) tableTypes filter to GetObjects must
     /// match NO table types (zero tables), matching databricks-jdbc; a null filter must
-    /// match ALL types. Runs on whichever protocol the test config selects (thrift/rest),
-    /// so the CI matrix exercises both the Thrift server-side sentinel and the SEA
-    /// client-side filter. Creates a unique table + view so the assertions are
-    /// deterministic regardless of what else lives in the fixture schema.
+    /// match ALL types. The test is parameterized over both protocols — it forces
+    /// <c>adbc.databricks.protocol=thrift</c> and <c>=rest</c> on independent connections
+    /// (rather than relying on the run's default protocol) so a single invocation
+    /// exercises BOTH the Thrift server-side sentinel and the SEA client-side filter.
+    /// Creates a unique table + view so the assertions are deterministic regardless of
+    /// what else lives in the fixture schema.
     /// </summary>
     public class EmptyTableTypesE2ETests : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
@@ -64,8 +66,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             return tables.Count;
         }
 
-        [SkippableFact]
-        public async Task GetObjects_EmptyTableTypes_MatchesNone_NullMatchesAll()
+        // Connection on an explicitly-forced protocol, independent of the run's default.
+        // Per the repo's learning log, a SEA/StatementExecution path is only exercised when
+        // the connection sets adbc.databricks.protocol=rest — so we force each protocol
+        // rather than trusting the run default (Thrift in most environments).
+        private AdbcConnection NewConnectionForProtocol(string protocol)
+        {
+            var parameters = new Dictionary<string, string>(TestEnvironment.GetDriverParameters(TestConfiguration));
+            parameters[DatabricksParameters.Protocol] = protocol;
+            return TestEnvironment.CreateNewDriver().Open(parameters).Connect(new Dictionary<string, string>());
+        }
+
+        [SkippableTheory]
+        [InlineData("thrift")]
+        [InlineData("rest")]
+        public async Task GetObjects_EmptyTableTypes_MatchesNone_NullMatchesAll(string protocol)
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
 
@@ -77,7 +92,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             string fqTable = $"{DelimitIdentifier(catalog)}.{DelimitIdentifier(schema)}.{DelimitIdentifier(tableName)}";
             string fqView = $"{DelimitIdentifier(catalog)}.{DelimitIdentifier(schema)}.{DelimitIdentifier(viewName)}";
 
-            using AdbcConnection connection = NewConnection();
+            using AdbcConnection connection = NewConnectionForProtocol(protocol);
             using AdbcStatement setup = connection.CreateStatement();
 
             try
