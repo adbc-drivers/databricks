@@ -337,6 +337,34 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Assert.Equal("c_int", rows[1]["COLUMN_NAME"]);
         }
 
+        // Case-variant input: querying with an uppercase table name must still match (identifiers
+        // are case-insensitive), and the result rows' TABLE_CAT/TABLE_SCHEM/TABLE_NAME must reflect
+        // the server's stored (canonical, lowercase) casing — NOT the uppercase input echoed back.
+        // Thrift and the JDBC reference driver both return the server's casing; SEA previously
+        // echoed the input, diverging on every case-variant PK query. Regression guard for that fix.
+        [SkippableFact]
+        public async Task GetPrimaryKeys_UppercaseTableName_ReturnsServerCanonicalCasing()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection();
+            var rows = await ReadMetadata(
+                conn, "GetPrimaryKeys", TestCatalog, TestSchema, TestTable.ToUpperInvariant());
+
+            // Case-insensitive match still finds the two PK columns.
+            Assert.Equal(2, rows.Count);
+            Assert.Equal("c_string", rows[0]["COLUMN_NAME"]);
+            Assert.Equal("c_int", rows[1]["COLUMN_NAME"]);
+
+            // The identifier columns reflect the server's canonical (lowercase) values, not the
+            // uppercase input. TestTable/TestSchema/TestCatalog are the canonical lowercase forms.
+            foreach (var row in rows)
+            {
+                Assert.Equal(TestTable, row["TABLE_NAME"]);
+                Assert.Equal(TestSchema, row["TABLE_SCHEM"]);
+                Assert.Equal(TestCatalog, row["TABLE_CAT"]);
+            }
+        }
+
         // --- GetTableSchema ---
 
         [SkippableFact]
