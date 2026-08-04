@@ -148,7 +148,7 @@ func TestIPCReaderAdapter(t *testing.T) {
 
 	// Test the IPC reader adapter
 	ctx := context.Background()
-	reader, err := newIPCReaderAdapter(ctx, mockRows)
+	reader, err := newIPCReaderAdapter(ctx, mockRows, false)
 	require.NoError(t, err)
 	defer reader.Release()
 
@@ -245,7 +245,7 @@ func TestIPCReaderAdapterMultipleStreams(t *testing.T) {
 
 	// Test the adapter
 	ctx := context.Background()
-	reader, err := newIPCReaderAdapter(ctx, mockRows)
+	reader, err := newIPCReaderAdapter(ctx, mockRows, false)
 	require.NoError(t, err)
 	defer reader.Release()
 
@@ -266,4 +266,88 @@ func TestIPCReaderAdapterMultipleStreams(t *testing.T) {
 
 	assert.Equal(t, 3, batchCount)
 	assert.Equal(t, 300, rowCount)
+}
+
+// TestIPCReaderAdapterGeoArrowCRSEager verifies that when a geometry struct
+// column is present and Arrow-native geospatial is enabled, the reader's
+// Schema() carries geoarrow.wkb extension metadata with CRS populated from
+// the first batch's SRID *before* Next() is called. Consumers like DuckDB's
+// adbc_scanner read Schema() upfront — if CRS is only populated on the first
+// Next(), it never reaches them.
+func TestIPCReaderAdapterGeoArrowCRSEager(t *testing.T) {
+	mem := memory.NewGoAllocator()
+
+	geoStructType := arrow.StructOf(
+		arrow.Field{Name: "srid", Type: arrow.PrimitiveTypes.Int32, Nullable: true},
+		arrow.Field{Name: "wkb", Type: arrow.BinaryTypes.Binary, Nullable: true},
+	)
+
+	schema := arrow.NewSchema(
+		[]arrow.Field{
+			{Name: "id", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "geom", Type: geoStructType, Nullable: true},
+		},
+		nil,
+	)
+
+	builder := array.NewRecordBuilder(mem, schema)
+	defer builder.Release()
+
+	builder.Field(0).(*array.Int64Builder).AppendValues([]int64{1, 2}, nil)
+
+	geoB := builder.Field(1).(*array.StructBuilder)
+	geoB.Append(true)
+	geoB.FieldBuilder(0).(*array.Int32Builder).Append(3857)
+	geoB.FieldBuilder(1).(*array.BinaryBuilder).Append([]byte{0x01, 0x01, 0x00, 0x00, 0x00})
+	geoB.Append(true)
+	geoB.FieldBuilder(0).(*array.Int32Builder).Append(3857)
+	geoB.FieldBuilder(1).(*array.BinaryBuilder).Append([]byte{0x01, 0x01, 0x00, 0x00, 0x00})
+
+	record := builder.NewRecordBatch()
+	defer record.Release()
+
+	var buf bytes.Buffer
+	writer := ipc.NewWriter(&buf, ipc.WithSchema(schema))
+	require.NoError(t, writer.Write(record))
+	require.NoError(t, writer.Close())
+	ipcData := buf.Bytes()
+
+	var schemaBuf bytes.Buffer
+	schemaWriter := ipc.NewWriter(&schemaBuf, ipc.WithSchema(schema))
+	require.NoError(t, schemaWriter.Close())
+
+	mockRows := &mockRows{
+		iterator: &mockIPCStreamIterator{
+			streams: [][]byte{ipcData},
+			schema:  schemaBuf.Bytes(),
+		},
+	}
+
+	ctx := context.Background()
+	reader, err := newIPCReaderAdapter(ctx, mockRows, true)
+	require.NoError(t, err)
+	defer reader.Release()
+
+	// Schema() must already carry geoarrow.wkb + CRS before any Next() call.
+	s := reader.Schema()
+	require.Equal(t, 2, len(s.Fields()))
+	geoField := s.Field(1)
+
+	assert.Equal(t, arrow.BINARY, geoField.Type.ID(), "geometry struct should be flattened to Binary")
+
+	extName, ok := geoField.Metadata.GetValue("ARROW:extension:name")
+	require.True(t, ok, "ARROW:extension:name missing")
+	assert.Equal(t, "geoarrow.wkb", extName)
+
+	extMeta, ok := geoField.Metadata.GetValue("ARROW:extension:metadata")
+	require.True(t, ok, "ARROW:extension:metadata missing")
+	assert.Equal(t, `{"crs":"EPSG:3857"}`, extMeta, "CRS must be populated from first batch SRID before Next()")
+
+	// Record still emerges on the first Next() and has matching shape.
+	require.True(t, reader.Next())
+	rec := reader.RecordBatch()
+	require.Equal(t, int64(2), rec.NumRows())
+	require.Equal(t, arrow.BINARY, rec.Column(1).DataType().ID())
+
+	require.False(t, reader.Next())
 }

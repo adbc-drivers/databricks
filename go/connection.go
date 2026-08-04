@@ -45,6 +45,17 @@ type connectionImpl struct {
 
 	// Database connection
 	conn *sql.Conn
+
+	// Arrow serialization options
+	useArrowNativeGeospatial bool
+
+	// Plumbed in from databaseImpl so the bulk-ingest Volume + COPY INTO
+	// path can issue Files API calls with the same credentials.
+	serverHostname      string
+	accessToken         string
+	bulkVolumePath      string
+	bulkGeometryColumns string
+	bulkBatchRows       int
 }
 
 func (c *connectionImpl) Close() error {
