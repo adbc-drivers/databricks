@@ -1672,7 +1672,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (string.IsNullOrEmpty(_metadataTableName))
                     throw NewInvalidArgumentException("tableName may not be null");
 
-                if (!string.IsNullOrEmpty(_metadataCatalogName) && string.IsNullOrEmpty(_metadataSchemaName))
+                // Match JDBC SEA (resolveKeyBasedParams): the schema check rejects only a
+                // *null* schema when a catalog is specified — NOT an empty-string schema. An
+                // empty-string schema is passed through to the server, which rejects it with a
+                // clean object-not-found (SQLSTATE 42704); the internal's IsObjectNotFoundException
+                // catch then maps that to an empty result (as JDBC SEA does). Using IsNullOrEmpty
+                // here would over-validate — throwing a generic 42000 client-side for empty schema
+                // where JDBC (and thus the SEA contract) returns empty.
+                if (!string.IsNullOrEmpty(_metadataCatalogName) && _metadataSchemaName == null)
                     throw NewInvalidArgumentException("schema may not be null when catalog is specified");
             }
 
@@ -1763,10 +1770,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // early-returns so the two never diverge. The client-side rejection is a synchronous,
             // deterministic check with no I/O; the thrown exception fully describes it, so it is not
             // wrapped in a trace span.
+            // Match JDBC SEA (resolveKeyBasedParams): reject only a *null* foreign schema when a
+            // foreign catalog is specified — NOT an empty-string schema. Empty-string foreign
+            // schema is passed through to the server (object-not-found 42704 → empty result via
+            // the internal's IsObjectNotFoundException catch), as JDBC SEA does; IsNullOrEmpty
+            // here would over-validate with a client-side 42000 where JDBC returns empty.
             if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK)
                 && !string.IsNullOrEmpty(_metadataForeignTableName)
                 && !string.IsNullOrEmpty(_metadataForeignCatalogName)
-                && string.IsNullOrEmpty(_metadataForeignSchemaName))
+                && _metadataForeignSchemaName == null)
             {
                 throw NewInvalidArgumentException("schema may not be null when catalog is specified");
             }

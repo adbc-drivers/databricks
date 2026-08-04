@@ -619,6 +619,44 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal("42000", ex.SqlState);
         }
 
+        // Empty-STRING schema (not null) must NOT throw the client-side 42000 — matching JDBC SEA
+        // (resolveKeyBasedParams rejects only schema == null, not ""). The empty schema is passed
+        // through to the server, which rejects it with object-not-found (42704); the driver maps
+        // that to an empty result (IsObjectNotFoundException), exactly as JDBC SEA does. Regression
+        // guard for the over-validation bug where IsNullOrEmpty(schema) wrongly threw 42000 for "".
+        [Fact]
+        public async Task GetPrimaryKeys_CatalogSetSchemaEmptyString_ReturnsEmpty()
+        {
+            using var http = HttpClientFailingWith(
+                "TABLE_OR_VIEW_NOT_FOUND", "[SCHEMA_NOT_FOUND] schema not found", "42704");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "");   // empty string, NOT null
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getprimarykeys";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        // XREF analogue: empty-string foreign schema (not null) must return empty, not throw 42000.
+        [Fact]
+        public async Task GetCrossReference_ForeignCatalogSetForeignSchemaEmptyString_ReturnsEmpty()
+        {
+            using var http = HttpClientFailingWith(
+                "TABLE_OR_VIEW_NOT_FOUND", "[SCHEMA_NOT_FOUND] schema not found", "42704");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "");   // empty string, NOT null
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
         // When PK/FK is disabled, the driver returns empty PK/FK metadata uniformly, and
         // the arg-validation throws must NOT fire — both exact-match ops behave the same.
         // GetPrimaryKeysAsync already short-circuits before validation; this pins that
