@@ -742,7 +742,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
         async Task<IReadOnlyList<string>> IGetObjectsDataProvider.GetCatalogsAsync(string? catalogPattern, CancellationToken cancellationToken)
         {
             string sql = new ShowCatalogsCommand(catalogPattern).Build();
-            var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            List<RecordBatch> batches;
+            try
+            {
+                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                // Object-not-found → empty (GetObjects nested-shape path; matches the
+                // flat metadata methods and the JDBC reference driver).
+                return System.Array.Empty<string>();
+            }
             var result = new List<string>();
             foreach (var batch in batches)
             {
@@ -866,6 +876,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
+                // Object-not-found → leave the column info unpopulated (empty), matching
+                // the flat metadata methods and the JDBC reference driver.
                 return;
             }
 

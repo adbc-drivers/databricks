@@ -84,11 +84,12 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 
         private async Task<List<Dictionary<string, string>>> ReadMetadata(AdbcConnection connection, string command,
             string? catalog = null, string? schema = null, string? table = null, string? column = null,
-            string? tableTypes = null)
+            string? tableTypes = null, bool escapeWildcards = false)
         {
             var results = new List<Dictionary<string, string>>();
             using var stmt = connection.CreateStatement();
             stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            if (escapeWildcards) stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
             if (catalog != null) stmt.SetOption(ApacheParameters.CatalogName, catalog);
             if (schema != null) stmt.SetOption(ApacheParameters.SchemaName, schema);
             if (table != null) stmt.SetOption(ApacheParameters.TableName, table);
@@ -184,6 +185,58 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             // Lowercase "table" does NOT match the uppercase server type -> no rows.
             var lowerRows = await ReadMetadata(conn, "GetTables", TestCatalog, TestSchema, TestTable, tableTypes: "table");
             Assert.DoesNotContain(lowerRows, r => r["TABLE_NAME"] == TestTable);
+        }
+
+        // --- Issue #593: catalog match-all "%" must honor escape_pattern_wildcards ---
+        //
+        // When escape_pattern_wildcards=true the caller has asked for wildcards to be
+        // treated LITERALLY. The Thrift path escapes catalog="%" -> "\%", which matches
+        // no catalog and returns 0 rows. SEA previously intercepted "%" as "all catalogs"
+        // (null) BEFORE checking the escape flag and returned rows from every catalog,
+        // diverging from Thrift. With escaping on, SEA must also return an empty result.
+
+        // The bug is SEA-specific, so these tests force the REST/SEA path explicitly
+        // rather than relying on the run's configured protocol.
+        private static readonly Dictionary<string, string> RestProtocol =
+            new() { { DatabricksParameters.Protocol, "rest" } };
+
+        [SkippableFact]
+        public async Task GetColumns_CatalogMatchAll_WithEscaping_ReturnsEmpty()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(RestProtocol);
+            var rows = await ReadMetadata(conn, "GetColumns", "%", TestSchema, TestTable, escapeWildcards: true);
+            Assert.Empty(rows);
+        }
+
+        [SkippableFact]
+        public async Task GetTables_CatalogMatchAll_WithEscaping_ReturnsEmpty()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(RestProtocol);
+            var rows = await ReadMetadata(conn, "GetTables", "%", TestSchema, TestTable, escapeWildcards: true);
+            Assert.Empty(rows);
+        }
+
+        [SkippableFact]
+        public async Task GetSchemas_CatalogMatchAll_WithEscaping_ReturnsEmpty()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(RestProtocol);
+            var rows = await ReadMetadata(conn, "GetSchemas", "%", TestSchema, escapeWildcards: true);
+            Assert.Empty(rows);
+        }
+
+        // Regression guard: with escaping OFF (default), catalog="%" must still be
+        // treated as match-all and return rows for the concrete schema/table.
+        [SkippableFact]
+        public async Task GetColumns_CatalogMatchAll_NoEscaping_ReturnsRows()
+        {
+            SkipIfNotConfigured();
+            using var conn = CreateConnection(RestProtocol);
+            var rows = await ReadMetadata(conn, "GetColumns", "%", TestSchema, TestTable, escapeWildcards: false);
+            Assert.NotEmpty(rows);
+            Assert.Contains(rows, r => r["TABLE_NAME"] == TestTable);
         }
 
         // --- GetColumnsExtended ---

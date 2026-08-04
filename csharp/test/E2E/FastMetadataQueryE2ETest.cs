@@ -162,18 +162,14 @@ namespace AdbcDrivers.Databricks.Tests.E2E
             {
                 result = await statement.ExecuteQueryAsync();
             }
-            catch (AdbcException ex) when (
-                ex.SqlState == "42601" || ex.SqlState == "20000"
-                || (ex is DatabricksException dbx && dbx.IsDescTableExtendedUnsupportedException()))
+            catch (AdbcException ex) when (DatabricksException.IsDescTableExtendedUnsupported(ex))
             {
                 // Runtime is pre-rollout: it does not yet support the `AS JSON STATIC ONLY`
                 // modifier (PR #198486). 42601 is the parse-syntax error; some DBRs return
-                // 20000 (internal error) instead. Catch the AdbcException base so this covers
-                // both protocols — Thrift surfaces HiveServer2Exception (SqlState populated),
-                // while REST/SEA surfaces DatabricksException with a null SqlState (the SQL state
-                // is only in the message), so reuse IsDescTableExtendedUnsupportedException for
-                // that case. Mirrors the driver's own fallback, so skip rather than fail the
-                // merge queue on warehouses where the feature isn't deployed yet.
+                // 20000 (internal error) instead. DatabricksException.IsDescTableExtendedUnsupported
+                // checks SqlState first, then the message body (covering the SEA case where the
+                // SQL state is embedded in the error message rather than the SqlState property).
+                // Mirrors the driver's own fallback so the merge queue isn't gated on runtime version.
                 Skip.If(true, $"Runtime does not support 'AS JSON STATIC ONLY' (SQLSTATE={ex.SqlState ?? "in-message"}); pre-PR#198486 DBR.");
                 return;
             }

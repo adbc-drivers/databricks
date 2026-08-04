@@ -21,6 +21,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
 using Moq;
 using Moq.Protected;
@@ -313,6 +314,43 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var client = new StatementExecutionClient(_httpClient, _testHost);
             await Assert.ThrowsAsync<ArgumentNullException>(() =>
                 client.ExecuteStatementAsync(null!, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task ExecuteStatementAsync_WithFailedState_ThrowsDatabricksExceptionWithSqlStateAndNativeError()
+        {
+            // A synchronously-FAILED execution surfaces a DatabricksException — the natural
+            // type for the SEA/REST path — with Status + SqlState + NativeError populated
+            // from the server error. Cross-protocol parity with the Thrift path
+            // (HiveServer2Exception) is enforced by the Thrift-vs-SEA comparator on
+            // Status + SqlState (any AdbcException subclass is equivalent), not on the
+            // concrete subclass. This asserts the load-bearing Status/SqlState/NativeError.
+            var request = new ExecuteStatementRequest { Statement = "SELECT 1" };
+            var responseJson = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-failed",
+                status = new
+                {
+                    state = "FAILED",
+                    error = new
+                    {
+                        error_code = "12345",
+                        message = "value too long for VARCHAR",
+                        sql_state = "22001",
+                    },
+                },
+            });
+
+            SetupMockResponse(HttpStatusCode.OK, responseJson);
+
+            var client = new StatementExecutionClient(_httpClient, _testHost);
+            var exception = await Assert.ThrowsAsync<DatabricksException>(() =>
+                client.ExecuteStatementAsync(request, CancellationToken.None));
+
+            Assert.Equal(AdbcStatusCode.InternalError, exception.Status);
+            Assert.Equal("22001", exception.SqlState);
+            Assert.Equal(12345, exception.NativeError);
+            Assert.Contains("value too long for VARCHAR", exception.Message);
         }
 
         [Fact]

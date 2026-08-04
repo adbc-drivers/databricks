@@ -23,16 +23,14 @@ bot_login_prefix: peco-engineer-bot       # <-- your engineer-bot App's login pr
 
 # safe_path denylist (relative to repo root). .git + the secret-scanner allowlist
 # at minimum. NOTE (security): csharp/src is NOT denied — the agent must edit the
-# code it fixes. But .github + .bot ARE denied as defense-in-depth: a bug fix
-# never needs to write the bot's own CI/workflows or config/prompts, and both the
-# author and follow-up system prompts already forbid it. Enforcing it in-sandbox
-# means a prompt-injected issue/review body cannot induce such edits at all,
-# rather than relying solely on a reviewer spotting them. The human PR-review gate
-# remains the backstop — reviewers should still scrutinize any .bot/.github diffs.
+# code it fixes. `.bot` stays denied as defense-in-depth (the agent should never
+# rewrite its own config/prompts). `.github` is INTENTIONALLY allowed (maintainer
+# decision): the engineer-bot may need to fix its own CI/workflow wiring (e.g. a
+# missing engine flag), and the human PR-review gate is the backstop — reviewers
+# must scrutinize any `.github` diffs, since workflows carry secrets/tokens.
 denied_subpaths:
   - .git
   - .gitleaksignore
-  - .github
   - .bot
   # csharp/hiveserver2 is a SEPARATE repo (git submodule -> adbc-drivers/hiveserver2).
   # Edits there cannot be committed to a parent-repo PR, so deny them. The author
@@ -84,17 +82,16 @@ author:
     issue_number: ISSUE_NUMBER
     issue_title:  ISSUE_TITLE
     issue_body:   ISSUE_BODY
-  # Learning log: .claude/knowledge/learning.md — NO config key needed. BOTH bots
-  # auto-read everything under .claude/knowledge/**/*.md via their conventions
-  # readers (the engineer's read_repo_conventions + the reviewer's
-  # aggregate_repo_rules), so past lessons inform each bot with zero wiring. One
-  # log for the whole repo for now; can split per-language later.
-  # (Trade-off vs. the author.knowledge_log key: via the glob the log is delivered
-  # oldest-first and byte-capped like other conventions, NOT newest-first — fine
-  # while the log is small; add author.knowledge_log back if it grows past the cap
-  # and recent lessons start getting truncated. Auto-append on merge is a separate
-  # follow-up: needs a `retrospective:` block + a learning workflow, neither wired
-  # yet — grow this file by hand for now.)
+  # Learning log: .claude/knowledge/learning.md. Now that the daily retrospective
+  # is wired (see the `retrospective:` block below), it will GROW automatically, so
+  # we pin author.knowledge_log to it explicitly: this delivers the log to the
+  # author phase NEWEST-first and byte-capped (vs. the conventions glob, which
+  # delivers .claude/knowledge/**/*.md oldest-first) — the right ordering once the
+  # log outgrows the cap and recent lessons matter most. MUST match
+  # retrospective.log_path below (write half ↔ read half). Both bots still also
+  # auto-read the file via their conventions readers, so this is purely about
+  # ordering/capping, not enablement.
+  knowledge_log: .claude/knowledge/learning.md
 
 # Follow-up phase (engineer-bot-followup.yml): NO config block. The engine reads
 # no `followup:` key — bot_config.py parses only `author:` + the shared top-level
@@ -106,6 +103,25 @@ author:
 # "write a failing test → fix the CODE → re-run until green; don't weaken the
 # test" instruction and forces a {outcome, reason, red_green_tests} result.
 flow: bug-fix
+
+# Daily-cron learning extraction (retrospective flow). Run by engineer-bot-learning.yml
+# via `python -m databricks_bot_engine.engineer_bot.retrospective`: over an adaptive
+# look-back window the engine ITSELF gathers merged PRs (diff + review comments) AND
+# recent engineer-bot author-run logs, and if the model finds durable learnings opens
+# ONE rolling PR appending a dated section to log_path. Human-gated — never commits the
+# canonical log directly. Omitting this block makes the retrospective a no-op.
+#
+# No `system_prompt` override: the engine ships the authoritative batch-aware base
+# (engineer_prompts.RETRO_SYSTEM_PROMPT). No `context_files` — the daily-cron engine
+# enumerates its own sources via the GitHub API (context_files is an AUTHOR-phase key).
+# branch_prefix here is the LEARNING branch prefix (distinct from the top-level
+# `ai/bugfix-` fix-branch prefix); the rolling PR lands on the derived stable branch
+# `ai/learning-pr`.
+retrospective:
+  log_path: .claude/knowledge/learning.md   # MUST match author.knowledge_log above (the EXISTING log)
+  branch_prefix: ai/learning-pr-            # rolling PR lands on the derived stable branch `ai/learning-pr`
+  pr_label: engineer-bot-learning
+  author_workflow: engineer-bot.yaml        # Track B: which workflow's author runs to mine (NOTE: .yaml)
 
 # ─── Reviewer bots (review / review-followup) — NOT configured here ──────────
 # Documented for completeness (this file is the whole bot setup), but the reviewer

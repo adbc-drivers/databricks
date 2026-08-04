@@ -1,0 +1,137 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Engineer Bot — learning (retrospective) extraction — DAILY CRON.
+#
+# Over an adaptive look-back window the engine gathers merged PRs (diff + review
+# comments) AND recent engineer-bot author-run console logs ITSELF via the GitHub
+# API — no in-workflow context gathering, no per-PR trigger — and if the model
+# finds durable, reusable learnings, opens ONE ROLLING PR on a stable branch
+# (`ai/learning-pr`), appending a dated section per day until a human merges it.
+# Human-gated by design: it NEVER commits the canonical log directly.
+#
+# Setup mirrors engineer-bot.yaml (this repo's interim pattern): self-hosted
+# runner, python3.11 venv, PAT-installed engine pinned to ENGINE_REF. Opt-in is
+# purely via the `retrospective:` block in .bot/config.yaml + this workflow;
+# absent that block the engine phase is a clean no-op.
+#
+# Prereqs (already present for the other bots):
+#   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY, DATABRICKS_HOST/TOKEN
+#   - the engineer-bot App installation must carry actions:read (Track B author-run mining)
+name: Engineer Bot — Learning (daily cron)
+
+on:
+  schedule:
+    # 17:23 UTC daily — off-peak, off-:00 minute (GitHub delays/drops on-the-hour crons).
+    - cron: "23 17 * * *"
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'ISO lower bound to bound (shorten) the window and recover a wedged flow. Empty = adaptive cursor.'
+        type: string
+        default: ''
+      window-hours:
+        # STRING, not number: a `type: number` workflow_dispatch input fails the
+        # whole run at startup ("workflow file issue") when combined with `schedule`.
+        description: 'Fallback look-back window (hours) used only when there is no prior successful run.'
+        type: string
+        default: '24'
+
+permissions:
+  contents: write        # push the learning branch / open the learning PR
+  pull-requests: write
+  actions: read          # Track B lists engineer-bot author runs + logs via the App token;
+                         # the engineer-bot App installation must ALSO carry actions:read
+                         # (a missing scope surfaces as a 403 that fails the whole run).
+  id-token: write        # if your model endpoint uses OIDC; harmless otherwise
+
+concurrency:
+  group: engineer-bot-learning-cron
+  cancel-in-progress: false
+
+jobs:
+  learning:
+    runs-on: [self-hosted, Linux, X64, peco-driver]
+    timeout-minutes: 20
+    steps:
+      - name: Mint engineer-bot App token
+        id: token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          private-key: ${{ secrets.ENGINEER_BOT_PRIVATE_KEY }}
+
+      # Checkout the default branch — the learning PR is cut from it. The token is
+      # persisted so the engine's `git push origin <branch>` authenticates as the bot.
+      - name: Checkout default branch (learning PR is cut from it)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Setup Python
+        shell: bash
+        # actions/setup-python can't provision on this self-hosted runner (no hosted
+        # tool-cache). The runner has system python3.11; use it via a venv so pip
+        # installs stay isolated and `pip` / `python -m` resolve to 3.11 later.
+        run: |
+          python3.11 -m venv "$RUNNER_TEMP/bot-venv"
+          echo "$RUNNER_TEMP/bot-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+        env:
+          # Fine-grained PAT, read-only Contents on databricks/databricks-bot-engine.
+          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+          # SUPPLY-CHAIN PIN: immutable commit SHA — never @main in a secret-bearing
+          # job. Bump to adopt engine changes; keep in lockstep with the other bots.
+          ENGINE_REF: d05dcb113332401b4aee8d6aa05c7107399ad44f
+        run: |
+          set -euo pipefail
+          : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
+          python -m pip install --upgrade pip
+          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
+          pip install claude-agent-sdk
+          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-global"
+          mkdir -p "$NPM_CONFIG_PREFIX/bin"
+          npm install -g @anthropic-ai/claude-code
+          echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
+
+      # NOTE: no LIVE-connection / E2E config step — the retrospective only READS
+      # diffs + logs via the API and calls the model; it never builds or runs the
+      # driver, so it needs no warehouse connection (unlike engineer-bot.yaml).
+      # NOTE: no context-gather step — the daily-cron engine enumerates merged PRs
+      # + author runs itself over the adaptive window.
+      - name: Extract learnings + open rolling PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # The databricks-claude-opus-4-8 serving endpoint; DATABRICKS_TOKEN authenticates it.
+          # (sdk_agent.translate_endpoint keys on the `/serving-endpoints/` prefix; the model
+          # path segment is discarded, so the effective model is retrospective.model or the
+          # engine default.)
+          MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          SINCE: ${{ inputs.since }}
+          WINDOW_HOURS: ${{ inputs.window-hours }}
+        # The checkout persisted the bot token, so the engine's `git push origin
+        # <branch>` authenticates as the bot (no set-url needed here). --since /
+        # --window-hours are passed only when provided via workflow_dispatch (the
+        # schedule trigger leaves them empty → the adaptive cursor drives the window).
+        run: |
+          args=(--repo-dir "$GITHUB_WORKSPACE")
+          [ -n "$SINCE" ] && args+=(--since "$SINCE")
+          [ -n "$WINDOW_HOURS" ] && args+=(--window-hours "$WINDOW_HOURS")
+          python -m databricks_bot_engine.engineer_bot.retrospective "${args[@]}"

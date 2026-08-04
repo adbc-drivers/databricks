@@ -32,12 +32,7 @@ name: Reviewer Bot
 
 on:
   pull_request:
-    # `labeled` is included so adding `review-bot` to an already-open PR triggers
-    # a review immediately, not just on the next push. (The `if:` gate below only
-    # honors `review-bot`; applying `engineer-bot` alone fires this event but the
-    # job is skipped. Engineer-bot fix PRs are reviewed because engineer-bot.yaml
-    # separately adds the `review-bot` label after publish.)
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -51,18 +46,14 @@ concurrency:
 
 jobs:
   review:
-    # Non-fork, non-draft, `review-bot`-labeled PRs only:
-    #  - fork PRs must never see the LLM/engine secrets; drafts aren't ready.
-    #  - label gate: review ONLY PRs carrying `review-bot`. `review-bot` guards the
-    #    reviewer; `engineer-bot` guards the engineer — strictly separate, never
-    #    mixed. A maintainer opts a PR in with `review-bot`; the bug-fix bot's own
-    #    fix PRs get `review-bot` applied by engineer-bot.yaml after publish, so
-    #    they're reviewed and the loop still closes. Without the label the reviewer
-    #    stays silent, so it doesn't comment on every PR in the repo.
+    # Non-fork, non-draft PRs — auto-review, matching the other consumer repos
+    # (databricks-sql-python/go/nodejs/kernel), which review every non-draft,
+    # non-fork PR without an opt-in label. fork == false keeps the LLM/engine
+    # secrets off untrusted code; drafts aren't ready. (Previously also required a
+    # `review-bot` label; dropped for fleet consistency.)
     if: >-
       github.event.pull_request.draft == false
       && github.event.pull_request.head.repo.fork == false
-      && contains(github.event.pull_request.labels.*.name, 'review-bot')
     # ACTIVATION BLOCKER: before taking this workflow out of DRAFT, switch this to
     # the protected `peco-driver` self-hosted runner (or adopt OIDC + a scoped,
     # short-lived model credential distinct from the CI DATABRICKS_TOKEN). As long
@@ -107,7 +98,7 @@ jobs:
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: 5fbcee18e479c58656a94e7704dabfe7edaf2b26
+          ENGINE_REF: d05dcb113332401b4aee8d6aa05c7107399ad44f
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"

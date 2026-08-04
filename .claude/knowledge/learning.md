@@ -38,4 +38,13 @@ reader can grep for it.
 
 ## Entries
 
-(no entries yet)
+### 2026-07-22: SEA metadata — catalog "%" match-all must honor escape_pattern_wildcards
+
+**Issue:** With `escape_pattern_wildcards=true`, `GetColumns`/`GetTables`/`GetSchemas` with `catalog="%"` returned rows from ALL catalogs on the SEA/REST path but 0 rows on Thrift — a cross-protocol row-set divergence (Issue #593).
+**Root Cause:** `StatementExecutionStatement.EffectiveCatalog` intercepted a bare `%`/`*` catalog via `IsMatchAllCatalogPattern` and rewrote it to `null` ("all catalogs") *unconditionally*, before considering the escape flag. Thrift instead escapes `%` → `\%` (a literal catalog matching nothing).
+**Fix:** Gate the interception on the flag: `if (IsMatchAllCatalogPattern(catalog) && !_escapePatternWildcards) catalog = null;`. With escaping on, `%` flows as a literal backtick-quoted identifier; the resulting `SCHEMA_NOT_FOUND` is already caught by the existing `IsObjectNotFoundException` handlers in each metadata method and mapped to an empty result — matching Thrift.
+**Rule:** Match-all catalog `%`/`*` interception on the SEA path must respect `_escapePatternWildcards` — when escaping is on, treat `%` literally to match the Thrift contract, not as "all catalogs".
+
+### Note on testing SEA-specific bugs
+The E2E suite runs on whichever protocol the run configures (Thrift by default in this env). A SEA-only bug will NOT reproduce unless the test forces it: pass `{ DatabricksParameters.Protocol, "rest" }` when creating the connection (see `SeaMetadataE2ETests` `RestProtocol` / `StatementExecutionDriverE2ETests.CreateRestConnection`).
+**Rule:** To reproduce/verify a SEA/StatementExecution-path bug in an E2E test, force `adbc.databricks.protocol=rest` on the connection — don't rely on the run's default protocol.
