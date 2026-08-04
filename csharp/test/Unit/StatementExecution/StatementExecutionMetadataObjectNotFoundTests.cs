@@ -20,10 +20,10 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Spark;
-using Apache.Arrow.Adbc;
 using Microsoft.IO;
 using Moq;
 using Moq.Protected;
@@ -32,72 +32,27 @@ using Xunit;
 namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
     /// <summary>
-    /// Tests that SEA metadata methods (GetSchemas / GetTables / GetColumns /
-    /// GetPrimaryKeys / GetCrossReference) return empty result sets when the
-    /// underlying SHOW command throws a DatabricksException whose message
-    /// indicates a non-existent catalog, schema, or table.
-    ///
-    /// Mock at the HttpMessageHandler level: the connection builds its own internal
-    /// IStatementExecutionClient over the supplied HttpClient, so injecting at the
-    /// IStatementExecutionClient seam doesn't reach the metadata path. Returning a
-    /// 200 OK with status.state=FAILED and a NOT_FOUND error code makes the real
-    /// StatementExecutionClient throw a DatabricksException — exercising the catch.
+    /// Tests for SEA metadata methods at the HttpMessageHandler seam.
+    /// The connection builds its own internal IStatementExecutionClient over the
+    /// supplied HttpClient, so injection at the IStatementExecutionClient seam
+    /// does not reach the metadata path.
     /// </summary>
     public class StatementExecutionMetadataObjectNotFoundTests
     {
-        // Routes CreateSession (/api/2.0/sql/sessions) to a 200 OK with a session id,
-        // and ExecuteStatement (/api/2.0/sql/statements) to a 200 OK with the supplied
-        // FAILED-state body. This is what makes the real SEA client throw on the
-        // metadata call.
-        private static HttpClient HttpClientWithFailedExecuteStatement(string errorCode, string errorMessage)
-        {
-            var failedBody = JsonSerializer.Serialize(new
-            {
-                statement_id = "stmt-failed",
-                status = new
-                {
-                    state = "FAILED",
-                    error = new { error_code = errorCode, message = errorMessage },
-                },
-            });
-            var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
-
-            var handler = new Mock<HttpMessageHandler>();
-            handler.Protected()
-                .Setup<Task<HttpResponseMessage>>(
-                    "SendAsync",
-                    ItExpr.IsAny<HttpRequestMessage>(),
-                    ItExpr.IsAny<CancellationToken>())
-                .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
-                {
-                    var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    var body = path.EndsWith("/api/2.0/sql/sessions")
-                        ? sessionBody
-                        : failedBody;
-                    return new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(body),
-                    };
-                });
-
-            return new HttpClient(handler.Object);
-        }
-
-        // Like HttpClientWithFailedExecuteStatement, but also records the `statement`
+        // Records the `statement` body of every ExecuteStatement call into
         // body of every ExecuteStatement call into <paramref name="captured"/> before
-        // returning the FAILED body. Using an object-not-found error keeps the metadata
-        // path from throwing (the catch returns an empty result), so the SQL the path
-        // emitted is captured deterministically without needing a live warehouse.
+        // returning a SUCCEEDED empty result. Returns an empty result so that the metadata
+        // path does not throw — the SQL the path emitted is captured deterministically
+        // without needing a live warehouse.
         private static HttpClient HttpClientCapturingStatements(List<string> captured)
         {
-            var failedBody = JsonSerializer.Serialize(new
+            // A SUCCEEDED response with no result attachment and no manifest schema:
+            // StatementExecutionStatement.CreateReader falls through to EmptyArrowArrayStream.
+            var succeededBody = JsonSerializer.Serialize(new
             {
-                statement_id = "stmt-failed",
-                status = new
-                {
-                    state = "FAILED",
-                    error = new { error_code = "NO_SUCH_CATALOG_EXCEPTION", message = "Catalog not found" },
-                },
+                statement_id = "stmt-ok",
+                status = new { state = "SUCCEEDED" },
+                manifest = new { format = "ARROW_STREAM", total_chunk_count = 0, total_row_count = 0 },
             });
             var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
 
@@ -128,19 +83,30 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
                     return new HttpResponseMessage(HttpStatusCode.OK)
                     {
-                        Content = new StringContent(failedBody),
+                        Content = new StringContent(succeededBody),
                     };
                 });
 
             return new HttpClient(handler.Object);
         }
 
-        // Returns a 400 Bad Request with the supplied error body — this makes
-        // EnsureSuccessStatusCodeAsync throw a DatabricksException with SqlState
-        // unset but the message containing the body content.
-        private static HttpClient HttpClientWithHttpError(HttpStatusCode statusCode, string errorBody)
+        // Returns an HttpClient whose ExecuteStatement always responds with an immediately
+        // FAILED state carrying an object-not-found error (e.g. SCHEMA_NOT_FOUND). The SEA
+        // client turns this into a DatabricksException, which the metadata methods now
+        // PROPAGATE (matching Thrift's behavior) instead of swallowing to an empty result.
+        private static HttpClient HttpClientFailingWith(string errorCode, string message, string sqlState)
         {
+            var failedBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-fail",
+                status = new
+                {
+                    state = "FAILED",
+                    error = new { error_code = errorCode, message, sql_state = sqlState },
+                },
+            });
             var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
+
             var handler = new Mock<HttpMessageHandler>();
             handler.Protected()
                 .Setup<Task<HttpResponseMessage>>(
@@ -150,23 +116,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
                     var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    if (path.EndsWith("/api/2.0/sql/sessions"))
+                    var body = path.EndsWith("/api/2.0/sql/sessions") ? sessionBody : failedBody;
+                    return new HttpResponseMessage(HttpStatusCode.OK)
                     {
-                        return new HttpResponseMessage(HttpStatusCode.OK)
-                        {
-                            Content = new StringContent(sessionBody),
-                        };
-                    }
-                    return new HttpResponseMessage(statusCode)
-                    {
-                        Content = new StringContent(errorBody),
+                        Content = new StringContent(body),
                     };
                 });
 
             return new HttpClient(handler.Object);
         }
 
-        private static StatementExecutionStatement CreateMetadataStatement(HttpClient httpClient)
+        private static StatementExecutionStatement CreateMetadataStatement(
+            HttpClient httpClient, IReadOnlyDictionary<string, string>? extraProperties = null)
         {
             var properties = new Dictionary<string, string>
             {
@@ -174,6 +135,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 { DatabricksParameters.WarehouseId, "wh-1" },
                 { SparkParameters.AccessToken, "token" },
             };
+            if (extraProperties != null)
+            {
+                foreach (var kv in extraProperties)
+                    properties[kv.Key] = kv.Value;
+            }
 
             var connection = new StatementExecutionConnection(properties, httpClient);
             // The outer statement's IStatementExecutionClient is unused on the metadata
@@ -196,249 +162,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 lz4BufferPool: System.Buffers.ArrayPool<byte>.Shared,
                 httpClient: httpClient,
                 connection: connection);
-        }
-
-        // Empty results from the catch path return RowCount=0 with the schema preserved.
-        // The first ReadNextRecordBatchAsync may return a 0-row batch or null depending on
-        // which factory built the result; both indicate "no rows".
-        private static async Task AssertEmptyStreamAsync(QueryResult queryResult)
-        {
-            Assert.Equal(0, queryResult.RowCount);
-            Assert.NotNull(queryResult.Stream);
-            var batch = await queryResult.Stream!.ReadNextRecordBatchAsync(CancellationToken.None);
-            if (batch != null)
-            {
-                Assert.Equal(0, batch.Length);
-                var next = await queryResult.Stream.ReadNextRecordBatchAsync(CancellationToken.None);
-                Assert.Null(next);
-            }
-        }
-
-        private static void AssertSchemaFieldNames(QueryResult queryResult, params string[] expectedFieldNames)
-        {
-            Assert.NotNull(queryResult.Stream);
-            var fields = queryResult.Stream!.Schema.FieldsList;
-            Assert.Equal(expectedFieldNames.Length, fields.Count);
-            for (int i = 0; i < expectedFieldNames.Length; i++)
-            {
-                Assert.Equal(expectedFieldNames[i], fields[i].Name);
-            }
-        }
-
-        [Fact]
-        public async Task GetSchemas_NoSuchCatalog_ReturnsEmptyResult()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "NO_SUCH_CATALOG_EXCEPTION", "Catalog 'doesnotexist' not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "doesnotexist");
-            stmt.SqlQuery = "getschemas";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            await AssertEmptyStreamAsync(queryResult);
-        }
-
-        [Fact]
-        public async Task GetTables_TableOrViewNotFound_ReturnsEmptyResult()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "TABLE_OR_VIEW_NOT_FOUND", "Table not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "main");
-            stmt.SetOption(ApacheParameters.SchemaName, "nonexistent");
-            stmt.SqlQuery = "gettables";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            await AssertEmptyStreamAsync(queryResult);
-        }
-
-        [Fact]
-        public async Task GetColumns_SchemaNotFound_ReturnsEmptyResult()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "SCHEMA_NOT_FOUND", "Schema not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "main");
-            stmt.SetOption(ApacheParameters.SchemaName, "nonexistent");
-            stmt.SetOption(ApacheParameters.TableName, "any_table");
-            stmt.SqlQuery = "getcolumns";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            await AssertEmptyStreamAsync(queryResult);
-        }
-
-        [Fact]
-        public async Task GetPrimaryKeys_TableNotFound_ReturnsEmptyResult()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "TABLE_OR_VIEW_NOT_FOUND", "Table not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "main");
-            stmt.SetOption(ApacheParameters.SchemaName, "schema1");
-            stmt.SetOption(ApacheParameters.TableName, "missing_table");
-            stmt.SqlQuery = "getprimarykeys";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            await AssertEmptyStreamAsync(queryResult);
-        }
-
-        [Fact]
-        public async Task GetCrossReference_TableNotFound_ReturnsEmptyResult()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "TABLE_OR_VIEW_NOT_FOUND", "Table not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            // Cross-reference uses the foreign-table fields as the SHOW FOREIGN KEYS target
-            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
-            stmt.SetOption(ApacheParameters.ForeignSchemaName, "schema1");
-            stmt.SetOption(ApacheParameters.ForeignTableName, "missing_table");
-            stmt.SqlQuery = "getcrossreference";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            await AssertEmptyStreamAsync(queryResult);
-        }
-
-        [Fact]
-        public async Task GetSchemas_UnrelatedDatabricksException_PropagatesToCaller()
-        {
-            // ACCESS_DENIED isn't an object-not-found error, so the catch must NOT swallow
-            // it — caller must see the failure.
-            using var http = HttpClientWithFailedExecuteStatement(
-                "ACCESS_DENIED", "Insufficient privileges to perform SHOW SCHEMAS");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "main");
-            stmt.SqlQuery = "getschemas";
-
-            await Assert.ThrowsAsync<DatabricksException>(
-                () => stmt.ExecuteQueryAsync(CancellationToken.None));
-        }
-
-        [Fact]
-        public async Task GetTables_HttpErrorContainingNotFoundKeyword_ReturnsEmptyResult()
-        {
-            // EnsureSuccessStatusCodeAsync also throws DatabricksException; verify the
-            // message-substring check still fires when the error comes through that path.
-            var errorBody = JsonSerializer.Serialize(new
-            {
-                error_code = "BAD_REQUEST",
-                message = "[TABLE_OR_VIEW_NOT_FOUND] The table or view `main`.`x`.`y` cannot be found.",
-            });
-            using var http = HttpClientWithHttpError(HttpStatusCode.BadRequest, errorBody);
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "main");
-            stmt.SetOption(ApacheParameters.SchemaName, "x");
-            stmt.SqlQuery = "gettables";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            await AssertEmptyStreamAsync(queryResult);
-        }
-
-        // ─── Schema-shape verification ──────────────────────────────────────────────
-        // The empty result returned by the catch path must carry the same schema (field
-        // names and order) that consumers expect from the non-empty result, otherwise
-        // ADBC clients will see a different shape for "table doesn't exist" vs "table
-        // is empty" — breaking column lookups by name.
-
-        [Fact]
-        public async Task GetSchemas_EmptyResult_PreservesJdbcSchema()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "NO_SUCH_CATALOG_EXCEPTION", "Catalog not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "x");
-            stmt.SqlQuery = "getschemas";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            AssertSchemaFieldNames(queryResult,
-                "TABLE_SCHEM", "TABLE_CATALOG");
-        }
-
-        [Fact]
-        public async Task GetTables_EmptyResult_PreservesJdbcSchema()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "SCHEMA_NOT_FOUND", "Schema not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "main");
-            stmt.SetOption(ApacheParameters.SchemaName, "missing");
-            stmt.SqlQuery = "gettables";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            AssertSchemaFieldNames(queryResult,
-                "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS",
-                "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME",
-                "SELF_REFERENCING_COL_NAME", "REF_GENERATION");
-        }
-
-        [Fact]
-        public async Task GetColumns_EmptyResult_PreservesJdbcSchema()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "TABLE_OR_VIEW_NOT_FOUND", "Table not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "main");
-            stmt.SetOption(ApacheParameters.SchemaName, "schema1");
-            stmt.SetOption(ApacheParameters.TableName, "missing");
-            stmt.SqlQuery = "getcolumns";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            // 24 columns including the Databricks-specific BASE_TYPE_NAME at the end.
-            AssertSchemaFieldNames(queryResult,
-                "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME",
-                "DATA_TYPE", "TYPE_NAME", "COLUMN_SIZE", "BUFFER_LENGTH",
-                "DECIMAL_DIGITS", "NUM_PREC_RADIX", "NULLABLE", "REMARKS",
-                "COLUMN_DEF", "SQL_DATA_TYPE", "SQL_DATETIME_SUB", "CHAR_OCTET_LENGTH",
-                "ORDINAL_POSITION", "IS_NULLABLE", "SCOPE_CATALOG", "SCOPE_SCHEMA",
-                "SCOPE_TABLE", "SOURCE_DATA_TYPE", "IS_AUTO_INCREMENT", "BASE_TYPE_NAME");
-        }
-
-        [Fact]
-        public async Task GetPrimaryKeys_EmptyResult_PreservesJdbcSchema()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "TABLE_OR_VIEW_NOT_FOUND", "Table not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.CatalogName, "main");
-            stmt.SetOption(ApacheParameters.SchemaName, "schema1");
-            stmt.SetOption(ApacheParameters.TableName, "missing");
-            stmt.SqlQuery = "getprimarykeys";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            // KEQ_SEQ is a pre-existing typo in MetadataSchemaDefinitions.CreatePrimaryKeysSchema
-            // (should be KEY_SEQ per JDBC spec); the empty path must match the success path.
-            AssertSchemaFieldNames(queryResult,
-                "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "KEQ_SEQ", "PK_NAME");
-        }
-
-        [Fact]
-        public async Task GetCrossReference_EmptyResult_PreservesJdbcSchema()
-        {
-            using var http = HttpClientWithFailedExecuteStatement(
-                "TABLE_OR_VIEW_NOT_FOUND", "Table not found");
-            using var stmt = CreateMetadataStatement(http);
-            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
-            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
-            stmt.SetOption(ApacheParameters.ForeignSchemaName, "schema1");
-            stmt.SetOption(ApacheParameters.ForeignTableName, "missing");
-            stmt.SqlQuery = "getcrossreference";
-
-            var queryResult = await stmt.ExecuteQueryAsync(CancellationToken.None);
-            // Same KEQ_SEQ typo as above.
-            AssertSchemaFieldNames(queryResult,
-                "PKTABLE_CAT", "PKTABLE_SCHEM", "PKTABLE_NAME", "PKCOLUMN_NAME",
-                "FKTABLE_CAT", "FKTABLE_SCHEM", "FKTABLE_NAME", "FKCOLUMN_NAME",
-                "KEQ_SEQ", "UPDATE_RULE", "DELETE_RULE", "FK_NAME", "PK_NAME", "DEFERRABILITY");
         }
 
         // ─── Issue #525: `%` match-all catalog wildcard ──────────────────────────────
@@ -502,6 +225,508 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // `%` expands to "all catalogs", which begins by enumerating catalogs.
             Assert.Contains("SHOW CATALOGS", captured);
             Assert.DoesNotContain(captured, sql => sql.Contains("`%`"));
+        }
+
+        // ─── Issue: double-escape of pre-escaped patterns with escape_pattern_wildcards ──
+        //
+        // When escape_pattern_wildcards=true the driver must escape raw _ and % to \_ and \%
+        // so the server treats them as literal characters instead of LIKE wildcards.
+        // But a caller may already have pre-escaped its pattern (e.g. the comparator passes
+        // "test\_result\_set\_types" verbatim). The naive Replace("_", "\\_") re-escapes the
+        // _ inside \_ → \\_ which ConvertPattern then turns into an escaped-backslash + wildcard
+        // dot, producing "test\\.result\\.set\\.types" — an invalid SHOW-command glob that the
+        // server rejects with a DatabricksException, while the Thrift path returns rows.
+        //
+        // The fix: EscapePatternWildcardsInName must recognise already-escaped sequences (\_, \%,
+        // \\) and pass them through unchanged, escaping only bare (unescaped) _ and %.
+        //
+        // These tests pin the SQL emitted at the HttpMessageHandler seam, guarding the fix in CI
+        // without a live warehouse.
+
+        [Fact]
+        public async Task GetTables_RawUnderscore_EscapeTrue_EmitsLiteralUnderscore()
+        {
+            // raw "foo_bar" + escape=true → \_ → ConvertPattern strips escape → literal _ in glob
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.TableName, "foo_bar");
+            stmt.SqlQuery = "gettables";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // \_ produced by escaping; ConvertPattern converts \_ to literal _ (not glob .)
+            Assert.Contains(captured, sql => sql.Contains("LIKE 'foo_bar'"));
+            // Sanity: the raw wildcard dot must NOT appear
+            Assert.DoesNotContain(captured, sql => sql.Contains("LIKE 'foo.bar'"));
+        }
+
+        [Fact]
+        public async Task GetTables_PreEscapedUnderscore_EscapeTrue_DoesNotDoubleEscape()
+        {
+            // escape=true means the input is a LITERAL name, so "foo\_bar" is the 8-char
+            // literal name foo \ _ bar. The escape step escapes every metacharacter
+            // (\ -> \\, _ -> \_) and LikePattern doubles backslashes for the SQL string
+            // literal, yielding LIKE 'foo\\_bar' (which the server reads as the literal
+            // name foo\_bar). No "already-escaped" idempotency — that guess was unsound.
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.TableName, @"foo\_bar");
+            stmt.SqlQuery = "gettables";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Literal name foo\_bar → LIKE 'foo\\_bar' (two backslashes in the SQL literal).
+            Assert.Contains(captured, sql => sql.Contains(@"LIKE 'foo\\\\_bar'"));
+        }
+
+        [Fact]
+        public async Task GetTables_PreEscapedPercent_EscapeTrue_DoesNotDoubleEscape()
+        {
+            // escape=true → "foo\%bar" is the 8-char literal name foo \ % bar. Escaping
+            // every metacharacter (\ -> \\, % -> \%) then doubling for the SQL string
+            // literal yields LIKE 'foo\\%bar' (server reads literal name foo\%bar).
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.TableName, @"foo\%bar");
+            stmt.SqlQuery = "gettables";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Literal name foo\%bar → LIKE 'foo\\%bar' (two backslashes in the SQL literal).
+            Assert.Contains(captured, sql => sql.Contains(@"LIKE 'foo\\\\%bar'"));
+        }
+
+        [Fact]
+        public async Task GetColumns_PreEscapedTableName_EscapeTrue_DoesNotDoubleEscape()
+        {
+            // escape=true → the input is the literal name test\_result\_set\_types
+            // (containing literal backslashes). Each backslash is escaped (\ -> \\) and
+            // each underscore (_ -> \_), then LikePattern doubles backslashes for the SQL
+            // string literal, yielding LIKE 'test\\_result\\_set\\_types' — the server
+            // reads it as the literal name test\_result\_set\_types.
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.SchemaName, "default");
+            stmt.SetOption(ApacheParameters.TableName, @"test\_result\_set\_types");
+            stmt.SqlQuery = "getcolumns";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Contains(captured, sql => sql.Contains(@"LIKE 'test\\\\_result\\\\_set\\\\_types'"));
+        }
+
+        [Fact]
+        public async Task GetTables_BackslashPattern_EscapeFalse_DoublesBackslashForSqlLiteral()
+        {
+            // escape=false: the input is a JDBC LIKE pattern, so "foo\\bar" is an escaped
+            // backslash that ConvertPattern preserves as a literal backslash in the glob
+            // (foo\\bar). LikePattern then doubles backslashes for the SQL string literal,
+            // yielding LIKE 'foo\\\\bar' so a schema/table literally named foo\bar matches
+            // through both the SQL-literal parser and the SHOW ... LIKE regex.
+            //
+            // This is the Layer-2 doubling on the escape=false path (prior behavior emitted
+            // LIKE 'foo\\bar', which collapsed to a single backslash and never matched).
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            // escape=false (default): pattern is interpreted as a JDBC LIKE pattern.
+            stmt.SetOption(ApacheParameters.TableName, @"foo\\bar");
+            stmt.SqlQuery = "gettables";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // Literal backslash → LIKE 'foo\\\\bar' (four backslashes in the SQL literal).
+            Assert.Contains(captured, sql => sql.Contains(@"LIKE 'foo\\\\bar'"));
+        }
+
+        // ─── Issue #593: catalog="%" + escape_pattern_wildcards=true → empty result ────
+        //
+        // Thrift escapes "%" → "\%" (a literal catalog matching nothing → 0 rows, no throw).
+        // SEA's EffectiveCatalog leaves "%" as a literal backtick-quoted identifier, so it
+        // issues SHOW ... IN `%`, the server returns SCHEMA_NOT_FOUND, and the object-not-found
+        // catch (DatabricksException.IsObjectNotFoundException) swallows it to an empty result —
+        // matching Thrift's 0 rows. (Earlier this branch had a dedicated pre-SHOW short-circuit
+        // for this case; it was removed as redundant once the general object-not-found catch was
+        // restored — verified live that catalog="%"+escape still returns 0 rows on both protocols.)
+        // These tests assert the empty (0-row) result and its JDBC-shaped schema.
+
+        [Fact]
+        public async Task GetSchemas_PercentCatalog_EscapeTrue_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SqlQuery = "getschemas";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            Assert.Equal(0, result.RowCount);
+            // The empty result must still carry the JDBC-shaped GetSchemas schema (field names
+            // and order) that ADBC consumers rely on for column-by-name lookups.
+            var fields = result.Stream!.Schema.FieldsList;
+            Assert.Equal(2, fields.Count);
+            Assert.Equal("TABLE_SCHEM", fields[0].Name);
+            Assert.Equal("TABLE_CATALOG", fields[1].Name);
+        }
+
+        [Fact]
+        public async Task GetTables_PercentCatalog_EscapeTrue_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SqlQuery = "gettables";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetColumns_PercentCatalog_EscapeTrue_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumns";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetColumnsExtended_PercentCatalog_EscapeTrue_ReturnsEmpty()
+        {
+            // On a real server, DESC TABLE EXTENDED `%`.`s`.`t` fails with
+            // TABLE_OR_VIEW_NOT_FOUND (verified live), which the object-not-found catch
+            // swallows to empty — so use a FAILED mock carrying that error (not the
+            // SUCCEEDED-empty capturing mock, which would surface as a FormatException the
+            // real server never produces here).
+            using var http = HttpClientFailingWith(
+                "TABLE_OR_VIEW_NOT_FOUND", "The table or view `%`.`s`.`t` cannot be found", "42P01");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumnsextended";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetColumnsExtended_ThreeCalls_NullSchema_ReuseInternals_NoThrowAndEmpty()
+        {
+            // Guards the central invariant of the columns-extended fallback path
+            // (GetColumnsExtendedViaThreeCalls): it must reuse the NON-throwing
+            // GetPrimaryKeysAsyncNoThrow / GetCrossReferenceAsyncNoThrow, which return
+            // empty for legitimately-unspecified args (here: catalog set + schema null),
+            // rather than the public getprimarykeys/getcrossreference wrappers that
+            // validate and throw a 42000 on that same catalog-set-schema-null shape.
+            //
+            // A future change that moved validation into the internals (or had the
+            // three-calls path call the throwing wrappers) would regress this without any
+            // unit failing today: the only other coverage is the E2E GetColumnsExtended
+            // tests, which are skipped in CI without a live warehouse. Pinned at the
+            // HttpMessageHandler seam like the sibling tests.
+            //
+            // UseDescTableExtended=false forces the three-calls fallback (the SEA default
+            // is DESC TABLE EXTENDED, which does not exercise the PK/FK internals).
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(
+                http,
+                new Dictionary<string, string>
+                {
+                    { DatabricksParameters.UseDescTableExtended, "false" },
+                });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            // Catalog defaults to "main" (see CreateMetadataStatement); schema is left null.
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumnsextended";
+
+            // Must NOT throw: the null schema flows through the non-throwing internals.
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+
+            // The null-schema PK/FK contribution short-circuits to empty inside the
+            // internals, so no SHOW KEYS / SHOW FOREIGN KEYS query is ever emitted.
+            Assert.DoesNotContain(captured, sql => sql.Contains("SHOW KEYS"));
+            Assert.DoesNotContain(captured, sql => sql.Contains("SHOW FOREIGN KEYS"));
+        }
+
+        [Fact]
+        public async Task GetSchemas_StarCatalog_EscapeTrue_ReturnsEmpty()
+        {
+            // "*" is the Databricks alias for "%" in the match-all catalog wildcard
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "*");
+            stmt.SqlQuery = "getschemas";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetSchemas_PercentCatalog_EscapeFalse_StillEmitsShowInAllCatalogs()
+        {
+            // When escape=false, "%" is the match-all wildcard → should expand to "IN ALL CATALOGS",
+            // not short-circuit. Verifies the short-circuit does not fire for escape=false.
+            var captured = new List<string>();
+            using var http = HttpClientCapturingStatements(captured);
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            // escape=false (default): "%" → null → "IN ALL CATALOGS"
+            stmt.SetOption(ApacheParameters.CatalogName, "%");
+            stmt.SqlQuery = "getschemas";
+
+            await stmt.ExecuteQueryAsync(CancellationToken.None);
+
+            // escape=false: the existing #525 path still fires — SHOW IN ALL CATALOGS.
+            Assert.Contains("SHOW SCHEMAS IN ALL CATALOGS", captured);
+        }
+
+        // ─── Exact-match ops throw on missing table, matching the Thrift path ─────────
+        // GetPrimaryKeys / GetCrossReference are exact-match (table required). Thrift's
+        // TGetPrimaryKeysReq / TGetCrossReferenceReq are rejected server-side with
+        // AdbcStatusCode.InternalError + SqlState 42000 when the table is null; SEA must
+        // throw an equivalent error instead of returning empty. SEA throws its own
+        // DatabricksException (the natural SEA type); the comparator treats any
+        // AdbcException subclass as equivalent and compares Status + SqlState, so those
+        // two are the load-bearing assertions here (not the concrete type).
+
+        [Fact]
+        public async Task GetPrimaryKeys_NullTable_ThrowsWithThriftStatusAndSqlState()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "some_schema");
+            // TableName deliberately not set (null).
+            stmt.SqlQuery = "getprimarykeys";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_BothTablesNull_ReturnsEmpty()
+        {
+            // JDBC SEA (DatabricksMetadataQueryClient.listCrossReferences) checks ONLY the
+            // foreign table: a null foreign table means "unspecified" and returns an empty
+            // result — it never inspects the parent table. ADBC SEA mirrors JDBC SEA here, so
+            // BOTH tables null → empty (NOT a throw). Live Thrift instead throws 42000 for the
+            // both-null case; ADBC SEA follows JDBC SEA, and the comparator whitelists that one
+            // input as a Thrift-vs-SEA divergence.
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "some_schema");
+            // Neither parent table nor foreign table set (both null).
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ParentTableSetForeignTableNull_ReturnsEmpty()
+        {
+            // JDBC SEA: a null foreign table returns empty regardless of the parent table
+            // (listCrossReferences short-circuits on foreignTable == null before looking at
+            // the parent side). SEA must return empty here too.
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "some_schema");
+            stmt.SetOption(ApacheParameters.TableName, "fk_parent");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "some_schema");
+            // Foreign table deliberately not set (null) while the parent table IS set.
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ForeignCatalogSetForeignSchemaNull_Throws()
+        {
+            // Foreign catalog set + foreign schema null (with a foreign table) → throw,
+            // mirroring JDBC resolveKeyBasedParams and avoiding Thrift's assertion-failed bug.
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            // Foreign schema deliberately not set (null) while foreign catalog IS set.
+            stmt.SqlQuery = "getcrossreference";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        // Exact-match ops also require schema when catalog is specified (mirroring the JDBC
+        // reference driver's resolveKeyBasedParams). Validating client-side gives a clean
+        // error and avoids the Thrift server's internal "GET_FUNCTIONS assertion failed" bug
+        // on a null schema.
+        [Fact]
+        public async Task GetPrimaryKeys_CatalogSetSchemaNull_Throws()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            // SchemaName deliberately not set (null) while catalog IS set.
+            stmt.SqlQuery = "getprimarykeys";
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
+            Assert.Equal(AdbcStatusCode.InternalError, ex.Status);
+            Assert.Equal("42000", ex.SqlState);
+        }
+
+        // When PK/FK is disabled, the driver returns empty PK/FK metadata uniformly, and
+        // the arg-validation throws must NOT fire — both exact-match ops behave the same.
+        // GetPrimaryKeysAsync already short-circuits before validation; this pins that
+        // GetCrossReferenceAsync does too (regression: it used to throw before the guard).
+
+        [Fact]
+        public async Task GetCrossReference_PKFKDisabled_ForeignCatalogSetForeignSchemaNull_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http,
+                new Dictionary<string, string> { { DatabricksParameters.EnablePKFK, "false" } });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "fk_child");
+            // Foreign schema deliberately null while foreign catalog IS set — would throw
+            // if PK/FK were enabled, but the disabled feature must short-circuit to empty.
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetPrimaryKeys_PKFKDisabled_CatalogSetSchemaNull_ReturnsEmpty()
+        {
+            using var http = HttpClientCapturingStatements(new List<string>());
+            using var stmt = CreateMetadataStatement(http,
+                new Dictionary<string, string> { { DatabricksParameters.EnablePKFK, "false" } });
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            // SchemaName deliberately null while catalog IS set — the sibling of the above.
+            stmt.SqlQuery = "getprimarykeys";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        // ─── Object-not-found errors are SWALLOWED to an empty result ────────────────
+        //
+        // SEA metadata methods catch NO_SUCH_CATALOG / SCHEMA_NOT_FOUND /
+        // TABLE_OR_VIEW_NOT_FOUND / INVALID_PARAMETER_VALUE (DatabricksException.
+        // IsObjectNotFoundException) and return an EMPTY result set rather than throwing —
+        // matching BOTH the Thrift path (which returns 0 rows on object-not-found, verified
+        // live) and the JDBC reference driver (isObjectNotFoundException). These tests mock a
+        // FAILED execute response carrying such an error and assert the metadata method
+        // returns an empty result (guarding against a regression that lets the error escape).
+        [Fact]
+        public async Task GetSchemas_SchemaNotFound_ReturnsEmpty()
+        {
+            using var http = HttpClientFailingWith("SCHEMA_NOT_FOUND", "Schema 'missing' not found", "42000");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "missing");
+            stmt.SqlQuery = "getschemas";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetTables_TableOrViewNotFound_ReturnsEmpty()
+        {
+            using var http = HttpClientFailingWith("TABLE_OR_VIEW_NOT_FOUND", "Table not found", "42P01");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "missing");
+            stmt.SqlQuery = "gettables";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetColumns_NoSuchCatalog_ReturnsEmpty()
+        {
+            // Real server error shape (captured live): NO_SUCH_CATALOG_EXCEPTION + SQLSTATE 42704.
+            using var http = HttpClientFailingWith("NO_SUCH_CATALOG_EXCEPTION", "Catalog 'main' was not found", "42704");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SetOption(ApacheParameters.TableName, "t");
+            stmt.SqlQuery = "getcolumns";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
+        }
+
+        // Negative direction: the object-not-found catch must ONLY swallow object-not-found
+        // (the `when (ex.IsObjectNotFoundException())` filter). An UNRELATED failure (e.g.
+        // ACCESS_DENIED) must still propagate, not be silently turned into an empty result.
+        // Guards against a regression that broadens the catch (dropping the `when` filter or
+        // over-matching in IsObjectNotFoundException).
+        [Fact]
+        public async Task GetSchemas_UnrelatedError_PropagatesToCaller()
+        {
+            using var http = HttpClientFailingWith("ACCESS_DENIED", "Permission denied on catalog 'main'", "42501");
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "s");
+            stmt.SqlQuery = "getschemas";
+
+            await Assert.ThrowsAsync<DatabricksException>(
+                () => stmt.ExecuteQueryAsync(CancellationToken.None));
         }
     }
 }

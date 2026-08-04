@@ -39,11 +39,11 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
             var sql = new StringBuilder("SHOW COLUMNS");
             AppendCatalogScope(sql, _catalog);
             if (_schemaPattern != null)
-                sql.Append(string.Format(SchemaLikeFormat, ConvertPattern(_schemaPattern)));
+                sql.Append(string.Format(SchemaLikeFormat, LikePattern(_schemaPattern)));
             if (_tablePattern != null)
-                sql.Append(string.Format(TableLikeFormat, ConvertPattern(_tablePattern)));
+                sql.Append(string.Format(TableLikeFormat, LikePattern(_tablePattern)));
             if (_columnPattern != null && _columnPattern != "%")
-                sql.Append(string.Format(LikeFormat, ConvertPattern(_columnPattern)));
+                sql.Append(string.Format(LikeFormat, LikePattern(_columnPattern)));
             return sql.ToString();
         }
     }
