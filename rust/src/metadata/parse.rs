@@ -356,6 +356,7 @@ mod tests {
             statement_id: "test-stmt".to_string(),
             reader: Box::new(MockReader::new(batches)),
             manifest: None,
+            server_side_closed: false,
         }
     }
 

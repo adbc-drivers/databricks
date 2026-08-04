@@ -72,6 +72,10 @@ pub struct ExecuteResult {
     pub statement_id: String,
     pub reader: Box<dyn ResultReader + Send>,
     pub manifest: Option<ResultManifest>,
+    /// True when the server returned `status=Closed` along with the result data.
+    /// In that case the statement is already cleaned up server-side and clients
+    /// should skip the explicit `close_statement` round-trip.
+    pub server_side_closed: bool,
 }
 
 impl std::fmt::Debug for ExecuteResult {
@@ -80,6 +84,7 @@ impl std::fmt::Debug for ExecuteResult {
             .field("statement_id", &self.statement_id)
             .field("reader", &"<dyn ResultReader>")
             .field("manifest", &self.manifest)
+            .field("server_side_closed", &self.server_side_closed)
             .finish()
     }
 }
