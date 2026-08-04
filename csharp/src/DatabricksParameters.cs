@@ -21,6 +21,7 @@
 * limitations under the License.
 */
 
+using System.Collections.Generic;
 using AdbcDrivers.HiveServer2.Spark;
 
 namespace AdbcDrivers.Databricks
@@ -526,6 +527,36 @@ namespace AdbcDrivers.Databricks
         /// stays well-formed on strict servers. See METADATA-035.
         /// </summary>
         internal const string NoMatchTableTypeSentinel = "__ADBC_NO_MATCHING_TABLE_TYPE__";
+
+        /// <summary>
+        /// Applies the METADATA-035 empty-table-types rule to a table-types list (the
+        /// <c>DatabricksConnection.GetObjects</c> surface). A <c>null</c> list means "all
+        /// types" and is returned unchanged; an EMPTY (non-null) list matches NO table
+        /// types (databricks-jdbc parity) and is mapped to a single-element list holding
+        /// the unmatchable <see cref="NoMatchTableTypeSentinel"/> so the shared HiveServer2
+        /// base — which folds empty/null into "all types" — instead returns zero rows.
+        /// A non-empty list is returned unchanged.
+        /// </summary>
+        internal static IReadOnlyList<string>? ApplyEmptyTableTypesRule(IReadOnlyList<string>? tableTypes) =>
+            tableTypes != null && tableTypes.Count == 0
+                ? new[] { NoMatchTableTypeSentinel }
+                : tableTypes;
+
+        /// <summary>
+        /// Applies the METADATA-035 empty-table-types rule to the Thrift
+        /// <c>is_metadata_command</c> "gettables" table-types string (the
+        /// <c>DatabricksStatement.GetTablesAsync</c> surface). A <c>null</c> value means
+        /// "all types" and is returned unchanged; an EMPTY (non-null) string matches NO
+        /// table types and is mapped to <see cref="NoMatchTableTypeSentinel"/> so the
+        /// shared HiveServer2 base (which folds empty/null into "all types" via
+        /// <c>string.IsNullOrEmpty</c>) instead returns zero rows. Any other value is
+        /// returned unchanged.
+        /// </summary>
+        internal static string? ApplyEmptyTableTypesRule(string? tableTypes) =>
+            tableTypes != null && tableTypes.Length == 0
+                ? NoMatchTableTypeSentinel
+                : tableTypes;
+
         /// <summary>
         /// Default heartbeat interval in seconds for long-running operations.
         /// </summary>

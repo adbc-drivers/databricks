@@ -56,19 +56,6 @@ namespace AdbcDrivers.Databricks
         internal static readonly string DriverVersion = s_assemblyVersion;
 
         /// <summary>
-        /// Sentinel table-type list used to force a server-side GetTables filter that
-        /// matches no rows, so an empty (non-null) tableTypes argument returns zero
-        /// tables (databricks-jdbc parity). The value is a plain ASCII string that can
-        /// never collide with a real Databricks table type (TABLE, VIEW, SYSTEM TABLE,
-        /// ...). It deliberately avoids control characters (e.g. NUL): an embedded NUL
-        /// is the most likely thing to trip server-side/transport string validation on
-        /// a strict server, which would turn an empty filter into a hard error instead
-        /// of an empty result. A normal identifier-shaped token that simply matches no
-        /// known type keeps the request well-formed while still returning zero rows.
-        /// </summary>
-        private static readonly IReadOnlyList<string> NoMatchTableTypes = new[] { DatabricksConstants.NoMatchTableTypeSentinel };
-
-        /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
         /// Takes precedence over <see cref="DefaultConfigEnvironmentVariable"/> when both are set.
         /// </summary>
@@ -534,20 +521,15 @@ namespace AdbcDrivers.Databricks
                 _ => Telemetry.Proto.Operation.Types.Type.Unspecified
             };
 
-            // Empty (non-null) tableTypes matches NO table types (zero tables),
-            // aligning with databricks-jdbc. A null tableTypes still matches all.
-            // The shared HiveServer2 base filters server-side and only forwards a
-            // non-empty list, so it would otherwise treat empty as "all". Substitute
-            // an unmatchable sentinel type so the server returns zero tables without
-            // modifying the shared base. The sentinel is a plain ASCII token (see
-            // NoMatchTableTypes) so the GetTables request stays well-formed; a server
-            // that filters on it returns zero rows. This server-side path is exercised
-            // in CI by EmptyTableTypesE2ETests, which runs on both thrift and rest.
-            // See METADATA-035.
-            if (tableTypes != null && tableTypes.Count == 0)
-            {
-                tableTypes = NoMatchTableTypes;
-            }
+            // METADATA-035: an EMPTY (non-null) tableTypes matches NO table types (zero
+            // tables), aligning with databricks-jdbc; a null tableTypes still matches all.
+            // The shared HiveServer2 base treats an empty/null list as "all", so we
+            // substitute an unmatchable sentinel type to make the server return zero rows
+            // without modifying the shared base. The substitution decision is centralized
+            // in DatabricksConstants.ApplyEmptyTableTypesRule and pinned by
+            // DatabricksEmptyTableTypesRuleTests; the live server-side round-trip is
+            // additionally exercised by EmptyTableTypesE2ETests on both thrift and rest.
+            tableTypes = DatabricksConstants.ApplyEmptyTableTypesRule(tableTypes);
 
             return this.TraceActivity(activity =>
                 _telemetry.ExecuteWithMetadataTelemetry(

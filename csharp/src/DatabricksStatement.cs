@@ -817,11 +817,10 @@ namespace AdbcDrivers.Databricks
                 // folding an empty string into the "all types" branch. Substitute the same
                 // unmatchable sentinel used on the GetObjects path (DatabricksConnection.GetObjects)
                 // so the server returns zero tables without modifying the shared base. A null
-                // TableTypes still means "all types" and is left untouched.
-                if (TableTypes != null && TableTypes.Length == 0)
-                {
-                    TableTypes = DatabricksConstants.NoMatchTableTypeSentinel;
-                }
+                // TableTypes still means "all types" and is left untouched. The substitution
+                // decision is centralized in DatabricksConstants.ApplyEmptyTableTypesRule and
+                // pinned by DatabricksEmptyTableTypesRuleTests.
+                TableTypes = DatabricksConstants.ApplyEmptyTableTypesRule(TableTypes);
 
                 // If EnableMultipleCatalogSupport is false and catalog is not null or SPARK, return empty result without RPC call
                 if (!enableMultipleCatalogSupport && CatalogName != null)
