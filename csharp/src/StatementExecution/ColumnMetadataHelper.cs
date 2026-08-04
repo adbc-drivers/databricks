@@ -95,10 +95,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 return result!.BaseTypeName;
             }
+            // Databricks-specific aliases the shared parser does not model.
             string upper = typeName.Trim().ToUpperInvariant();
             if (s_aliasToBaseType.TryGetValue(upper, out string? canonical))
                 return canonical;
-            return upper;
+            // Delegate the remaining unmodeled-type fallback to the shared parser so the
+            // Thrift and SEA metadata paths report an identical stripped BASE_TYPE_NAME for
+            // types the registry does not model (e.g. "geometry(0)" -> "GEOMETRY", matching
+            // SparkConnection.SetPrecisionScaleAndTypeName on Thrift). Parse never throws for
+            // the generic result type; it falls back to the stripped, upper-cased base name.
+            return SqlTypeNameParser<SqlTypeNameParserResult>.Parse(typeName).BaseTypeName;
         }
 
         /// <summary>
