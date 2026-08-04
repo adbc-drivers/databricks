@@ -1731,13 +1731,26 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
                     var keyNameArray = TryGetColumn<StringArray>(batch, "constraintName");
                     var keySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
+                    // Read the identifier columns back from the SHOW KEYS response so
+                    // TABLE_CAT/TABLE_SCHEM/TABLE_NAME reflect the server's stored (canonical)
+                    // casing rather than echoing the caller's input case. Mirrors the JDBC
+                    // reference driver (PRIMARY_KEYS_COLUMNS maps TABLE_CAT→catalogName,
+                    // TABLE_SCHEM→namespace, TABLE_NAME→tableName) and this driver's own
+                    // FetchCrossReferenceAsync. Fall back to the input args when the server
+                    // omits a value, so behavior is never worse than before.
+                    var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
+                    var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
+                    var tableArray = TryGetColumn<StringArray>(batch, "tableName");
                     if (colNameArray == null) continue;
                     for (int i = 0; i < batch.Length; i++)
                     {
                         if (colNameArray.IsNull(i)) continue;
                         int keySeq = keySeqArray != null && !keySeqArray.IsNull(i) ? keySeqArray.GetValue(i)!.Value : ++seq;
                         string pkName = keyNameArray != null && !keyNameArray.IsNull(i) ? keyNameArray.GetString(i) : "";
-                        keys.Add((catalog!, schema!, table!,
+                        string rowCatalog = catalogArray != null && !catalogArray.IsNull(i) ? catalogArray.GetString(i) : catalog!;
+                        string rowSchema = schemaArray != null && !schemaArray.IsNull(i) ? schemaArray.GetString(i) : schema!;
+                        string rowTable = tableArray != null && !tableArray.IsNull(i) ? tableArray.GetString(i) : table!;
+                        keys.Add((rowCatalog, rowSchema, rowTable,
                             colNameArray.GetString(i), keySeq, pkName));
                     }
                 }
