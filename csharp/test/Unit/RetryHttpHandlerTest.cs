@@ -22,7 +22,10 @@
 */
 
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -663,6 +666,143 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal(2, mockHandler.RequestCount); // 1 timeout + 1 success
+        }
+
+        // ---------------------------------------------------------------------
+        // Retry telemetry tests (issue #479)
+        //
+        // The RetryHttpHandler runs on every HTTP send and retries on
+        // Retry-After (503/429) responses and on transient transport errors —
+        // but historically it emitted zero per-attempt telemetry. A customer
+        // reading their own driver logs asking "did my failure retry then
+        // succeed, or did it fail without any retry?" could not answer from
+        // the trace alone.
+        //
+        // The fix (around the retry loop) is to emit a `retry.attempt` event
+        // for each *retry* (i.e. not the first try) on the wrapping SendAsync
+        // activity, carrying attempt_number/delay_ms/reason. The target
+        // consumer is the user reading local driver logs, so dashboard-shaped
+        // summary tags are intentionally not emitted.
+        //
+        // These tests capture the activity emitted by RetryHttpHandler via an
+        // ActivityListener attached to the MockActivityTracer's source name
+        // ("TestSource"), then assert on its Events.
+        // ---------------------------------------------------------------------
+
+        /// <summary>
+        /// Captures Activity objects emitted by an ActivitySource for in-test
+        /// assertions on tags and events.
+        /// </summary>
+        private sealed class ActivityCapture : IDisposable
+        {
+            private readonly ActivityListener _listener;
+            private readonly object _lock = new();
+            private readonly List<Activity> _stopped = new();
+
+            public ActivityCapture(string sourceName)
+            {
+                _listener = new ActivityListener
+                {
+                    ShouldListenTo = source => source.Name == sourceName,
+                    Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                    ActivityStopped = activity =>
+                    {
+                        lock (_lock) { _stopped.Add(activity); }
+                    }
+                };
+                ActivitySource.AddActivityListener(_listener);
+            }
+
+            public IReadOnlyList<Activity> StoppedActivities
+            {
+                get { lock (_lock) { return _stopped.ToArray(); } }
+            }
+
+            public void Dispose() => _listener.Dispose();
+        }
+
+        /// <summary>
+        /// Issue #479: when the first attempt succeeds, no `retry.attempt`
+        /// events fire.
+        /// </summary>
+        [Fact]
+        public async Task RetryTelemetry_NoRetry_EmitsNoEvents_Issue479()
+        {
+            using var capture = new ActivityCapture("TestSource");
+            var mockHandler = new MockHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.OK));
+            var retryHandler = new RetryHttpHandler(mockHandler, new MockActivityTracer(), 5, 5, true, true);
+
+            await new HttpClient(retryHandler).GetAsync("http://test.com");
+
+            Activity sendAsync = capture.StoppedActivities.Single(a => a.OperationName == "SendAsync");
+            Assert.DoesNotContain(sendAsync.Events, e => e.Name == "retry.attempt");
+        }
+
+        /// <summary>
+        /// Issue #479: each retry triggered by a Retry-After response emits a
+        /// `retry.attempt` event with attempt_number / delay_ms / reason. The
+        /// reason string must reference the status code so 429 throttles are
+        /// distinguishable from 503s.
+        /// </summary>
+        [Theory]
+        [InlineData(HttpStatusCode.ServiceUnavailable, "503")]
+        [InlineData((HttpStatusCode)429, "429")]
+        public async Task RetryTelemetry_RetryAfter_EmitsAttemptEvents_Issue479(HttpStatusCode status, string expectedReasonSubstring)
+        {
+            using var capture = new ActivityCapture("TestSource");
+
+            var mockHandler = new MockHttpMessageHandler(new HttpResponseMessage(status)
+            {
+                Headers = { { "Retry-After", "1" } }
+            });
+            mockHandler.SetResponseAfterRetryCount(2, new HttpResponseMessage(HttpStatusCode.OK));
+
+            var retryHandler = new RetryHttpHandler(mockHandler, new MockActivityTracer(), 10, 10, true, true);
+            await new HttpClient(retryHandler).GetAsync("http://test.com");
+
+            Activity sendAsync = capture.StoppedActivities.Single(a => a.OperationName == "SendAsync");
+            var events = sendAsync.Events.Where(e => e.Name == "retry.attempt").ToList();
+            Assert.Equal(2, events.Count);
+
+            for (int i = 0; i < events.Count; i++)
+            {
+                var tags = events[i].Tags.ToDictionary(t => t.Key, t => t.Value);
+                Assert.Equal(i + 1, Convert.ToInt32(tags["attempt_number"]));
+                Assert.True(Convert.ToInt64(tags["delay_ms"]) >= 1000); // Retry-After: 1 → 1000ms
+                Assert.Contains(expectedReasonSubstring, (string)tags["reason"]!);
+                Assert.Equal((int)status, Convert.ToInt32(tags["status_code"])); // folded from the old http.response.status_code tag
+            }
+        }
+
+        /// <summary>
+        /// Issue #479: a retry triggered by a transient transport error emits a
+        /// `retry.attempt` event carrying the per-retry detail that used to be written
+        /// as overwritten span tags — attempt_number, reason, and error_message.
+        /// </summary>
+        [Fact]
+        public async Task RetryTelemetry_TransportError_EmitsAttemptEventWithErrorDetail_Issue479()
+        {
+            using var capture = new ActivityCapture("TestSource");
+
+            var mockHandler = new MockHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.OK));
+            // Throw a transient transport error for the first 2 attempts, then succeed.
+            mockHandler.SetExceptionForRequestCount(2, new HttpRequestException("Connection refused"));
+
+            var retryHandler = new RetryHttpHandler(mockHandler, new MockActivityTracer(), 10, 10, true, true,
+                transportErrorRetryEnabled: true, httpRequestTimeoutSeconds: 0);
+            await new HttpClient(retryHandler).GetAsync("http://test.com");
+
+            Activity sendAsync = capture.StoppedActivities.Single(a => a.OperationName == "SendAsync");
+            var events = sendAsync.Events.Where(e => e.Name == "retry.attempt").ToList();
+            Assert.Equal(2, events.Count); // 2 transport failures → 2 retry events
+
+            for (int i = 0; i < events.Count; i++)
+            {
+                var tags = events[i].Tags.ToDictionary(t => t.Key, t => t.Value);
+                Assert.Equal(i + 1, Convert.ToInt32(tags["attempt_number"]));
+                Assert.Contains("transport_error", (string)tags["reason"]!);
+                Assert.Equal("Connection refused", (string)tags["error_message"]!);
+            }
         }
 
         /// <summary>

@@ -22,6 +22,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -142,10 +143,6 @@ namespace AdbcDrivers.Databricks
                         attemptCount++;
                         lastTransportException = ex;
 
-                        activity?.SetTag("http.retry.attempt", attemptCount);
-                        activity?.SetTag("http.retry.transport_error", ex.GetType().Name);
-                        activity?.SetTag("http.retry.transport_error_message", ex.Message);
-
                         int transportWaitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
                         lastErrorMessage = $"Transport error ({ex.GetType().Name}: {ex.Message}). Using exponential backoff of {transportWaitSeconds} seconds. Attempt {attemptCount}.";
 
@@ -160,6 +157,19 @@ namespace AdbcDrivers.Databricks
                             break;
                         }
                         totalTransportErrorRetrySeconds += transportWaitSeconds;
+
+                        // Issue #479: emit a per-retry event BEFORE we sleep so the
+                        // trace makes the retry visible even if the process dies
+                        // during the delay. The event is self-contained — it carries
+                        // the per-retry detail that used to be written as overwritten
+                        // span tags (attempt number, error type via reason, error message).
+                        activity?.AddEvent("retry.attempt", new List<KeyValuePair<string, object?>>
+                        {
+                            new("attempt_number", attemptCount),
+                            new("delay_ms", (long)transportWaitSeconds * 1000L),
+                            new("reason", $"transport_error_{ex.GetType().Name}"),
+                            new("error_message", ex.Message)
+                        });
 
                         await Task.Delay(TimeSpan.FromSeconds(transportWaitSeconds), cancellationToken);
                         currentBackoffSeconds = Math.Min(currentBackoffSeconds * 2, _maxBackoffSeconds);
@@ -183,11 +193,13 @@ namespace AdbcDrivers.Databricks
                     HttpStatusCode statusCode = response.StatusCode;
                     bool isTooManyRequests = statusCode == (HttpStatusCode)429;
 
-                    // Log this retry attempt
-                    activity?.SetTag("http.retry.attempt", attemptCount);
-                    activity?.SetTag("http.response.status_code", (int)statusCode);
-
                     int waitSeconds;
+
+                    // Issue #479: derive a reason string the retry.attempt
+                    // event below will carry. We thread it alongside the
+                    // existing lastErrorMessage so the event tag and the
+                    // exception text stay consistent.
+                    string retryReason;
 
                     // Check for Retry-After header
                     if (response.Headers.TryGetValues("Retry-After", out var retryAfterValues))
@@ -199,12 +211,14 @@ namespace AdbcDrivers.Databricks
                             // Use the Retry-After value
                             waitSeconds = retryAfterSeconds;
                             lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using server-specified retry after {waitSeconds} seconds. Attempt {attemptCount}.";
+                            retryReason = $"retry_after_{(int)statusCode}";
                         }
                         else
                         {
                             // Invalid Retry-After value, use exponential backoff
                             waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
                             lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Invalid Retry-After header, using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
+                            retryReason = $"retry_after_{(int)statusCode}_invalid_header";
                         }
                     }
                     else
@@ -212,6 +226,7 @@ namespace AdbcDrivers.Databricks
                         // No Retry-After header, use exponential backoff
                         waitSeconds = CalculateBackoffWithJitter(currentBackoffSeconds);
                         lastErrorMessage = $"Service temporarily unavailable (HTTP {(int)statusCode}). Using exponential backoff of {waitSeconds} seconds. Attempt {attemptCount}.";
+                        retryReason = $"retry_after_{(int)statusCode}_no_header";
                     }
 
                     // Dispose the response before retrying
@@ -245,6 +260,20 @@ namespace AdbcDrivers.Databricks
                         }
                         totalServiceUnavailableRetrySeconds += waitSeconds;
                     }
+
+                    // Issue #479: emit a retry.attempt event BEFORE Task.Delay
+                    // below. This lives on the SendAsync activity (created by
+                    // TraceActivityAsync above) so a single completed activity
+                    // carries all its retry attempts as ordered events. The event is
+                    // self-contained — it carries the per-retry detail that used to be
+                    // written as overwritten span tags (attempt number, status code).
+                    activity?.AddEvent("retry.attempt", new List<KeyValuePair<string, object?>>
+                    {
+                        new("attempt_number", attemptCount),
+                        new("delay_ms", (long)waitSeconds * 1000L),
+                        new("reason", retryReason),
+                        new("status_code", (int)statusCode)
+                    });
 
                     // Wait for the calculated time
                     await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
