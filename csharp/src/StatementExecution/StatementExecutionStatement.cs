@@ -1674,11 +1674,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 // Match JDBC SEA (resolveKeyBasedParams): the schema check rejects only a
                 // *null* schema when a catalog is specified — NOT an empty-string schema. An
-                // empty-string schema is passed through to the server, which rejects it with a
-                // clean object-not-found (SQLSTATE 42704); the internal's IsObjectNotFoundException
-                // catch then maps that to an empty result (as JDBC SEA does). Using IsNullOrEmpty
-                // here would over-validate — throwing a generic 42000 client-side for empty schema
-                // where JDBC (and thus the SEA contract) returns empty.
+                // empty-string schema falls through to GetPrimaryKeysAsyncNoThrow, whose
+                // IsNullOrEmpty(catalog/schema/table) short-circuit returns an empty result
+                // client-side (no SHOW KEYS issued) — matching JDBC SEA's empty result. Using
+                // IsNullOrEmpty here would over-validate — throwing a generic 42000 client-side
+                // for empty schema where JDBC (and thus the SEA contract) returns empty.
                 if (!string.IsNullOrEmpty(_metadataCatalogName) && _metadataSchemaName == null)
                     throw NewInvalidArgumentException("schema may not be null when catalog is specified");
             }
@@ -1771,10 +1771,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // deterministic check with no I/O; the thrown exception fully describes it, so it is not
             // wrapped in a trace span.
             // Match JDBC SEA (resolveKeyBasedParams): reject only a *null* foreign schema when a
-            // foreign catalog is specified — NOT an empty-string schema. Empty-string foreign
-            // schema is passed through to the server (object-not-found 42704 → empty result via
-            // the internal's IsObjectNotFoundException catch), as JDBC SEA does; IsNullOrEmpty
-            // here would over-validate with a client-side 42000 where JDBC returns empty.
+            // foreign catalog is specified — NOT an empty-string schema. An empty-string foreign
+            // schema is NOT rejected here; it falls through to GetCrossReferenceAsyncNoThrow, whose
+            // own IsNullOrEmpty(fkSchema) guard short-circuits client-side to an empty result with
+            // no server round-trip, as JDBC SEA does. Using IsNullOrEmpty in this throw check would
+            // over-validate with a client-side 42000 where JDBC returns empty.
             if (!MetadataUtilities.ShouldReturnEmptyPKFKResult(_metadataCatalogName, _metadataForeignCatalogName, _connection.EnablePKFK)
                 && !string.IsNullOrEmpty(_metadataForeignTableName)
                 && !string.IsNullOrEmpty(_metadataForeignCatalogName)
