@@ -514,6 +514,18 @@ namespace AdbcDrivers.Databricks
         /// HTTP header for passing the Databricks organization ID on REST requests.
         /// </summary>
         public const string OrgIdHeader = "x-databricks-org-id";
+
+        /// <summary>
+        /// Unmatchable table-type sentinel used to force a GetTables request to return
+        /// zero rows when an EMPTY (non-null) table-types filter is supplied. An empty
+        /// filter matches NO table types (databricks-jdbc parity), but the shared
+        /// HiveServer2 base treats an empty/null list as "all types", so we substitute
+        /// this token instead. It is a plain ASCII identifier-shaped string that can
+        /// never collide with a real Databricks table type (TABLE, VIEW, SYSTEM TABLE,
+        /// ...) and deliberately avoids control characters (e.g. NUL) so the request
+        /// stays well-formed on strict servers. See METADATA-035.
+        /// </summary>
+        internal const string NoMatchTableTypeSentinel = "__ADBC_NO_MATCHING_TABLE_TYPE__";
         /// <summary>
         /// Default heartbeat interval in seconds for long-running operations.
         /// </summary>

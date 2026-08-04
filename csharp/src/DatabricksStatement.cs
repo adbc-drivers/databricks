@@ -810,6 +810,19 @@ namespace AdbcDrivers.Databricks
                 HandleSparkCatalog();
                 activity?.SetTag("statement.catalog_name_after_spark_handling", CatalogName ?? "(none)");
 
+                // METADATA-035: an EMPTY (non-null) table-types filter matches NO table
+                // types (zero rows), matching databricks-jdbc and the SEA path. This is the
+                // Thrift is_metadata_command "gettables" surface: the shared HiveServer2 base
+                // (HiveServer2Statement.GetTablesAsync) builds its type list with IsNullOrEmpty,
+                // folding an empty string into the "all types" branch. Substitute the same
+                // unmatchable sentinel used on the GetObjects path (DatabricksConnection.GetObjects)
+                // so the server returns zero tables without modifying the shared base. A null
+                // TableTypes still means "all types" and is left untouched.
+                if (TableTypes != null && TableTypes.Length == 0)
+                {
+                    TableTypes = DatabricksConstants.NoMatchTableTypeSentinel;
+                }
+
                 // If EnableMultipleCatalogSupport is false and catalog is not null or SPARK, return empty result without RPC call
                 if (!enableMultipleCatalogSupport && CatalogName != null)
                 {

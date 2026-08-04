@@ -66,7 +66,7 @@ namespace AdbcDrivers.Databricks
         /// of an empty result. A normal identifier-shaped token that simply matches no
         /// known type keeps the request well-formed while still returning zero rows.
         /// </summary>
-        private static readonly IReadOnlyList<string> NoMatchTableTypes = new[] { "__ADBC_NO_MATCHING_TABLE_TYPE__" };
+        private static readonly IReadOnlyList<string> NoMatchTableTypes = new[] { DatabricksConstants.NoMatchTableTypeSentinel };
 
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.

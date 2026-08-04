@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using AdbcDrivers.HiveServer2;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
 using Apache.Arrow.Adbc.Tests.Metadata;
@@ -77,6 +78,35 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             return TestEnvironment.CreateNewDriver().Open(parameters).Connect(new Dictionary<string, string>());
         }
 
+        // Drive the is_metadata_command "gettables" shim and collect the TABLE_NAME values.
+        // On Thrift this routes through DatabricksStatement.GetTablesAsync -> the shared
+        // HiveServer2 base; on SEA through StatementExecutionStatement.GetTablesAsync.
+        private static List<string> MetadataCommandTableNames(AdbcConnection connection, string catalog,
+            string schema, string tablePattern, string? tableTypesOption)
+        {
+            using var stmt = connection.CreateStatement();
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, catalog);
+            stmt.SetOption(ApacheParameters.SchemaName, schema);
+            stmt.SetOption(ApacheParameters.TableName, tablePattern);
+            if (tableTypesOption != null) stmt.SetOption(ApacheParameters.TableTypes, tableTypesOption);
+            stmt.SqlQuery = "gettables";
+
+            var result = stmt.ExecuteQuery();
+            using var reader = result.Stream!;
+            int nameIdx = reader.Schema.FieldsList.ToList().FindIndex(f => f.Name == "TABLE_NAME");
+            var names = new List<string>();
+            var batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+            while (batch != null)
+            {
+                var nameArr = (Apache.Arrow.StringArray)batch.Column(nameIdx);
+                for (int i = 0; i < batch.Length; i++)
+                    names.Add(nameArr.GetString(i));
+                batch = reader.ReadNextRecordBatchAsync().GetAwaiter().GetResult();
+            }
+            return names;
+        }
+
         [SkippableTheory]
         [InlineData("thrift")]
         [InlineData("rest")]
@@ -128,6 +158,65 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             }
 
             await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// METADATA-035, is_metadata_command "gettables" surface: an EMPTY (non-null)
+        /// adbc.get_metadata.target_table_types option must match NO table types (zero
+        /// rows); a never-set (null) option means "all types". Parameterized over both
+        /// protocols so a single invocation exercises the Thrift shim (which routes
+        /// through DatabricksStatement.GetTablesAsync -> the shared HiveServer2 base,
+        /// where an empty string previously folded into "all types") AND the SEA shim.
+        /// </summary>
+        [SkippableTheory]
+        [InlineData("thrift")]
+        [InlineData("rest")]
+        public void MetadataCommandGetTables_EmptyTableTypes_MatchesNone_NullMatchesAll(string protocol)
+        {
+            Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
+
+            string catalog = TestConfiguration.Metadata.Catalog;
+            string schema = TestConfiguration.Metadata.Schema;
+            string suffix = Guid.NewGuid().ToString("N").Substring(0, 12);
+            string tableName = $"ett_tbl_{suffix}";
+            string viewName = $"ett_view_{suffix}";
+            string fqTable = $"{DelimitIdentifier(catalog)}.{DelimitIdentifier(schema)}.{DelimitIdentifier(tableName)}";
+            string fqView = $"{DelimitIdentifier(catalog)}.{DelimitIdentifier(schema)}.{DelimitIdentifier(viewName)}";
+
+            using AdbcConnection connection = NewConnectionForProtocol(protocol);
+            using AdbcStatement setup = connection.CreateStatement();
+
+            try
+            {
+                setup.SqlQuery = $"CREATE TABLE IF NOT EXISTS {fqTable} (id INT)";
+                setup.ExecuteUpdate();
+                setup.SqlQuery = $"CREATE VIEW {fqView} AS SELECT 1 AS id";
+                setup.ExecuteUpdate();
+
+                string pattern = $"ett_%_{suffix}";
+
+                // null (unset) -> all types: both the table and the view are returned.
+                var allNames = MetadataCommandTableNames(connection, catalog, schema, pattern, tableTypesOption: null);
+                Assert.Contains(tableName, allNames);
+                Assert.Contains(viewName, allNames);
+
+                // empty (non-null) -> match NONE: neither is returned (METADATA-035).
+                var emptyNames = MetadataCommandTableNames(connection, catalog, schema, pattern, tableTypesOption: "");
+                Assert.DoesNotContain(tableName, emptyNames);
+                Assert.DoesNotContain(viewName, emptyNames);
+
+                // "TABLE" -> only the TABLE.
+                var tableOnly = MetadataCommandTableNames(connection, catalog, schema, pattern, tableTypesOption: "TABLE");
+                Assert.Contains(tableName, tableOnly);
+                Assert.DoesNotContain(viewName, tableOnly);
+            }
+            finally
+            {
+                setup.SqlQuery = $"DROP VIEW IF EXISTS {fqView}";
+                try { setup.ExecuteUpdate(); } catch { /* best-effort cleanup */ }
+                setup.SqlQuery = $"DROP TABLE IF EXISTS {fqTable}";
+                try { setup.ExecuteUpdate(); } catch { /* best-effort cleanup */ }
+            }
         }
     }
 }
