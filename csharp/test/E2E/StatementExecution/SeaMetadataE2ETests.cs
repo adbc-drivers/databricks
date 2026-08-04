@@ -342,11 +342,14 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // the server's stored (canonical, lowercase) casing — NOT the uppercase input echoed back.
         // Thrift and the JDBC reference driver both return the server's casing; SEA previously
         // echoed the input, diverging on every case-variant PK query. Regression guard for that fix.
+        // The bug is SEA-specific, so force the REST/SEA path explicitly (matching the #593 tests
+        // above) rather than relying on the run's configured protocol — on a Thrift-configured run
+        // the default connection would pass trivially without exercising the fixed code path.
         [SkippableFact]
         public async Task GetPrimaryKeys_UppercaseTableName_ReturnsServerCanonicalCasing()
         {
             SkipIfNotConfigured();
-            using var conn = CreateConnection();
+            using var conn = CreateConnection(RestProtocol);
             var rows = await ReadMetadata(
                 conn, "GetPrimaryKeys", TestCatalog, TestSchema, TestTable.ToUpperInvariant());
 
