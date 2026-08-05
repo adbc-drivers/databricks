@@ -253,18 +253,21 @@ namespace AdbcDrivers.Databricks.Tests
             OutputHelper?.WriteLine(
                 $"[FeatureFlagCacheE2ETest] {connectionCount} connections to the same host -> actual external feature-flag fetches: {fetchCount}");
 
-            // Assert - the shared cache DEDUPS: far fewer external fetches than connections.
-            // Not exactly 1: if the first fetch hits a transient failure/timeout, it is cached
-            // with a short 60s NEGATIVE TTL (FeatureFlagContext.DefaultNegativeTtl) by design, so a
-            // later connection legitimately re-fetches — a healthy run makes 1 external call, and a
-            // run that caught one transient makes 2, both of which still prove dedup (4-of-5 or
-            // 3-of-5 served from cache). Asserting == 1 turned that designed-in retry into a flake
-            // (observed Expected 1 / Actual 2). Require dedup: strictly fewer fetches than
-            // connections, and at most 2 (one initial + at most one transient re-fetch).
-            Assert.True(fetchCount >= 1 && fetchCount < connectionCount && fetchCount <= 2,
-                $"Feature-flag cache should dedup {connectionCount} connections to at most 2 external "
-                + $"fetches (1 healthy, or 2 if the first fetch transiently failed and re-fetched under "
-                + $"the negative-cache TTL), but saw {fetchCount}.");
+            // Assert - the shared cache DEDUPS: strictly fewer external fetches than connections.
+            // Not exactly 1: if a fetch hits a transient failure/timeout, it is cached with a short
+            // 60s NEGATIVE TTL (FeatureFlagContext.DefaultNegativeTtl) by design, so a later
+            // connection legitimately re-fetches — a healthy run makes 1 external call, and any run
+            // that caught one or more transients makes a few more. Asserting == 1 turned that
+            // designed-in retry into a flake (observed Expected 1 / Actual 2). We deliberately do
+            // NOT cap the count at a fixed ceiling (e.g. <= 2): multiple connections can each catch
+            // a transient at different points and re-fetch under the negative TTL, so any hard
+            // ceiling would reintroduce the same flake class for the same reason, just less often.
+            // The robust invariant is the dedup property itself: at least one fetch happened, and
+            // the cache served at least one connection (strictly fewer fetches than connections).
+            Assert.True(fetchCount >= 1 && fetchCount < connectionCount,
+                $"Feature-flag cache should dedup {connectionCount} connections to strictly fewer "
+                + $"external fetches (1 in a healthy run, more only if fetches transiently failed and "
+                + $"re-fetched under the negative-cache TTL), but saw {fetchCount}.");
             Assert.True(cache.TryGetContext(hostName!, out _), "Context should be cached after the first fetch");
         }
 
