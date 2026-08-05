@@ -1032,11 +1032,24 @@ namespace AdbcDrivers.Databricks.Tests
                 // covers any table already created — if the second CREATE throws (e.g. missing
                 // write access to a catalog), the first catalog's table is still cleaned up.
                 // DROP TABLE IF EXISTS makes dropping a never-created table harmless.
-                foreach (var probeCatalog in probeCatalogs)
+                //
+                // This test requires DDL/write access to BOTH probe catalogs (hive_metastore and
+                // main). On a workspace where the run principal lacks that, treat it as an
+                // environmental precondition and SKIP with a clear reason rather than letting an
+                // opaque CREATE failure turn into a hard red build. (The filtered GetColumns
+                // assertions below depend on the probe existing, so we can't just continue.)
+                try
                 {
-                    using var createStmt = connection.CreateStatement();
-                    createStmt.SqlQuery = $"CREATE TABLE IF NOT EXISTS {probeCatalog}.default.{probeTable} (id INT, name STRING)";
-                    await createStmt.ExecuteUpdateAsync();
+                    foreach (var probeCatalog in probeCatalogs)
+                    {
+                        using var createStmt = connection.CreateStatement();
+                        createStmt.SqlQuery = $"CREATE TABLE IF NOT EXISTS {probeCatalog}.default.{probeTable} (id INT, name STRING)";
+                        await createStmt.ExecuteUpdateAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Skip.If(true, $"Requires DDL/write access to catalogs [{string.Join(", ", probeCatalogs)}]; probe table creation failed: {ex.Message}");
                 }
 
                 // First run with SPARK catalog to get real schemas
