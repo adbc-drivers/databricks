@@ -1202,7 +1202,16 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 if (catalogName.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
                 {
-                    // When EnableMultipleCatalogSupport is false and catalog is SPARK, results should be from default catalog
+                    // When EnableMultipleCatalogSupport is false and catalog is SPARK, results should be from default catalog.
+                    //
+                    // This also holds for the filtered GetColumns case, which now hinges on probe placement:
+                    // HandleSparkCatalog maps SPARK -> null, so the CatalogName != null empty-result short-circuit
+                    // does NOT fire and GetColumns delegates to the base with catalog=null. With multi-catalog
+                    // support OFF, null resolves to the session's default catalog, which is hive_metastore
+                    // (pinned by DatabricksConnectionTest.EnableMultipleCatalogSupport* -> "hive_metastore"). The
+                    // probe is created in hive_metastore.default, so the filtered scan returns exactly its rows and
+                    // foundCatalogs.Count == 1 holds. If the workspace default ever stopped being hive_metastore,
+                    // this row-set would be empty and the assertion would fail loudly here rather than silently pass.
                     Assert.True(foundCatalogs.Count == 1,
                         $"{queryType} should only return results from the default catalog when EnableMultipleCatalogSupport is false and catalog is SPARK");
                     OutputHelper?.WriteLine($"All results are from default catalog: {defaultCatalog}");
