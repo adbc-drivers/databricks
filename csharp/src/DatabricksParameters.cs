@@ -517,58 +517,6 @@ namespace AdbcDrivers.Databricks
         public const string OrgIdHeader = "x-databricks-org-id";
 
         /// <summary>
-        /// Unmatchable table-type sentinel used to force a GetTables request to return
-        /// zero rows when an EMPTY (non-null) table-types filter is supplied. An empty
-        /// filter matches NO table types (databricks-jdbc parity), but the shared
-        /// HiveServer2 base treats an empty/null list as "all types", so we substitute
-        /// this token instead. It is a plain ASCII identifier-shaped string that can
-        /// never collide with a real Databricks table type (TABLE, VIEW, SYSTEM TABLE,
-        /// ...) and deliberately avoids control characters (e.g. NUL) so the request
-        /// stays well-formed on strict servers. See METADATA-035.
-        ///
-        /// SERVER CONTRACT (METADATA-035): this substitution relies on the Databricks
-        /// server TOLERATING an unrecognized table-type string on the Thrift GetTables /
-        /// is_metadata_command "gettables" path — i.e. filtering it out and returning
-        /// ZERO rows rather than raising an error. This is the only surface where the
-        /// empty-types rule is enforced server-side (the two SEA surfaces filter
-        /// client-side, so they do not depend on this behavior). If a future server
-        /// version rejects an unknown table type with an error instead of matching
-        /// nothing, empty-types GetObjects would throw; that server-round-trip contract
-        /// is guarded only by EmptyTableTypesE2ETests (live workspace, not ordinary CI),
-        /// so treat a regression there as a signal the server contract changed.
-        /// </summary>
-        internal const string NoMatchTableTypeSentinel = "__ADBC_NO_MATCHING_TABLE_TYPE__";
-
-        /// <summary>
-        /// Applies the METADATA-035 empty-table-types rule to a table-types list (the
-        /// <c>DatabricksConnection.GetObjects</c> surface). A <c>null</c> list means "all
-        /// types" and is returned unchanged; an EMPTY (non-null) list matches NO table
-        /// types (databricks-jdbc parity) and is mapped to a single-element list holding
-        /// the unmatchable <see cref="NoMatchTableTypeSentinel"/> so the shared HiveServer2
-        /// base — which folds empty/null into "all types" — instead returns zero rows.
-        /// A non-empty list is returned unchanged.
-        /// </summary>
-        internal static IReadOnlyList<string>? ApplyEmptyTableTypesRule(IReadOnlyList<string>? tableTypes) =>
-            tableTypes != null && tableTypes.Count == 0
-                ? new[] { NoMatchTableTypeSentinel }
-                : tableTypes;
-
-        /// <summary>
-        /// Applies the METADATA-035 empty-table-types rule to the Thrift
-        /// <c>is_metadata_command</c> "gettables" table-types string (the
-        /// <c>DatabricksStatement.GetTablesAsync</c> surface). A <c>null</c> value means
-        /// "all types" and is returned unchanged; an EMPTY (non-null) string matches NO
-        /// table types and is mapped to <see cref="NoMatchTableTypeSentinel"/> so the
-        /// shared HiveServer2 base (which folds empty/null into "all types" via
-        /// <c>string.IsNullOrEmpty</c>) instead returns zero rows. Any other value is
-        /// returned unchanged.
-        /// </summary>
-        internal static string? ApplyEmptyTableTypesRule(string? tableTypes) =>
-            tableTypes != null && tableTypes.Length == 0
-                ? NoMatchTableTypeSentinel
-                : tableTypes;
-
-        /// <summary>
         /// Default heartbeat interval in seconds for long-running operations.
         /// </summary>
         public const int DefaultOperationStatusPollingIntervalSeconds = 60;

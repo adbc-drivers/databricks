@@ -521,16 +521,10 @@ namespace AdbcDrivers.Databricks
                 _ => Telemetry.Proto.Operation.Types.Type.Unspecified
             };
 
-            // METADATA-035: an EMPTY (non-null) tableTypes matches NO table types (zero
-            // tables), aligning with databricks-jdbc; a null tableTypes still matches all.
-            // The shared HiveServer2 base treats an empty/null list as "all", so we
-            // substitute an unmatchable sentinel type to make the server return zero rows
-            // without modifying the shared base. The substitution decision is centralized
-            // in DatabricksConstants.ApplyEmptyTableTypesRule and pinned by
-            // DatabricksEmptyTableTypesRuleTests; the live server-side round-trip is
-            // additionally exercised by EmptyTableTypesE2ETests on both thrift and rest.
-            tableTypes = DatabricksConstants.ApplyEmptyTableTypesRule(tableTypes);
-
+            // Empty (non-null) tableTypes → match no table types (zero rows); null →
+            // all. This is enforced by the shared HiveServer2 base (see
+            // adbc-drivers/hiveserver2#83), which short-circuits an empty filter before
+            // the RPC. No Databricks-layer handling is required.
             return this.TraceActivity(activity =>
                 _telemetry.ExecuteWithMetadataTelemetry(
                     operationType,

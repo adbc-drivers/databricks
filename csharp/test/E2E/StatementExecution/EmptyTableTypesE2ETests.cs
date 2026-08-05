@@ -34,7 +34,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
     /// match ALL types. The test is parameterized over both protocols — it forces
     /// <c>adbc.databricks.protocol=thrift</c> and <c>=rest</c> on independent connections
     /// (rather than relying on the run's default protocol) so a single invocation
-    /// exercises BOTH the Thrift server-side sentinel and the SEA client-side filter.
+    /// exercises BOTH the Thrift path (shared HiveServer2 base short-circuits an empty
+    /// filter — adbc-drivers/hiveserver2#83) and the SEA client-side filter.
     /// Creates a unique table + view so the assertions are deterministic regardless of
     /// what else lives in the fixture schema.
     /// </summary>
