@@ -62,10 +62,10 @@ namespace AdbcDrivers.Databricks.Tests
         /// </summary>
         private static void CompactAndCollect()
         {
-#if NET
+            // Available since .NET Framework 4.5.1, so this applies on net472 too (no #if guard needed,
+            // unlike the GC.GetGCMemoryInfo() blocks below which require .NET Core+).
             System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
                 System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-#endif
             GC.Collect(2, GCCollectionMode.Forced, blocking: true);
             GC.WaitForPendingFinalizers();
             GC.Collect(2, GCCollectionMode.Forced, blocking: true);
