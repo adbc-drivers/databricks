@@ -1026,14 +1026,19 @@ namespace AdbcDrivers.Databricks.Tests
             // exercising the catalog-scoped filtered path with a real row rather than an empty one.
             string probeTable = $"adbc_multicat_getcolumns_probe_{Guid.NewGuid():N}";
             string[] probeCatalogs = { "hive_metastore", "main" };
-            foreach (var probeCatalog in probeCatalogs)
-            {
-                using var createStmt = connection.CreateStatement();
-                createStmt.SqlQuery = $"CREATE TABLE IF NOT EXISTS {probeCatalog}.default.{probeTable} (id INT, name STRING)";
-                await createStmt.ExecuteUpdateAsync();
-            }
             try
             {
+                // Create the probe tables inside the try so the finally's DROP loop always
+                // covers any table already created — if the second CREATE throws (e.g. missing
+                // write access to a catalog), the first catalog's table is still cleaned up.
+                // DROP TABLE IF EXISTS makes dropping a never-created table harmless.
+                foreach (var probeCatalog in probeCatalogs)
+                {
+                    using var createStmt = connection.CreateStatement();
+                    createStmt.SqlQuery = $"CREATE TABLE IF NOT EXISTS {probeCatalog}.default.{probeTable} (id INT, name STRING)";
+                    await createStmt.ExecuteUpdateAsync();
+                }
+
                 // First run with SPARK catalog to get real schemas
                 await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
                 await TestMetadataQuery(connection, "GetSchemas", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
