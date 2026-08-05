@@ -1055,9 +1055,20 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 foreach (var probeCatalog in probeCatalogs)
                 {
-                    using var dropStmt = connection.CreateStatement();
-                    dropStmt.SqlQuery = $"DROP TABLE IF EXISTS {probeCatalog}.default.{probeTable}";
-                    await dropStmt.ExecuteUpdateAsync();
+                    // Swallow cleanup failures: if the test body threw (e.g. a connection-level
+                    // timeout or dropped session), each DROP here would throw too and REPLACE the
+                    // original test exception, masking the real failure in CI logs. Log and
+                    // continue so the informative original exception propagates.
+                    try
+                    {
+                        using var dropStmt = connection.CreateStatement();
+                        dropStmt.SqlQuery = $"DROP TABLE IF EXISTS {probeCatalog}.default.{probeTable}";
+                        await dropStmt.ExecuteUpdateAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        OutputHelper?.WriteLine($"Cleanup: failed to drop {probeCatalog}.default.{probeTable}: {ex.Message}");
+                    }
                 }
             }
         }
