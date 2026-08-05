@@ -84,7 +84,11 @@ namespace AdbcDrivers.Databricks.Tests
         /// small number of these rather than failing the whole run.
         /// </summary>
         private static bool IsTransientColdStartError(Exception ex) =>
-            ex is DatabricksException
+            // Match the common base type: on the Thrift/HiveServer2 path the server execute error
+            // surfaces as HiveServer2Exception, on the SEA path as DatabricksException. Both are
+            // siblings extending AdbcException, so gating on AdbcException covers both protocols.
+            // The message-substring test below does the real discrimination.
+            ex is AdbcException
             && ex.Message.IndexOf("sparkSession", StringComparison.OrdinalIgnoreCase) >= 0
             && ex.Message.IndexOf("is null", StringComparison.OrdinalIgnoreCase) >= 0;
 
