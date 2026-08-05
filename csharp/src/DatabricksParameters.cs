@@ -21,7 +21,6 @@
 * limitations under the License.
 */
 
-using System.Collections.Generic;
 using AdbcDrivers.HiveServer2.Spark;
 
 namespace AdbcDrivers.Databricks
