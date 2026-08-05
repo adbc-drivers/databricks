@@ -1316,6 +1316,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     && MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) != null)
                     return MetadataSchemaFactory.CreateEmptyTablesResult();
 
+                // An EMPTY (non-null) types filter matches NO table types (zero rows) —
+                // short-circuit without running SHOW TABLES, mirroring databricks-jdbc's
+                // listTables. A null filter (all types) and a non-empty filter (filtered
+                // client-side below) fall through.
+                if (_metadataTableTypes != null && _metadataTableTypes.Length == 0)
+                    return MetadataSchemaFactory.CreateEmptyTablesResult();
+
                 string sql = new ShowTablesCommand(
                     catalog,
                     EscapePatternWildcardsInName(_metadataSchemaName),
@@ -1348,12 +1355,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Issue #526: match JDBC's MetadataResultSetBuilder and the Thrift path -
                 // the types filter is a case-SENSITIVE exact match against the server's
                 // uppercase type names (TABLE/VIEW/...). Use Ordinal, not OrdinalIgnoreCase.
-                //
-                // METADATA-035: an EMPTY (non-null) types filter matches NO table types
-                // (zero rows), matching databricks-jdbc; only an UNSET (null) filter means
-                // "all types". Guard on `!= null` (not IsNullOrEmpty) so an empty string
-                // builds a HashSet{""} that no real table type matches → zero rows, while
-                // null skips the filter entirely.
+                // The empty-filter case is handled by the short-circuit above; here
+                // _metadataTableTypes is either null (all types → no filter) or non-empty.
                 var tableTypeFilter = _metadataTableTypes != null
                     ? new HashSet<string>(
                         _metadataTableTypes.Split(',').Select(t => t.Trim()),

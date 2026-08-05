@@ -821,6 +821,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         async Task<IReadOnlyList<(string catalog, string schema, string table, string tableType)>> IGetObjectsDataProvider.GetTablesAsync(
             string? catalogPattern, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes, CancellationToken cancellationToken)
         {
+            // An EMPTY (non-null) tableTypes filter matches NO table types (zero rows) —
+            // short-circuit without running SHOW TABLES, mirroring databricks-jdbc's
+            // listTables. A null filter (all types) and a non-empty filter (filtered
+            // client-side below) fall through. SHOW TABLES has no server-side type
+            // filter, so non-empty types must still be filtered on the client.
+            if (tableTypes != null && tableTypes.Count == 0)
+            {
+                return System.Array.Empty<(string, string, string, string)>();
+            }
+
             string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
 
             List<RecordBatch> batches;
