@@ -89,6 +89,12 @@ namespace AdbcDrivers.Databricks.Tests
             // siblings extending AdbcException, so gating on AdbcException covers both protocols.
             // The message-substring test below does the real discrimination.
             ex is AdbcException
+            // Require the server-side BAD_REQUEST marker as well as the sparkSession/is-null text.
+            // The cold-start race is specifically a BAD_REQUEST the server raises before its
+            // SparkSession is initialized; demanding all three substrings keeps this from masking
+            // a hypothetical driver-side session-lifecycle regression that merely mentions a null
+            // sparkSession without the server's BAD_REQUEST classification.
+            && ex.Message.IndexOf("BAD_REQUEST", StringComparison.OrdinalIgnoreCase) >= 0
             && ex.Message.IndexOf("sparkSession", StringComparison.OrdinalIgnoreCase) >= 0
             && ex.Message.IndexOf("is null", StringComparison.OrdinalIgnoreCase) >= 0;
 
