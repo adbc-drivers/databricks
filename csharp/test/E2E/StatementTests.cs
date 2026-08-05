@@ -1008,30 +1008,28 @@ namespace AdbcDrivers.Databricks.Tests
             // Store SPARK catalog schemas for comparison
             Dictionary<string, Schema> sparkSchemas = new Dictionary<string, Schema>();
 
-            // GetColumns is filtered to a single table to BOUND the scan. Unfiltered, GetColumns
-            // over the "default" schema enumerates the columns of EVERY table in it (13k+ on the
-            // shared workspace) — a columns×tables scan that exceeded the 30-minute CI job cap on
-            // Thrift. We CREATE our own small table in the SPARK-aliased "default" schema (the exact
-            // catalog+schema this test queries) so the filtered GetColumns actually resolves it —
-            // TestConfiguration.Metadata.Table lives in a different catalog/schema and would return
-            // zero rows here. GetCatalogs/GetSchemas/GetTables stay unfiltered: they are fast and
+            // GetColumns is filtered to a single table name to BOUND the scan. Unfiltered,
+            // GetColumns over the "default" schema enumerates the columns of EVERY table in it
+            // (13k+ on the shared workspace) — a columns×tables scan that exceeded the 30-minute CI
+            // job cap on Thrift. GetCatalogs/GetSchemas/GetTables stay unfiltered: they are fast and
             // their catalog-count assertions rely on the full listing.
             //
-            // WORKSPACE PRECONDITION: this test requires that the driver's synthetic `SPARK`
-            // catalog alias fans out over `hive_metastore` and that the run's principal can CREATE
-            // in `hive_metastore.default`. That holds for the standard target: `hive_metastore` is
-            // the legacy metastore present in every Databricks workspace, and `SPARK` is the
-            // driver's alias for that legacy path (see MetadataUtilities.NormalizeSparkCatalog), so
-            // the probe table is created in the exact catalog+schema the alias resolves. The probe
-            // table is intentionally NOT sourced from TestConfiguration.Metadata: that config
-            // points at a different catalog/schema (used by the other metadata tests) and would
-            // resolve to zero rows through the SPARK alias here. If a workspace ever remaps `SPARK`
-            // away from `hive_metastore`, create the probe table in whatever catalog the alias then
-            // covers (mirrored in the minCatalogs>=1 assertion comment below).
+            // We create a same-named probe table in the "default" schema of TWO catalogs
+            // (hive_metastore and main). This is what lets the SPARK case still assert STRICT
+            // multi-catalog coverage (foundCatalogs.Count > 1): the SPARK alias resolves catalog to
+            // null (DatabricksConnection.HandleSparkCatalog), so a filtered GetColumns fans out and
+            // must return the probe from BOTH catalogs. Creating it in only one catalog would force
+            // the assertion down to >= 1 and stop actually testing the fanout — the whole point of
+            // this test. Both are ordinary Databricks catalogs the run's principal can write to:
+            // hive_metastore (the legacy metastore present in every workspace) and main (Unity
+            // Catalog default). The non-SPARK "main" case below then also finds the probe in main,
+            // exercising the catalog-scoped filtered path with a real row rather than an empty one.
             string probeTable = $"adbc_multicat_getcolumns_probe_{Guid.NewGuid():N}";
-            using (var createStmt = connection.CreateStatement())
+            string[] probeCatalogs = { "hive_metastore", "main" };
+            foreach (var probeCatalog in probeCatalogs)
             {
-                createStmt.SqlQuery = $"CREATE TABLE IF NOT EXISTS hive_metastore.default.{probeTable} (id INT, name STRING)";
+                using var createStmt = connection.CreateStatement();
+                createStmt.SqlQuery = $"CREATE TABLE IF NOT EXISTS {probeCatalog}.default.{probeTable} (id INT, name STRING)";
                 await createStmt.ExecuteUpdateAsync();
             }
             try
@@ -1050,9 +1048,12 @@ namespace AdbcDrivers.Databricks.Tests
             }
             finally
             {
-                using var dropStmt = connection.CreateStatement();
-                dropStmt.SqlQuery = $"DROP TABLE IF EXISTS hive_metastore.default.{probeTable}";
-                await dropStmt.ExecuteUpdateAsync();
+                foreach (var probeCatalog in probeCatalogs)
+                {
+                    using var dropStmt = connection.CreateStatement();
+                    dropStmt.SqlQuery = $"DROP TABLE IF EXISTS {probeCatalog}.default.{probeTable}";
+                    await dropStmt.ExecuteUpdateAsync();
+                }
             }
         }
 
@@ -1189,45 +1190,22 @@ namespace AdbcDrivers.Databricks.Tests
                 // When EnableMultipleCatalogSupport is true
                 if (catalogName.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
                 {
-                    // When catalog is SPARK, the SPARK alias fans out across catalogs. For the
-                    // UNFILTERED listings (GetSchemas/GetTables) the "default" schema exists in
-                    // more than one catalog, so multi-catalog coverage is near-guaranteed and
-                    // asserted strictly. The FILTERED GetColumns case is bounded to a single
-                    // TableName to cap its cost (see caller): a purpose-built test table need not
-                    // exist in more than one catalog's "default" schema, so requiring >1 there
-                    // would be a data-dependent failure. The cross-catalog fanout is still
-                    // asserted strictly by the unfiltered queries above, so here the filtered
-                    // case only requires that the fanout produced at least one catalog.
-                    //
-                    // HARD DEPENDENCY (why >=1 is deterministic here, not flaky): the filtered
-                    // GetColumns probe table is CREATED by this test in `hive_metastore.default`
-                    // (see the caller) — the exact catalog+schema the SPARK alias fans out over.
-                    // So a correctly-functioning SPARK fanout MUST surface it, making >=1
-                    // guaranteed rather than reliant on any pre-existing fixture. A 0-row result
-                    // here is therefore a genuine regression (the SPARK alias stopped surfacing
-                    // `hive_metastore`), which this assertion is meant to catch — do NOT add a
-                    // 0-row escape hatch. If a future config change legitimately removes
-                    // `hive_metastore` from the SPARK fanout, create the probe table in whatever
-                    // catalog the alias then covers so this invariant continues to hold.
-                    int minCatalogs = string.IsNullOrEmpty(tableName) ? 2 : 1;
-                    Assert.True(foundCatalogs.Count >= minCatalogs,
-                        $"{queryType} should return results from {(minCatalogs > 1 ? "multiple catalogs" : "at least one catalog")} when EnableMultipleCatalogSupport is true and catalog is SPARK");
-                    OutputHelper?.WriteLine($"Found results from catalogs: {string.Join(", ", foundCatalogs)}");
-                }
-                else if (!string.IsNullOrEmpty(tableName))
-                {
-                    // FILTERED GetColumns against a non-SPARK catalog: the probe table was created
-                    // in the SPARK-aliased "default" schema, not in this catalog, so it correctly
-                    // resolves to zero rows here. That is itself the catalog-scoping guarantee —
-                    // the filter is honored per-catalog and does not leak the probe table across
-                    // catalogs. (Cross-catalog scoping for the full listing is asserted by the
-                    // unfiltered GetTables/GetSchemas below.)
-                    Assert.Equal(0, rowCount);
-                    OutputHelper?.WriteLine($"Filtered {queryType} for '{tableName}' correctly returns no rows from catalog {catalogName}");
+                    // The SPARK alias resolves catalog to null (DatabricksConnection.HandleSparkCatalog),
+                    // so metadata fans out across catalogs and results MUST span more than one. This
+                    // holds for the filtered GetColumns too: the caller created the probe table in
+                    // BOTH hive_metastore.default and main.default, so a correct fanout surfaces it
+                    // from both. Strict >1 is the whole point of this test — a single-catalog result
+                    // here means the SPARK fanout regressed.
+                    Assert.True(foundCatalogs.Count > 1,
+                        $"{queryType} should return results from multiple catalogs when EnableMultipleCatalogSupport is true and catalog is SPARK");
+                    OutputHelper?.WriteLine($"Found results from multiple catalogs: {string.Join(", ", foundCatalogs)}");
                 }
                 else
                 {
-                    // When catalog is not SPARK, we should only get results from that specific catalog
+                    // When catalog is not SPARK, results must come only from that specific catalog.
+                    // This covers the filtered GetColumns case too: the probe table also exists in
+                    // main.default, so the filtered query returns its rows scoped to `main` only —
+                    // confirming the per-catalog filter does not leak the fanout across catalogs.
                     Assert.True(foundCatalogs.Count == 1,
                         $"{queryType} should return results from only the specified catalog when EnableMultipleCatalogSupport is true and catalog is not SPARK");
                     Assert.Contains(catalogName, foundCatalogs);
