@@ -208,8 +208,10 @@ namespace AdbcDrivers.Databricks.Tests
 
         /// <summary>
         /// Verifies the shared singleton cache dedups external calls: opening multiple
-        /// connections to the same host within the cache window results in exactly one
-        /// actual connector-service fetch; the rest are served from the cache.
+        /// connections to the same host within the cache window results in strictly fewer
+        /// actual connector-service fetches than connections (1 in a healthy run; a few
+        /// more only if a fetch transiently failed and re-fetched under the short negative
+        /// TTL). The remaining connections are served from the cache.
         /// </summary>
         [SkippableFact]
         public async Task TestFeatureFlagCache_SingleExternalCallAcrossConnections()

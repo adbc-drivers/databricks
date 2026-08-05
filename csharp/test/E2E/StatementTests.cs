@@ -1132,7 +1132,6 @@ namespace AdbcDrivers.Databricks.Tests
                 // Check catalog values in each row
                 for (int i = 0; i < batch.Length; i++)
                 {
-                    string? rowCat = null, rowSchem = null, rowTable = null;
                     for (int j = 0; j < batch.ColumnCount; j++)
                     {
                         string colName = queryResult.Stream.Schema.FieldsList[j].Name;
@@ -1140,7 +1139,6 @@ namespace AdbcDrivers.Databricks.Tests
                             colName.Equals("TABLE_CAT", StringComparison.OrdinalIgnoreCase))
                         {
                             string? catalog = GetStringValue(batch.Column(j), i);
-                            rowCat = catalog;
                             if (!string.IsNullOrEmpty(catalog))
                             {
                                 foundCatalogs.Add(catalog);
@@ -1148,22 +1146,6 @@ namespace AdbcDrivers.Databricks.Tests
                                 defaultCatalog ??= catalog;
                             }
                         }
-                        else if (colName.Equals("TABLE_SCHEM", StringComparison.OrdinalIgnoreCase) ||
-                                 colName.Equals("TABLE_SCHEMA", StringComparison.OrdinalIgnoreCase))
-                        {
-                            rowSchem = GetStringValue(batch.Column(j), i);
-                        }
-                        else if (colName.Equals("TABLE_NAME", StringComparison.OrdinalIgnoreCase))
-                        {
-                            rowTable = GetStringValue(batch.Column(j), i);
-                        }
-                    }
-                    // TEMP DIAGNOSTIC (issue #629): for the bounded GetColumns probe, dump the
-                    // per-row catalog/schema/table exactly as returned so we can see what catalog
-                    // label each probe row carries on the CI service principal. Remove before merge.
-                    if (!string.IsNullOrEmpty(tableName) && queryType.Equals("GetColumns", StringComparison.OrdinalIgnoreCase))
-                    {
-                        OutputHelper?.WriteLine($"[DIAG #629] queried catalog={catalogName} -> row TABLE_CAT='{rowCat}' TABLE_SCHEM='{rowSchem}' TABLE_NAME='{rowTable}'");
                     }
                 }
             }
