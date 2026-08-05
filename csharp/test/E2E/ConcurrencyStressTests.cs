@@ -54,11 +54,27 @@ namespace AdbcDrivers.Databricks.Tests
         /// </summary>
         private async Task WarmUpAsync(AdbcConnection connection)
         {
-            using var statement = connection.CreateStatement();
-            statement.SqlQuery = "SELECT 1";
-            var result = statement.ExecuteQuery();
-            using var reader = result.Stream;
-            while (await reader.ReadNextRecordBatchAsync() != null) { }
+            // The warm-up query is itself the first statement against a possibly-cold warehouse,
+            // so it can be the very victim of the cold-start race it exists to prevent. Retry a
+            // bounded number of times on the known transient error rather than aborting the test.
+            const int maxAttempts = 5;
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    using var statement = connection.CreateStatement();
+                    statement.SqlQuery = "SELECT 1";
+                    var result = statement.ExecuteQuery();
+                    using var reader = result.Stream;
+                    while (await reader.ReadNextRecordBatchAsync() != null) { }
+                    return;
+                }
+                catch (Exception ex) when (IsTransientColdStartError(ex) && attempt < maxAttempts)
+                {
+                    OutputHelper?.WriteLine($"Warm-up attempt {attempt} hit transient cold-start error, retrying: {ex.Message}");
+                    await Task.Delay(500 * attempt);
+                }
+            }
         }
 
         /// <summary>
@@ -192,7 +208,6 @@ namespace AdbcDrivers.Databricks.Tests
                             // Verify we got OUR value back, not another thread's
                             var array = (Int32Array)batch.Column(0);
                             long actual = array.GetValue(0)!.Value;
-                            results.Add((threadId, i, actual));
 
                             if (actual != expected)
                             {
@@ -202,6 +217,12 @@ namespace AdbcDrivers.Databricks.Tests
 
                             // Drain remaining batches
                             while (await reader.ReadNextRecordBatchAsync() != null) { }
+
+                            // Record success only after the full result set has drained. If a cold-start
+                            // transient surfaces mid-drain it is caught below and counted solely in
+                            // transientErrors, keeping the results/transientErrors accounting exact so the
+                            // final Assert.Equal invariant cannot spuriously fail.
+                            results.Add((threadId, i, actual));
                         }
                         catch (Exception ex) when (IsTransientColdStartError(ex))
                         {
