@@ -84,6 +84,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly object _cancelLock = new();
         private CancellationTokenSource? _executeCts;
 
+        // Set only when a caller explicitly scopes THIS statement to a catalog via
+        // SetOption(ApacheParameters.CatalogName) — the native-query / drill-down case.
+        // The SEA server rejects catalog+session_id together, and SEA always uses a
+        // session, so we scope by issuing USE CATALOG on that session before the query.
+        // See ES-2115589.
+        private bool _explicitCatalogSet;
+
         // Metadata command support
         private bool _isMetadataCommand;
         private bool _escapePatternWildcards;
@@ -216,6 +223,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     break;
                 case ApacheParameters.CatalogName:
                     _metadataCatalogName = value;
+                    _explicitCatalogSet = true;
                     break;
                 case ApacheParameters.SchemaName:
                     _metadataSchemaName = value;
@@ -325,8 +333,44 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
         }
 
+        /// <summary>
+        /// When the caller explicitly scoped this statement to a catalog (via
+        /// SetOption(ApacheParameters.CatalogName)), issue USE CATALOG on the SEA session
+        /// before the query so a 2-level name resolves. Skipped when multi-catalog support
+        /// is off, the catalog is empty, or the SPARK default-catalog alias. See ES-2115589.
+        /// </summary>
+        private async Task EnsureCatalogScopedAsync(CancellationToken cancellationToken)
+        {
+            if (!_explicitCatalogSet || !_connection.EnableMultipleCatalogSupport)
+            {
+                return;
+            }
+
+            string? catalog = DatabricksConnection.HandleSparkCatalog(_metadataCatalogName);
+            if (string.IsNullOrEmpty(catalog))
+            {
+                return;
+            }
+
+            var useRequest = new ExecuteStatementRequest
+            {
+                Statement = $"USE CATALOG `{catalog!.Replace("`", "``")}`",
+                WarehouseId = _warehouseId,
+                SessionId = _sessionId,
+                WaitTimeout = _waitTimeout,
+                OnWaitTimeout = "CONTINUE",
+            };
+            await _client.ExecuteStatementAsync(useRequest, cancellationToken).ConfigureAwait(false);
+        }
+
         private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
         {
+            // If the caller explicitly scoped this statement to a catalog, set the session's
+            // current catalog first via USE CATALOG so a 2-level `schema`.`table` name
+            // resolves. The server rejects catalog+session_id together, and SEA always uses a
+            // session, so per-request Catalog can't be used here. See ES-2115589.
+            await EnsureCatalogScopedAsync(cancellationToken).ConfigureAwait(false);
+
             // Build the execute statement request
             // Note: warehouse_id is always required by the Databricks Statement Execution API
             // Note: catalog/schema cannot be set when session_id is provided (session has context)

@@ -66,6 +66,12 @@ namespace AdbcDrivers.Databricks
         private bool runAsyncInThrift;
         private bool enableComplexDatatypeSupport;
         private Dictionary<string, string>? confOverlay;
+        // Set only when a caller explicitly sets the catalog on THIS statement via
+        // SetOption(ApacheParameters.CatalogName) — i.e. the native-query / drill-down case.
+        // Distinguishes that from the catalog inherited from the connection default in the
+        // constructor (already applied at session open), so we only issue a session-scoping
+        // USE CATALOG when it was explicitly requested. See ES-2115589.
+        private bool explicitCatalogSet;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
@@ -219,8 +225,38 @@ namespace AdbcDrivers.Databricks
             CaptureRetryCount(ctx);
         }
 
+        /// <summary>
+        /// When the caller explicitly scoped this statement to a catalog (via
+        /// SetOption(ApacheParameters.CatalogName)), set the session's current catalog with
+        /// a standalone USE CATALOG on the same connection before running the query, so a
+        /// 2-level `schema`.`table` name resolves against it. The Thrift execute request has
+        /// no honored per-statement catalog (StatementConf.InitialNamespace is ignored by
+        /// the server), so this mirrors what the ODBC/Simba driver does. Not issued for
+        /// metadata commands (they scope via target_catalog), driver-internal statements,
+        /// the SPARK default-catalog alias, or when multi-catalog support is off. See
+        /// ES-2115589.
+        /// </summary>
+        private async Task EnsureCatalogScopedAsync()
+        {
+            if (!explicitCatalogSet
+                || IsMetadataCommand
+                || IsInternalCall
+                || !enableMultipleCatalogSupport
+                || string.IsNullOrEmpty(CatalogName)
+                || CatalogName!.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            using var useStatement = new DatabricksStatement((DatabricksConnection)Connection);
+            useStatement.SqlQuery = $"USE CATALOG `{CatalogName!.Replace("`", "``")}`";
+            useStatement.IsInternalCall = true; // prevents recursion + marks as driver-internal
+            await useStatement.ExecuteUpdateAsync();
+        }
+
         public override QueryResult ExecuteQuery()
         {
+            EnsureCatalogScopedAsync().GetAwaiter().GetResult();
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
@@ -251,6 +287,7 @@ namespace AdbcDrivers.Databricks
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
+            await EnsureCatalogScopedAsync();
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
@@ -588,6 +625,14 @@ namespace AdbcDrivers.Databricks
                     {
                         throw new ArgumentOutOfRangeException(key, value, $"The value '{value}' for option '{key}' is invalid. Must be a numeric value greater than zero.");
                     }
+                    break;
+                case ApacheParameters.CatalogName:
+                    // Caller explicitly scoped this statement to a catalog (e.g. a native
+                    // query drilled in from a catalog navigation node). Record that so the
+                    // execute path issues a session-scoping USE CATALOG; then delegate to
+                    // base to set CatalogName (also used for metadata commands).
+                    explicitCatalogSet = true;
+                    base.SetOption(key, value);
                     break;
                 default:
                     try
