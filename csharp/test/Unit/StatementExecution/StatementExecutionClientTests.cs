@@ -326,17 +326,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             // Status + SqlState (any AdbcException subclass is equivalent), not on the
             // concrete subclass. This asserts the load-bearing Status/SqlState/NativeError.
             var request = new ExecuteStatementRequest { Statement = "SELECT 1" };
+            // Mirror the REAL SEA FAILED response shape (verified live against a warehouse):
+            // sql_state sits at the status level (sibling of error); the error object carries
+            // only error_code + message — it does NOT contain sql_state. The driver must read
+            // status.sql_state, not status.error.sql_state.
             var responseJson = JsonSerializer.Serialize(new
             {
                 statement_id = "stmt-failed",
                 status = new
                 {
                     state = "FAILED",
+                    sql_state = "22001",
                     error = new
                     {
                         error_code = "12345",
                         message = "value too long for VARCHAR",
-                        sql_state = "22001",
                     },
                 },
             });

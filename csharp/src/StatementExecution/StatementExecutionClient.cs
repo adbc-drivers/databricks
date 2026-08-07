@@ -264,8 +264,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     errorMessage += $". Error Code: {error.ErrorCode}, Message: {error.Message}";
                 }
                 var ex = new DatabricksException(errorMessage, AdbcStatusCode.InternalError);
-                if (error?.SqlState != null)
-                    ex.SetSqlState(error.SqlState);
+                // The SEA response carries sql_state at the status level (sibling of error),
+                // not inside error; fall back to error.SqlState only if the status-level one is
+                // absent (defensive against future response shapes).
+                var sqlState = executeResponse.Status.SqlState ?? error?.SqlState;
+                if (sqlState != null)
+                    ex.SetSqlState(sqlState);
                 if (error?.ErrorCode != null && int.TryParse(error.ErrorCode, out int nativeError))
                     ex.SetNativeError(nativeError);
                 throw ex;
