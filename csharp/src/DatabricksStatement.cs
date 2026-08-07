@@ -219,8 +219,52 @@ namespace AdbcDrivers.Databricks
             CaptureRetryCount(ctx);
         }
 
+        /// <summary>
+        /// When statement-level catalog scoping is opted in (connection ScopeCurrentCatalog flag)
+        /// and this statement's catalog (CatalogName, from adbc.get_metadata.target_catalog)
+        /// differs from the session's current catalog, set the session's current catalog with a
+        /// standalone USE CATALOG on the same connection before running the query, so a 2-level
+        /// `schema`.`table` name resolves against it. The Thrift execute request has no honored
+        /// per-statement catalog (StatementConf.InitialNamespace is ignored by the server), so
+        /// this mirrors what the ODBC/Simba and JDBC drivers do.
+        ///
+        /// Issued only on change (matching ODBC's issue-on-change, not per query); CatalogName is
+        /// auto-filled from the connection default, so a regular query whose catalog already
+        /// matches the session is a no-op. Not issued for metadata commands, driver-internal
+        /// statements, the SPARK default-catalog alias, or when multi-catalog support is off. See
+        /// ES-2115589.
+        /// </summary>
+        private async Task EnsureCatalogScopedAsync()
+        {
+            var connection = (DatabricksConnection)Connection;
+
+            if (string.IsNullOrEmpty(CatalogName)
+                || !connection.ScopeCurrentCatalog
+                || IsMetadataCommand
+                || IsInternalCall
+                || !enableMultipleCatalogSupport
+                || CatalogName!.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // Issue-on-change: skip if the session is already on this catalog (ODBC parity).
+            // CurrentCatalog is null when the open-time catalog is unknown; then issue once and record.
+            if (string.Equals(connection.CurrentCatalog, CatalogName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            using var useStatement = new DatabricksStatement(connection);
+            useStatement.SqlQuery = $"USE CATALOG `{CatalogName!.Replace("`", "``")}`";
+            useStatement.IsInternalCall = true; // prevents recursion + marks as driver-internal
+            await useStatement.ExecuteUpdateAsync();
+            connection.UpdateCurrentCatalog(CatalogName);
+        }
+
         public override QueryResult ExecuteQuery()
         {
+            EnsureCatalogScopedAsync().GetAwaiter().GetResult();
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
@@ -251,6 +295,7 @@ namespace AdbcDrivers.Databricks
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
+            await EnsureCatalogScopedAsync().ConfigureAwait(false);
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);

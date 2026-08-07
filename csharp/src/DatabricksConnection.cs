@@ -75,6 +75,7 @@ namespace AdbcDrivers.Databricks
         private bool _applySSPWithQueries = false;
         private bool _enableDirectResults = true;
         private bool _enableMultipleCatalogSupport = true;
+        private bool _scopeCurrentCatalog = false;
         private bool _enablePKFK = true;
         private bool _runAsyncInThrift = true;
         private bool _enableComplexDatatypeSupport = false;
@@ -207,6 +208,7 @@ namespace AdbcDrivers.Databricks
         {
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnablePKFK, _enablePKFK);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableMultipleCatalogSupport, _enableMultipleCatalogSupport);
+            _scopeCurrentCatalog = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.ScopeCurrentCatalog, _scopeCurrentCatalog);
             _applySSPWithQueries = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.ApplySSPWithQueries, _applySSPWithQueries);
             _enableDirectResults = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableDirectResults, _enableDirectResults);
 
@@ -361,6 +363,55 @@ namespace AdbcDrivers.Databricks
         /// Gets the default namespace to use for SQL queries.
         /// </summary>
         internal TNamespace? DefaultNamespace => _defaultNamespace;
+
+        /// <summary>
+        /// Whether statement-level catalog scoping (adbc.databricks.use_catalog) is opted in.
+        /// </summary>
+        internal bool ScopeCurrentCatalog => _scopeCurrentCatalog;
+
+        // Tracks the session's current catalog so a statement-level USE CATALOG (see
+        // DatabricksStatement.EnsureCatalogScopedAsync) is issued only when the target differs
+        // from the session's current catalog — matching the ODBC driver, which issues
+        // USE CATALOG on change, not per query. Seeded lazily from the open-time namespace;
+        // updated only after a USE CATALOG the driver itself issues (a user's own USE CATALOG in
+        // native SQL is not observed — accepted, opt-in-only staleness). Null = not yet known,
+        // in which case the first scoped statement issues USE CATALOG and records it.
+        private string? _currentCatalog;
+        private bool _currentCatalogInitialized;
+        private readonly object _currentCatalogLock = new object();
+
+        /// <summary>
+        /// The session's current catalog (best-effort), seeded from the open-time namespace and
+        /// updated whenever the driver issues a USE CATALOG on this connection. Null if unknown.
+        /// </summary>
+        internal string? CurrentCatalog
+        {
+            get
+            {
+                lock (_currentCatalogLock)
+                {
+                    if (!_currentCatalogInitialized)
+                    {
+                        _currentCatalog = HandleSparkCatalog(_defaultNamespace?.CatalogName);
+                        _currentCatalogInitialized = true;
+                    }
+                    return _currentCatalog;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Records that the session's current catalog changed (after the driver issued
+        /// USE CATALOG), so subsequent statements skip a redundant USE CATALOG to the same catalog.
+        /// </summary>
+        internal void UpdateCurrentCatalog(string? catalog)
+        {
+            lock (_currentCatalogLock)
+            {
+                _currentCatalog = HandleSparkCatalog(catalog);
+                _currentCatalogInitialized = true;
+            }
+        }
 
         /// <summary>
         /// Gets the heartbeat interval in seconds for long-running operations.

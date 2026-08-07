@@ -67,6 +67,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private int _queryTimeoutSeconds;
         private bool _enablePKFK;
         private bool _enableMultipleCatalogSupport;
+        private bool _scopeCurrentCatalog;
         private bool _useDescTableExtended;
         private bool _enableFastMetadataQuery;
         private bool _applySSPWithQueries;
@@ -309,6 +310,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Connection feature flags — must be parsed before catalog loading (depends on _enableMultipleCatalogSupport).
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnablePKFK, true);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableMultipleCatalogSupport, true);
+            _scopeCurrentCatalog = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.ScopeCurrentCatalog, false);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
             _enableFastMetadataQuery = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableFastMetadataQuery, false);
             // When true, SSPs (adbc.databricks.ssp_*) are applied via post-open SET statements
@@ -1021,6 +1023,52 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal bool EnablePKFK => _enablePKFK;
 
         internal bool EnableMultipleCatalogSupport => _enableMultipleCatalogSupport;
+
+        /// <summary>
+        /// Whether statement-level catalog scoping (adbc.databricks.use_catalog) is opted in.
+        /// </summary>
+        internal bool ScopeCurrentCatalog => _scopeCurrentCatalog;
+
+        // In-memory tracking of the session's current catalog so a statement-level USE CATALOG
+        // (StatementExecutionStatement.EnsureCatalogScopedAsync) is issued only when the target
+        // differs — matching ODBC's issue-on-change. Seeded from the open-time catalog; updated
+        // only after a USE CATALOG the driver itself issues (a user's own USE CATALOG in native
+        // SQL is not observed — accepted, opt-in-only staleness). Null = not yet known.
+        private string? _trackedCurrentCatalog;
+        private bool _trackedCurrentCatalogInitialized;
+        private readonly object _trackedCurrentCatalogLock = new object();
+
+        /// <summary>
+        /// The session's current catalog (best-effort, cached), seeded from the open-time catalog
+        /// and updated whenever the driver issues a USE CATALOG. Null if not yet known.
+        /// </summary>
+        internal string? TrackedCurrentCatalog
+        {
+            get
+            {
+                lock (_trackedCurrentCatalogLock)
+                {
+                    if (!_trackedCurrentCatalogInitialized)
+                    {
+                        _trackedCurrentCatalog = DatabricksConnection.HandleSparkCatalog(_catalog);
+                        _trackedCurrentCatalogInitialized = true;
+                    }
+                    return _trackedCurrentCatalog;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Records that the session's current catalog changed (after the driver issued USE CATALOG).
+        /// </summary>
+        internal void UpdateTrackedCurrentCatalog(string? catalog)
+        {
+            lock (_trackedCurrentCatalogLock)
+            {
+                _trackedCurrentCatalog = DatabricksConnection.HandleSparkCatalog(catalog);
+                _trackedCurrentCatalogInitialized = true;
+            }
+        }
 
         /// <summary>
         /// Whether to use DESC TABLE EXTENDED AS JSON for GetColumnsExtended.

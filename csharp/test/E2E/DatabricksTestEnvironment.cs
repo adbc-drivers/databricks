@@ -171,6 +171,10 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 parameters.Add(DatabricksParameters.EnableMultipleCatalogSupport, testConfiguration.EnableMultipleCatalogSupport!);
             }
+            if (!string.IsNullOrEmpty(testConfiguration.ScopeCurrentCatalog))
+            {
+                parameters.Add(DatabricksParameters.ScopeCurrentCatalog, testConfiguration.ScopeCurrentCatalog!);
+            }
             if (!string.IsNullOrEmpty(testConfiguration.TracePropagationEnabled))
             {
                 parameters.Add(DatabricksParameters.TracePropagationEnabled, testConfiguration.TracePropagationEnabled!);

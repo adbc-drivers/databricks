@@ -503,6 +503,19 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string EnableComplexDatatypeSupport = "adbc.databricks.enable_complex_datatype_support";
+
+        /// <summary>
+        /// Connection option (boolean, default false): opt in to statement-level catalog scoping.
+        /// When enabled, a non-metadata statement whose catalog (adbc.get_metadata.target_catalog,
+        /// i.e. CatalogName) differs from the session's current catalog causes the driver to issue
+        /// a standalone USE CATALOG on the session before executing — so a query using a bare
+        /// 2-level `schema`.`table` name resolves against that catalog. Issued only on change
+        /// (the current catalog is tracked in memory), matching the ODBC driver. When disabled
+        /// (default), no USE CATALOG is issued (pre-fix behavior). Not applied to metadata
+        /// commands, driver-internal statements, the SPARK legacy alias, or when multiple-catalog
+        /// support is off. See ES-2115589.
+        /// </summary>
+        public const string ScopeCurrentCatalog = "adbc.databricks.scope_current_catalog";
     }
 
     /// <summary>
