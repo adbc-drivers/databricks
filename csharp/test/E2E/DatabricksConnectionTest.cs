@@ -591,6 +591,46 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         /// <summary>
+        /// Regression test (PECO / ES-2115589): a catalog set at the STATEMENT level via
+        /// ApacheParameters.CatalogName must scope the executed DML statement, so a query
+        /// using a 2-level `schema`.`table` name resolves against that catalog. Previously
+        /// CatalogName was only applied to metadata commands, not to the execute request,
+        /// so this failed with TABLE_OR_VIEW_NOT_FOUND.
+        /// </summary>
+        [SkippableFact]
+        public async Task StatementCatalogScopesTwoLevelNameQuery()
+        {
+            // Applies to both Thrift and SEA: statement-level catalog must scope the query
+            // so a 2-level `schema`.`table` name resolves (ES-2115589).
+            var catalog = TestConfiguration.Metadata.Catalog;
+            var schema = TestConfiguration.Metadata.Schema;
+            var table = TestConfiguration.Metadata.Table;
+
+            // Connect WITHOUT a default catalog so the session default is not the target
+            // catalog; the only catalog scoping comes from the statement-level option below.
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.Catalog = string.Empty;
+            testConfig.DbSchema = string.Empty;
+            testConfig.EnableMultipleCatalogSupport = "true";
+
+            using var connection = NewConnection(testConfig);
+            var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.CatalogName, catalog);
+            // 2-level name (schema.table), relying on the statement catalog to resolve it.
+            statement.SqlQuery = $"SELECT COUNT(*) FROM `{schema}`.`{table}`";
+
+            var result = await statement.ExecuteQueryAsync();
+            Assert.NotNull(result);
+            Assert.NotNull(result.Stream);
+            var batch = await result.Stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            Assert.Equal(1, batch.Length);
+
+            OutputHelper?.WriteLine(
+                $"StatementCatalogScopesTwoLevelNameQuery: catalog={catalog}, ran `SELECT COUNT(*) FROM {schema}.{table}` and resolved.");
+        }
+
+        /// <summary>
         /// Tests that trace propagation configuration is correctly parsed and stored.
         /// </summary>
         [SkippableTheory]
