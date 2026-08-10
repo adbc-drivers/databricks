@@ -365,7 +365,7 @@ namespace AdbcDrivers.Databricks
         internal TNamespace? DefaultNamespace => _defaultNamespace;
 
         /// <summary>
-        /// Whether statement-level catalog scoping (adbc.databricks.use_catalog) is opted in.
+        /// Whether statement-level catalog scoping (adbc.databricks.scope_current_catalog) is opted in.
         /// </summary>
         internal bool ScopeCurrentCatalog => _scopeCurrentCatalog;
 

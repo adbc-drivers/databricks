@@ -591,8 +591,9 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         /// <summary>
-        /// Regression test (ES-2115589): the adbc.databricks.use_catalog statement option must
-        /// scope the executed DML statement's session, so a query using a bare 2-level
+        /// Regression test (ES-2115589): with adbc.databricks.scope_current_catalog opted in, the
+        /// statement's target catalog (ApacheParameters.CatalogName) must scope the executed DML
+        /// statement's session, so a query using a bare 2-level
         /// `schema`.`table` name resolves against that catalog. Without it the driver issues no
         /// USE CATALOG and the 2-level name resolves against the session's open-time catalog,
         /// failing with TABLE_OR_VIEW_NOT_FOUND. Runs on the Thrift path.
@@ -651,7 +652,7 @@ namespace AdbcDrivers.Databricks.Tests
 
         /// <summary>
         /// Opt-in gate (ES-2115589): with ScopeCurrentCatalog OFF (the default), the driver must
-        /// NOT issue USE CATALOG even when adbc.databricks.use_catalog is set — so a 2-level
+        /// NOT issue USE CATALOG even when a statement target catalog is set — so a 2-level
         /// `schema`.`table` name against a NON-default catalog fails to resolve. This proves the
         /// feature is fully opt-in (existing users see no behavior change). Thrift; SEA is _Sea.
         /// </summary>
@@ -673,7 +674,7 @@ namespace AdbcDrivers.Databricks.Tests
             testConfig.Catalog = string.Empty;
             testConfig.DbSchema = string.Empty;
             testConfig.EnableMultipleCatalogSupport = "true";
-            // ScopeCurrentCatalog left OFF (default) — use_catalog must be ignored.
+            // ScopeCurrentCatalog left OFF (default) — the statement target catalog must be ignored.
             if (protocol != null)
             {
                 testConfig.Protocol = protocol;
@@ -702,7 +703,7 @@ namespace AdbcDrivers.Databricks.Tests
 
         /// <summary>
         /// ES-2115589 (issue-on-change): with ScopeCurrentCatalog ON and the session already on
-        /// the target catalog (connection default == use_catalog), the driver must NOT issue a
+        /// the target catalog (connection default == statement target catalog), the driver must NOT issue a
         /// redundant USE CATALOG — the tracked current catalog matches, so it's skipped (ODBC
         /// parity). Connects WITH the target catalog as the default, then runs the 2-level query
         /// twice on one connection: both must resolve, and (verified out-of-band via query
@@ -723,7 +724,7 @@ namespace AdbcDrivers.Databricks.Tests
             var table = TestConfiguration.Metadata.Table;
 
             // Connect WITH the target catalog as the session default and opt in via
-            // ScopeCurrentCatalog; use_catalog then re-selects the same catalog. Because the
+            // ScopeCurrentCatalog; the statement target catalog then re-selects the same catalog. Because the
             // tracked current catalog already matches, no USE CATALOG should be issued.
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
             testConfig.Catalog = catalog;

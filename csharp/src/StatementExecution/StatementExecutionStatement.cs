@@ -364,7 +364,31 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 WaitTimeout = _waitTimeout,
                 OnWaitTimeout = "CONTINUE",
             };
-            await _client.ExecuteStatementAsync(useRequest, cancellationToken).ConfigureAwait(false);
+            var useResponse = await _client.ExecuteStatementAsync(useRequest, cancellationToken).ConfigureAwait(false);
+
+            // The USE CATALOG must actually take effect before the query runs, otherwise the
+            // 2-level name still resolves against the old catalog. ExecuteStatementAsync only
+            // throws on FAILED; PENDING/RUNNING return immediately (e.g. wait_timeout "0s" when
+            // enable_direct_results=false), so poll to a terminal state like the main path does.
+            var state = useResponse.Status?.State;
+            if (state == "PENDING" || state == "RUNNING")
+            {
+                useResponse = await PollWithTimeoutAsync(useResponse.StatementId, cancellationToken).ConfigureAwait(false);
+                state = useResponse.Status?.State;
+            }
+
+            if (state == "FAILED")
+            {
+                throw NewFailedStateException(useResponse.Status?.Error);
+            }
+            if (state == "CANCELED")
+            {
+                throw new AdbcException("USE CATALOG statement was canceled");
+            }
+
+            // Only record the change once the server has confirmed it (SUCCEEDED/CLOSED); updating
+            // optimistically would make every later statement skip USE CATALOG and resolve against
+            // the wrong catalog if the USE CATALOG had not actually succeeded.
             _connection.UpdateTrackedCurrentCatalog(catalog);
         }
 

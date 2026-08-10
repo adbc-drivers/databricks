@@ -1025,7 +1025,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal bool EnableMultipleCatalogSupport => _enableMultipleCatalogSupport;
 
         /// <summary>
-        /// Whether statement-level catalog scoping (adbc.databricks.use_catalog) is opted in.
+        /// Whether statement-level catalog scoping (adbc.databricks.scope_current_catalog) is opted in.
         /// </summary>
         internal bool ScopeCurrentCatalog => _scopeCurrentCatalog;
 

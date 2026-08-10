@@ -514,6 +514,14 @@ namespace AdbcDrivers.Databricks
         /// (default), no USE CATALOG is issued (pre-fix behavior). Not applied to metadata
         /// commands, driver-internal statements, the SPARK legacy alias, or when multiple-catalog
         /// support is off. See ES-2115589.
+        ///
+        /// This scopes session-global state (the server-side current catalog is per session, and
+        /// all statements on one connection share that session) and is best-effort, not
+        /// per-statement isolated: the check-then-USE-CATALOG-then-track sequence is not atomic.
+        /// If two statements run concurrently on the same connection, their USE CATALOG and query
+        /// can interleave, so a query may execute against the other statement's catalog. Do not
+        /// assume per-statement catalog isolation when executing statements concurrently on a
+        /// single connection.
         /// </summary>
         public const string ScopeCurrentCatalog = "adbc.databricks.scope_current_catalog";
     }
