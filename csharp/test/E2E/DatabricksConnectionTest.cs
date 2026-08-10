@@ -687,7 +687,7 @@ namespace AdbcDrivers.Databricks.Tests
 
             // With the flag off, no USE CATALOG is issued; the 2-level name resolves against the
             // session's default catalog (not the target), so the query must fail to find it.
-            await Assert.ThrowsAnyAsync<Exception>(async () =>
+            var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
             {
                 var result = await statement.ExecuteQueryAsync();
                 if (result.Stream != null)
@@ -695,6 +695,16 @@ namespace AdbcDrivers.Databricks.Tests
                     await result.Stream.ReadNextRecordBatchAsync();
                 }
             });
+
+            // Assert the SPECIFIC unresolved-name failure, not any exception: a transient
+            // connection drop, auth failure, or timeout must NOT pass this test as a false
+            // positive. The server raises TABLE_OR_VIEW_NOT_FOUND (SQLSTATE 42P01) because the
+            // 2-level name was resolved against the wrong (default) catalog.
+            string message = ex.ToString();
+            Assert.True(
+                message.IndexOf("TABLE_OR_VIEW_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
+                    || message.IndexOf("42P01", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected TABLE_OR_VIEW_NOT_FOUND / 42P01 (2-level name unresolved), but got: {message}");
 
             OutputHelper?.WriteLine(
                 $"StatementCatalogNotScopedWhenFlagOff (protocol={protocol ?? "default"}): " +

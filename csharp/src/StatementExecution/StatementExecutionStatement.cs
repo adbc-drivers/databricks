@@ -343,7 +343,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             if (_isMetadataCommand
                 || IsInternalCall
-                || string.IsNullOrEmpty(_metadataCatalogName)
                 || !_connection.ScopeCurrentCatalog
                 || !_connection.EnableMultipleCatalogSupport)
             {
