@@ -80,6 +80,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private bool _statementClosedByServer;
         private string? _sqlQuery;
 
+        // Marks a driver-internal statement (e.g. the USE CATALOG issued by EnsureCatalogScopedAsync).
+        // Mirrors DatabricksStatement.IsInternalCall on Thrift: it prevents catalog-scoping recursion
+        // (an internal statement must not itself trigger another USE CATALOG).
+        internal bool IsInternalCall { get; set; }
+
         // Cancel support
         private readonly object _cancelLock = new();
         private CancellationTokenSource? _executeCts;
@@ -337,6 +342,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private async Task EnsureCatalogScopedAsync(CancellationToken cancellationToken)
         {
             if (_isMetadataCommand
+                || IsInternalCall
                 || string.IsNullOrEmpty(_metadataCatalogName)
                 || !_connection.ScopeCurrentCatalog
                 || !_connection.EnableMultipleCatalogSupport)
@@ -361,10 +367,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // path means the switch is polled to a terminal state before we proceed — a plain
             // client call only throws on FAILED and returns PENDING/RUNNING under wait_timeout "0s"
             // (enable_direct_results=false), which would let the query run against the old catalog.
-            // The throwaway carries no _metadataCatalogName, so it never recurses into scoping, and
-            // its own server-side handle is released by Dispose (distinct from this statement's).
+            // IsInternalCall marks the throwaway so it never recurses into scoping, and its own
+            // server-side handle is released by Dispose (distinct from this statement's).
             using var useStatement = (StatementExecutionStatement)_connection.CreateStatement();
             useStatement.SqlQuery = $"USE CATALOG `{catalog!.Replace("`", "``")}`";
+            useStatement.IsInternalCall = true;
             await useStatement.ExecuteUpdateAsync(cancellationToken).ConfigureAwait(false);
 
             // Record the change only after the server confirmed it, so a later statement doesn't
