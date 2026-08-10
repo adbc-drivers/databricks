@@ -238,28 +238,34 @@ namespace AdbcDrivers.Databricks
         {
             var connection = (DatabricksConnection)Connection;
 
-            if (string.IsNullOrEmpty(CatalogName)
-                || !connection.ScopeCurrentCatalog
-                || IsMetadataCommand
+            if (IsMetadataCommand
                 || IsInternalCall
-                || !enableMultipleCatalogSupport
-                || CatalogName!.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
+                || !connection.ScopeCurrentCatalog
+                || !enableMultipleCatalogSupport)
+            {
+                return;
+            }
+
+            // Normalize the SPARK legacy default-catalog alias to null (same as SEA), so we don't
+            // emit a bogus USE CATALOG `SPARK` and treat it as "no explicit catalog".
+            string? catalog = DatabricksConnection.HandleSparkCatalog(CatalogName);
+            if (string.IsNullOrEmpty(catalog))
             {
                 return;
             }
 
             // Issue-on-change: skip if the session is already on this catalog (ODBC parity).
             // CurrentCatalog is null when the open-time catalog is unknown; then issue once and record.
-            if (string.Equals(connection.CurrentCatalog, CatalogName, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(connection.CurrentCatalog, catalog, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
 
             using var useStatement = new DatabricksStatement(connection);
-            useStatement.SqlQuery = $"USE CATALOG `{CatalogName!.Replace("`", "``")}`";
+            useStatement.SqlQuery = $"USE CATALOG `{catalog!.Replace("`", "``")}`";
             useStatement.IsInternalCall = true; // prevents recursion + marks as driver-internal
             await useStatement.ExecuteUpdateAsync().ConfigureAwait(false);
-            connection.UpdateCurrentCatalog(CatalogName);
+            connection.UpdateCurrentCatalog(catalog);
         }
 
         public override QueryResult ExecuteQuery()
