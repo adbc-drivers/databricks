@@ -431,7 +431,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Check for terminal error states
             if (state == "FAILED")
             {
-                throw NewFailedStateException(response.Status?.Error);
+                throw NewFailedStateException(response.Status);
             }
             if (state == "CANCELED")
             {
@@ -784,7 +784,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Check for terminal error states
             if (state == "FAILED")
             {
-                throw NewFailedStateException(response.Status?.Error);
+                throw NewFailedStateException(response.Status);
             }
             if (state == "CANCELED")
             {
@@ -1214,13 +1214,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// path — this keeps object-not-found and other failures consistent regardless of
         /// timing.
         /// </summary>
-        private static DatabricksException NewFailedStateException(StatementError? error)
+        private static DatabricksException NewFailedStateException(StatementStatus? status)
         {
+            var error = status?.Error;
             var ex = new DatabricksException(
                 $"Statement execution failed: {error?.Message ?? "Unknown error"} (Error Code: {error?.ErrorCode})",
                 AdbcStatusCode.InternalError);
-            if (error?.SqlState != null)
-                ex.SetSqlState(error.SqlState);
+            // The SEA response carries sql_state at the status level (sibling of error), not
+            // inside error; fall back to error.SqlState only if the status-level one is absent.
+            var sqlState = status?.SqlState ?? error?.SqlState;
+            if (sqlState != null)
+                ex.SetSqlState(sqlState);
             if (error?.ErrorCode != null && int.TryParse(error.ErrorCode, out int nativeError))
                 ex.SetNativeError(nativeError);
             return ex;
