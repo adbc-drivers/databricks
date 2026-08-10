@@ -523,6 +523,7 @@ namespace AdbcDrivers.Databricks
         /// assume per-statement catalog isolation when executing statements concurrently on a
         /// single connection.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string ScopeCurrentCatalog = "adbc.databricks.scope_current_catalog";
     }
 

@@ -339,6 +339,7 @@ namespace AdbcDrivers.Databricks
 
         public override UpdateResult ExecuteUpdate()
         {
+            EnsureCatalogScopedAsync().GetAwaiter().GetResult();
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return base.ExecuteUpdate();
 
@@ -361,6 +362,7 @@ namespace AdbcDrivers.Databricks
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
         {
+            await EnsureCatalogScopedAsync().ConfigureAwait(false);
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return await base.ExecuteUpdateAsync();
 

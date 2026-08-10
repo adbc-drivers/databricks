@@ -369,49 +369,27 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal bool ScopeCurrentCatalog => _scopeCurrentCatalog;
 
-        // Tracks the session's current catalog so a statement-level USE CATALOG (see
-        // DatabricksStatement.EnsureCatalogScopedAsync) is issued only when the target differs
-        // from the session's current catalog — matching the ODBC driver, which issues
-        // USE CATALOG on change, not per query. Seeded lazily from the open-time namespace;
-        // updated only after a USE CATALOG the driver itself issues (a user's own USE CATALOG in
-        // native SQL is not observed — accepted, opt-in-only staleness). Null = not yet known,
-        // in which case the first scoped statement issues USE CATALOG and records it.
+        // The session's current catalog, so a statement-level USE CATALOG (see
+        // DatabricksStatement.EnsureCatalogScopedAsync) is issued only when the target differs —
+        // matching the ODBC driver, which issues USE CATALOG on change, not per query. Seeded once
+        // from the open-time namespace (UpdateCurrentCatalog, called at session open) and thereafter
+        // mutated only by a USE CATALOG the driver itself issues; a user's own USE CATALOG in
+        // native SQL is not observed (accepted, opt-in-only staleness). Volatile for cross-thread
+        // visibility on a shared connection.
         private string? _currentCatalog;
-        private bool _currentCatalogInitialized;
-        private readonly object _currentCatalogLock = new object();
 
         /// <summary>
-        /// The session's current catalog (best-effort), seeded from the open-time namespace and
-        /// updated whenever the driver issues a USE CATALOG on this connection. Null if unknown.
+        /// The session's current catalog, seeded from the open-time namespace and updated whenever
+        /// the driver issues a USE CATALOG on this connection.
         /// </summary>
-        internal string? CurrentCatalog
-        {
-            get
-            {
-                lock (_currentCatalogLock)
-                {
-                    if (!_currentCatalogInitialized)
-                    {
-                        _currentCatalog = HandleSparkCatalog(_defaultNamespace?.CatalogName);
-                        _currentCatalogInitialized = true;
-                    }
-                    return _currentCatalog;
-                }
-            }
-        }
+        internal string? CurrentCatalog => Volatile.Read(ref _currentCatalog);
 
         /// <summary>
-        /// Records that the session's current catalog changed (after the driver issued
-        /// USE CATALOG), so subsequent statements skip a redundant USE CATALOG to the same catalog.
+        /// Records the session's current catalog — both the one-time seed from the open-time
+        /// namespace and each subsequent change after the driver issues a USE CATALOG, so a
+        /// statement skips a redundant USE CATALOG to the catalog already in effect.
         /// </summary>
-        internal void UpdateCurrentCatalog(string? catalog)
-        {
-            lock (_currentCatalogLock)
-            {
-                _currentCatalog = HandleSparkCatalog(catalog);
-                _currentCatalogInitialized = true;
-            }
-        }
+        internal void UpdateCurrentCatalog(string? catalog) => Volatile.Write(ref _currentCatalog, HandleSparkCatalog(catalog));
 
         /// <summary>
         /// Gets the heartbeat interval in seconds for long-running operations.
@@ -773,6 +751,10 @@ namespace AdbcDrivers.Databricks
                 ]);
                 await SetSchema(_defaultNamespace.SchemaName);
             }
+
+            // Seed the current-catalog tracker from the open-time namespace so statement-level
+            // catalog scoping (EnsureCatalogScopedAsync) issues USE CATALOG only on a genuine change.
+            UpdateCurrentCatalog(_defaultNamespace?.CatalogName);
 
             // Initialize telemetry after successful session creation
             InitializeTelemetry(activity);

@@ -390,6 +390,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // optimistically would make every later statement skip USE CATALOG and resolve against
             // the wrong catalog if the USE CATALOG had not actually succeeded.
             _connection.UpdateTrackedCurrentCatalog(catalog);
+
+            // Release the USE CATALOG statement's server-side handle (unless the server already
+            // closed it via a direct result). Best-effort with CancellationToken.None so a
+            // canceled caller token can't leak the handle. This is a side statement, separate
+            // from the main query's _currentStatementId that Dispose closes.
+            if (state != "CLOSED")
+            {
+                try
+                {
+                    await _client.CloseStatementAsync(useResponse.StatementId, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort cleanup; the handle expires server-side regardless.
+                }
+            }
         }
 
         private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
@@ -757,6 +773,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private async Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
         {
+            // Scope the session to the caller's catalog first (see ExecuteQueryInternalAsync), so a
+            // DML statement with a bare 2-level `schema`.`table` name resolves against it too.
+            await EnsureCatalogScopedAsync(cancellationToken).ConfigureAwait(false);
+
             // Build the execute statement request
             // Note: catalog/schema cannot be set when session_id is provided (session has context)
             var request = new ExecuteStatementRequest
