@@ -542,12 +542,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         // SEA's CreateSession response doesn't include it, so we query explicitly.
                         if (_catalog == null && _enableMultipleCatalogSupport)
                         {
-                            _catalog = GetCurrentCatalog();
+                            _catalog = GetSessionDefaultCatalog();
                         }
 
                         // Seed the current-catalog tracker from the resolved open-time catalog so
                         // statement-level catalog scoping issues USE CATALOG only on a genuine change.
-                        UpdateTrackedCurrentCatalog(_catalog);
+                        UpdateCurrentCatalog(_catalog);
                     }
                 }
                 catch (OperationCanceledException ex) when (
@@ -1036,22 +1036,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // The session's current catalog so a statement-level USE CATALOG
         // (StatementExecutionStatement.EnsureCatalogScopedAsync) is issued only when the target
         // differs — matching ODBC's issue-on-change. Seeded once from the open-time catalog
-        // (UpdateTrackedCurrentCatalog, called at session open) and thereafter mutated only by a
+        // (UpdateCurrentCatalog, called at session open) and thereafter mutated only by a
         // USE CATALOG the driver itself issues; a user's own USE CATALOG in native SQL is not
         // observed (accepted, opt-in-only staleness). Volatile for cross-thread visibility.
-        private string? _trackedCurrentCatalog;
+        // Distinct from GetSessionDefaultCatalog(), which returns the session DEFAULT.
+        private string? _currentCatalog;
 
         /// <summary>
         /// The session's current catalog, seeded from the open-time catalog and updated whenever
-        /// the driver issues a USE CATALOG.
+        /// the driver issues a USE CATALOG. Mirrors DatabricksConnection.CurrentCatalog on Thrift.
         /// </summary>
-        internal string? TrackedCurrentCatalog => Volatile.Read(ref _trackedCurrentCatalog);
+        internal string? CurrentCatalog => Volatile.Read(ref _currentCatalog);
 
         /// <summary>
         /// Records the session's current catalog — both the one-time seed from the open-time
         /// catalog and each subsequent change after the driver issues a USE CATALOG.
         /// </summary>
-        internal void UpdateTrackedCurrentCatalog(string? catalog) => Volatile.Write(ref _trackedCurrentCatalog, DatabricksConnection.HandleSparkCatalog(catalog));
+        internal void UpdateCurrentCatalog(string? catalog) => Volatile.Write(ref _currentCatalog, DatabricksConnection.HandleSparkCatalog(catalog));
 
         /// <summary>
         /// Whether to use DESC TABLE EXTENDED AS JSON for GetColumnsExtended.
@@ -1071,15 +1072,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal bool EnableFastMetadataQuery => _enableFastMetadataQuery;
 
         /// <summary>
-        /// Returns the session's default catalog. Used by statements when
-        /// enableMultipleCatalogSupport=false and no catalog was specified.
+        /// Returns the session's default catalog by querying the server via
+        /// SELECT CURRENT_CATALOG(). SEA's CreateSession response, unlike Thrift's
+        /// OpenSessionResp.InitialNamespace, doesn't carry the default catalog, so it must be
+        /// queried. Used at session open (catalog discovery) and by statements when
+        /// enableMultipleCatalogSupport=false and no catalog was specified. This is the session
+        /// DEFAULT, not the live current catalog after a USE CATALOG — for that see CurrentCatalog.
         /// </summary>
-        internal string? GetSessionDefaultCatalog() => GetCurrentCatalog();
-
-        /// <summary>
-        /// Queries the server for the current catalog via SELECT CURRENT_CATALOG().
-        /// </summary>
-        private string? GetCurrentCatalog()
+        internal string? GetSessionDefaultCatalog()
         {
             var batches = ExecuteMetadataSql("SELECT CURRENT_CATALOG()");
             foreach (var batch in batches)

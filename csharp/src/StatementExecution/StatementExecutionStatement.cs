@@ -351,7 +351,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // Issue-on-change: skip if the session is already on this catalog (ODBC parity).
-            if (string.Equals(_connection.TrackedCurrentCatalog, catalog, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(_connection.CurrentCatalog, catalog, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
@@ -389,7 +389,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Only record the change once the server has confirmed it (SUCCEEDED/CLOSED); updating
             // optimistically would make every later statement skip USE CATALOG and resolve against
             // the wrong catalog if the USE CATALOG had not actually succeeded.
-            _connection.UpdateTrackedCurrentCatalog(catalog);
+            _connection.UpdateCurrentCatalog(catalog);
 
             // Release the USE CATALOG statement's server-side handle (unless the server already
             // closed it via a direct result). Best-effort with CancellationToken.None so a

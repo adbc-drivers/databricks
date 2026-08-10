@@ -39,7 +39,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             { SparkParameters.HostName, "test.databricks.com" },
             { DatabricksParameters.WarehouseId, "test-warehouse" },
             { SparkParameters.AccessToken, "test-token" },
-            // Provide a catalog so OpenAsync doesn't fire GetCurrentCatalog() (a 2nd HTTP call)
+            // Provide a catalog so OpenAsync doesn't fire GetSessionDefaultCatalog() (a 2nd HTTP call)
             { "adbc.connection.catalog", "main" }
         };
 
