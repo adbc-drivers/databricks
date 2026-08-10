@@ -328,11 +328,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// When statement-level catalog scoping is opted in (connection ScopeCurrentCatalog flag)
         /// and this statement's catalog (_metadataCatalogName, from adbc.get_metadata.target_catalog)
-        /// differs from the session's current catalog, issue USE CATALOG on the SEA session before
+        /// differs from the session's current catalog, run USE CATALOG on the SEA session before
         /// the query so a 2-level name resolves. Issued only on change (matching ODBC's
-        /// issue-on-change). Metadata commands never reach here (they route to
-        /// ExecuteMetadataCommandAsync earlier). Skipped when multi-catalog support is off, the
-        /// catalog is empty, or the SPARK default-catalog alias. See ES-2115589.
+        /// issue-on-change). Skipped when multi-catalog support is off, the catalog is empty, the
+        /// metadata command flag is set, or the SPARK default-catalog alias. Mirrors the Thrift
+        /// path: it runs on a throwaway statement over the same session. See ES-2115589.
         /// </summary>
         private async Task EnsureCatalogScopedAsync(CancellationToken cancellationToken)
         {
@@ -356,56 +356,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return;
             }
 
-            var useRequest = new ExecuteStatementRequest
-            {
-                Statement = $"USE CATALOG `{catalog!.Replace("`", "``")}`",
-                WarehouseId = _warehouseId,
-                SessionId = _sessionId,
-                WaitTimeout = _waitTimeout,
-                OnWaitTimeout = "CONTINUE",
-            };
-            var useResponse = await _client.ExecuteStatementAsync(useRequest, cancellationToken).ConfigureAwait(false);
+            // Run USE CATALOG on a throwaway statement over the same session, mirroring the Thrift
+            // path (DatabricksStatement.EnsureCatalogScopedAsync). Going through the normal execute
+            // path means the switch is polled to a terminal state before we proceed — a plain
+            // client call only throws on FAILED and returns PENDING/RUNNING under wait_timeout "0s"
+            // (enable_direct_results=false), which would let the query run against the old catalog.
+            // The throwaway carries no _metadataCatalogName, so it never recurses into scoping, and
+            // its own server-side handle is released by Dispose (distinct from this statement's).
+            using var useStatement = (StatementExecutionStatement)_connection.CreateStatement();
+            useStatement.SqlQuery = $"USE CATALOG `{catalog!.Replace("`", "``")}`";
+            await useStatement.ExecuteUpdateAsync(cancellationToken).ConfigureAwait(false);
 
-            // The USE CATALOG must actually take effect before the query runs, otherwise the
-            // 2-level name still resolves against the old catalog. ExecuteStatementAsync only
-            // throws on FAILED; PENDING/RUNNING return immediately (e.g. wait_timeout "0s" when
-            // enable_direct_results=false), so poll to a terminal state like the main path does.
-            var state = useResponse.Status?.State;
-            if (state == "PENDING" || state == "RUNNING")
-            {
-                useResponse = await PollWithTimeoutAsync(useResponse.StatementId, cancellationToken).ConfigureAwait(false);
-                state = useResponse.Status?.State;
-            }
-
-            if (state == "FAILED")
-            {
-                throw NewFailedStateException(useResponse.Status?.Error);
-            }
-            if (state == "CANCELED")
-            {
-                throw new AdbcException("USE CATALOG statement was canceled");
-            }
-
-            // Only record the change once the server has confirmed it (SUCCEEDED/CLOSED); updating
-            // optimistically would make every later statement skip USE CATALOG and resolve against
-            // the wrong catalog if the USE CATALOG had not actually succeeded.
+            // Record the change only after the server confirmed it, so a later statement doesn't
+            // skip USE CATALOG and resolve against a catalog that never actually took effect.
             _connection.UpdateCurrentCatalog(catalog);
-
-            // Release the USE CATALOG statement's server-side handle (unless the server already
-            // closed it via a direct result). Best-effort with CancellationToken.None so a
-            // canceled caller token can't leak the handle. This is a side statement, separate
-            // from the main query's _currentStatementId that Dispose closes.
-            if (state != "CLOSED")
-            {
-                try
-                {
-                    await _client.CloseStatementAsync(useResponse.StatementId, CancellationToken.None).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Best-effort cleanup; the handle expires server-side regardless.
-                }
-            }
         }
 
         private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
