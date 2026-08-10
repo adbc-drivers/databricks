@@ -258,7 +258,7 @@ namespace AdbcDrivers.Databricks
             using var useStatement = new DatabricksStatement(connection);
             useStatement.SqlQuery = $"USE CATALOG `{CatalogName!.Replace("`", "``")}`";
             useStatement.IsInternalCall = true; // prevents recursion + marks as driver-internal
-            await useStatement.ExecuteUpdateAsync();
+            await useStatement.ExecuteUpdateAsync().ConfigureAwait(false);
             connection.UpdateCurrentCatalog(CatalogName);
         }
 
