@@ -471,6 +471,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // uniformly via Spark:DataType:SqlName metadata rather than Arrow IPC types.
             IArrowArrayStream reader = CreateReader(response, cancellationToken);
 
+            // An untyped-NULL column (SQL type VOID, e.g. `SELECT NULL`) arrives as an Arrow
+            // NullArray but the manifest schema declares it as StringType (to match Thrift, which
+            // reports STRING for untyped NULL). Convert the NullArray to an all-null StringArray so
+            // the declared schema and the batch array agree.
+            reader = new NullColumnSerializingStream(reader);
+
             // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
             // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
             reader = new IntervalSerializingStream(reader);
