@@ -284,6 +284,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("error")]
         public StatementError? Error { get; set; }
+
+        /// <summary>
+        /// SQL state code for a failed statement. The SEA response places this at the
+        /// <c>status.sql_state</c> level (a sibling of <c>error</c>), NOT inside
+        /// <c>status.error</c> — the <c>error</c> object only carries <c>error_code</c> and
+        /// <c>message</c> (verified live: FAILED responses return e.g. status.sql_state="42601"
+        /// with status.error.sql_state absent). Read this rather than <see cref="StatementError.SqlState"/>.
+        /// </summary>
+        [JsonPropertyName("sql_state")]
+        public string? SqlState { get; set; }
     }
 
     /// <summary>

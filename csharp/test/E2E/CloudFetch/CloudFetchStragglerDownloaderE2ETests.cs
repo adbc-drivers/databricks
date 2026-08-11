@@ -417,9 +417,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
         }
 
         [Fact]
-        public async Task NoStragglersDetectedInSequentialMode()
+        public async Task SequentialModeDeliversAllDownloads()
         {
-            // Arrange - Immediate sequential mode
+            // Arrange - Immediate sequential mode (maxStragglersBeforeFallback == 0).
+            // Note: sequential fallback changes *scheduling* (one download at a time via
+            // the sequential semaphore); it does NOT disable straggler cancellation. A slow
+            // download can still straggle in sequential mode, and cancelling it triggers a
+            // fresh re-download (see CloudFetchDownloader's straggler-cancelled catch block:
+            // MarkCancelledAsStraggler -> RegisterDownload -> retry). That recovery is
+            // desirable — a stuck sequential transfer would otherwise block the whole queue.
+            //
+            // So this test asserts the invariant that actually holds: sequential mode still
+            // delivers the complete set of downloads (straggler cancel+retry included). It
+            // does NOT assert "zero cancellations" — that was false and produced a timing
+            // flake (a ~1s tail download racing the 2s monitor tick got cancelled on loaded
+            // CI, tripping the old Assert.Empty(downloadCancelledFlags)).
             var downloadCancelledFlags = new ConcurrentDictionary<long, bool>();
             var mockHttpHandler = CreateHttpHandlerWithVariableSpeeds(
                 downloadCancelledFlags,
@@ -437,40 +449,35 @@ namespace AdbcDrivers.Databricks.Tests.E2E.CloudFetch
             // Act
             await downloader.StartAsync(CancellationToken.None);
 
-            for (long i = 0; i < 5; i++)
+            const int expectedCount = 5;
+            for (long i = 0; i < expectedCount; i++)
             {
                 downloadQueue.Add(CreateMockDownloadResult(i, 1024 * 1024).Object);
             }
+            downloadQueue.Add(EndOfResultsGuard.Instance);
 
-            // Start a background task to consume results from the result queue
-            using var consumerCts = new CancellationTokenSource();
-            var consumerTask = Task.Run(async () =>
+            // Consume every delivered result until the end-of-results signal (null). Waiting
+            // on the end signal instead of a fixed delay is what makes this deterministic:
+            // the assert only runs once the downloader has drained the whole set, however
+            // many straggler retries that took.
+            var deliveredOffsets = new HashSet<long>();
+            using var consumerCts = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // safety net against a hang
+            while (true)
             {
-                try
-                {
-                    while (!consumerCts.Token.IsCancellationRequested)
-                    {
-                        var result = await downloader.GetNextDownloadedFileAsync(consumerCts.Token);
-                        if (result == null) break;
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected during cleanup
-                }
-            });
+                var result = await downloader.GetNextDownloadedFileAsync(consumerCts.Token);
+                if (result == null) break;
+                deliveredOffsets.Add(result.StartRowOffset);
+            }
 
-            // Monitoring runs every 2 seconds, need time for detection + retry
-            await Task.Delay(4000);
-
-            // Assert - No cancellations in sequential mode
-            Assert.Empty(downloadCancelledFlags);
+            // Assert - sequential mode delivers the complete set of downloads.
+            Assert.Equal(expectedCount, deliveredOffsets.Count);
+            for (long i = 0; i < expectedCount; i++)
+            {
+                Assert.Contains(i, deliveredOffsets);
+            }
 
             // Cleanup
-            downloadQueue.Add(EndOfResultsGuard.Instance);
             await downloader.StopAsync();
-            consumerCts.Cancel();
-            await consumerTask;
         }
 
         [Fact]

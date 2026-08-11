@@ -810,6 +810,11 @@ namespace AdbcDrivers.Databricks
                 HandleSparkCatalog();
                 activity?.SetTag("statement.catalog_name_after_spark_handling", CatalogName ?? "(none)");
 
+                // Empty (non-null) table-types filter → match no table types (zero rows);
+                // null → all. Enforced by the shared HiveServer2 base
+                // (HiveServer2Statement.GetTablesAsync short-circuits an empty filter; see
+                // adbc-drivers/hiveserver2#83), so no Databricks-layer handling is required.
+
                 // If EnableMultipleCatalogSupport is false and catalog is not null or SPARK, return empty result without RPC call
                 if (!enableMultipleCatalogSupport && CatalogName != null)
                 {

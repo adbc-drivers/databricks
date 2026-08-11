@@ -673,6 +673,80 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(0, actualBatchLength);
         }
 
+        // Issue #568: GetColumns on a table with a GEOMETRY/GEOGRAPHY column previously threw
+        // NotSupportedException on the Thrift path (SqlTypeNameParser had no entry for the geo
+        // types and no catch-all). The root-cause fix lives in the hiveserver2 submodule's
+        // SqlTypeNameParser.Parse (stripped-base-name fallback); this test guards that GetColumns
+        // returns a row for the geo column and reports the stripped BASE_TYPE_NAME (e.g.
+        // "geometry(0)" -> "GEOMETRY"), consistent on whatever protocol the run is configured with.
+        [SkippableTheory]
+        [InlineData("GEOMETRY", "geom_col")]
+        [InlineData("GEOGRAPHY", "geog_col")]
+        public async Task CanGetColumnsOnGeospatialColumn(string geoType, string columnName)
+        {
+            string? catalogName = TestConfiguration.Metadata.Catalog;
+            string? schemaName = TestConfiguration.Metadata.Schema;
+            string tableName = Guid.NewGuid().ToString("N");
+            string fullTableName = string.Format(
+                "{0}{1}{2}",
+                string.IsNullOrEmpty(catalogName) ? string.Empty : DelimitIdentifier(catalogName) + ".",
+                string.IsNullOrEmpty(schemaName) ? string.Empty : DelimitIdentifier(schemaName) + ".",
+                DelimitIdentifier(tableName));
+            using TemporaryTable temporaryTable = await TemporaryTable.NewTemporaryTableAsync(
+                Statement,
+                fullTableName,
+                $"CREATE TABLE IF NOT EXISTS {fullTableName} (id INT, {columnName} {geoType}(4326));",
+                OutputHelper);
+
+            var statement = Connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SetOption(ApacheParameters.CatalogName, catalogName);
+            statement.SetOption(ApacheParameters.SchemaName, schemaName);
+            statement.SetOption(ApacheParameters.TableName, tableName);
+            statement.SqlQuery = "GetColumns";
+
+            // Prior to the fix this throws NotSupportedException while parsing the geo type name.
+            QueryResult queryResult = await statement.ExecuteQueryAsync();
+            Assert.NotNull(queryResult.Stream);
+
+            int columnNameIndex = -1;
+            int baseTypeNameIndex = -1;
+            for (int i = 0; i < queryResult.Stream!.Schema.FieldsList.Count; i++)
+            {
+                string name = queryResult.Stream.Schema.FieldsList[i].Name;
+                if (name.Equals("COLUMN_NAME", StringComparison.OrdinalIgnoreCase)) columnNameIndex = i;
+                else if (name.Equals("BASE_TYPE_NAME", StringComparison.OrdinalIgnoreCase)) baseTypeNameIndex = i;
+            }
+            Assert.True(columnNameIndex >= 0, "COLUMN_NAME column not found in GetColumns result");
+            Assert.True(baseTypeNameIndex >= 0, "BASE_TYPE_NAME column not found in GetColumns result");
+
+            bool foundGeoColumn = false;
+            string? geoBaseTypeName = null;
+            while (queryResult.Stream != null)
+            {
+                RecordBatch? batch = await queryResult.Stream.ReadNextRecordBatchAsync();
+                if (batch == null)
+                {
+                    break;
+                }
+                var columnNames = (StringArray)batch.Column(columnNameIndex);
+                var baseTypeNames = (StringArray)batch.Column(baseTypeNameIndex);
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (string.Equals(columnNames.GetString(i), columnName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foundGeoColumn = true;
+                        geoBaseTypeName = baseTypeNames.GetString(i);
+                    }
+                }
+            }
+
+            Assert.True(foundGeoColumn, $"GetColumns should return a row for the {geoType} column '{columnName}'");
+            // BASE_TYPE_NAME is the stripped base name (no (SRID) suffix), matching how the
+            // recognized types report it and the JDBC reference driver's stripBaseTypeName.
+            Assert.Equal(geoType, geoBaseTypeName);
+        }
+
         [SkippableFact]
         public async Task CanGetColumnsExtendedOnNoColumnTable()
         {

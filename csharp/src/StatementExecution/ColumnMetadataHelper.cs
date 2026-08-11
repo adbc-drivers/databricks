@@ -91,14 +91,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         internal static string GetBaseTypeName(string typeName)
         {
-            if (SqlTypeNameParser<SqlTypeNameParserResult>.TryParse(typeName, out SqlTypeNameParserResult? result))
-            {
-                return result!.BaseTypeName;
-            }
+            // Databricks-specific aliases the shared parser does not model. Checked first
+            // because these names (BYTE/SHORT/LONG) are not parseable, so Parse below would
+            // otherwise strip-fall-back to the alias itself instead of its canonical base.
             string upper = typeName.Trim().ToUpperInvariant();
             if (s_aliasToBaseType.TryGetValue(upper, out string? canonical))
                 return canonical;
-            return upper;
+            // Parse returns the matched parser's base name for a recognized type, or a
+            // stripped, upper-cased fallback for a type the registry does not model
+            // (e.g. "geometry(0)" -> "GEOMETRY"), matching SparkConnection's Thrift path so
+            // both metadata paths report an identical BASE_TYPE_NAME. Parse never throws for
+            // the generic result type.
+            return SqlTypeNameParser<SqlTypeNameParserResult>.Parse(typeName).BaseTypeName;
         }
 
         /// <summary>

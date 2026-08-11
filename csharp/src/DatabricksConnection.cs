@@ -521,6 +521,10 @@ namespace AdbcDrivers.Databricks
                 _ => Telemetry.Proto.Operation.Types.Type.Unspecified
             };
 
+            // Empty (non-null) tableTypes → match no table types (zero rows); null →
+            // all. This is enforced by the shared HiveServer2 base (see
+            // adbc-drivers/hiveserver2#83), which short-circuits an empty filter before
+            // the RPC. No Databricks-layer handling is required.
             return this.TraceActivity(activity =>
                 _telemetry.ExecuteWithMetadataTelemetry(
                     operationType,

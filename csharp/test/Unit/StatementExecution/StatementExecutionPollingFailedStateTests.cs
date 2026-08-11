@@ -116,11 +116,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     Status = new StatementStatus
                     {
                         State = "FAILED",
+                        // The SEA server places sql_state at the status level (sibling of error),
+                        // not inside error — mirror that real shape here (verified live).
+                        SqlState = sqlState,
                         Error = new StatementError
                         {
                             ErrorCode = errorCode,
                             Message = message,
-                            SqlState = sqlState,
                         }
                     }
                 });
