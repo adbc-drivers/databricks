@@ -15,12 +15,17 @@
 */
 
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow;
 using Apache.Arrow.Adbc;
+using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Spark;
@@ -768,6 +773,158 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public void ParentMatches_SpecifiedNonMatching_ReturnsFalse(string requested, string? rowValue)
         {
             Assert.False(InvokeParentMatches(requested, rowValue));
+        }
+
+        // ─── GetCrossReference parent-filter WIRING (end-to-end at the Http seam) ─────
+        // The tests above pin the ParentMatches predicate in isolation. These exercise the
+        // full SEA row-filtering loop in GetCrossReferenceAsyncNoThrow: a mocked SHOW FOREIGN
+        // KEYS result carrying FKs to TWO different parents flows through server-value
+        // extraction → ParentMatches × 3 → continue → value population. A regression that
+        // filtered on the wrong variable, or that let the empty-parent case (diff[6]) leak
+        // rows instead of collapsing to zero, would pass the predicate suite but fail here.
+
+        // A SHOW FOREIGN KEYS result with two rows: orders(customer_id) → main.sales.customers
+        // and orders(manager_id) → main.hr.employees. Both share the same FOREIGN table
+        // (main.default.orders) but reference DIFFERENT parent tables, so a specified parent
+        // must keep only its own row.
+        private static byte[] BuildShowForeignKeysArrow()
+        {
+            var columns = new[]
+            {
+                "parentCatalogName", "parentNamespace", "parentTableName", "parentColName",
+                "catalogName", "namespace", "tableName", "col_name", "constraintName",
+            };
+            var schema = new Schema(columns.Select(c => new Field(c, StringType.Default, true)), null);
+
+            IArrowArray Col(string a, string b) => new StringArray.Builder().Append(a).Append(b).Build();
+
+            var arrays = new IArrowArray[]
+            {
+                Col("main", "main"),                 // parentCatalogName
+                Col("sales", "hr"),                  // parentNamespace
+                Col("customers", "employees"),       // parentTableName
+                Col("id", "id"),                     // parentColName
+                Col("main", "main"),                 // catalogName (FK side)
+                Col("default", "default"),           // namespace (FK side)
+                Col("orders", "orders"),             // tableName (FK side)
+                Col("customer_id", "manager_id"),    // col_name (FK side)
+                Col("fk_customer", "fk_manager"),    // constraintName
+            };
+            var batch = new RecordBatch(schema, arrays, 2);
+
+            using var raw = new MemoryStream();
+            using (var writer = new ArrowStreamWriter(raw, schema))
+            {
+                writer.WriteRecordBatch(batch);
+                writer.WriteEnd();
+            }
+            return raw.ToArray();
+        }
+
+        private static HttpClient HttpClientReturningForeignKeys()
+        {
+            byte[] attachment = BuildShowForeignKeysArrow();
+            var executeBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-fk",
+                status = new { state = "SUCCEEDED" },
+                manifest = new
+                {
+                    total_row_count = 2,
+                    schema = new
+                    {
+                        column_count = 9,
+                        columns = new[]
+                        {
+                            new { name = "parentCatalogName", position = 0, type_name = "STRING", type_text = "STRING" },
+                            new { name = "parentNamespace", position = 1, type_name = "STRING", type_text = "STRING" },
+                            new { name = "parentTableName", position = 2, type_name = "STRING", type_text = "STRING" },
+                            new { name = "parentColName", position = 3, type_name = "STRING", type_text = "STRING" },
+                            new { name = "catalogName", position = 4, type_name = "STRING", type_text = "STRING" },
+                            new { name = "namespace", position = 5, type_name = "STRING", type_text = "STRING" },
+                            new { name = "tableName", position = 6, type_name = "STRING", type_text = "STRING" },
+                            new { name = "col_name", position = 7, type_name = "STRING", type_text = "STRING" },
+                            new { name = "constraintName", position = 8, type_name = "STRING", type_text = "STRING" },
+                        },
+                    },
+                },
+                result = new { attachment },
+            });
+            var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
+
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
+                {
+                    var path = req.RequestUri?.AbsolutePath ?? string.Empty;
+                    var body = path.EndsWith("/api/2.0/sql/sessions") ? sessionBody : executeBody;
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+                });
+
+            return new HttpClient(handler.Object);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_NullParent_KeepsAllRows()
+        {
+            // The GetColumnsExtended foreign-only reuse passes null parents — "no constraint",
+            // so every FK the server returns must survive the filter (both parents kept).
+            using var http = HttpClientReturningForeignKeys();
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "default");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "orders");
+            // No parent (PK) identifiers set → null → no parent constraint.
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(2, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_SpecifiedParent_KeepsOnlyMatchingRow()
+        {
+            // A specified parent (main.sales.customers) must keep ONLY its own FK row, not the
+            // one referencing main.hr.employees — pinning that the loop filters on the parent
+            // columns (not the foreign columns, which are identical across both rows).
+            using var http = HttpClientReturningForeignKeys();
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "main");
+            stmt.SetOption(ApacheParameters.SchemaName, "sales");
+            stmt.SetOption(ApacheParameters.TableName, "customers");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "default");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "orders");
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(1, result.RowCount);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_EmptyStringParent_CollapsesToZeroRows()
+        {
+            // diff[6]: an empty-string parent catalog is a SPECIFIED value that matches only an
+            // empty server value — no real FK has one — so every row filters out. The catalog is
+            // empty but the FOREIGN catalog is valid ("main"), so ShouldReturnEmptyPKFKResult does
+            // NOT short-circuit: the rows genuinely flow through the loop and are dropped there.
+            using var http = HttpClientReturningForeignKeys();
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.CatalogName, "");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "default");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "orders");
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(0, result.RowCount);
         }
     }
 }
