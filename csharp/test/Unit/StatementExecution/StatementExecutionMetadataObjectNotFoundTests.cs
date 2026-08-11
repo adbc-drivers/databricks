@@ -742,7 +742,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         //     an empty-string parent (the diff[6] case) filters every row out → empty.
         // Reflection is used because the predicate is a private static helper (same
         // approach as DatabricksStatementTests.GetConfOverlay).
-        private static bool InvokeParentMatches(string? requested, string rowValue)
+        private static bool InvokeParentMatches(string? requested, string? rowValue)
         {
             var method = typeof(StatementExecutionStatement).GetMethod(
                 "ParentMatches",
@@ -764,7 +764,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Theory]
         [InlineData("", "comparator_tests")]     // empty-string requested (diff[6]) → filters out
         [InlineData("other_catalog", "comparator_tests")]   // specified, non-matching → filters out
-        public void ParentMatches_SpecifiedNonMatching_ReturnsFalse(string requested, string rowValue)
+        [InlineData("comparator_tests", null)]   // specified vs NULL server column → filters out
+        public void ParentMatches_SpecifiedNonMatching_ReturnsFalse(string requested, string? rowValue)
         {
             Assert.False(InvokeParentMatches(requested, rowValue));
         }
