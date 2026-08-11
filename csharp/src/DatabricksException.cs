@@ -94,14 +94,26 @@ namespace AdbcDrivers.Databricks
         /// catalog with that error (name "" is not a valid name); the caller treats it the same as
         /// "no such object" and returns empty, matching Thrift's 0-row behavior for that filter.
         /// </summary>
-        internal bool IsObjectNotFoundException()
+        internal bool IsObjectNotFoundException() => IsObjectNotFoundException(this);
+
+        /// <summary>
+        /// Static form of <see cref="IsObjectNotFoundException()"/> that accepts any
+        /// <see cref="AdbcException"/> so a catch clause works for both
+        /// <see cref="DatabricksException"/> (legacy SEA path) and
+        /// <see cref="AdbcDrivers.HiveServer2.Hive2.HiveServer2Exception"/> (the Thrift
+        /// metadata path, which throws HiveServer2Exception via ThrowErrorResponse).
+        /// Mirrors the JDBC reference driver's isObjectNotFoundException, which the Thrift
+        /// cross-reference path (DatabricksThriftServiceClient.listCrossReferences) uses to
+        /// turn an object-not-found / invalid-name server error into an empty result.
+        /// </summary>
+        internal static bool IsObjectNotFoundException(AdbcException ex)
         {
             const string ObjectNotFoundSqlState = "42704";
 
-            if (SqlState == ObjectNotFoundSqlState)
+            if (ex.SqlState == ObjectNotFoundSqlState)
                 return true;
 
-            var message = Message;
+            var message = ex.Message;
             if (string.IsNullOrEmpty(message)) return false;
             return message.IndexOf("NO_SUCH_CATALOG_EXCEPTION", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("TABLE_OR_VIEW_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0

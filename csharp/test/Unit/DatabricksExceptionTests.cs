@@ -14,6 +14,8 @@
 * limitations under the License.
 */
 
+using Apache.Arrow.Adbc;
+using AdbcDrivers.HiveServer2.Hive2;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit
@@ -119,6 +121,45 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         {
             var ex = new DatabricksException("");
             Assert.False(ex.IsObjectNotFoundException());
+        }
+
+        // ─── Static overload over AdbcException (Thrift GetCrossReference catch) ──────
+        // The Thrift metadata path throws HiveServer2Exception (via ThrowErrorResponse),
+        // not DatabricksException, so DatabricksStatement.GetCrossReferenceAsync catches
+        // `AdbcException ex when DatabricksException.IsObjectNotFoundException(ex)`. These
+        // pin that the static form recognizes the HiveServer2Exception the server raises
+        // for an empty-string parent catalog (SHOW FOREIGN KEYS IN CATALOG `` →
+        // TABLE_OR_VIEW_NOT_FOUND / 42P01), so the catch swallows it to an empty result
+        // like the JDBC reference Thrift client.
+        [Fact]
+        public void IsObjectNotFoundException_Static_HiveServer2ExceptionEmptyParent_ReturnsTrue()
+        {
+            // Exact shape captured live: SHOW FOREIGN KEYS IN CATALOG `` throws
+            // TABLE_OR_VIEW_NOT_FOUND with SQLSTATE 42P01.
+            var ex = new HiveServer2Exception(
+                "[TABLE_OR_VIEW_NOT_FOUND] The table or view ``.``.`` cannot be found.",
+                AdbcStatusCode.InternalError)
+                .SetSqlState("42P01");
+            Assert.True(DatabricksException.IsObjectNotFoundException(ex));
+        }
+
+        [Fact]
+        public void IsObjectNotFoundException_Static_HiveServer2ExceptionInvalidParam_ReturnsTrue()
+        {
+            var ex = new HiveServer2Exception(
+                "[INVALID_PARAMETER_VALUE] name \"\" is not a valid name.",
+                AdbcStatusCode.InternalError);
+            Assert.True(DatabricksException.IsObjectNotFoundException(ex));
+        }
+
+        [Fact]
+        public void IsObjectNotFoundException_Static_HiveServer2ExceptionUnrelated_ReturnsFalse()
+        {
+            // A genuine execution failure on the Thrift path must still propagate.
+            var ex = new HiveServer2Exception(
+                "[ACCESS_DENIED] Permission denied", AdbcStatusCode.InternalError)
+                .SetSqlState("42501");
+            Assert.False(DatabricksException.IsObjectNotFoundException(ex));
         }
     }
 }

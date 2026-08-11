@@ -728,5 +728,45 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             await Assert.ThrowsAsync<DatabricksException>(
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
         }
+
+        // ─── GetCrossReference parent-identifier filter ──────────────────────────────
+        // SHOW FOREIGN KEYS is scoped to the FOREIGN table only, so it returns FKs to
+        // every parent. GetCrossReferenceAsyncNoThrow filters the returned rows by any
+        // SPECIFIED (non-null) parent identifier — mirroring the JDBC reference driver
+        // (CrossReferenceKeysDatabricksResultSetAdapter.includeRow). ParentMatches is the
+        // per-field predicate; these pin the three behaviors the filter relies on:
+        //   • null requested  → no constraint (matches any row) — the GetColumnsExtended
+        //     foreign-only reuse passes null parents and must stay UNFILTERED;
+        //   • specified value → case-insensitive equality;
+        //   • empty string    → matches only an empty row value (no real FK has one), so
+        //     an empty-string parent (the diff[6] case) filters every row out → empty.
+        // Reflection is used because the predicate is a private static helper (same
+        // approach as DatabricksStatementTests.GetConfOverlay).
+        private static bool InvokeParentMatches(string? requested, string rowValue)
+        {
+            var method = typeof(StatementExecutionStatement).GetMethod(
+                "ParentMatches",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            Assert.NotNull(method);
+            return (bool)method!.Invoke(null, new object?[] { requested, rowValue })!;
+        }
+
+        [Theory]
+        [InlineData(null, "comparator_tests")]   // null requested → no constraint → matches
+        [InlineData(null, "")]                   // null requested → matches even empty row value
+        [InlineData("comparator_tests", "comparator_tests")]   // exact match
+        [InlineData("COMPARATOR_TESTS", "comparator_tests")]   // case-insensitive match
+        public void ParentMatches_NullOrEqual_ReturnsTrue(string? requested, string rowValue)
+        {
+            Assert.True(InvokeParentMatches(requested, rowValue));
+        }
+
+        [Theory]
+        [InlineData("", "comparator_tests")]     // empty-string requested (diff[6]) → filters out
+        [InlineData("other_catalog", "comparator_tests")]   // specified, non-matching → filters out
+        public void ParentMatches_SpecifiedNonMatching_ReturnsFalse(string requested, string rowValue)
+        {
+            Assert.False(InvokeParentMatches(requested, rowValue));
+        }
     }
 }
