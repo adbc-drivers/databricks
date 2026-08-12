@@ -290,6 +290,19 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
+        public async Task Map_DateKeys_UseCanonicalValueFormatting()
+        {
+            MapArray.Builder mb = new MapArray.Builder(new MapType(Date32Type.Default, StringType.Default));
+            Date32Array.Builder kb = (Date32Array.Builder)mb.KeyBuilder;
+            StringArray.Builder vb = (StringArray.Builder)mb.ValueBuilder;
+            mb.Append();
+            kb.Append(new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Unspecified));
+            vb.Append("value");
+            Assert.Equal("{\"2024-06-15\":\"value\"}",
+                await Serialize("MAP<DATE,STRING>", mb.Build()));
+        }
+
+        [Fact]
         public async Task Map_Empty_IsEmptyObject()
         {
             MapArray.Builder mb = new MapArray.Builder(new MapType(StringType.Default, Int32Type.Default));
@@ -538,7 +551,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             // 3 days, 45045123 ms = 3 days 12:30:45.123
             vb.Append(new DayTimeInterval(3, 45045123));
             string? json = await Serialize("ARRAY<INTERVAL DAY TO SECOND>", b.Build());
-            Assert.Equal("[\"3.12:30:45.1230000\"]", json);
+            Assert.Equal("[\"3 12:30:45.123000000\"]", json);
         }
 
         [Fact]

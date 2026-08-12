@@ -221,12 +221,12 @@ namespace AdbcDrivers.Databricks
                     {
                         case IntervalUnit.DayTime:
                             var dayTime = ((DayTimeIntervalArray)array).GetValue(index)!.Value;
-                            var timeSpan = TimeSpan.FromDays(dayTime.Days) + TimeSpan.FromMilliseconds(dayTime.Milliseconds);
-                            writer.WriteStringValue(timeSpan.ToString());
+                            long totalMilliseconds = (long)dayTime.Days * 86_400_000L + dayTime.Milliseconds;
+                            writer.WriteStringValue(IntervalSerializingStream.FormatDuration(totalMilliseconds, TimeUnit.Millisecond));
                             break;
                         case IntervalUnit.MonthDayNanosecond:
                             var monthDayNano = ((MonthDayNanosecondIntervalArray)array).GetValue(index)!.Value;
-                            timeSpan = TimeSpan.FromDays(monthDayNano.Days) + TimeSpan.FromTicks(monthDayNano.Nanoseconds / 100);
+                            var timeSpan = TimeSpan.FromDays(monthDayNano.Days) + TimeSpan.FromTicks(monthDayNano.Nanoseconds / 100);
                             writer.WriteStringValue(IntervalSerializingStream.FormatYearMonth(monthDayNano.Months) + " " + timeSpan.ToString());
                             break;
                         case IntervalUnit.YearMonth:
@@ -325,12 +325,24 @@ namespace AdbcDrivers.Databricks
             writer.WriteStartObject();
             for (int i = start; i < end; i++)
             {
-                // Convert any key type to its string representation; treat null keys as "null"
-                string key = keyArray.ValueAt(i)?.ToString() ?? "null";
-                writer.WritePropertyName(key);
+                writer.WritePropertyName(SerializeMapKey(keyArray, i));
                 SerializeStructuredValue(writer, valueArray, i);
             }
             writer.WriteEndObject();
+        }
+
+        private static string SerializeMapKey(IArrowArray keyArray, int index)
+        {
+            using MemoryStream stream = new MemoryStream();
+            using (Utf8JsonWriter keyWriter = new Utf8JsonWriter(stream, WriterOptions))
+            {
+                SerializeStructuredValue(keyWriter, keyArray, index);
+                keyWriter.Flush();
+            }
+
+            using JsonDocument document = JsonDocument.Parse(stream.ToArray());
+            JsonElement key = document.RootElement;
+            return key.ValueKind == JsonValueKind.String ? key.GetString()! : key.GetRawText();
         }
 
         private static void SerializeDict(Utf8JsonWriter writer, StructArray structArray, int index)
