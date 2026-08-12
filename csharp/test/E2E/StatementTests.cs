@@ -747,6 +747,57 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(geoType, geoBaseTypeName);
         }
 
+        // Issue #568 follow-up to #627: #627 fixed GEOMETRY/GEOGRAPHY only on the GetColumns
+        // *metadata* path and never exercised a geo *data* column. This verifies that selecting a
+        // geospatial value round-trips through the driver as a UTF-8 EWKT string, identically on
+        // Thrift and SEA. Databricks serializes a geo value to its EWKT text on the wire
+        // ("SRID=4326;POINT(30 10)"); since Arrow has no OTHER type (JDBC reports Types.OTHER),
+        // ArrowTypeParser maps the unmodeled GEOMETRY/GEOGRAPHY SQL type to StringType via its
+        // catch-all, so the declared schema is Utf8 and the wire StringArray already agrees with it
+        // (no serializing stream needed, unlike untyped NULL). Asserting the concrete EWKT value on
+        // whatever protocol the run is configured with makes a two-config CI run prove Thrift↔SEA
+        // parity, the guarantee #627 relied on but did not test for data.
+        [SkippableTheory]
+        [InlineData("st_geomfromtext('POINT(30 10)', 4326)", "GEOMETRY(4326)")]
+        [InlineData("to_geography('POINT(30 10)')", "GEOGRAPHY(ANY)")]
+        public async Task GeospatialDataColumnReportsStringEwkt(string geoExpr, string expectedSqlName)
+        {
+            using AdbcConnection connection = NewConnection();
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = $"SELECT {geoExpr} AS geo_col";
+
+            QueryResult result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            // Schema: the geo column is declared Utf8, carrying the server's SQL type name in the
+            // Spark:DataType:SqlName field metadata (the same signal #627 strips for BASE_TYPE_NAME).
+            Field field = Assert.Single(reader!.Schema.FieldsList);
+            Assert.Equal("geo_col", field.Name);
+            Assert.Equal(ArrowTypeId.String, field.DataType.TypeId);
+            Assert.True(
+                field.Metadata != null &&
+                field.Metadata.TryGetValue("Spark:DataType:SqlName", out string? sqlName) &&
+                sqlName == expectedSqlName,
+                $"expected Spark:DataType:SqlName={expectedSqlName}");
+
+            // Data: the batch array agrees with the declared Utf8 schema, and the value round-trips
+            // as the server's EWKT text (SRID-prefixed WKT).
+            int totalRows = 0;
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                StringArray geoValues = Assert.IsType<StringArray>(batch.Column(0));
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    Assert.Equal("SRID=4326;POINT(30 10)", geoValues.GetString(i));
+                }
+                totalRows += batch.Length;
+            }
+            Assert.Equal(1, totalRows);
+        }
+
         [SkippableFact]
         public async Task CanGetColumnsExtendedOnNoColumnTable()
         {
