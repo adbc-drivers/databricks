@@ -20,6 +20,27 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-08-11
+
+### Added
+
+- New opt-in connection parameter `adbc.databricks.scope_current_catalog` for
+  native-query catalog scoping (default off) (#635)
+- Validate exact-match arguments for SEA `GetPrimaryKeys` / `GetCrossReference` (#609)
+
+### Fixed
+
+- Align SEA metadata error behavior with the Thrift path (#604)
+- `escape_pattern_wildcards` not honored for the catalog dimension on the SEA path,
+  where a match-all `%` diverged from Thrift (#593, #594)
+- Empty `tableTypes` filter now matches no rows rather than all rows (JDBC parity) (#626)
+- Return a row for `GEOMETRY`/`GEOGRAPHY` columns in `GetColumns` (#568, #627)
+- Read `SqlState` from `status.sql_state` on failed SEA statements (#636)
+- Derive SEA `GetPrimaryKeys` row identifiers from the server response rather than the
+  input case (#622)
+- Make `CloseOperation` best-effort in `DatabricksCompositeReader.Dispose` (#618)
+- Conformance fix for DATATYPE-042 (#640, #644)
+
 ## [1.1.7] - 2026-07-08
 
 ### Changed
