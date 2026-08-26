@@ -886,7 +886,10 @@ namespace AdbcDrivers.Databricks
                 QueryResult result = await base.GetTablesAsync(cancellationToken);
                 activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
                 activity?.AddEvent("statement.get_tables.complete");
-                return result;
+                // Match databricks-jdbc (MetadataResultSetBuilder): substitute "TABLE" for any
+                // null/empty TABLE_TYPE the Thrift GetTables path leaves empty — e.g. legacy
+                // hive_metastore tables in a broad enumeration. See TableTypeDefaultingStream.
+                return new QueryResult(result.RowCount, new TableTypeDefaultingStream(result.Stream));
             }, activityName: "GetTables");
         }
 
