@@ -40,6 +40,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         private const string TestHost = "test-host.databricks.com";
         private const string DriverVersion = "1.0.0";
 
+        /// <summary>
+        /// Test-only FeatureFlagCache that overrides context creation with a supplied factory,
+        /// exercising the per-host locking logic without any network I/O. Keeps the fetch seam in
+        /// the test project rather than in production code.
+        /// </summary>
+        private sealed class TestableFeatureFlagCache : FeatureFlagCache
+        {
+            private readonly Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> _factory;
+
+            public TestableFeatureFlagCache(
+                IMemoryCache cache,
+                Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory)
+                : base(cache)
+            {
+                _factory = factory;
+            }
+
+            internal override Task<FeatureFlagContext> CreateContextAsync(
+                string host,
+                IReadOnlyDictionary<string, string> properties,
+                string driverVersion,
+                string? endpointFormat,
+                CancellationToken cancellationToken)
+                => _factory(host, driverVersion, endpointFormat, cancellationToken);
+        }
+
         #region FeatureFlagContext Tests - Basic Functionality
 
         [Fact]
@@ -732,7 +758,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                     return CreateTestContext(new Dictionary<string, string> { ["adbc.databricks.flag"] = "v" });
                 };
 
-            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
+            var cache = new TestableFeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
 
             var propsA = new Dictionary<string, string> { [SparkParameters.HostName] = "host-a.databricks.com" };
             var propsB = new Dictionary<string, string> { [SparkParameters.HostName] = "host-b.databricks.com" };
@@ -762,7 +788,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                     return CreateTestContext(new Dictionary<string, string> { ["adbc.databricks.flag"] = "v" });
                 };
 
-            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
+            var cache = new TestableFeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
 
             const string host = "same-host.databricks.com";
             var props1 = new Dictionary<string, string> { [SparkParameters.HostName] = host };

@@ -49,7 +49,7 @@ namespace AdbcDrivers.Databricks
     /// JDBC Reference: DatabricksDriverFeatureFlagsContextFactory.java
     /// </para>
     /// </remarks>
-    internal sealed class FeatureFlagCache : IDisposable
+    internal class FeatureFlagCache : IDisposable
     {
         private static readonly FeatureFlagCache s_instance = new FeatureFlagCache();
 
@@ -74,13 +74,6 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _createLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
 
-        /// <summary>
-        /// Test-only factory used to create a context on cache miss. When null (production), the
-        /// cache builds an HttpClient and fetches feature flags from the connector service.
-        /// Receives (host, driverVersion, endpointFormat, cancellationToken).
-        /// </summary>
-        private readonly Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>>? _contextFactory;
-
         private bool _disposed;
 
         /// <summary>
@@ -100,25 +93,8 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         /// <param name="cache">The memory cache to use.</param>
         internal FeatureFlagCache(IMemoryCache cache)
-            : this(cache, contextFactory: null)
-        {
-        }
-
-        /// <summary>
-        /// Creates a new FeatureFlagCache with a custom IMemoryCache and an optional context factory
-        /// that replaces the network fetch on cache miss (for testing).
-        /// </summary>
-        /// <param name="cache">The memory cache to use.</param>
-        /// <param name="contextFactory">
-        /// Optional factory invoked on cache miss instead of building an HttpClient and fetching.
-        /// Receives (host, driverVersion, endpointFormat, cancellationToken).
-        /// </param>
-        internal FeatureFlagCache(
-            IMemoryCache cache,
-            Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>>? contextFactory)
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
-            _contextFactory = contextFactory;
         }
 
         /// <summary>
@@ -171,24 +147,14 @@ namespace AdbcDrivers.Databricks
                     return context;
                 }
 
-                if (_contextFactory != null)
-                {
-                    // Test path: create the context without any network I/O.
-                    context = await _contextFactory(host, driverVersion, endpointFormat, cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    // Create HttpClient only on cache miss (lazy creation)
-                    using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
-
-                    // Create context asynchronously - this waits for initial fetch to complete
-                    context = await FeatureFlagContext.CreateAsync(
-                        host,
-                        httpClient,
-                        driverVersion,
-                        endpointFormat,
-                        cancellationToken).ConfigureAwait(false);
-                }
+                // Create the context (network fetch) only on cache miss. Extracted into a virtual
+                // method so tests can override the fetch without any test-only branching here.
+                context = await CreateContextAsync(
+                    host,
+                    properties,
+                    driverVersion,
+                    endpointFormat,
+                    cancellationToken).ConfigureAwait(false);
 
                 // Choose cache expiration based on the fetch outcome:
                 // - Healthy: sliding TTL so active use keeps flags warm.
@@ -224,6 +190,37 @@ namespace AdbcDrivers.Databricks
             {
                 createLock.Release();
             }
+        }
+
+        /// <summary>
+        /// Creates a feature flag context on cache miss. The default (production) implementation
+        /// builds an HttpClient and fetches feature flags from the connector service, waiting for
+        /// the initial fetch to complete. Overridden in tests to supply a context without network
+        /// I/O, keeping the fetch seam out of the production code path.
+        /// </summary>
+        /// <param name="host">The host to create a context for.</param>
+        /// <param name="properties">Connection properties used to build the HttpClient.</param>
+        /// <param name="driverVersion">The driver version for the API endpoint.</param>
+        /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The newly created feature flag context.</returns>
+        internal virtual async Task<FeatureFlagContext> CreateContextAsync(
+            string host,
+            IReadOnlyDictionary<string, string> properties,
+            string driverVersion,
+            string? endpointFormat,
+            CancellationToken cancellationToken)
+        {
+            // Create HttpClient only on cache miss (lazy creation)
+            using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
+
+            // Create context asynchronously - this waits for initial fetch to complete
+            return await FeatureFlagContext.CreateAsync(
+                host,
+                httpClient,
+                driverVersion,
+                endpointFormat,
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
