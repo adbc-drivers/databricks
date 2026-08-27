@@ -228,10 +228,24 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Callback invoked when a cache entry is evicted.
-        /// Disposes the context to clean up resources (stops background refresh task).
+        /// Disposes the context to clean up resources (stops background refresh task) and drops the
+        /// host's per-host create lock so <see cref="_createLocks"/> does not grow unbounded over
+        /// the process lifetime as connections are made to many distinct hosts.
         /// </summary>
-        private static void OnCacheEntryEvicted(object key, object? value, EvictionReason reason, object? state)
+        private void OnCacheEntryEvicted(object key, object? value, EvictionReason reason, object? state)
         {
+            // Drop the per-host create lock for this evicted entry. We only remove it from the map
+            // (and let the GC reclaim it) rather than disposing it: a concurrent GetOrCreateContextAsync
+            // for the same host may already hold this semaphore, and disposing it out from under that
+            // caller would throw ObjectDisposedException on WaitAsync/Release. A SemaphoreSlim that has
+            // never had its AvailableWaitHandle accessed (as here) holds no OS handle, so dropping the
+            // reference leaks nothing. If a create is racing this eviction it may briefly create a
+            // fresh lock for the same key; that only weakens dedup for one window, never correctness.
+            if (key is string cacheKey)
+            {
+                _createLocks.TryRemove(cacheKey, out _);
+            }
+
             if (value is FeatureFlagContext context)
             {
                 context.Dispose();
