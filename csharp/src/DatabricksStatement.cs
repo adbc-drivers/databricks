@@ -889,6 +889,9 @@ namespace AdbcDrivers.Databricks
                 // Match databricks-jdbc (MetadataResultSetBuilder): substitute "TABLE" for any
                 // null/empty TABLE_TYPE the Thrift GetTables path leaves empty — e.g. legacy
                 // hive_metastore tables in a broad enumeration. See TableTypeDefaultingStream.
+                // Guard a null stream (mirrors MaybeWrapComplexTypes) so a null-stream base
+                // result is passed through rather than converted into a thrown exception.
+                if (result.Stream == null) return result;
                 return new QueryResult(result.RowCount, new TableTypeDefaultingStream(result.Stream));
             }, activityName: "GetTables");
         }
