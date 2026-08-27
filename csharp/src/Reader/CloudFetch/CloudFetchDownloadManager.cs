@@ -120,7 +120,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         }
 
         /// <inheritdoc />
-        public async Task StartAsync()
+        public async Task StartAsync(CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
 
@@ -129,8 +129,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 throw new InvalidOperationException("Download manager is already started.");
             }
 
-            // Create a new cancellation token source
-            _cancellationTokenSource = new CancellationTokenSource();
+            // Link the caller's token (e.g. the connection's shutdown token) so cancelling it tears
+            // down the fetcher + downloader and unblocks any reader waiting on the result queue.
+            _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             // Start the result fetcher
             await _resultFetcher.StartAsync(_cancellationTokenSource.Token).ConfigureAwait(false);

@@ -122,6 +122,20 @@ namespace AdbcDrivers.Databricks
         // Shared HttpClient for CloudFetch downloads (created once, reused across queries)
         private HttpClient? _cloudFetchHttpClient;
 
+        // Connection-scoped shutdown signal for in-flight CloudFetch pipelines. Cancelled at the
+        // start of Dispose so any active download manager (which links this token into its own
+        // cancellation source) tears down promptly, unblocking a reader parked on a download.
+        // Without this, closing a connection mid-CloudFetch cannot cancel the pipeline (the reader
+        // that owns it is blocked), so the reader spins on download retries until the retry budget
+        // expires (minutes) — see CloseConnection_DuringCloudFetch_ShouldNotHang.
+        private readonly CancellationTokenSource _cloudFetchShutdownCts = new CancellationTokenSource();
+
+        /// <summary>
+        /// Token cancelled when this connection is disposed. CloudFetch download managers link this
+        /// into their pipeline cancellation source so connection close tears down in-flight downloads.
+        /// </summary>
+        internal CancellationToken CloudFetchShutdownToken => _cloudFetchShutdownCts.Token;
+
         // Telemetry
         private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
         // Stopwatch covering the connection lifetime; started at construction and used to
@@ -1183,6 +1197,13 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
+                // Signal in-flight CloudFetch pipelines to stop before tearing down the transport.
+                // The download manager links this token into its own cancellation source, so this
+                // cancels the download loop and faults any in-flight download — unblocking a reader
+                // parked on GetNextDownloadedFileAsync / DownloadCompletedTask instead of leaving it
+                // to spin on retries against the about-to-be-disposed HttpClient.
+                try { _cloudFetchShutdownCts.Cancel(); } catch (ObjectDisposedException) { }
+
                 // Dispose the shared CloudFetch HttpClient before closing the session so any
                 // in-flight CloudFetch HTTP work is torn down first (PR #385: concurrent Dispose deadlock fix).
                 _cloudFetchHttpClient?.Dispose();
@@ -1216,6 +1237,8 @@ namespace AdbcDrivers.Databricks
                     // This is synchronous because Dispose() cannot be async; we block on
                     // GetAwaiter().GetResult(), which is acceptable in Dispose.
                     DisposeTelemetryAsync().GetAwaiter().GetResult();
+
+                    _cloudFetchShutdownCts.Dispose();
                 }
                 return;
             }

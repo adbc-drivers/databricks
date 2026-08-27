@@ -108,8 +108,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 resultQueue,
                 config);
 
-            // Start the download manager
-            downloadManager.StartAsync().Wait();
+            // Start the download manager, linked to the connection's shutdown token so closing the
+            // connection mid-stream tears down the pipeline and unblocks the reader.
+            downloadManager.StartAsync(connection.CloudFetchShutdownToken).Wait();
 
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);

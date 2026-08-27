@@ -274,8 +274,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Starts the download manager.
         /// </summary>
+        /// <param name="cancellationToken">
+        /// Token linked into the pipeline's cancellation source; cancelling it (e.g. on connection
+        /// dispose) tears down the fetcher and downloader and unblocks any waiting reader.
+        /// </param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        Task StartAsync();
+        Task StartAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Stops the download manager.
