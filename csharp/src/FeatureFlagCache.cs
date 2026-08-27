@@ -15,6 +15,7 @@
 */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
@@ -63,7 +64,23 @@ namespace AdbcDrivers.Databricks
         public static readonly TimeSpan DefaultCacheTtl = TimeSpan.FromMinutes(15);
 
         private readonly IMemoryCache _cache;
-        private readonly SemaphoreSlim _createLock = new SemaphoreSlim(1, 1);
+
+        /// <summary>
+        /// Per-host locks that serialize context creation for a single host (preventing duplicate
+        /// fetches) without serializing across hosts. Keyed by the same cache key as the entries in
+        /// <see cref="_cache"/>. A single shared lock would make concurrent first-time connects to
+        /// different cold hosts queue behind one another, inflating worst-case connect latency to
+        /// roughly N × the fetch timeout.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _createLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
+
+        /// <summary>
+        /// Test-only factory used to create a context on cache miss. When null (production), the
+        /// cache builds an HttpClient and fetches feature flags from the connector service.
+        /// Receives (host, driverVersion, endpointFormat, cancellationToken).
+        /// </summary>
+        private readonly Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>>? _contextFactory;
+
         private bool _disposed;
 
         /// <summary>
@@ -83,8 +100,25 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         /// <param name="cache">The memory cache to use.</param>
         internal FeatureFlagCache(IMemoryCache cache)
+            : this(cache, contextFactory: null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a new FeatureFlagCache with a custom IMemoryCache and an optional context factory
+        /// that replaces the network fetch on cache miss (for testing).
+        /// </summary>
+        /// <param name="cache">The memory cache to use.</param>
+        /// <param name="contextFactory">
+        /// Optional factory invoked on cache miss instead of building an HttpClient and fetching.
+        /// Receives (host, driverVersion, endpointFormat, cancellationToken).
+        /// </param>
+        internal FeatureFlagCache(
+            IMemoryCache cache,
+            Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>>? contextFactory)
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _contextFactory = contextFactory;
         }
 
         /// <summary>
@@ -124,8 +158,11 @@ namespace AdbcDrivers.Databricks
                 return context;
             }
 
-            // Cache miss - create new context with async lock to prevent duplicate creation
-            await _createLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // Cache miss - create new context under a PER-HOST lock. This dedups concurrent
+            // first-time creations for the same host (only one fetch) without serializing
+            // creations for different hosts behind a single process-wide lock.
+            var createLock = _createLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+            await createLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 // Double-check after acquiring lock
@@ -134,16 +171,24 @@ namespace AdbcDrivers.Databricks
                     return context;
                 }
 
-                // Create HttpClient only on cache miss (lazy creation)
-                using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
+                if (_contextFactory != null)
+                {
+                    // Test path: create the context without any network I/O.
+                    context = await _contextFactory(host, driverVersion, endpointFormat, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    // Create HttpClient only on cache miss (lazy creation)
+                    using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
 
-                // Create context asynchronously - this waits for initial fetch to complete
-                context = await FeatureFlagContext.CreateAsync(
-                    host,
-                    httpClient,
-                    driverVersion,
-                    endpointFormat,
-                    cancellationToken).ConfigureAwait(false);
+                    // Create context asynchronously - this waits for initial fetch to complete
+                    context = await FeatureFlagContext.CreateAsync(
+                        host,
+                        httpClient,
+                        driverVersion,
+                        endpointFormat,
+                        cancellationToken).ConfigureAwait(false);
+                }
 
                 // Choose cache expiration based on the fetch outcome:
                 // - Healthy: sliding TTL so active use keeps flags warm.
@@ -177,7 +222,7 @@ namespace AdbcDrivers.Databricks
             }
             finally
             {
-                _createLock.Release();
+                createLock.Release();
             }
         }
 
@@ -294,7 +339,11 @@ namespace AdbcDrivers.Databricks
 
             _disposed = true;
 
-            _createLock.Dispose();
+            foreach (var kvp in _createLocks)
+            {
+                kvp.Value.Dispose();
+            }
+            _createLocks.Clear();
 
             if (_cache is IDisposable disposableCache)
             {

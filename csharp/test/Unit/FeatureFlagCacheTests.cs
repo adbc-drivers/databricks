@@ -700,6 +700,87 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
         #endregion
 
+        #region Per-Host Locking Tests
+
+        [Fact]
+        public async Task GetOrCreateContext_DifferentColdHosts_ResolveConcurrently()
+        {
+            // Per-host locking must let first-time (cold-cache) resolves for DIFFERENT hosts proceed
+            // in parallel. With a single global lock these would serialize and max concurrency would
+            // be 1; with per-host locks both context creations are in flight at once (max 2).
+            int concurrent = 0;
+            int maxConcurrent = 0;
+            var gate = new object();
+
+            Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory =
+                async (host, driverVersion, endpointFormat, ct) =>
+                {
+                    lock (gate)
+                    {
+                        concurrent++;
+                        maxConcurrent = Math.Max(maxConcurrent, concurrent);
+                    }
+
+                    // Hold both calls inside the factory simultaneously long enough to observe overlap.
+                    await Task.Delay(300, ct).ConfigureAwait(false);
+
+                    lock (gate)
+                    {
+                        concurrent--;
+                    }
+
+                    return CreateTestContext(new Dictionary<string, string> { ["adbc.databricks.flag"] = "v" });
+                };
+
+            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
+
+            var propsA = new Dictionary<string, string> { [SparkParameters.HostName] = "host-a.databricks.com" };
+            var propsB = new Dictionary<string, string> { [SparkParameters.HostName] = "host-b.databricks.com" };
+
+            // Act - kick off both resolves; each runs synchronously up to the factory's delay await.
+            var taskA = cache.MergePropertiesWithFeatureFlagsAsync(propsA, DriverVersion);
+            var taskB = cache.MergePropertiesWithFeatureFlagsAsync(propsB, DriverVersion);
+            await Task.WhenAll(taskA, taskB);
+
+            // Assert - both factory calls overlapped => different hosts did not serialize.
+            Assert.Equal(2, maxConcurrent);
+        }
+
+        [Fact]
+        public async Task GetOrCreateContext_SameColdHost_CreatesContextOnce()
+        {
+            // Regression guard for the lock's original purpose: concurrent first-time resolves for
+            // the SAME host must dedup to a single creation. The second caller acquires the per-host
+            // lock after the first, then finds the context already cached (post-lock double-check).
+            int factoryCalls = 0;
+
+            Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory =
+                async (host, driverVersion, endpointFormat, ct) =>
+                {
+                    Interlocked.Increment(ref factoryCalls);
+                    await Task.Delay(200, ct).ConfigureAwait(false);
+                    return CreateTestContext(new Dictionary<string, string> { ["adbc.databricks.flag"] = "v" });
+                };
+
+            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
+
+            const string host = "same-host.databricks.com";
+            var props1 = new Dictionary<string, string> { [SparkParameters.HostName] = host };
+            var props2 = new Dictionary<string, string> { [SparkParameters.HostName] = host };
+
+            // Act
+            var task1 = cache.MergePropertiesWithFeatureFlagsAsync(props1, DriverVersion);
+            var task2 = cache.MergePropertiesWithFeatureFlagsAsync(props2, DriverVersion);
+            var results = await Task.WhenAll(task1, task2);
+
+            // Assert - fetched once; both connections still see the server flag merged in.
+            Assert.Equal(1, factoryCalls);
+            Assert.Equal("v", results[0]["adbc.databricks.flag"]);
+            Assert.Equal("v", results[1]["adbc.databricks.flag"]);
+        }
+
+        #endregion
+
         #region Feature Flag HttpClient Timeout Tests
 
         [Fact]
