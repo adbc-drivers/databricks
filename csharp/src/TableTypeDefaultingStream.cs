@@ -48,6 +48,10 @@ namespace AdbcDrivers.Databricks
         public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
         {
             RecordBatch? batch = await _inner.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+            // The Thrift GetTables reader this wraps always materializes TABLE_TYPE as a plain
+            // StringArray, so only that encoding is handled. If TABLE_TYPE ever arrives dictionary-
+            // encoded on some path, the batch passes through unchanged (defaulting becomes a no-op)
+            // rather than risking a wrong-type cast — matching the sibling streams' behavior.
             if (batch == null || _tableTypeIndex < 0 || batch.Column(_tableTypeIndex) is not StringArray tableTypes)
                 return batch;
 
