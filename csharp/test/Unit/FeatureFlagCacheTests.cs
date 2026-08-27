@@ -663,12 +663,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
         #endregion
 
-        #region MergeWarmFeatureFlags Tests
+        #region MergePropertiesWithFeatureFlags (sync) Tests
 
         [Fact]
-        public void MergeWarmFeatureFlags_WarmCache_MergesFlags_LocalPropertiesWin()
+        public void MergePropertiesWithFeatureFlags_WarmCache_MergesFlagsSynchronously_LocalPropertiesWin()
         {
-            // Arrange - seed a warm context (server flags) for the host under the cache key.
+            // The connection-open path (DatabricksDatabase) calls this synchronous wrapper so the
+            // opening connection carries server feature flags from the start. With a warm per-host
+            // cache the merge must happen inline (no network) and local properties must override
+            // server flags on conflict.
             const string host = "warm-host.databricks.com";
             var warmContext = CreateTestContext(new Dictionary<string, string>
             {
@@ -687,68 +690,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             };
 
             // Act
-            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
+            var result = cache.MergePropertiesWithFeatureFlags(localProperties, DriverVersion);
 
-            // Assert - server flag applied; local property overrides the server flag.
+            // Assert - server flag applied inline; local property overrides the server flag.
             Assert.Equal("true", result[DatabricksParameters.EnableFastMetadataQuery]);
             Assert.Equal("local_value", result["adbc.databricks.some_server_flag"]);
             Assert.Equal(host, result[SparkParameters.HostName]);
-        }
-
-        [Fact]
-        public void MergeWarmFeatureFlags_ColdCache_ReturnsLocalPropertiesUnchanged()
-        {
-            // Arrange - empty (cold) cache. The method must not block; it starts a background
-            // warm-up and returns the local properties unchanged for this connection.
-            // A 1s timeout keeps the background fetch fast even when it fails for this test host.
-            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
-            var localProperties = new Dictionary<string, string>
-            {
-                [SparkParameters.HostName] = "cold-host.databricks.com",
-                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "1",
-                ["some_property"] = "some_value"
-            };
-
-            // Act
-            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
-
-            // Assert - unchanged (same reference) since nothing was cached.
-            Assert.Same(localProperties, result);
-        }
-
-        [Fact]
-        public void MergeWarmFeatureFlags_Disabled_ReturnsLocalPropertiesUnchanged()
-        {
-            // Arrange - FeatureFlagCacheEnabled explicitly false.
-            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
-            var localProperties = new Dictionary<string, string>
-            {
-                [SparkParameters.HostName] = TestHost,
-                [DatabricksParameters.FeatureFlagCacheEnabled] = "false"
-            };
-
-            // Act
-            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
-
-            // Assert
-            Assert.Same(localProperties, result);
-        }
-
-        [Fact]
-        public void MergeWarmFeatureFlags_NoHost_ReturnsLocalPropertiesUnchanged()
-        {
-            // Arrange - no host present in properties.
-            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
-            var localProperties = new Dictionary<string, string>
-            {
-                ["some_property"] = "some_value"
-            };
-
-            // Act
-            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
-
-            // Assert
-            Assert.Same(localProperties, result);
         }
 
         #endregion

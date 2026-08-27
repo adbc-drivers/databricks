@@ -166,17 +166,18 @@ namespace AdbcDrivers.Databricks
         /// This is the single place where all property merging happens for both Thrift and REST connections.
         /// </summary>
         /// <param name="properties">Properties to merge.</param>
-        /// <returns>Merged properties dictionary with any warm-cache feature flags applied.</returns>
+        /// <returns>Merged properties dictionary with any server feature flags applied.</returns>
         private static IReadOnlyDictionary<string, string> MergeWithEnvironmentConfigAndFeatureFlags(IReadOnlyDictionary<string, string> properties)
         {
             var mergedWithEnvConfig = MergeWithDefaultEnvironmentConfig(properties);
 
-            // Apply server feature flags without ever blocking Connect(): if the per-host cache
-            // is already warm, the flags are merged in synchronously (no network, local props win);
-            // if it is cold, a background warm-up is kicked off so a subsequent connection to the
-            // same host picks them up, and this connection proceeds with the unmodified properties.
+            // Apply server feature flags synchronously so this connection carries them from the
+            // start: on a warm per-host cache the flags are merged in without a network call; on a
+            // cold cache this blocks for the initial fetch (bounded by the feature-flag HTTP
+            // timeout, default 5s). Local properties always win on conflict, and a failed or
+            // disabled fetch returns the properties unchanged so Connect() is never broken.
             return FeatureFlagCache.GetInstance()
-                .MergeWarmFeatureFlags(mergedWithEnvConfig, s_assemblyVersion);
+                .MergePropertiesWithFeatureFlags(mergedWithEnvConfig, s_assemblyVersion);
         }
 
         /// <summary>
