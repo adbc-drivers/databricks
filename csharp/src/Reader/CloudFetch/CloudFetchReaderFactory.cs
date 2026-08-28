@@ -108,9 +108,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 resultQueue,
                 config);
 
-            // Start the download manager, linked to the connection's shutdown token so closing the
-            // connection mid-stream tears down the pipeline and unblocks the reader.
-            downloadManager.StartAsync(connection.CloudFetchShutdownToken).Wait();
+            // Start the download manager, linked to the statement's CloudFetch token (which is itself
+            // linked to the connection's shutdown token). This gives the full cancel cascade: closing
+            // the connection, or cancelling/disposing this statement, tears down the pipeline and
+            // unblocks the reader. Fall back to the connection token if the statement isn't a
+            // DatabricksStatement (defensive — the Thrift path always uses DatabricksStatement).
+            var cloudFetchToken = statement is DatabricksStatement dbStatement
+                ? dbStatement.CloudFetchStatementToken
+                : connection.CloudFetchShutdownToken;
+            downloadManager.StartAsync(cloudFetchToken).Wait();
 
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);

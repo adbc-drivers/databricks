@@ -78,6 +78,27 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         public bool HasMoreResults => !_downloader.IsCompleted || !_resultQueue.IsCompleted;
 
         /// <inheritdoc />
+        public CancellationToken PipelineToken
+        {
+            get
+            {
+                var cts = _cancellationTokenSource;
+                if (cts == null)
+                {
+                    return CancellationToken.None;
+                }
+                try
+                {
+                    return cts.Token;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return CancellationToken.None;
+                }
+            }
+        }
+
+        /// <inheritdoc />
         public async Task<IDownloadResult?> GetNextDownloadedFileAsync(CancellationToken cancellationToken)
         {
             ThrowIfDisposed();

@@ -99,8 +99,17 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 ThrowIfDisposed();
 
+                // Observe the pipeline's cancellation (statement cancel / connection dispose) in
+                // addition to the caller's token, so the read stops promptly even while draining
+                // already-buffered chunks — not only when it next blocks for a download.
+                CancellationToken pipelineToken = this.downloadManager?.PipelineToken ?? CancellationToken.None;
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, pipelineToken);
+                CancellationToken token = linkedCts.Token;
+
                 while (true)
                 {
+                    token.ThrowIfCancellationRequested();
+
                     // Check global row limit first (used by SEA with manifest.TotalRowCount)
                     if (_totalExpectedRows > 0 && _rowsRead >= _totalExpectedRows)
                     {
@@ -126,7 +135,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     // If we have a current reader, try to read the next batch
                     if (this.currentReader != null)
                     {
-                        RecordBatch? next = await this.currentReader.ReadNextRecordBatchAsync(cancellationToken);
+                        RecordBatch? next = await this.currentReader.ReadNextRecordBatchAsync(token);
                         if (next != null)
                         {
                             // Apply row count limiting: trim the batch if it would exceed expected rows
@@ -151,7 +160,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         try
                         {
                             // Get the next downloaded file
-                            this.currentDownloadResult = await this.downloadManager.GetNextDownloadedFileAsync(cancellationToken);
+                            this.currentDownloadResult = await this.downloadManager.GetNextDownloadedFileAsync(token);
                             if (this.currentDownloadResult == null)
                             {
                                 Activity.Current?.AddEvent("cloudfetch.reader_no_more_files", [

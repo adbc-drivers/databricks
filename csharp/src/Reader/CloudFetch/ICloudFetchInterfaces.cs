@@ -293,6 +293,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         bool HasMoreResults { get; }
 
         /// <summary>
+        /// The pipeline's cancellation token (linked to the token passed to <see cref="StartAsync"/>).
+        /// The reader observes this so a cancel/dispose stops the read promptly even while draining
+        /// already-buffered chunks — not just when it next blocks for a download. Returns
+        /// <see cref="CancellationToken.None"/> before start or after stop/dispose.
+        /// </summary>
+        CancellationToken PipelineToken { get; }
+
+        /// <summary>
         /// Gets the aggregated chunk metrics from the downloader.
         /// Returns a snapshot of current metrics that can be safely passed to telemetry.
         /// </summary>

@@ -434,5 +434,85 @@ namespace AdbcDrivers.Databricks.Tests
                 OutputHelper?.WriteLine("Query completed before cancel took effect (race condition — acceptable).");
             }
         }
+
+        /// <summary>
+        /// CONCURRENT-006: Cancel a statement while it is actively fetching results via CloudFetch.
+        /// Distinct from CONCURRENT-005 (cancel during execution): here cancellation must tear down
+        /// the CloudFetch download pipeline promptly rather than let it keep downloading. Regression
+        /// for the connection ⊃ statement ⊃ cloudfetch cancel cascade — statement.Cancel() cancels the
+        /// statement-lifetime token linked into the pipeline, so the parked reader unblocks instead of
+        /// running to completion (the per-execute token is already disposed by the time results stream).
+        /// </summary>
+        [SkippableFact]
+        public async Task CancelStatement_DuringCloudFetch_ShouldStopPromptly()
+        {
+            const int timeoutMs = 30_000;
+            var queryStarted = new ManualResetEventSlim(false);
+            Exception? queryException = null;
+            int rowsRead = 0;
+
+            using AdbcConnection connection = NewConnection();
+            using var statement = connection.CreateStatement();
+
+            // Deliberately huge so a full read takes far longer than timeoutMs: without the fix,
+            // Cancel() is a no-op during streaming and the read would keep going well past the
+            // window (test fails); with the fix, Cancel() tears down the pipeline and the read ends
+            // in well under the window. We only ever read the first batch before cancelling.
+            statement.SqlQuery = "SELECT * FROM RANGE(1000000000)";
+
+            var queryTask = Task.Run(async () =>
+            {
+                try
+                {
+                    var result = statement.ExecuteQuery();
+                    using var reader = result.Stream;
+
+                    while (true)
+                    {
+                        var batch = await reader.ReadNextRecordBatchAsync();
+                        if (batch == null) break;
+
+                        Interlocked.Add(ref rowsRead, batch.Length);
+
+                        // Signal after the first batch so we know CloudFetch streaming is active.
+                        if (!queryStarted.IsSet)
+                        {
+                            queryStarted.Set();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    queryException = ex;
+                }
+            });
+
+            bool started = queryStarted.Wait(30_000);
+            if (!started)
+            {
+                statement.Cancel();
+                Assert.Fail("Query did not start producing results within 30s");
+            }
+
+            OutputHelper?.WriteLine($"Query started, read {rowsRead} rows so far. Cancelling statement...");
+
+            // Cancel the statement while results are streaming via CloudFetch.
+            statement.Cancel();
+
+            var completed = await Task.WhenAny(queryTask, Task.Delay(timeoutMs));
+
+            OutputHelper?.WriteLine($"Query task completed: {queryTask.IsCompleted}");
+            OutputHelper?.WriteLine($"Rows read before cancel: {rowsRead}");
+
+            if (queryException != null)
+            {
+                // A cancellation exception is expected — the pipeline was torn down mid-read.
+                OutputHelper?.WriteLine($"Query exception (expected): {queryException.GetType().Name}: {queryException.Message}");
+            }
+
+            Assert.True(queryTask.IsCompleted,
+                $"Statement cancel during CloudFetch did not stop the read within {timeoutMs}ms. " +
+                $"Query completed: {queryTask.IsCompleted}, rows read: {rowsRead}.");
+        }
     }
 }
