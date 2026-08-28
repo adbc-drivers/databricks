@@ -134,7 +134,24 @@ namespace AdbcDrivers.Databricks
         /// Token cancelled when this connection is disposed. CloudFetch download managers link this
         /// into their pipeline cancellation source so connection close tears down in-flight downloads.
         /// </summary>
-        internal CancellationToken CloudFetchShutdownToken => _cloudFetchShutdownCts.Token;
+        internal CancellationToken CloudFetchShutdownToken
+        {
+            get
+            {
+                // Defensive against a read after Dispose(bool) has disposed the source: return
+                // CancellationToken.None rather than throwing, matching the sibling
+                // DatabricksStatement.CloudFetchStatementToken and CloudFetchDownloadManager.PipelineToken
+                // so the three tokens behave symmetrically.
+                try
+                {
+                    return _cloudFetchShutdownCts.Token;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return CancellationToken.None;
+                }
+            }
+        }
 
         // Telemetry
         private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
