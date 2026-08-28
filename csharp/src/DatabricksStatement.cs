@@ -1449,6 +1449,13 @@ namespace AdbcDrivers.Databricks
                 // downloads stop promptly if the caller disposed the statement mid-stream.
                 try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
 
+                // Dispose the CloudFetch statement CTS before the telemetry emission below:
+                // it was already Cancel()ed just above and nothing in the telemetry blocks
+                // depends on it, so releasing it here guarantees the linked-token registration
+                // it holds on the connection's _cloudFetchShutdownCts is freed even if the
+                // telemetry calls below throw. Mirrors the ordering in DatabricksConnection.Dispose.
+                _cloudFetchStatementCts.Dispose();
+
                 if (PendingTelemetryContext != null)
                 {
                     // Emit telemetry now that results have been consumed
@@ -1493,8 +1500,6 @@ namespace AdbcDrivers.Databricks
                             { "operation_type", "CLOSE_STATEMENT" }
                         }));
                 }
-
-                _cloudFetchStatementCts.Dispose();
             }
             base.Dispose(disposing);
         }
