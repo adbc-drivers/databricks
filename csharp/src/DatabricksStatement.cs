@@ -170,9 +170,21 @@ namespace AdbcDrivers.Databricks
             var previous = _cloudFetchStatementCts;
             _cloudFetchStatementCts = CancellationTokenSource.CreateLinkedTokenSource(
                 ((DatabricksConnection)Connection).CloudFetchShutdownToken);
-            // Release the prior source's registration on the connection shutdown token. A new
-            // execution supersedes the previous result set, so any pipeline linked to the old
-            // token is done; disposing the source does not cancel already-created linked children.
+            // Release the prior source's registration on the connection shutdown token. Under normal
+            // AdbcStatement usage the previous result set is fully consumed/disposed before the next
+            // Execute, so no pipeline is still linked to the old token here. We dispose (rather than
+            // leak) it so a reused statement (repeated Execute) doesn't accumulate one linked-CTS
+            // registration on the connection shutdown token per execution for the connection's lifetime.
+            //
+            // Constraint: the CloudFetch pipeline's cancellation source is CreateLinkedTokenSource of
+            // this statement token (CloudFetchDownloadManager), whose only link to the connection
+            // shutdown token runs THROUGH this source. If a caller re-executes while still holding an
+            // OPEN (undisposed) reader from a prior execution, disposing the old source detaches that
+            // reader's still-running pipeline from the connection-dispose cascade. That reader's own
+            // disposal (StopAsync/Dispose) still tears its pipeline down; the connection-shutdown safety
+            // net only lapses for the narrow case of a reader that is never disposed AND whose
+            // connection is then disposed. Disposing a source does not cancel its already-created
+            // linked children.
             previous?.Dispose();
         }
 
@@ -1545,12 +1557,14 @@ namespace AdbcDrivers.Databricks
             long startMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
             try
             {
-                base.Cancel();
-
-                // Also cancel the CloudFetch pipeline for this statement. base.Cancel() only signals
+                // Cancel the CloudFetch pipeline for this statement first. base.Cancel() only signals
                 // the per-execute token, which is already disposed once results are streaming, so
-                // without this a Cancel() during CloudFetch would leave the downloads running.
+                // without this a Cancel() during CloudFetch would leave the downloads running. Do it
+                // before base.Cancel() because base.Cancel() issues the remote CancelOperation RPC,
+                // which can throw on a network/transport failure and would otherwise skip this cleanup.
                 try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+
+                base.Cancel();
             }
             catch (Exception ex)
             {
