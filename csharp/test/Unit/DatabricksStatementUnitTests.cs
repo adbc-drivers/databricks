@@ -170,5 +170,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         {
             Assert.NotNull(DatabricksStatement.GetMetadataOperationType(command));
         }
+
+        /// <summary>
+        /// Regression: Cancel() cancels the statement-lifetime CloudFetch token permanently, but the
+        /// statement is reusable (repeated ExecuteQuery). Each execution refreshes the CloudFetch CTS,
+        /// so a cancel-then-reexecute must start the next CloudFetch read with a fresh, non-cancelled
+        /// token rather than the poisoned one.
+        /// </summary>
+        [Fact]
+        public void RefreshCloudFetchStatementCts_AfterCancel_YieldsFreshUncancelledToken()
+        {
+            using var statement = CreateStatement();
+
+            // Fresh statement: token is live.
+            Assert.False(statement.CloudFetchStatementToken.IsCancellationRequested);
+
+            // Cancel() cancels the statement-lifetime CloudFetch source.
+            statement.Cancel();
+            Assert.True(statement.CloudFetchStatementToken.IsCancellationRequested);
+
+            // The next execution refreshes the source; the new token must not be born cancelled.
+            statement.RefreshCloudFetchStatementCts();
+            Assert.False(statement.CloudFetchStatementToken.IsCancellationRequested);
+
+            // And a subsequent Cancel() still cancels the refreshed source.
+            statement.Cancel();
+            Assert.True(statement.CloudFetchStatementToken.IsCancellationRequested);
+        }
     }
 }

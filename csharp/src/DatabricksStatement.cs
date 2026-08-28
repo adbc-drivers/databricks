@@ -111,7 +111,9 @@ namespace AdbcDrivers.Databricks
         // on a single statement stops just its downloads. It is distinct from the base
         // HiveServer2Statement._executeTokenSource, which is disposed when ExecuteQuery() returns and so
         // cannot cover the later CloudFetch result-fetch phase.
-        private readonly CancellationTokenSource _cloudFetchStatementCts;
+        // Not readonly: refreshed at the start of each execution by RefreshCloudFetchStatementCts()
+        // so a Cancel() on a prior execution doesn't poison the next CloudFetch read (see that method).
+        private CancellationTokenSource _cloudFetchStatementCts;
 
         /// <summary>
         /// Token cancelled when this statement is cancelled or disposed — and, via linkage to the
@@ -152,6 +154,26 @@ namespace AdbcDrivers.Databricks
             {
                 SetOption(ApacheParameters.PollTimeMilliseconds, DatabricksConstants.DefaultAsyncExecPollIntervalMs.ToString());
             }
+        }
+
+        /// <summary>
+        /// Recreates the statement-lifetime CloudFetch cancellation source (re-linked to the
+        /// connection's shutdown token) at the start of each execution. <see cref="AdbcStatement"/>
+        /// is reusable (settable <see cref="SqlQuery"/> + repeated Execute), and <see cref="Cancel"/>/
+        /// <see cref="Dispose(bool)"/> cancel this source permanently; without a refresh a
+        /// cancel-then-reexecute would start the next CloudFetch read with an already-cancelled
+        /// token. This mirrors how the base <c>HiveServer2Statement._executeTokenSource</c> is
+        /// refreshed per-execute so a statement stays reusable after cancel.
+        /// </summary>
+        internal void RefreshCloudFetchStatementCts()
+        {
+            var previous = _cloudFetchStatementCts;
+            _cloudFetchStatementCts = CancellationTokenSource.CreateLinkedTokenSource(
+                ((DatabricksConnection)Connection).CloudFetchShutdownToken);
+            // Release the prior source's registration on the connection shutdown token. A new
+            // execution supersedes the previous result set, so any pipeline linked to the old
+            // token is done; disposing the source does not cancel already-created linked children.
+            previous?.Dispose();
         }
 
         private StatementTelemetryContext? CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type statementType)
@@ -287,6 +309,9 @@ namespace AdbcDrivers.Databricks
 
         public override QueryResult ExecuteQuery()
         {
+            // Refresh the CloudFetch cancellation source before base.ExecuteQuery() captures it into
+            // the reader, so a prior Cancel() doesn't leave the next read starting cancelled.
+            RefreshCloudFetchStatementCts();
             EnsureCatalogScopedAsync().GetAwaiter().GetResult();
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
@@ -318,6 +343,9 @@ namespace AdbcDrivers.Databricks
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
+            // Refresh the CloudFetch cancellation source before base.ExecuteQueryAsync() captures it
+            // into the reader, so a prior Cancel() doesn't leave the next read starting cancelled.
+            RefreshCloudFetchStatementCts();
             await EnsureCatalogScopedAsync().ConfigureAwait(false);
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
