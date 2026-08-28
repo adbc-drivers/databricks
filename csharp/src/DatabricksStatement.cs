@@ -113,14 +113,26 @@ namespace AdbcDrivers.Databricks
         // cannot cover the later CloudFetch result-fetch phase.
         // Not readonly: refreshed at the start of each execution by RefreshCloudFetchStatementCts()
         // so a Cancel() on a prior execution doesn't poison the next CloudFetch read (see that method).
+        // Guarded by _cloudFetchStatementCtsLock: Cancel() is explicitly supported from another thread
+        // and can race the field swap performed by a concurrent re-execute (RefreshCloudFetchStatementCts).
         private CancellationTokenSource _cloudFetchStatementCts;
+
+        // Serializes the field swap in RefreshCloudFetchStatementCts() against the reads +
+        // Cancel()/Dispose() of _cloudFetchStatementCts. Without it, a cross-thread Cancel() issued
+        // around a re-execute boundary can act on the source the swap is replacing (cancelling the
+        // wrong pipeline) or on the source the swap just disposed (silently swallowed) — either of
+        // which drops the cancel this PR exists to deliver.
+        private readonly object _cloudFetchStatementCtsLock = new object();
 
         /// <summary>
         /// Token cancelled when this statement is cancelled or disposed — and, via linkage to the
         /// connection's shutdown token, when the connection is disposed. The CloudFetch download
         /// manager links this into its pipeline source so any of those tears down in-flight downloads.
         /// </summary>
-        internal CancellationToken CloudFetchStatementToken => _cloudFetchStatementCts.Token;
+        internal CancellationToken CloudFetchStatementToken
+        {
+            get { lock (_cloudFetchStatementCtsLock) { return _cloudFetchStatementCts.Token; } }
+        }
 
         public DatabricksStatement(DatabricksConnection connection)
             : base(connection)
@@ -167,9 +179,15 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal void RefreshCloudFetchStatementCts()
         {
-            var previous = _cloudFetchStatementCts;
-            _cloudFetchStatementCts = CancellationTokenSource.CreateLinkedTokenSource(
-                ((DatabricksConnection)Connection).CloudFetchShutdownToken);
+            // Swap the field under the lock so a concurrent cross-thread Cancel()/Dispose() either
+            // acts on the old source before the swap or on the new one after it — never on a torn read.
+            CancellationTokenSource previous;
+            lock (_cloudFetchStatementCtsLock)
+            {
+                previous = _cloudFetchStatementCts;
+                _cloudFetchStatementCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    ((DatabricksConnection)Connection).CloudFetchShutdownToken);
+            }
             // Release the prior source's registration on the connection shutdown token. Under normal
             // AdbcStatement usage the previous result set is fully consumed/disposed before the next
             // Execute, so no pipeline is still linked to the old token here. We dispose (rather than
@@ -1487,14 +1505,20 @@ namespace AdbcDrivers.Databricks
             {
                 // Cancel this statement's CloudFetch pipeline before anything else so in-flight
                 // downloads stop promptly if the caller disposed the statement mid-stream.
-                try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+                //
+                // Cancel + dispose under the lock so this can't interleave with a concurrent
+                // re-execute's field swap (RefreshCloudFetchStatementCts) and act on a stale source.
+                lock (_cloudFetchStatementCtsLock)
+                {
+                    try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
 
-                // Dispose the CloudFetch statement CTS before the telemetry emission below:
-                // it was already Cancel()ed just above and nothing in the telemetry blocks
-                // depends on it, so releasing it here guarantees the linked-token registration
-                // it holds on the connection's _cloudFetchShutdownCts is freed even if the
-                // telemetry calls below throw. Mirrors the ordering in DatabricksConnection.Dispose.
-                _cloudFetchStatementCts.Dispose();
+                    // Dispose the CloudFetch statement CTS before the telemetry emission below:
+                    // it was already Cancel()ed just above and nothing in the telemetry blocks
+                    // depends on it, so releasing it here guarantees the linked-token registration
+                    // it holds on the connection's _cloudFetchShutdownCts is freed even if the
+                    // telemetry calls below throw. Mirrors the ordering in DatabricksConnection.Dispose.
+                    _cloudFetchStatementCts.Dispose();
+                }
 
                 if (PendingTelemetryContext != null)
                 {
@@ -1562,7 +1586,14 @@ namespace AdbcDrivers.Databricks
                 // without this a Cancel() during CloudFetch would leave the downloads running. Do it
                 // before base.Cancel() because base.Cancel() issues the remote CancelOperation RPC,
                 // which can throw on a network/transport failure and would otherwise skip this cleanup.
-                try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+                //
+                // Under the lock so a re-execute's field swap (RefreshCloudFetchStatementCts) can't
+                // race this read: we cancel whichever source is current, never a torn/half-swapped one.
+                // The lock scopes only the field access — base.Cancel()'s remote RPC runs outside it.
+                lock (_cloudFetchStatementCtsLock)
+                {
+                    try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+                }
 
                 base.Cancel();
             }
