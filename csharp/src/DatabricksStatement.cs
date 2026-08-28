@@ -131,7 +131,23 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal CancellationToken CloudFetchStatementToken
         {
-            get { lock (_cloudFetchStatementCtsLock) { return _cloudFetchStatementCts.Token; } }
+            get
+            {
+                lock (_cloudFetchStatementCtsLock)
+                {
+                    // Defensive against a read after Dispose(bool) has disposed the source: return
+                    // CancellationToken.None rather than throwing, matching the sibling
+                    // CloudFetchDownloadManager.PipelineToken so the two tokens behave symmetrically.
+                    try
+                    {
+                        return _cloudFetchStatementCts.Token;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return CancellationToken.None;
+                    }
+                }
+            }
         }
 
         public DatabricksStatement(DatabricksConnection connection)
