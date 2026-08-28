@@ -1231,14 +1231,19 @@ namespace AdbcDrivers.Databricks
                 {
                     closeStopwatch.Stop();
                     closeSessionElapsedMs = closeStopwatch.ElapsedMilliseconds;
+
+                    // Dispose the CloudFetch shutdown CTS first so cleanup is unconditional:
+                    // it was already Cancel()ed at the top of Dispose and nothing below depends
+                    // on it, so releasing it here guarantees it happens even if the telemetry
+                    // calls below throw.
+                    _cloudFetchShutdownCts.Dispose();
+
                     EmitDeleteSessionTelemetry(closeSessionElapsedMs, closeSessionError);
 
                     // Clean up telemetry client.
                     // This is synchronous because Dispose() cannot be async; we block on
                     // GetAwaiter().GetResult(), which is acceptable in Dispose.
                     DisposeTelemetryAsync().GetAwaiter().GetResult();
-
-                    _cloudFetchShutdownCts.Dispose();
                 }
                 return;
             }
